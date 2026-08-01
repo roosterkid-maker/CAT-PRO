@@ -1,0 +1,161 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* shadcn semantic colors */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Trading terminal colors */
+  --color-app-bg: var(--app-bg);
+  --color-panel: var(--panel);
+  --color-panel-light: var(--panel-light);
+  --color-border-default: var(--border-default);
+  --color-text-primary: var(--text-primary);
+  --color-text-muted: var(--text-muted);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-brand: var(--brand);
+
+  /* Radius */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  color-scheme: dark;
+
+  --radius: 0.625rem;
+
+  /* shadcn theme */
+  --background: #0b1220;
+  --foreground: #f8fafc;
+
+  --card: #111827;
+  --card-foreground: #f8fafc;
+
+  --popover: #111827;
+  --popover-foreground: #f8fafc;
+
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+
+  --secondary: #1f2937;
+  --secondary-foreground: #f8fafc;
+
+  --muted: #1f2937;
+  --muted-foreground: #94a3b8;
+
+  --accent: #1f2937;
+  --accent-foreground: #f8fafc;
+
+  --destructive: #ea3943;
+
+  --border: #2d3748;
+  --input: #475569;
+  --ring: #3b82f6;
+
+  /* Existing trading-terminal tokens */
+  --app-bg: #0b1220;
+  --panel: #111827;
+  --panel-light: #1f2937;
+  --border-default: #2d3748;
+
+  --text-primary: #f8fafc;
+  --text-muted: #94a3b8;
+
+  --success: #16c784;
+  --danger: #ea3943;
+  --warning: #fbbf24;
+  --brand: #3b82f6;
+}
+
+* {
+  box-sizing: border-box;
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: var(--app-bg);
+}
+
+body {
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--text-primary);
+  font-family:
+    Inter,
+    Geist,
+    "Segoe UI",
+    Roboto,
+    Arial,
+    sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* Live price flash */
+
+@keyframes price-flash-up {
+  0% {
+    background-color: rgb(22 199 132 / 35%);
+  }
+
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes price-flash-down {
+  0% {
+    background-color: rgb(234 57 67 / 35%);
+  }
+
+  100% {
+    background-color: transparent;
+  }
+}
+
+.price-flash-up {
+  animation: price-flash-up 700ms ease-out;
+}
+
+.price-flash-down {
+  animation: price-flash-down 700ms ease-out;
+}
