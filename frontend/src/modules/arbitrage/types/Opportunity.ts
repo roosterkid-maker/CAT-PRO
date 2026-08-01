@@ -1,3 +1,8 @@
+export type OpportunityDecision =
+  | "EXECUTE"
+  | "REVIEW"
+  | "SKIP";
+
 export interface Opportunity {
   market: string;
 
@@ -9,6 +14,10 @@ export interface Opportunity {
   sellPrice: number;
   sellAvailableQty: number;
 
+  requiredQty: number;
+
+  availableExecutableQty: number;
+
   executableQty: number;
 
   rawSpread: number;
@@ -19,11 +28,25 @@ export interface Opportunity {
   netProfit: number;
   netProfitPercent: number;
 
+  liquidityScore: number;
+
+  freshnessScore: number;
+
+  feeScore: number;
+
+  spreadScore: number;
+
+  overallScore: number;
+
+  decision: OpportunityDecision;
+
+  analysisSummary: string[];
+
+  enoughLiquidity: boolean;
+
   usedLastPriceFallback: false;
 
   quotesAreFresh: boolean;
-
-  score: number;
 
   timestamp: number;
 }

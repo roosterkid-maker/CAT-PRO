@@ -27,7 +27,10 @@ export default function MarketTable() {
       if (current.field === field) {
         return {
           field,
-          direction: current.direction === "asc" ? "desc" : "asc",
+          direction:
+            current.direction === "asc"
+              ? "desc"
+              : "asc",
         };
       }
 
@@ -39,30 +42,50 @@ export default function MarketTable() {
   };
 
   const markets = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
+    const normalizedSearch =
+      search.trim().toLowerCase();
 
-    const filteredMarkets = Object.values(marketMap).filter((market) => {
+    const filteredMarkets = Object.values(
+      marketMap,
+    ).filter((market) => {
       if (!normalizedSearch) {
         return true;
       }
 
       return (
-        market.market.toLowerCase().includes(normalizedSearch) ||
-        market.exchange.toLowerCase().includes(normalizedSearch)
+        market.market
+          .toLowerCase()
+          .includes(normalizedSearch) ||
+        market.exchange
+          .toLowerCase()
+          .includes(normalizedSearch)
       );
     });
 
-    return [...filteredMarkets].sort((first, second) => {
-      let comparison = 0;
+    return [...filteredMarkets].sort(
+      (first, second) => {
+        let comparison = 0;
 
-      if (sort.field === "lastPrice") {
-        comparison = first.lastPrice - second.lastPrice;
-      } else {
-        comparison = first[sort.field].localeCompare(second[sort.field]);
-      }
+        if (sort.field === "lastPrice") {
+          const firstPrice =
+            first.lastPrice ?? Number.NEGATIVE_INFINITY;
 
-      return sort.direction === "asc" ? comparison : -comparison;
-    });
+          const secondPrice =
+            second.lastPrice ?? Number.NEGATIVE_INFINITY;
+
+          comparison =
+            firstPrice - secondPrice;
+        } else {
+          comparison = first[sort.field].localeCompare(
+            second[sort.field],
+          );
+        }
+
+        return sort.direction === "asc"
+          ? comparison
+          : -comparison;
+      },
+    );
   }, [marketMap, search, sort]);
 
   return (

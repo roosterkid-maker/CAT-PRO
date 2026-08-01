@@ -1,5 +1,10 @@
 export type PaperTradeStatus =
+  | "detected"
+  | "validated"
   | "open"
+  | "monitoring"
+  | "target-hit"
+  | "closed"
   | "completed"
   | "cancelled"
   | "failed";
@@ -30,13 +35,13 @@ export interface PaperTrade {
 
   currentPrice: number;
 
-currentProfit: number;
-currentProfitPercent: number;
+  currentProfit: number;
+  currentProfitPercent: number;
 
-highestProfit: number;
-lowestProfit: number;
+  highestProfit: number;
+  lowestProfit: number;
 
-lastUpdatedAt: number;
+  lastUpdatedAt: number;
 
   actualSellPrice: number | null;
   actualProfit: number | null;
@@ -47,8 +52,6 @@ lastUpdatedAt: number;
 
 export interface PaperTradesResponse {
   success: boolean;
-
   count: number;
-
   data: PaperTrade[];
 }

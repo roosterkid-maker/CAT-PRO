@@ -20,8 +20,24 @@ export interface ArbitragePolicy {
   minimumExchangeCount: number;
 
   /**
-   * Bid/ask unavailable hone par last price use karna allowed hai ya nahi.
-   * Production mode me ideally false rahega.
+   * Liquidity calculate karne ke liye reference trading capital.
+   *
+   * Example:
+   * ₹10,000 capital / buy price = required quantity.
+   */
+  referenceCapital: number;
+
+  /**
+   * Required quantity ka minimum percentage jo top-of-book
+   * liquidity me available hona chahiye.
+   *
+   * 100 = complete quantity available honi chahiye.
+   */
+  minimumLiquidityPercent: number;
+
+  /**
+   * Legacy compatibility field.
+   * Executable-only mode me false rehna chahiye.
    */
   allowLastPriceFallback: boolean;
 }

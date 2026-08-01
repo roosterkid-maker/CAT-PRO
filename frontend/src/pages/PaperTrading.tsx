@@ -83,12 +83,12 @@ function getStatusClass(
 
 function isActiveTrade(trade: PaperTrade): boolean {
   return (
+    trade.status === "detected" ||
     trade.status === "validated" ||
     trade.status === "open" ||
     trade.status === "monitoring"
   );
 }
-
 export default function PaperTrading() {
   const {
     data,
@@ -102,9 +102,12 @@ export default function PaperTrading() {
   const summary = useMemo(() => {
     const activeTrades = trades.filter(isActiveTrade);
 
-    const closedTrades = trades.filter(
-      (trade) => trade.status === "closed",
-    );
+  const closedTrades = trades.filter(
+  (trade) =>
+    trade.status === "closed" ||
+    trade.status === "completed" ||
+    trade.status === "target-hit",
+);
 
     const winningTrades = closedTrades.filter(
       (trade) => (trade.actualProfit ?? 0) > 0,

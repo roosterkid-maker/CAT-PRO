@@ -1,28 +1,44 @@
 import type { ExchangePair } from "./ExchangePair";
 
+export type ExecutionDecision =
+  | "EXECUTE"
+  | "REVIEW"
+  | "SKIP";
+
 export interface ArbitrageOpportunity {
   pair: ExchangePair;
 
-  /**
-   * Actual executable prices:
-   * Buy side uses best ask.
-   * Sell side uses best bid.
-   */
   buyPrice: number;
   sellPrice: number;
 
-  /**
-   * Top-of-book liquidity available
-   * at the executable prices.
-   */
   buyAvailableQty: number;
   sellAvailableQty: number;
 
   /**
-   * Maximum quantity executable on both legs
-   * without moving beyond the top order-book level.
+   * Required quantity based on reference capital.
+   */
+  requiredQty: number;
+
+  /**
+   * Maximum quantity available on both top-of-book legs.
+   */
+  availableExecutableQty: number;
+
+  /**
+   * Quantity that can actually be evaluated/executed.
    */
   executableQty: number;
+
+  liquidityScore: number;
+  enoughLiquidity: boolean;
+
+  freshnessScore: number;
+  feeScore: number;
+  spreadScore: number;
+
+  decision: ExecutionDecision;
+
+  analysisSummary: string[];
 
   rawSpread: number;
   rawSpreadPercent: number;
@@ -32,18 +48,9 @@ export interface ArbitrageOpportunity {
   netProfit: number;
   netProfitPercent: number;
 
+  usedLastPriceFallback: false;
   quotesAreFresh: boolean;
 
-  /**
-   * Temporary compatibility field.
-   * Executable-only opportunities always keep this false.
-   */
-  usedLastPriceFallback: false;
-
-  /**
-   * Will later contain the opportunity-quality ranking.
-   */
   score: number;
-
   timestamp: number;
 }

@@ -1,3 +1,4 @@
+import { executionAnalysis } from "../../trading/analysis/ExecutionAnalysis";
 import { defaultArbitragePolicy } from "../config/policy";
 
 import type { ArbitrageOpportunity } from "../models/ArbitrageOpportunity";
@@ -11,10 +12,11 @@ export class OpportunityEngine {
     pair: ExchangePair,
     policy: ArbitragePolicy = defaultArbitragePolicy,
   ): ArbitrageOpportunity | null {
-    const evaluation = opportunityEvaluator.evaluate(
-      pair,
-      policy,
-    );
+    const evaluation =
+      opportunityEvaluator.evaluate(
+        pair,
+        policy,
+      );
 
     if (!evaluation) {
       return null;
@@ -39,8 +41,12 @@ export class OpportunityEngine {
       sellAvailableQty === null ||
       !Number.isFinite(buyPrice) ||
       !Number.isFinite(sellPrice) ||
-      !Number.isFinite(buyAvailableQty) ||
-      !Number.isFinite(sellAvailableQty) ||
+      !Number.isFinite(
+        buyAvailableQty,
+      ) ||
+      !Number.isFinite(
+        sellAvailableQty,
+      ) ||
       buyPrice <= 0 ||
       sellPrice <= 0 ||
       buyAvailableQty <= 0 ||
@@ -63,19 +69,34 @@ export class OpportunityEngine {
       return null;
     }
 
-    const executableQty = Math.min(
-      buyAvailableQty,
-      sellAvailableQty,
-    );
+    const requiredQty =
+      policy.referenceCapital /
+      buyPrice;
 
     if (
-      !Number.isFinite(executableQty) ||
-      executableQty <= 0
+      !Number.isFinite(requiredQty) ||
+      requiredQty <= 0
     ) {
       return null;
     }
 
-    return {
+    const availableExecutableQty =
+      Math.min(
+        buyAvailableQty,
+        sellAvailableQty,
+      );
+
+    if (
+      !Number.isFinite(
+        availableExecutableQty,
+      ) ||
+      availableExecutableQty <= 0
+    ) {
+      return null;
+    }
+
+    const preliminaryOpportunity:
+      ArbitrageOpportunity = {
       pair,
 
       buyPrice,
@@ -84,16 +105,37 @@ export class OpportunityEngine {
       buyAvailableQty,
       sellAvailableQty,
 
-      executableQty,
+      requiredQty,
+      availableExecutableQty,
 
-      rawSpread: evaluation.rawSpread,
+      executableQty: Math.min(
+        requiredQty,
+        availableExecutableQty,
+      ),
+
+      liquidityScore: 0,
+      enoughLiquidity: false,
+
+      freshnessScore: 0,
+      feeScore: 0,
+      spreadScore: 0,
+
+      decision: "SKIP",
+
+      analysisSummary: [],
+
+      rawSpread:
+        evaluation.rawSpread,
+
       rawSpreadPercent:
         evaluation.rawSpreadPercent,
 
       estimatedFees:
         evaluation.estimatedFees,
 
-      netProfit: evaluation.netProfit,
+      netProfit:
+        evaluation.netProfit,
+
       netProfitPercent:
         evaluation.netProfitPercent,
 
@@ -108,6 +150,52 @@ export class OpportunityEngine {
         pair.buy.timestamp,
         pair.sell.timestamp,
       ),
+    };
+
+    const analysis =
+      executionAnalysis.analyze(
+        preliminaryOpportunity,
+        policy,
+      );
+
+    if (!analysis.executable) {
+      return null;
+    }
+
+    return {
+      ...preliminaryOpportunity,
+
+      executableQty:
+        analysis.liquidity
+          .executableQty,
+
+      liquidityScore:
+        analysis.liquidity.score,
+
+      enoughLiquidity:
+        analysis.liquidity
+          .enoughLiquidity,
+
+      freshnessScore:
+        analysis.freshness.score,
+
+      feeScore:
+        analysis.fees.score,
+
+      spreadScore:
+        analysis.spread.score,
+
+      decision:
+        analysis.decision.decision,
+
+      analysisSummary:
+        analysis.summary,
+
+      quotesAreFresh:
+        analysis.freshness.fresh,
+
+      score:
+        analysis.overallScore,
     };
   }
 }

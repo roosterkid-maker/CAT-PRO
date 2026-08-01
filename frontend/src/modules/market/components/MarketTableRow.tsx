@@ -6,7 +6,7 @@ import {
 } from "@/shared/ui/table";
 
 import { useFavoritesStore } from "../store/favorites.store";
-import type { MarketViewModel } from "../types/MarketViewModel";
+import type { MarketViewModel } from "@/types/MarketViewModel";
 
 interface MarketTableRowProps {
   market: MarketViewModel;

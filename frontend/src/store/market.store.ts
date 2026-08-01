@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { MarketViewModel } from "@/modules/market/types/MarketViewModel";
+import type { MarketViewModel } from "@/types/MarketViewModel";
 import type { MarketTicker } from "@/types/market";
 
 interface MarketState {

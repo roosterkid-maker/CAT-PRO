@@ -4,6 +4,7 @@ import BestOpportunityCard from "@/modules/arbitrage/components/BestOpportunityC
 import TradePlanner from "@/modules/arbitrage/components/TradePlanner";
 import { useOpportunities } from "@/modules/arbitrage/hooks/useOpportunities";
 import type { Opportunity } from "@/modules/arbitrage/types/Opportunity";
+import DecisionBadge from "@/shared/components/DecisionBadge";
 import {
   Table,
   TableBody,
@@ -39,14 +40,20 @@ export default function Arbitrage() {
         return opportunities[0];
       }
 
-      const refreshedOpportunity = opportunities.find(
-        (opportunity) =>
-          opportunity.market === current.market &&
-          opportunity.buyExchange === current.buyExchange &&
-          opportunity.sellExchange === current.sellExchange,
-      );
+      const refreshedOpportunity =
+        opportunities.find(
+          (opportunity) =>
+            opportunity.market === current.market &&
+            opportunity.buyExchange ===
+              current.buyExchange &&
+            opportunity.sellExchange ===
+              current.sellExchange,
+        );
 
-      return refreshedOpportunity ?? opportunities[0];
+      return (
+        refreshedOpportunity ??
+        opportunities[0]
+      );
     });
   }, [opportunities]);
 
@@ -77,21 +84,25 @@ export default function Arbitrage() {
         </h1>
 
         <p className="mt-1 text-sm text-text-muted">
-          Profitable cross-exchange opportunities after estimated fees.
+          Execution-quality cross-exchange opportunities
+          ranked by liquidity, freshness, fees, spread,
+          and overall score.
         </p>
       </div>
 
-      <BestOpportunityCard opportunity={bestOpportunity} />
+      <BestOpportunityCard
+        opportunity={bestOpportunity}
+      />
 
-        {selectedOpportunity && (
-  <div className="mb-6">
-    <TradePlanner
-      opportunity={selectedOpportunity}
-    />
-  </div>
-)}
+      {selectedOpportunity && (
+        <div className="mb-6">
+          <TradePlanner
+            opportunity={selectedOpportunity}
+          />
+        </div>
+      )}
 
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-4">
         <span className="text-sm text-text-muted">
           Opportunities: {opportunities.length}
         </span>
@@ -106,6 +117,7 @@ export default function Arbitrage() {
           <TableHeader className="sticky top-0 z-10 bg-panel-light">
             <TableRow className="border-border-default hover:bg-panel-light">
               <TableHead>Market</TableHead>
+              <TableHead>Decision</TableHead>
               <TableHead>Buy</TableHead>
               <TableHead>Sell</TableHead>
 
@@ -118,19 +130,15 @@ export default function Arbitrage() {
               </TableHead>
 
               <TableHead className="text-right">
-                Raw Spread
-              </TableHead>
-
-              <TableHead className="text-right">
-                Fees
-              </TableHead>
-
-              <TableHead className="text-right">
-                Net Profit
-              </TableHead>
-
-              <TableHead className="text-right">
                 Profit %
+              </TableHead>
+
+              <TableHead className="text-right">
+                Score
+              </TableHead>
+
+              <TableHead className="text-right">
+                Executable Qty
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -142,78 +150,97 @@ export default function Arbitrage() {
                   colSpan={9}
                   className="h-32 text-center text-text-muted"
                 >
-                  No profitable opportunities currently match the policy.
+                  No executable opportunities currently
+                  match the policy.
                 </TableCell>
               </TableRow>
             ) : (
-              opportunities.map((opportunity) => {
-                const isSelected =
-                  selectedOpportunity?.market ===
-                    opportunity.market &&
-                  selectedOpportunity?.buyExchange ===
-                    opportunity.buyExchange &&
-                  selectedOpportunity?.sellExchange ===
-                    opportunity.sellExchange;
+              opportunities.map(
+                (opportunity) => {
+                  const isSelected =
+                    selectedOpportunity?.market ===
+                      opportunity.market &&
+                    selectedOpportunity?.buyExchange ===
+                      opportunity.buyExchange &&
+                    selectedOpportunity?.sellExchange ===
+                      opportunity.sellExchange;
 
-                return (
-                  <TableRow
-                    key={`${opportunity.market}-${opportunity.buyExchange}-${opportunity.sellExchange}`}
-                    onClick={() =>
-                      setSelectedOpportunity(opportunity)
-                    }
-                    className={`cursor-pointer border-border-default transition-colors ${
-                      isSelected
-                        ? "bg-panel-light"
-                        : "hover:bg-panel-light"
-                    }`}
-                  >
-                    <TableCell className="font-medium">
-                      {opportunity.market}
-                    </TableCell>
+                  return (
+                    <TableRow
+                      key={`${opportunity.market}-${opportunity.buyExchange}-${opportunity.sellExchange}`}
+                      onClick={() =>
+                        setSelectedOpportunity(
+                          opportunity,
+                        )
+                      }
+                      className={`cursor-pointer border-border-default transition-colors ${
+                        isSelected
+                          ? "bg-panel-light"
+                          : "hover:bg-panel-light"
+                      }`}
+                    >
+                      <TableCell className="font-medium">
+                        {opportunity.market}
+                      </TableCell>
 
-                    <TableCell className="uppercase text-success">
-                      {opportunity.buyExchange}
-                    </TableCell>
+                      <TableCell>
+                        <DecisionBadge
+                          decision={
+                            opportunity.decision
+                          }
+                        />
+                      </TableCell>
 
-                    <TableCell className="uppercase text-danger">
-                      {opportunity.sellExchange}
-                    </TableCell>
+                      <TableCell className="uppercase text-success">
+                        {opportunity.buyExchange}
+                      </TableCell>
 
-                    <TableCell className="text-right font-mono tabular-nums">
-                      {formatPrice(opportunity.buyPrice)}
-                    </TableCell>
+                      <TableCell className="uppercase text-danger">
+                        {opportunity.sellExchange}
+                      </TableCell>
 
-                    <TableCell className="text-right font-mono tabular-nums">
-                      {formatPrice(opportunity.sellPrice)}
-                    </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {formatPrice(
+                          opportunity.buyPrice,
+                        )}
+                      </TableCell>
 
-                    <TableCell className="text-right font-mono tabular-nums">
-                      {formatPrice(opportunity.rawSpread)}
-                    </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {formatPrice(
+                          opportunity.sellPrice,
+                        )}
+                      </TableCell>
 
-                    <TableCell className="text-right font-mono tabular-nums text-warning">
-                      {formatPrice(opportunity.estimatedFees)}
-                    </TableCell>
+                      <TableCell className="text-right font-semibold text-success">
+                        {opportunity.netProfitPercent.toFixed(
+                          2,
+                        )}
+                        %
+                      </TableCell>
 
-                    <TableCell className="text-right font-mono tabular-nums text-success">
-                      {formatPrice(opportunity.netProfit)}
-                    </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {opportunity.overallScore}
+                      </TableCell>
 
-                    <TableCell className="text-right font-semibold text-success">
-                      {opportunity.netProfitPercent.toFixed(2)}%
-                    </TableCell>
-                  </TableRow>
-                );
-              })
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {formatPrice(
+                          opportunity.executableQty,
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                },
+              )
             )}
           </TableBody>
         </Table>
       </div>
 
-      <p className="mt-3 text-xs text-warning">
-        Development data may use last traded price when executable bid/ask data
-        is unavailable. Verify liquidity, slippage, transfer limits, and fees
-        before trading.
+      <p className="mt-3 text-xs text-text-muted">
+        Opportunities are filtered using executable
+        bid/ask prices, top-of-book liquidity, quote
+        freshness, estimated fees, and configured policy
+        limits.
       </p>
     </div>
   );

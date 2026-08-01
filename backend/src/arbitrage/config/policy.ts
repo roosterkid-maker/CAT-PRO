@@ -1,17 +1,47 @@
 import type { ArbitragePolicy } from "../models/ArbitragePolicy";
 
 export const defaultArbitragePolicy: ArbitragePolicy = {
-  minimumSpreadPercent: 0.2,
+  /**
+   * Minimum raw spread before fees.
+   */
+  minimumSpreadPercent: 0.20,
+
+  /**
+   * Minimum net profit after fees.
+   */
   minimumNetProfitPercent: 0.05,
+
+  /**
+   * Quotes older than this are rejected.
+   */
   maximumQuoteAgeMs: 5_000,
+
+  /**
+   * Minimum exchanges required.
+   */
   minimumExchangeCount: 2,
 
-  /*
-   * Development mode:
-   * CoinDCX/Binance feeds me abhi bid/ask null hain,
-   * isliye lastPrice fallback temporarily allowed hai.
+  /**
+   * Liquidity evaluation reference capital.
    *
-   * Real execution mode me ise false karna hoga.
+   * Initial value:
+   * ₹10,000
+   *
+   * Later this will come from the user's UI selection.
    */
-  allowLastPriceFallback: true,
+  referenceCapital: 10_000,
+
+  /**
+   * At least 100% of the required quantity
+   * should be available at the top of the order book.
+   */
+  minimumLiquidityPercent: 100,
+
+  /**
+   * CAT PRO v0.9+
+   *
+   * Execution Engine now prefers executable quotes.
+   * Keep this FALSE unless debugging legacy feeds.
+   */
+  allowLastPriceFallback: false,
 };

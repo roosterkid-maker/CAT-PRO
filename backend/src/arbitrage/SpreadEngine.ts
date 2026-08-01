@@ -1,3 +1,5 @@
+import { defaultArbitragePolicy } from "./config/policy";
+
 import type { ArbitrageOpportunity } from "./models/ArbitrageOpportunity";
 import type { ExchangePair } from "./models/ExchangePair";
 
@@ -46,18 +48,50 @@ export class SpreadEngine {
     const rawSpreadPercent =
       (rawSpread / buyPrice) * 100;
 
-    const executableQty =
+    const requiredQty =
+      defaultArbitragePolicy.referenceCapital /
+      buyPrice;
+
+    if (
+      !Number.isFinite(requiredQty) ||
+      requiredQty <= 0
+    ) {
+      return null;
+    }
+
+    const availableExecutableQty =
       Math.min(
         buyAvailableQty,
         sellAvailableQty,
       );
 
     if (
-      !Number.isFinite(executableQty) ||
-      executableQty <= 0
+      !Number.isFinite(
+        availableExecutableQty,
+      ) ||
+      availableExecutableQty <= 0
     ) {
       return null;
     }
+
+    const executableQty =
+      Math.min(
+        requiredQty,
+        availableExecutableQty,
+      );
+
+    const liquidityPercent =
+      Math.min(
+        100,
+        (availableExecutableQty /
+          requiredQty) *
+          100,
+      );
+
+    const enoughLiquidity =
+      liquidityPercent >=
+      defaultArbitragePolicy
+        .minimumLiquidityPercent;
 
     return {
       pair,
@@ -68,7 +102,26 @@ export class SpreadEngine {
       buyAvailableQty,
       sellAvailableQty,
 
+      requiredQty,
+      availableExecutableQty,
       executableQty,
+
+      liquidityScore:
+        Math.round(
+          Math.max(
+            0,
+            liquidityPercent,
+          ),
+        ),
+
+      enoughLiquidity,
+      freshnessScore: 0,
+feeScore: 0,
+spreadScore: 0,
+
+decision: "SKIP",
+
+analysisSummary: [],
 
       rawSpread,
       rawSpreadPercent,

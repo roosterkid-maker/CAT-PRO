@@ -26,6 +26,12 @@ export class OpportunityMapper {
       sellAvailableQty:
         opportunity.sellAvailableQty,
 
+      requiredQty:
+        opportunity.requiredQty,
+
+      availableExecutableQty:
+        opportunity.availableExecutableQty,
+
       executableQty:
         opportunity.executableQty,
 
@@ -44,13 +50,34 @@ export class OpportunityMapper {
       netProfitPercent:
         opportunity.netProfitPercent,
 
+      liquidityScore:
+        opportunity.liquidityScore,
+
+      freshnessScore:
+        opportunity.freshnessScore,
+
+      feeScore:
+        opportunity.feeScore,
+
+      spreadScore:
+        opportunity.spreadScore,
+
+      overallScore:
+        opportunity.score,
+
+      decision:
+        opportunity.decision,
+
+      analysisSummary:
+        opportunity.analysisSummary,
+
+      enoughLiquidity:
+        opportunity.enoughLiquidity,
+
       usedLastPriceFallback: false,
 
       quotesAreFresh:
         opportunity.quotesAreFresh,
-
-      score:
-        opportunity.score,
 
       timestamp:
         opportunity.timestamp,
