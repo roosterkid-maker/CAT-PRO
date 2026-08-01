@@ -1,0 +1,1 @@
+{"version":3,"file":"execution.js","sourceRoot":"","sources":["../../../src/trading/config/execution.ts"],"names":[],"mappings":";;;AAIa,QAAA,6BAA6B,GAA2B;IACnE,IAAI,EAAE,OAAO;IAEb,OAAO,EAAE,IAAI;IAEb,sBAAsB,EAAE,MAAM;IAE9B,uBAAuB,EAAE,GAAG;IAE5B,mBAAmB,EAAE,GAAG;IAExB,iBAAiB,EAAE,CAAC;IAEpB,kBAAkB,EAAE,KAAK;IAEzB,iBAAiB,EAAE,IAAI;CACxB,CAAC"}
