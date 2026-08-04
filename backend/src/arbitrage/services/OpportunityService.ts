@@ -2,6 +2,7 @@ import { defaultArbitragePolicy } from "../config/policy";
 import { comparisonEngine } from "../ComparisonEngine";
 import { exchangePairGenerator } from "../engines/ExchangePairGenerator";
 import { opportunityEngine } from "../engines/OpportunityEngine";
+
 import type { ArbitrageOpportunity } from "../models/ArbitrageOpportunity";
 
 import { marketCache } from "../../services/cache.service";
@@ -13,33 +14,72 @@ export class OpportunityService {
   getOpportunities(): ArbitrageOpportunity[] {
     this.removeExpiredSnapshots();
 
+    opportunityEngine.resetDiagnostics();
+
+    const cachedQuotes =
+      marketCache.getAll();
+
     const snapshots =
       comparisonEngine.groupByMarket(
-        marketCache.getAll(),
+        cachedQuotes,
       );
 
-    const opportunities = snapshots
-      .flatMap((snapshot) =>
-        exchangePairGenerator.generate(
-          snapshot,
-        ),
-      )
-      .map((pair) =>
-        opportunityEngine.evaluate(pair),
-      )
-      .filter(
-        (
-          opportunity,
-        ): opportunity is ArbitrageOpportunity =>
-          opportunity !== null,
-      )
-      .sort(
-        (first, second) =>
-          second.netProfitPercent -
-          first.netProfitPercent,
+    const exchangePairs =
+      snapshots.flatMap(
+        (snapshot) =>
+          exchangePairGenerator.generate(
+            snapshot,
+          ),
       );
 
-    for (const opportunity of opportunities) {
+    const opportunities =
+      exchangePairs
+        .map((pair) =>
+          opportunityEngine.evaluate(
+            pair,
+          ),
+        )
+        .filter(
+          (
+            opportunity,
+          ): opportunity is ArbitrageOpportunity =>
+            opportunity !== null,
+        )
+        .sort(
+          (first, second) =>
+            second.netProfitPercent -
+            first.netProfitPercent,
+        );
+
+    console.log(
+      "[Opportunity Debug] Cached quotes:",
+      cachedQuotes.length,
+    );
+
+    console.log(
+      "[Opportunity Debug] Market snapshots:",
+      snapshots.length,
+    );
+
+    console.log(
+      "[Opportunity Debug] Exchange pairs:",
+      exchangePairs.length,
+    );
+
+    console.log(
+      "[Opportunity Debug] Accepted opportunities:",
+      opportunities.length,
+    );
+
+    console.log(
+      "[Opportunity Diagnostics]",
+      opportunityEngine.getDiagnostics(),
+    );
+
+    for (
+      const opportunity
+      of opportunities
+    ) {
       this.opportunitySnapshots.set(
         opportunity.id,
         opportunity,
@@ -63,7 +103,11 @@ export class OpportunityService {
       return null;
     }
 
-    if (!this.isSnapshotFresh(opportunity)) {
+    if (
+      !this.isSnapshotFresh(
+        opportunity,
+      )
+    ) {
       this.opportunitySnapshots.delete(
         opportunityId,
       );
@@ -75,11 +119,17 @@ export class OpportunityService {
   }
 
   private removeExpiredSnapshots(): void {
-    for (const [
-      opportunityId,
-      opportunity,
-    ] of this.opportunitySnapshots) {
-      if (!this.isSnapshotFresh(opportunity)) {
+    for (
+      const [
+        opportunityId,
+        opportunity,
+      ] of this.opportunitySnapshots
+    ) {
+      if (
+        !this.isSnapshotFresh(
+          opportunity,
+        )
+      ) {
         this.opportunitySnapshots.delete(
           opportunityId,
         );
@@ -92,7 +142,8 @@ export class OpportunityService {
   ): boolean {
     const ageMs = Math.max(
       0,
-      Date.now() - opportunity.timestamp,
+      Date.now() -
+        opportunity.timestamp,
     );
 
     return (

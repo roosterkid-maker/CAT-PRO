@@ -9,43 +9,58 @@ import type { ExchangePair } from "../models/ExchangePair";
 
 import { opportunityEvaluator } from "./OpportunityEvaluator";
 
-interface OpportunityDiagnostics {
+interface OpportunityEngineDiagnostics {
   evaluated: number;
+
   evaluatorRejected: number;
   invalidMarketData: number;
+
   spreadRejected: number;
   netProfitRejected: number;
+
   quantityRejected: number;
+
   liquidityRejected: number;
   freshnessRejected: number;
   feeRejected: number;
   spreadAnalysisRejected: number;
+
   accepted: number;
 }
 
-const diagnostics: OpportunityDiagnostics = {
+export interface OpportunityDiagnostics {
+  engine: OpportunityEngineDiagnostics;
+
+  evaluator: ReturnType<
+    typeof opportunityEvaluator.getDiagnostics
+  >;
+}
+
+const diagnostics: OpportunityEngineDiagnostics = {
   evaluated: 0,
+
   evaluatorRejected: 0,
   invalidMarketData: 0,
+
   spreadRejected: 0,
   netProfitRejected: 0,
+
   quantityRejected: 0,
+
   liquidityRejected: 0,
   freshnessRejected: 0,
   feeRejected: 0,
   spreadAnalysisRejected: 0,
+
   accepted: 0,
 };
 
 export class OpportunityEngine {
   evaluate(
-    
     pair: ExchangePair,
-    policy: ArbitragePolicy = defaultArbitragePolicy,
+    policy: ArbitragePolicy =
+      defaultArbitragePolicy,
   ): ArbitrageOpportunity | null {
-    console.log(
-  "[OpportunityEngine] evaluate() called",
-);
     diagnostics.evaluated += 1;
 
     const evaluation =
@@ -56,6 +71,7 @@ export class OpportunityEngine {
 
     if (!evaluation) {
       diagnostics.evaluatorRejected += 1;
+
       return null;
     }
 
@@ -76,16 +92,25 @@ export class OpportunityEngine {
       sellPrice === null ||
       buyAvailableQty === null ||
       sellAvailableQty === null ||
-      !Number.isFinite(buyPrice) ||
-      !Number.isFinite(sellPrice) ||
-      !Number.isFinite(buyAvailableQty) ||
-      !Number.isFinite(sellAvailableQty) ||
+      !Number.isFinite(
+        buyPrice,
+      ) ||
+      !Number.isFinite(
+        sellPrice,
+      ) ||
+      !Number.isFinite(
+        buyAvailableQty,
+      ) ||
+      !Number.isFinite(
+        sellAvailableQty,
+      ) ||
       buyPrice <= 0 ||
       sellPrice <= 0 ||
       buyAvailableQty <= 0 ||
       sellAvailableQty <= 0
     ) {
       diagnostics.invalidMarketData += 1;
+
       return null;
     }
 
@@ -94,6 +119,7 @@ export class OpportunityEngine {
       policy.minimumSpreadPercent
     ) {
       diagnostics.spreadRejected += 1;
+
       return null;
     }
 
@@ -102,6 +128,7 @@ export class OpportunityEngine {
       policy.minimumNetProfitPercent
     ) {
       diagnostics.netProfitRejected += 1;
+
       return null;
     }
 
@@ -110,10 +137,13 @@ export class OpportunityEngine {
       buyPrice;
 
     if (
-      !Number.isFinite(requiredQty) ||
+      !Number.isFinite(
+        requiredQty,
+      ) ||
       requiredQty <= 0
     ) {
       diagnostics.quantityRejected += 1;
+
       return null;
     }
 
@@ -130,10 +160,12 @@ export class OpportunityEngine {
       availableExecutableQty <= 0
     ) {
       diagnostics.quantityRejected += 1;
+
       return null;
     }
 
-    const preliminaryOpportunity: ArbitrageOpportunity = {
+    const preliminaryOpportunity:
+      ArbitrageOpportunity = {
       id: randomUUID(),
 
       pair,
@@ -147,10 +179,11 @@ export class OpportunityEngine {
       requiredQty,
       availableExecutableQty,
 
-      executableQty: Math.min(
-        requiredQty,
-        availableExecutableQty,
-      ),
+      executableQty:
+        Math.min(
+          requiredQty,
+          availableExecutableQty,
+        ),
 
       liquidityScore: 0,
       enoughLiquidity: false,
@@ -178,17 +211,19 @@ export class OpportunityEngine {
       netProfitPercent:
         evaluation.netProfitPercent,
 
-      usedLastPriceFallback: false,
+      usedLastPriceFallback:
+        evaluation.usedLastPriceFallback,
 
       quotesAreFresh:
         evaluation.quotesAreFresh,
 
       score: 0,
 
-      timestamp: Math.max(
-        pair.buy.timestamp,
-        pair.sell.timestamp,
-      ),
+      timestamp:
+        Math.max(
+          pair.buy.timestamp,
+          pair.sell.timestamp,
+        ),
     };
 
     const analysis =
@@ -197,80 +232,124 @@ export class OpportunityEngine {
         policy,
       );
 
-    if (!analysis.liquidity.enoughLiquidity) {
+    if (
+      !analysis.liquidity
+        .enoughLiquidity
+    ) {
       diagnostics.liquidityRejected += 1;
     }
 
-    if (!analysis.freshness.fresh) {
+    if (
+      !analysis.freshness.fresh
+    ) {
       diagnostics.freshnessRejected += 1;
     }
 
-    if (!analysis.fees.acceptable) {
+    if (
+      !analysis.fees.acceptable
+    ) {
       diagnostics.feeRejected += 1;
     }
 
-    if (!analysis.spread.acceptable) {
+    if (
+      !analysis.spread.acceptable
+    ) {
       diagnostics.spreadAnalysisRejected += 1;
     }
 
- if (!analysis.executable) {
-  console.log("========== REJECTED ==========");
-  console.log("Market:", pair.market);
+  if (!analysis.executable) {
   console.log(
-    "Raw Spread %:",
-    evaluation.rawSpreadPercent.toFixed(4),
-  );
-  console.log(
-    "Net Profit %:",
-    evaluation.netProfitPercent.toFixed(4),
-  );
+    "[ExecutionAnalysis Rejected]",
+    {
+      market: pair.market,
 
-  console.log(
-    "Liquidity:",
-    analysis.liquidity,
-  );
+      buyExchange:
+        pair.buy.exchange,
 
-  console.log(
-    "Freshness:",
-    analysis.freshness,
-  );
+      sellExchange:
+        pair.sell.exchange,
 
-  console.log(
-    "Fees:",
-    analysis.fees,
-  );
+      rawSpreadPercent:
+        evaluation.rawSpreadPercent,
 
-  console.log(
-    "Spread:",
-    analysis.spread,
-  );
+      netProfitPercent:
+        evaluation.netProfitPercent,
 
-  console.log(
-    "Decision:",
-    analysis.decision,
-  );
+      liquidity: {
+        enough:
+          analysis.liquidity
+            .enoughLiquidity,
 
-  console.log(
-    "Summary:",
-    analysis.summary,
+        score:
+          analysis.liquidity.score,
+
+        reason:
+          analysis.liquidity.reason,
+      },
+
+      freshness: {
+        fresh:
+          analysis.freshness.fresh,
+
+        score:
+          analysis.freshness.score,
+
+        reason:
+          analysis.freshness.reason,
+      },
+
+      fees: {
+        acceptable:
+          analysis.fees.acceptable,
+
+        score:
+          analysis.fees.score,
+
+        reason:
+          analysis.fees.reason,
+      },
+
+      spread: {
+        acceptable:
+          analysis.spread.acceptable,
+
+        score:
+          analysis.spread.score,
+
+        reason:
+          analysis.spread.reason,
+      },
+
+      decision: {
+        decision:
+          analysis.decision.decision,
+
+        reason:
+          analysis.decision.reason,
+      },
+
+      overallScore:
+        analysis.overallScore,
+    },
   );
 
   return null;
 }
-
     diagnostics.accepted += 1;
 
     return {
       ...preliminaryOpportunity,
 
       executableQty:
-        analysis.liquidity.executableQty,
+        analysis.liquidity
+          .executableQty,
 
       liquidityScore:
         analysis.liquidity.score,
 
       enoughLiquidity:
-        analysis.liquidity.enoughLiquidity,
+        analysis.liquidity
+          .enoughLiquidity,
 
       freshnessScore:
         analysis.freshness.score,
@@ -295,24 +374,38 @@ export class OpportunityEngine {
     };
   }
 
-  getDiagnostics(): OpportunityDiagnostics {
+  getDiagnostics():
+  OpportunityDiagnostics {
     return {
-      ...diagnostics,
+      engine: {
+        ...diagnostics,
+      },
+
+      evaluator:
+        opportunityEvaluator
+          .getDiagnostics(),
     };
   }
 
   resetDiagnostics(): void {
     diagnostics.evaluated = 0;
+
     diagnostics.evaluatorRejected = 0;
     diagnostics.invalidMarketData = 0;
+
     diagnostics.spreadRejected = 0;
     diagnostics.netProfitRejected = 0;
+
     diagnostics.quantityRejected = 0;
+
     diagnostics.liquidityRejected = 0;
     diagnostics.freshnessRejected = 0;
     diagnostics.feeRejected = 0;
     diagnostics.spreadAnalysisRejected = 0;
+
     diagnostics.accepted = 0;
+
+    opportunityEvaluator.resetDiagnostics();
   }
 }
 

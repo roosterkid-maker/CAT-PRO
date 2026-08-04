@@ -40,6 +40,7 @@ export interface ExecutionAnalysisResult {
   spread: SpreadAnalysis;
 
   overallScore: number;
+
   executable: boolean;
 
   decision: DecisionAnalysis;
@@ -120,6 +121,18 @@ export class ExecutionAnalysis {
         executable,
       );
 
+    const summary = [
+      liquidity.reason,
+      freshness.reason,
+      fees.reason,
+      spread.reason,
+      decision.reason,
+    ].filter(
+      (reason): reason is string =>
+        typeof reason === "string" &&
+        reason.trim().length > 0,
+    );
+
     return {
       context,
 
@@ -129,17 +142,12 @@ export class ExecutionAnalysis {
       spread,
 
       overallScore,
+
       executable,
 
       decision,
 
-      summary: [
-        liquidity.reason,
-        freshness.reason,
-        fees.reason,
-        spread.reason,
-        decision.reason,
-      ],
+      summary,
     };
   }
 }

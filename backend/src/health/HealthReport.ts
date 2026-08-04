@@ -1,3 +1,5 @@
+import type { OpportunityDiagnostics } from "../arbitrage/engines/OpportunityEngine";
+
 export interface ExchangeHealth {
   name: string;
   connected: boolean;
@@ -5,7 +7,9 @@ export interface ExchangeHealth {
 
 export interface ExchangeQuoteCount {
   exchange: string;
+
   totalQuotes: number;
+
   executableQuotes: number;
 }
 
@@ -16,28 +20,24 @@ export interface SystemHealthReport {
 
   cache: {
     cachedQuotes: number;
+
     executableQuotes: number;
-    quotesByExchange: ExchangeQuoteCount[];
+
+    quotesByExchange:
+      ExchangeQuoteCount[];
   };
 
   engine: {
     markets: number;
+
     sharedMarkets: number;
+
     generatedPairs: number;
+
     opportunities: number;
-    diagnostics: {
-  evaluated: number;
-  evaluatorRejected: number;
-  invalidMarketData: number;
-  spreadRejected: number;
-  netProfitRejected: number;
-  quantityRejected: number;
-  liquidityRejected: number;
-  freshnessRejected: number;
-  feeRejected: number;
-  spreadAnalysisRejected: number;
-  accepted: number;
-};
+
+    diagnostics:
+      OpportunityDiagnostics;
   };
 
   process: {
@@ -45,7 +45,9 @@ export interface SystemHealthReport {
 
     memory: {
       rss: number;
+
       heapUsed: number;
+
       heapTotal: number;
     };
   };
