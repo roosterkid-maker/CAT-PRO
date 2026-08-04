@@ -1,106 +1,283 @@
-import { io, type Socket } from "socket.io-client";
+import {
+  io,
+  type Socket,
+} from "socket.io-client";
 
-import { marketCache } from "../../services/cache.service";
+import {
+  orderBookService,
+} from "../../orderbook/services/OrderBookService";
+
+import {
+  marketCache,
+} from "../../services/cache.service";
+
 import { COINDCX } from "./constants";
 import { loadMarkets } from "./marketLoader";
-import { normalizeCoinDCXOrderBook } from "./orderBookNormalizer";
-import type { CoinDCXOrderBookResponse } from "./orderBook.types";
+
+import {
+  normalizeCoinDCXFullOrderBook,
+  normalizeCoinDCXOrderBook,
+} from "./orderBookNormalizer";
+
+import type {
+  CoinDCXOrderBookResponse,
+} from "./orderBook.types";
 
 export class CoinDCXOrderBookAdapter {
-  private socket: Socket | null = null;
+  private socket:
+    | Socket
+    | null = null;
 
   private subscribed = false;
+
+  private readonly subscribedChannels =
+    new Set<string>();
+
+  private updateCount = 0;
 
   async connect(): Promise<void> {
     if (this.socket?.connected) {
       return;
     }
 
-    this.socket = io(COINDCX.SOCKET.URL, {
-      transports: ["websocket"],
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 2000,
-    });
+    this.socket = io(
+      COINDCX.SOCKET.URL,
+      {
+        transports: [
+          "websocket",
+        ],
 
-    this.socket.on("connect", async () => {
-      console.log(
-        "[CoinDCX] OrderBook Connected",
-      );
+        reconnection: true,
 
-      await this.subscribe();
-    });
+        reconnectionAttempts:
+          Infinity,
 
-    this.socket.on(
-      COINDCX.EVENTS.DEPTH_SNAPSHOT,
-      (message: CoinDCXOrderBookResponse) =>
-        this.handle(message),
+        reconnectionDelay:
+          2_000,
+      },
     );
 
     this.socket.on(
-      COINDCX.EVENTS.DEPTH_UPDATE,
-      (message: CoinDCXOrderBookResponse) =>
-        this.handle(message),
+      "connect",
+      () => {
+        console.log(
+          "[CoinDCX] OrderBook Connected",
+        );
+
+        this.subscribed = false;
+        this.subscribedChannels.clear();
+
+        void this.subscribe();
+      },
+    );
+
+    this.socket.on(
+      COINDCX.EVENTS
+        .DEPTH_SNAPSHOT,
+      (
+        message:
+          CoinDCXOrderBookResponse,
+      ) => {
+        this.handle(message);
+      },
+    );
+
+    this.socket.on(
+      COINDCX.EVENTS
+        .DEPTH_UPDATE,
+      (
+        message:
+          CoinDCXOrderBookResponse,
+      ) => {
+        this.handle(message);
+      },
+    );
+
+    this.socket.on(
+      "disconnect",
+      (reason) => {
+        this.subscribed = false;
+
+        this.subscribedChannels.clear();
+
+        console.log(
+          `[CoinDCX] OrderBook Disconnected: ${reason}`,
+        );
+      },
+    );
+
+    this.socket.on(
+      "connect_error",
+      (error: Error) => {
+        console.error(
+          `[CoinDCX] OrderBook connection error: ${error.message}`,
+        );
+      },
     );
   }
 
-  private async subscribe(): Promise<void> {
+  async disconnect(): Promise<void> {
+    if (!this.socket) {
+      return;
+    }
+
+    for (
+      const channelName
+      of this.subscribedChannels
+    ) {
+      this.socket.emit(
+        "leave",
+        {
+          channelName,
+        },
+      );
+    }
+
+    this.socket.removeAllListeners();
+
+    this.socket.disconnect();
+
+    this.socket = null;
+
+    this.subscribed = false;
+
+    this.subscribedChannels.clear();
+  }
+
+  isConnected(): boolean {
+    return (
+      this.socket?.connected ??
+      false
+    );
+  }
+
+  getSubscribedMarketCount(): number {
+    return this
+      .subscribedChannels
+      .size;
+  }
+
+  private async subscribe():
+  Promise<void> {
     if (
-      !this.socket ||
-      !this.socket.connected ||
+      !this.socket?.connected ||
       this.subscribed
     ) {
       return;
     }
 
-    const markets =
-      await loadMarkets();
+    try {
+      const markets =
+        await loadMarkets();
 
-    const selectedMarkets =
-      markets.slice(
-        0,
-        COINDCX.ORDER_BOOK.MAX_MARKETS,
+      const selectedMarkets =
+        markets.slice(
+          0,
+          COINDCX.ORDER_BOOK
+            .MAX_MARKETS,
+        );
+
+      for (
+        const market
+        of selectedMarkets
+      ) {
+        const channelName =
+          `${market.pair}@orderbook@${COINDCX.ORDER_BOOK.DEPTH}`;
+
+        this.socket.emit(
+          "join",
+          {
+            channelName,
+          },
+        );
+
+        this.subscribedChannels.add(
+          channelName,
+        );
+      }
+
+      this.subscribed = true;
+
+      console.log(
+        `[CoinDCX] Subscribed to ${selectedMarkets.length} order books`,
       );
+    } catch (error) {
+      this.subscribed = false;
 
-    for (const market of selectedMarkets) {
-      this.socket.emit("join", {
-        channelName: `${market.pair}@orderbook@${COINDCX.ORDER_BOOK.DEPTH}`,
-      });
+      console.error(
+        "[CoinDCX] Unable to subscribe to order books:",
+        error,
+      );
     }
-
-    console.log(
-      `[CoinDCX] Subscribed to ${selectedMarkets.length} order books`,
-    );
-
-    this.subscribed = true;
   }
 
   private handle(
-    response: CoinDCXOrderBookResponse,
+    response:
+      CoinDCXOrderBookResponse,
   ): void {
     try {
       const payload =
-        typeof response.data === "string"
-          ? JSON.parse(response.data)
+        typeof response.data ===
+        "string"
+          ? JSON.parse(
+              response.data,
+            )
           : response.data;
 
       if (!payload) {
         return;
       }
 
-      const quote =
+      /*
+       * Preserve the existing top-of-book
+       * flow used by the opportunity engine.
+       */
+      const executableQuote =
         normalizeCoinDCXOrderBook(
           payload,
         );
 
-      if (!quote) {
+      if (executableQuote) {
+        marketCache.update(
+          executableQuote,
+        );
+      }
+
+      /*
+       * Store the complete normalized depth
+       * for VWAP and execution simulation.
+       */
+      const fullOrderBook =
+        normalizeCoinDCXFullOrderBook(
+          payload,
+        );
+
+      if (!fullOrderBook) {
         return;
       }
 
-      marketCache.update(quote);
+      orderBookService.update(
+        fullOrderBook,
+      );
+
+      this.updateCount += 1;
+
+      /*
+       * Controlled diagnostic logging:
+       * first update and every 500 updates.
+       */
+      if (
+        this.updateCount === 1 ||
+        this.updateCount % 500 ===
+          0
+      ) {
+        console.log(
+          `[CoinDCX] OrderBook cache updated: ${fullOrderBook.market} | bids=${fullOrderBook.bids.length} | asks=${fullOrderBook.asks.length} | cached=${orderBookService.size()}`,
+        );
+      }
     } catch (error) {
       console.error(
-        "[CoinDCX] OrderBook parse error",
+        "[CoinDCX] OrderBook parse error:",
         error,
       );
     }

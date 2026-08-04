@@ -9,6 +9,12 @@ export const BINANCE = {
   SOCKET: {
     URL: "wss://stream.binance.com:9443/ws",
   },
+  
+  DEPTH: {
+  LEVELS: 20,
+
+  UPDATE_SPEED: "100ms",
+},
 
   QUOTE_ASSET: "USDT",
 

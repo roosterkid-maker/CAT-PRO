@@ -30,3 +30,22 @@ export interface BinanceExchangeSymbol {
 export interface BinanceExchangeInfoResponse {
   symbols: BinanceExchangeSymbol[];
 }
+
+export type BinanceDepthLevel = [
+  string,
+  string,
+];
+
+export interface BinancePartialDepth {
+  lastUpdateId: number;
+
+  bids: BinanceDepthLevel[];
+
+  asks: BinanceDepthLevel[];
+}
+
+export interface BinanceCombinedDepthMessage {
+  stream: string;
+
+  data: BinancePartialDepth;
+}

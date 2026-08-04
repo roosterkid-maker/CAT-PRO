@@ -1,4 +1,5 @@
 import { orderBookCache } from "../cache/OrderBookCache";
+import { orderBookMerger } from "../calculators/OrderBookMerger";
 
 import type { OrderBook } from "../models/OrderBook";
 
@@ -6,8 +7,31 @@ export class OrderBookService {
   update(
     book: OrderBook,
   ): void {
-    orderBookCache.set(book);
+    const existing =
+      this.get(
+        book.exchange,
+        book.market,
+      );
+
+    const mergedBook =
+      orderBookMerger.merge(
+        existing,
+        book,
+      );
+
+    orderBookCache.set(
+      mergedBook,
+    );
+
+    console.log(
+      `[CACHE] ${mergedBook.exchange} ${mergedBook.market} | bids=${mergedBook.bids.length} | asks=${mergedBook.asks.length} | cached=${this.size()}`,
+    );
   }
+  replace(
+  book: OrderBook,
+): void {
+  orderBookCache.set(book);
+}
 
   get(
     exchange: string,
@@ -78,7 +102,9 @@ export class OrderBookService {
       now - book.timestamp,
     );
 
-    return ageMs <= maximumAgeMs;
+    return (
+      ageMs <= maximumAgeMs
+    );
   }
 
   getTimestamp(

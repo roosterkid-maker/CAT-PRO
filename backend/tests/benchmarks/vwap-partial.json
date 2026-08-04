@@ -1,0 +1,22 @@
+{
+  "name": "VWAP Partial Fill",
+
+  "levels": [
+    {
+      "price": 100,
+      "quantity": 1
+    },
+    {
+      "price": 101,
+      "quantity": 1
+    }
+  ],
+
+  "requestedQuantity": 5,
+
+  "expected": {
+    "filledQuantity": 2,
+    "partialFill": true,
+    "fillPercent": 40
+  }
+}

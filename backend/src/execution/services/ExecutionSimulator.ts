@@ -22,6 +22,10 @@ export class ExecutionSimulator {
         context,
       );
 
+    const executionTimeMs =
+      performance.now() -
+      startedAt;
+
     const validation =
       pipelineResult.context.validation;
 
@@ -43,27 +47,28 @@ export class ExecutionSimulator {
           pipelineResult.reason ??
           "Execution pipeline failed.",
 
-        executionTimeMs:
-          performance.now() -
-          startedAt,
+        executionTimeMs,
       };
     }
 
     const {
+      depth,
+
       buyVWAP,
       sellVWAP,
-      depth,
+
       buySlippage,
       sellSlippage,
+
       profit,
       confidence,
       decision,
     } = pipelineResult.context;
 
     if (
+      !depth ||
       !buyVWAP ||
       !sellVWAP ||
-      !depth ||
       !buySlippage ||
       !sellSlippage ||
       !profit ||
@@ -80,18 +85,16 @@ export class ExecutionSimulator {
         failureReason:
           "Execution pipeline completed without all required simulation outputs.",
 
-        executionTimeMs:
-          performance.now() -
-          startedAt,
+        executionTimeMs,
       };
     }
 
-    const simulation: ExecutionSimulation = {
+    const simulation:
+      ExecutionSimulation = {
+      depth,
+
       buyVWAP,
       sellVWAP,
-
-      buyDepth: depth,
-      sellDepth: depth,
 
       buySlippage,
       sellSlippage,
@@ -113,9 +116,7 @@ export class ExecutionSimulator {
 
       failureReason: null,
 
-      executionTimeMs:
-        performance.now() -
-        startedAt,
+      executionTimeMs,
     };
   }
 }

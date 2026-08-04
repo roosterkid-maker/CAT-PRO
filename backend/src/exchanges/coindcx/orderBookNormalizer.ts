@@ -1,19 +1,19 @@
 import type { ExecutableQuote } from "../../core/models/ExecutableQuote";
+import type { OrderBook } from "../../orderbook/models/OrderBook";
+import type { OrderBookLevel } from "../../orderbook/models/OrderBookLevel";
 
+import { COINDCX } from "./constants";
 import { marketRegistry } from "./registry";
+
 import type {
   CoinDCXOrderBookPayload,
   CoinDCXOrderBookSide,
 } from "./orderBook.types";
 
-interface PriceLevel {
-  price: number;
-  quantity: number;
-}
 
-export function normalizeCoinDCXOrderBook(
+function resolveMarket(
   payload: CoinDCXOrderBookPayload,
-): ExecutableQuote | null {
+): string | null {
   const rawSymbol =
     payload.s?.trim().toUpperCase();
 
@@ -25,79 +25,35 @@ export function normalizeCoinDCXOrderBook(
     marketRegistry.get(rawSymbol) ??
     marketRegistry.getByPair(rawSymbol);
 
-  const market =
+  return (
     marketInfo?.symbol ??
-    rawSymbol;
+    rawSymbol
+  );
+}
 
-  const bestBid =
-    findBestLevel(
-      payload.bids,
-      "bid",
-    );
-
-  const bestAsk =
-    findBestLevel(
-      payload.asks,
-      "ask",
-    );
-
-  if (!bestBid || !bestAsk) {
-    return null;
-  }
-
-  if (bestAsk.price < bestBid.price) {
-    return null;
-  }
-
+function resolveTimestamp(
+  payload: CoinDCXOrderBookPayload,
+): number {
   const timestamp =
     payload.E ??
     payload.ts ??
     Date.now();
 
-  return {
-    exchange: "coindcx",
-
-    market,
-
-    lastPrice: null,
-
-    bestBidPrice:
-      bestBid.price,
-
-    bestBidQty:
-      bestBid.quantity,
-
-    bestAskPrice:
-      bestAsk.price,
-
-    bestAskQty:
-      bestAsk.quantity,
-
-    spread:
-      bestAsk.price -
-      bestBid.price,
-
-    timestamp,
-
-    source: "orderBook",
-
-    executable: true,
-  };
+  return Number.isFinite(timestamp)
+    ? timestamp
+    : Date.now();
 }
 
-function findBestLevel(
-  side:
-    | CoinDCXOrderBookSide
-    | undefined,
-  type: "bid" | "ask",
-): PriceLevel | null {
+function normalizeSide(
+  side: CoinDCXOrderBookSide | undefined,
+  direction: "bid" | "ask",
+  maximumLevels = COINDCX.ORDER_BOOK.DEPTH,
+): OrderBookLevel[] {
   if (!side) {
-    return null;
+    return [];
   }
 
-  let bestLevel:
-    | PriceLevel
-    | null = null;
+  const levels: OrderBookLevel[] = [];
 
   for (const [
     rawPrice,
@@ -118,27 +74,141 @@ function findBestLevel(
       continue;
     }
 
-    if (!bestLevel) {
-      bestLevel = {
-        price,
-        quantity,
-      };
-
-      continue;
-    }
-
-    const isBetter =
-      type === "bid"
-        ? price > bestLevel.price
-        : price < bestLevel.price;
-
-    if (isBetter) {
-      bestLevel = {
-        price,
-        quantity,
-      };
-    }
+    levels.push({
+      price,
+      quantity,
+    });
   }
 
-  return bestLevel;
+  levels.sort(
+    direction === "bid"
+      ? (
+          first,
+          second,
+        ) =>
+          second.price -
+          first.price
+      : (
+          first,
+          second,
+        ) =>
+          first.price -
+          second.price,
+  );
+
+  return levels.slice(
+    0,
+    maximumLevels,
+  );
+}
+
+export function normalizeCoinDCXFullOrderBook(
+  payload: CoinDCXOrderBookPayload,
+): OrderBook | null {
+  const market =
+    resolveMarket(payload);
+
+  if (!market) {
+    return null;
+  }
+
+  const bids =
+    normalizeSide(
+      payload.bids,
+      "bid",
+    );
+
+  const asks =
+    normalizeSide(
+      payload.asks,
+      "ask",
+    );
+
+  if (
+    bids.length === 0 ||
+    asks.length === 0
+  ) {
+    return null;
+  }
+
+  const bestBid =
+    bids[0];
+
+  const bestAsk =
+    asks[0];
+
+  if (
+    !bestBid ||
+    !bestAsk ||
+    bestAsk.price < bestBid.price
+  ) {
+    return null;
+  }
+
+  return {
+    exchange: "coindcx",
+
+    market,
+
+    bids,
+    asks,
+
+    timestamp:
+      resolveTimestamp(payload),
+  };
+}
+
+export function normalizeCoinDCXOrderBook(
+  payload: CoinDCXOrderBookPayload,
+): ExecutableQuote | null {
+  const orderBook =
+    normalizeCoinDCXFullOrderBook(
+      payload,
+    );
+
+  if (!orderBook) {
+    return null;
+  }
+
+  const bestBid =
+    orderBook.bids[0];
+
+  const bestAsk =
+    orderBook.asks[0];
+
+  if (!bestBid || !bestAsk) {
+    return null;
+  }
+
+  return {
+    exchange: "coindcx",
+
+    market:
+      orderBook.market,
+
+    lastPrice: null,
+
+    bestBidPrice:
+      bestBid.price,
+
+    bestBidQty:
+      bestBid.quantity,
+
+    bestAskPrice:
+      bestAsk.price,
+
+    bestAskQty:
+      bestAsk.quantity,
+
+    spread:
+      bestAsk.price -
+      bestBid.price,
+
+    timestamp:
+      orderBook.timestamp,
+
+    source: "orderBook",
+
+    executable: true,
+  };
 }
