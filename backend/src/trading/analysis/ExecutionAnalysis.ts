@@ -1,6 +1,9 @@
 import type { ArbitrageOpportunity } from "../../arbitrage/models/ArbitrageOpportunity";
 import type { ArbitragePolicy } from "../../arbitrage/models/ArbitragePolicy";
 
+import { executionCalculator } from "../calculators/ExecutionCalculator";
+import type { ExecutionContext } from "../models/ExecutionContext";
+
 import {
   decisionAnalyzer,
   type DecisionAnalysis,
@@ -29,6 +32,8 @@ import {
 import { scoreCalculator } from "./ScoreCalculator";
 
 export interface ExecutionAnalysisResult {
+  context: ExecutionContext;
+
   liquidity: LiquidityAnalysis;
   freshness: FreshnessAnalysis;
   fees: FeeAnalysis;
@@ -46,10 +51,20 @@ export class ExecutionAnalysis {
   analyze(
     opportunity: ArbitrageOpportunity,
     policy: ArbitragePolicy,
+    suppliedContext?: ExecutionContext,
   ): ExecutionAnalysisResult {
+    const context =
+      suppliedContext ??
+      executionCalculator.calculate(
+        opportunity.buyPrice,
+        opportunity.buyAvailableQty,
+        opportunity.sellAvailableQty,
+        policy.referenceCapital,
+      );
+
     const liquidity =
       liquidityAnalyzer.analyze(
-        opportunity,
+        context,
         policy.minimumLiquidityPercent,
       );
 
@@ -106,6 +121,8 @@ export class ExecutionAnalysis {
       );
 
     return {
+      context,
+
       liquidity,
       freshness,
       fees,

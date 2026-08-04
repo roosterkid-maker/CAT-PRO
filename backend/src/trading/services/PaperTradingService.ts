@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import type { ArbitrageOpportunity } from "../../arbitrage/models/ArbitrageOpportunity";
+import { executionCalculator } from "../calculators/ExecutionCalculator";
 import { defaultTradingExecutionConfig } from "../config/execution";
+import type { ExecutionResult } from "../models/ExecutionResult";
 import type { PaperTrade } from "../models/PaperTrade";
 
 import { paperTradeStore } from "./PaperTradeStore";
@@ -11,7 +13,8 @@ export class PaperTradingService {
     opportunity: ArbitrageOpportunity,
     requestedCapital: number,
   ): PaperTrade {
-    const config = defaultTradingExecutionConfig;
+    const config =
+      defaultTradingExecutionConfig;
 
     if (!config.enabled) {
       throw new Error(
@@ -76,53 +79,36 @@ export class PaperTradingService {
       );
     }
 
-    const buyPrice =
-      opportunity.buyPrice;
+    const execution =
+      executionCalculator.calculate(
+        opportunity.buyPrice,
+        opportunity.buyAvailableQty,
+        opportunity.sellAvailableQty,
+        requestedCapital,
+      );
 
-    const sellPrice =
-      opportunity.sellPrice;
-
-    const executableQty =
-      opportunity.executableQty;
-
-    if (
-      !Number.isFinite(buyPrice) ||
-      !Number.isFinite(sellPrice) ||
-      !Number.isFinite(executableQty) ||
-      buyPrice <= 0 ||
-      sellPrice <= 0 ||
-      executableQty <= 0
-    ) {
+    if (!execution.enoughLiquidity) {
       throw new Error(
-        "Opportunity contains invalid execution prices or liquidity.",
+        `Only ${execution.liquidityPercent.toFixed(
+          1,
+        )}% liquidity is available for the requested capital.`,
       );
     }
-
-    const requestedQuantity =
-      requestedCapital / buyPrice;
-
-    const quantity = Math.min(
-      requestedQuantity,
-      executableQty,
-    );
-
-    if (
-      !Number.isFinite(quantity) ||
-      quantity <= 0
-    ) {
-      throw new Error(
-        "Unable to calculate a valid executable quantity.",
-      );
-    }
-
-    const executableCapital =
-      quantity * buyPrice;
 
     const estimatedFees =
-      quantity * opportunity.estimatedFees;
+      execution.executableQty *
+      opportunity.estimatedFees;
 
     const expectedProfit =
-      quantity * opportunity.netProfit;
+      execution.executableQty *
+      opportunity.netProfit;
+
+    const expectedProfitPercent =
+      execution.executableCapital > 0
+        ? (expectedProfit /
+            execution.executableCapital) *
+          100
+        : 0;
 
     const now = Date.now();
 
@@ -138,24 +124,30 @@ export class PaperTradingService {
       sellExchange:
         opportunity.pair.sell.exchange,
 
-      capital: executableCapital,
-      quantity,
+      capital:
+        execution.executableCapital,
 
-      buyPrice,
-      sellPrice,
+      quantity:
+        execution.executableQty,
+
+      buyPrice:
+        opportunity.buyPrice,
+
+      sellPrice:
+        opportunity.sellPrice,
 
       estimatedFees,
       expectedProfit,
-
-      expectedProfitPercent:
-        opportunity.netProfitPercent,
+      expectedProfitPercent,
 
       status: "open",
 
       openedAt: now,
       closedAt: null,
 
-      currentPrice: buyPrice,
+      currentPrice:
+        opportunity.buyPrice,
+
       currentProfit: 0,
       currentProfitPercent: 0,
 
@@ -169,6 +161,114 @@ export class PaperTradingService {
       actualProfitPercent: null,
 
       failureReason: null,
+    };
+
+    return paperTradeStore.create(
+      trade,
+    );
+  }
+
+  recordCompletedExecution(
+    result: ExecutionResult,
+  ): PaperTrade {
+    if (!result.successful) {
+      throw new Error(
+        result.failureReason ??
+          "Paper execution was not successful.",
+      );
+    }
+
+    const completedAt =
+      result.completedAt ?? Date.now();
+
+    const quantity = Math.min(
+      result.buy.filledQuantity,
+      result.sell.filledQuantity,
+    );
+
+    if (
+      !Number.isFinite(quantity) ||
+      quantity <= 0
+    ) {
+      throw new Error(
+        "Paper execution produced an invalid filled quantity.",
+      );
+    }
+
+    const trade: PaperTrade = {
+      id: result.planId,
+
+      market: result.market,
+
+      buyExchange:
+        result.buy.exchange,
+
+      sellExchange:
+        result.sell.exchange,
+
+      capital:
+        result.capitalUsed,
+
+      quantity,
+
+      buyPrice:
+        result.buy.averageFillPrice,
+
+      sellPrice:
+        result.sell.averageFillPrice,
+
+      estimatedFees:
+        result.totalFees,
+
+      expectedProfit:
+        result.netProfit,
+
+      expectedProfitPercent:
+        result.netProfitPercent,
+
+      status: "closed",
+
+      openedAt:
+        result.startedAt,
+
+      closedAt:
+        completedAt,
+
+      currentPrice:
+        result.sell.averageFillPrice,
+
+      currentProfit:
+        result.netProfit,
+
+      currentProfitPercent:
+        result.netProfitPercent,
+
+      highestProfit:
+        Math.max(
+          0,
+          result.netProfit,
+        ),
+
+      lowestProfit:
+        Math.min(
+          0,
+          result.netProfit,
+        ),
+
+      lastUpdatedAt:
+        completedAt,
+
+      actualSellPrice:
+        result.sell.averageFillPrice,
+
+      actualProfit:
+        result.netProfit,
+
+      actualProfitPercent:
+        result.netProfitPercent,
+
+      failureReason:
+        result.failureReason,
     };
 
     return paperTradeStore.create(

@@ -1,7 +1,6 @@
 import axios from "axios";
 
 import type {
-  PaperTrade,
   PaperTradesResponse,
 } from "../types/PaperTrade";
 
@@ -10,15 +9,32 @@ const API_BASE_URL =
   "http://localhost:5000";
 
 export interface CreatePaperTradePayload {
-  market: string;
-  buyExchange: string;
-  sellExchange: string;
-  capital: number;
+  opportunityId: string;
+  requestedCapital: number;
 }
 
-interface PaperTradeResponse {
+interface ExecutionResult {
+  tradeId: string;
+  market: string;
+  capital: number;
+  quantity: number;
+  buyPrice: number;
+  sellPrice: number;
+  grossProfit: number;
+  fees: number;
+  netProfit: number;
+  executedAt: number;
+}
+
+interface AutomatedPaperTradeExecution {
+  approved: boolean;
+  result: ExecutionResult | null;
+  reasons: string[];
+}
+
+interface PaperTradeExecutionResponse {
   success: boolean;
-  data: PaperTrade;
+  data: AutomatedPaperTradeExecution;
 }
 
 interface ApiErrorResponse {
@@ -39,15 +55,30 @@ export async function fetchPaperTrades(): Promise<PaperTradesResponse> {
 
 export async function createPaperTrade(
   payload: CreatePaperTradePayload,
-): Promise<PaperTradeResponse> {
+): Promise<PaperTradeExecutionResponse> {
   try {
-    const response = await axios.post<PaperTradeResponse>(
-      `${API_BASE_URL}/api/paper-trades`,
-      payload,
-      {
-        timeout: 10_000,
-      },
-    );
+    const response =
+      await axios.post<PaperTradeExecutionResponse>(
+        `${API_BASE_URL}/api/paper/execute`,
+        {
+          opportunityId: payload.opportunityId,
+          requestedCapital:
+            payload.requestedCapital,
+        },
+        {
+          timeout: 10_000,
+        },
+      );
+
+    if (
+      !response.data.success ||
+      !response.data.data.approved
+    ) {
+      throw new Error(
+        response.data.data.reasons[0] ??
+          "Paper trade was not approved.",
+      );
+    }
 
     return response.data;
   } catch (error) {

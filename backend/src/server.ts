@@ -2,6 +2,7 @@ import http from "node:http";
 
 import cors from "cors";
 import express from "express";
+import portfolioRoutes from "./portfolio/routes/portfolioRoutes";
 
 import comparisonRoutes from "./routes/comparison";
 import liveRoutes from "./routes/live";
@@ -12,6 +13,8 @@ import systemHealthRoutes from "./routes/systemHealth";
 import { initializeSocket } from "./socket/server";
 import { tradeMonitorRunner } from "./trading/services/TradeMonitorRunner";
 import { websocketManager } from "./websocket/manager";
+import paperTradingRouter
+from "./routes/paperTrading";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
@@ -22,7 +25,14 @@ app.use(express.json());
 app.get("/", (_request, response) => {
   response.send("Crypto Arbitrage Server Running");
 });
-
+app.use(
+  "/api/portfolio",
+  portfolioRoutes,
+);
+app.use(
+    "/api/paper",
+    paperTradingRouter,
+);
 app.use("/api/live", liveRoutes);
 app.use("/api/comparison", comparisonRoutes);
 app.use("/api/spreads", spreadRoutes);

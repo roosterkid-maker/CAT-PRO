@@ -356,14 +356,10 @@ export default function TradePlanner({
           onClick={() => {
             createPaperTrade.reset();
 
-            createPaperTrade.mutate({
-              market: opportunity.market,
-              buyExchange:
-                opportunity.buyExchange,
-              sellExchange:
-                opportunity.sellExchange,
-              capital,
-            });
+          createPaperTrade.mutate({
+          opportunityId: opportunity.id,
+          requestedCapital: capital,
+          });
           }}
           className="w-full rounded-xl bg-brand px-6 py-4 text-lg font-semibold text-white transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >

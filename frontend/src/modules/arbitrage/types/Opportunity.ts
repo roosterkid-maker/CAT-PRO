@@ -4,6 +4,7 @@ export type OpportunityDecision =
   | "SKIP";
 
 export interface Opportunity {
+    id: string;
   market: string;
 
   buyExchange: string;

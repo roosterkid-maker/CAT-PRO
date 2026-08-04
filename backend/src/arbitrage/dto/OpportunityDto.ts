@@ -4,6 +4,7 @@ export type OpportunityDecision =
   | "SKIP";
 
 export interface OpportunityDto {
+  id: string;
   market: string;
 
   buyExchange: string;
@@ -44,7 +45,7 @@ export interface OpportunityDto {
 
   enoughLiquidity: boolean;
 
-  usedLastPriceFallback: false;
+  usedLastPriceFallback: boolean;
 
   quotesAreFresh: boolean;
 

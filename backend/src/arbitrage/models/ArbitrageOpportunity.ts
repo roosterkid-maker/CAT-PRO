@@ -6,6 +6,12 @@ export type ExecutionDecision =
   | "SKIP";
 
 export interface ArbitrageOpportunity {
+  /**
+   * Unique ID for this exact opportunity snapshot.
+   * A refreshed/recalculated opportunity receives a new ID.
+   */
+  id: string;
+
   pair: ExchangePair;
 
   buyPrice: number;
@@ -15,18 +21,19 @@ export interface ArbitrageOpportunity {
   sellAvailableQty: number;
 
   /**
-   * Required quantity based on reference capital.
+   * Temporary compatibility fields.
+   *
+   * These are currently used by the opportunity DTO,
+   * frontend trade planner, execution analysis,
+   * allocation engine, risk engine and paper-trading flow.
+   *
+   * They will be removed after dynamic capital calculation
+   * is integrated across all dependent modules.
    */
   requiredQty: number;
 
-  /**
-   * Maximum quantity available on both top-of-book legs.
-   */
   availableExecutableQty: number;
 
-  /**
-   * Quantity that can actually be evaluated/executed.
-   */
   executableQty: number;
 
   liquidityScore: number;
@@ -48,7 +55,7 @@ export interface ArbitrageOpportunity {
   netProfit: number;
   netProfitPercent: number;
 
-  usedLastPriceFallback: false;
+  usedLastPriceFallback: boolean;
   quotesAreFresh: boolean;
 
   score: number;

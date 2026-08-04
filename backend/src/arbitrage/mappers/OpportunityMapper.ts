@@ -6,7 +6,10 @@ export class OpportunityMapper {
     opportunity: ArbitrageOpportunity,
   ): OpportunityDto {
     return {
-      market: opportunity.pair.market,
+      id: opportunity.id,
+
+      market:
+        opportunity.pair.market,
 
       buyExchange:
         opportunity.pair.buy.exchange,
@@ -74,7 +77,8 @@ export class OpportunityMapper {
       enoughLiquidity:
         opportunity.enoughLiquidity,
 
-      usedLastPriceFallback: false,
+      usedLastPriceFallback:
+        opportunity.usedLastPriceFallback,
 
       quotesAreFresh:
         opportunity.quotesAreFresh,

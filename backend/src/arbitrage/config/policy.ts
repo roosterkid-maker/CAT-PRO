@@ -29,7 +29,7 @@ export const defaultArbitragePolicy: ArbitragePolicy = {
    *
    * Later this will come from the user's UI selection.
    */
-  referenceCapital: 10_000,
+  referenceCapital: 500,
 
   /**
    * At least 100% of the required quantity

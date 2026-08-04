@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { defaultArbitragePolicy } from "./config/policy";
 
 import type { ArbitrageOpportunity } from "./models/ArbitrageOpportunity";
@@ -94,6 +95,7 @@ export class SpreadEngine {
         .minimumLiquidityPercent;
 
     return {
+      id: randomUUID(),
       pair,
 
       buyPrice,
