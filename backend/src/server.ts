@@ -13,6 +13,7 @@ import systemHealthRoutes from "./routes/systemHealth";
 import { initializeSocket } from "./socket/server";
 import { tradeMonitorRunner } from "./trading/services/TradeMonitorRunner";
 import { websocketManager } from "./websocket/manager";
+import executionRoutes from "./execution/routes/executionRoutes";
 import paperTradingRouter
 from "./routes/paperTrading";
 
@@ -32,6 +33,10 @@ app.use(
 app.use(
     "/api/paper",
     paperTradingRouter,
+);
+app.use(
+  "/api/execution",
+  executionRoutes,
 );
 app.use("/api/live", liveRoutes);
 app.use("/api/comparison", comparisonRoutes);

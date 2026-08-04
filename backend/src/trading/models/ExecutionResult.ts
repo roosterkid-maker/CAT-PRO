@@ -1,8 +1,6 @@
-import type {
-  ExecutionMode,
-  ExecutionStatus,
-  OrderSide,
-} from "./ExecutionPlan";
+export type ExecutionLegSide =
+  | "BUY"
+  | "SELL";
 
 export type ExecutionLegStatus =
   | "PENDING"
@@ -11,12 +9,22 @@ export type ExecutionLegStatus =
   | "FAILED"
   | "CANCELLED";
 
+export type ExecutionResultStatus =
+  | "COMPLETED"
+  | "FAILED"
+  | "PARTIALLY_COMPLETED";
+
+export type TradingExecutionMode =
+  | "PAPER"
+  | "TESTNET"
+  | "LIVE";
+
 export interface ExecutionLegResult {
   exchange: string;
 
   market: string;
 
-  side: OrderSide;
+  side: ExecutionLegSide;
 
   requestedQuantity: number;
 
@@ -42,9 +50,9 @@ export interface ExecutionResult {
 
   market: string;
 
-  mode: ExecutionMode;
+  mode: TradingExecutionMode;
 
-  status: ExecutionStatus;
+  status: ExecutionResultStatus;
 
   buy: ExecutionLegResult;
 
