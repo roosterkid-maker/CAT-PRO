@@ -1,4 +1,10 @@
 import {
+  executionAuditLogger,
+} from "../audit/ExecutionAuditLogger";
+import {
+  orderPoller,
+} from "../polling/OrderPoller";
+import {
   coinDCXCredentialsProvider,
 } from "../../../exchanges/coindcx/api/CoinDCXCredentialsProvider";
 
@@ -24,15 +30,19 @@ export class CoinDCXExecutionAdapter
   readonly exchange =
     "coindcx";
 
-  async execute(
-    request: LiveExecutionRequest,
-  ): Promise<LiveExecutionResult> {
-    const startedAt =
-      Date.now();
+   async execute(
+  request: LiveExecutionRequest,
+): Promise<LiveExecutionResult> {
+  const startedAt =
+    Date.now();
+    await executionAuditLogger.executionStarted(
+  request,
+);
 
-    const credentials =
-      coinDCXCredentialsProvider.getCredentials();
+  const credentials =
+    coinDCXCredentialsProvider.getCredentials();
 
+  try {
     const createdOrder =
       await coinDCXOrderApi.createOrder(
         {
@@ -60,14 +70,107 @@ export class CoinDCXExecutionAdapter
         credentials,
       );
 
-    return this.mapOrder(
-      createdOrder,
-      startedAt,
-      false,
-      false,
-      null,
+    const initialResult =
+      this.mapOrder(
+        createdOrder,
+        startedAt,
+        false,
+        false,
+        null,
+      );
+      await executionAuditLogger.orderCreated(
+  request,
+  initialResult,
+);
+
+    return orderPoller.waitForFinalState(
+      this,
+      initialResult,
+      {
+        timeoutMs:
+          request.timeoutMs ??
+          15_000,
+
+        pollingIntervalMs:
+          request.pollingIntervalMs ??
+          1_000,
+
+        cancelOnTimeout:
+          request.cancelOnTimeout ??
+          true,
+      },
     );
+  } catch (error: unknown) {
+    const completedAt =
+      Date.now();
+      await executionAuditLogger.executionFailed(
+  request,
+  error instanceof Error
+    ? error.message
+    : "CoinDCX execution failed.",
+);
+
+    return {
+      success: false,
+
+      exchange:
+        this.exchange,
+
+      market:
+        request.market
+          .trim()
+          .toUpperCase(),
+
+      side:
+        request.side,
+
+      orderId: null,
+
+      clientOrderId:
+        request.clientOrderId ??
+        null,
+
+      status: "FAILED",
+
+      requestedQuantity:
+        request.quantity,
+
+      filledQuantity: 0,
+
+      remainingQuantity:
+        request.quantity,
+
+      requestedPrice:
+        request.price ??
+        null,
+
+      averageFillPrice: 0,
+
+      feeAmount: 0,
+
+      cancelled: false,
+
+      timedOut: false,
+
+      startedAt,
+
+      completedAt,
+
+      executionTimeMs:
+        completedAt -
+        startedAt,
+
+      failureReason:
+        error instanceof Error
+          ? error.message
+          : "CoinDCX live execution failed.",
+
+      reasons: [
+        "Unable to create or monitor the CoinDCX order.",
+      ],
+    };
   }
+}
 
   async getOrderStatus(
     orderId: string,
