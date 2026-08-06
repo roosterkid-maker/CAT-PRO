@@ -1,26 +1,31 @@
 export const BINANCE = {
   NAME: "Binance",
 
-  REST: {
-    BASE_URL:
-      process.env.BINANCE_REST_BASE_URL?.trim() ??
-      "https://api.binance.com",
+   REST: {
+  BASE_URL:
+    process.env.BINANCE_REST_BASE_URL?.trim() ??
+    "https://api.binance.com",
+    API_RESTRICTIONS:
+  "/sapi/v1/account/apiRestrictions",
 
-    TIME:
-      "/api/v3/time",
+  TIME:
+    "/api/v3/time",
 
-    EXCHANGE_INFO:
-      "https://api.binance.com/api/v3/exchangeInfo",
+  EXCHANGE_INFO:
+    "https://api.binance.com/api/v3/exchangeInfo",
 
-    ACCOUNT:
-      "/api/v3/account",
+  ACCOUNT:
+    "/api/v3/account",
 
-    ORDER:
-      "/api/v3/order",
+  ORDER:
+    "/api/v3/order",
 
-    OPEN_ORDERS:
-      "/api/v3/openOrders",
-  },
+  ORDER_TEST:
+    "/api/v3/order/test",
+
+  OPEN_ORDERS:
+    "/api/v3/openOrders",
+},
 
   SOCKET: {
     URL: "wss://stream.binance.com:9443/ws",
