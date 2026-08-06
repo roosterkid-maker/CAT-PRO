@@ -25,9 +25,12 @@ export class CoinDCXHttpClient {
       timeout: 10_000,
 
       headers: {
-        "Content-Type":
-          "application/json",
+        "Content-Type": "application/json",
       },
+
+      validateStatus: (status) =>
+        status >= 200 &&
+        status < 300,
     });
   }
 
@@ -35,26 +38,42 @@ export class CoinDCXHttpClient {
     path: string,
     config?: AxiosRequestConfig,
   ): Promise<T> {
-    const response =
-      await this.client.get<T>(
-        path,
-        config,
-      );
+    try {
+      const response =
+        await this.client.get<T>(
+          path,
+          config,
+        );
 
-    return response.data;
+      return response.data;
+    } catch (error: unknown) {
+      throw this.createRequestError(
+        "GET",
+        path,
+        error,
+      );
+    }
   }
 
   async postPublic<T>(
     path: string,
     body: CoinDCXRequestBody = {},
   ): Promise<T> {
-    const response =
-      await this.client.post<T>(
-        path,
-        body,
-      );
+    try {
+      const response =
+        await this.client.post<T>(
+          path,
+          body,
+        );
 
-    return response.data;
+      return response.data;
+    } catch (error: unknown) {
+      throw this.createRequestError(
+        "POST",
+        path,
+        error,
+      );
+    }
   }
 
   async postPrivate<T>(
@@ -69,17 +88,69 @@ export class CoinDCXHttpClient {
         credentials.apiSecret,
       );
 
-    const response =
-      await this.client.post<T>(
-        path,
-        signedRequest.payload,
-        {
-          headers:
-            signedRequest.headers,
-        },
-      );
+    try {
+      const response =
+        await this.client.post<T>(
+          path,
+          signedRequest.payload,
+          {
+            headers:
+              signedRequest.headers,
+          },
+        );
 
-    return response.data;
+      return response.data;
+    } catch (error: unknown) {
+      throw this.createRequestError(
+        "POST",
+        path,
+        error,
+      );
+    }
+  }
+
+  private createRequestError(
+    method: string,
+    path: string,
+    error: unknown,
+  ): Error {
+    if (axios.isAxiosError(error)) {
+      const status =
+        error.response?.status ??
+        "unknown";
+
+      const responseData =
+        error.response?.data;
+
+      const responseText =
+        responseData === undefined
+          ? error.message
+          : this.safeStringify(
+              responseData,
+            );
+
+      return new Error(
+        `CoinDCX ${method} ${path} failed: status=${status}, response=${responseText}`,
+      );
+    }
+
+    return error instanceof Error
+      ? error
+      : new Error(
+          `CoinDCX ${method} ${path} failed with an unknown error.`,
+        );
+  }
+
+  private safeStringify(
+    value: unknown,
+  ): string {
+    try {
+      return JSON.stringify(
+        value,
+      );
+    } catch {
+      return String(value);
+    }
   }
 }
 

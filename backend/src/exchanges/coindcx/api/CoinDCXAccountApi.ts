@@ -9,15 +9,26 @@ import {
 
 export interface CoinDCXBalance {
   currency: string;
+
   balance: number;
+
   lockedBalance: number;
+
   availableBalance: number;
+
+  totalBalance: number;
 }
 
 interface CoinDCXBalanceResponse {
   currency?: string;
-  balance?: number | string;
-  locked_balance?: number | string;
+
+  balance?:
+    | number
+    | string;
+
+  locked_balance?:
+    | number
+    | string;
 }
 
 export class CoinDCXAccountApi {
@@ -44,7 +55,9 @@ export class CoinDCXAccountApi {
 
     return response
       .map((item) =>
-        this.normalizeBalance(item),
+        this.normalizeBalance(
+          item,
+        ),
       )
       .filter(
         (
@@ -79,7 +92,8 @@ export class CoinDCXAccountApi {
         (balance) =>
           balance.currency ===
           normalizedCurrency,
-      ) ?? null
+      ) ??
+      null
     );
   }
 
@@ -92,7 +106,10 @@ export class CoinDCXAccountApi {
         .toUpperCase();
 
     const balance =
-      Number(response.balance);
+      Number(
+        response.balance ??
+          0,
+      );
 
     const lockedBalance =
       Number(
@@ -119,12 +136,16 @@ export class CoinDCXAccountApi {
 
       lockedBalance,
 
+      /*
+       * CoinDCX balance already represents
+       * the currently usable balance.
+       */
       availableBalance:
-        Math.max(
-          0,
-          balance -
-            lockedBalance,
-        ),
+        balance,
+
+      totalBalance:
+        balance +
+        lockedBalance,
     };
   }
 }

@@ -1,11 +1,27 @@
 import type { LoadedCoinDCXMarket } from "./marketLoader";
 
-export interface MarketInfo {
+ export interface MarketInfo {
   symbol: string;
   pair: string;
 
   base: string;
   quote: string;
+
+  minimumQuantity: number;
+  maximumQuantity: number | null;
+
+  minimumPrice: number;
+  maximumPrice: number | null;
+
+  minimumNotional: number;
+
+  quantityStep: number;
+
+  quantityPrecision: number;
+
+  pricePrecision: number;
+
+  orderTypes: string[];
 }
 
 class MarketRegistry {
@@ -43,12 +59,40 @@ class MarketRegistry {
       return;
     }
 
-    const marketInfo: MarketInfo = {
-      symbol,
-      pair,
-      base,
-      quote,
-    };
+      const marketInfo: MarketInfo = {
+  symbol,
+  pair,
+
+  base,
+  quote,
+
+  minimumQuantity:
+    market.minimumQuantity,
+
+  maximumQuantity:
+    market.maximumQuantity,
+
+  minimumPrice:
+    market.minimumPrice,
+
+  maximumPrice:
+    market.maximumPrice,
+
+  minimumNotional:
+    market.minimumNotional,
+
+  quantityStep:
+    market.quantityStep,
+
+  quantityPrecision:
+    market.quantityPrecision,
+
+  pricePrecision:
+    market.pricePrecision,
+
+  orderTypes:
+    market.orderTypes,
+};
 
     this.markets.set(
       symbol,
