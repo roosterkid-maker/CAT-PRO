@@ -1,9 +1,17 @@
-import { opportunityRankingService } from "../../ranking/services/OpportunityRankingService";
-import { capitalOptimizer } from "../../optimizer/services/CapitalOptimizer";
 import { executionSimulator } from "../../execution/services/ExecutionSimulator";
+import { capitalOptimizer } from "../../optimizer/services/CapitalOptimizer";
+import { opportunityRankingService } from "../../ranking/services/OpportunityRankingService";
 import { riskEngine } from "../../risk/services/RiskEngine";
 
 import type { ArbitrageOpportunity } from "../../arbitrage/models/ArbitrageOpportunity";
+
+import { tradingAccountService } from "../account/TradingAccountService";
+import {
+  defaultExecutableProfitConfig,
+} from "../config/execution";
+import {
+  executableProfitCalculator,
+} from "../profit/ExecutableProfitCalculator";
 
 export type TradingRecommendation =
   | "EXECUTE"
@@ -37,6 +45,7 @@ export interface TradeCycleResult {
   market: string | null;
 
   buyExchange: string | null;
+
   sellExchange: string | null;
 
   capital: number | null;
@@ -61,25 +70,67 @@ export class TradeOrchestrator {
     opportunity: ArbitrageOpportunity,
     requestedCapital: number,
   ): TradingDecision {
+    console.log(
+      "[TradingOrchestrator] Evaluating opportunity:",
+      {
+        market: opportunity.pair.market,
+        requestedCapital,
+      },
+    );
+
     if (
       !Number.isFinite(requestedCapital) ||
       requestedCapital <= 0
     ) {
-      return {
-        approved: false,
+      return this.createRejectedDecision([
+        "Requested capital must be a positive number.",
+      ]);
+    }
 
-        decision: "SKIP",
+    const accountCheck =
+      tradingAccountService.evaluateTrade(
+        requestedCapital,
+      );
 
-        allocatedCapital: 0,
+    if (!accountCheck.approved) {
+      return this.createRejectedDecision(
+        accountCheck.reasons,
+      );
+    }
 
-        executionScore: 0,
+    let executableProfit;
 
-        riskScore: 0,
+    try {
+      executableProfit =
+        executableProfitCalculator.calculate({
+          capital: requestedCapital,
 
-        reasons: [
-          "Requested capital must be a positive number.",
-        ],
-      };
+          buyExchange:
+            opportunity.pair.buy.exchange,
+
+          sellExchange:
+            opportunity.pair.sell.exchange,
+
+          buyPrice:
+            opportunity.buyPrice,
+
+          sellPrice:
+            opportunity.sellPrice,
+
+          ...defaultExecutableProfitConfig,
+        });
+    } catch (error: unknown) {
+      return this.createRejectedDecision([
+        error instanceof Error
+          ? error.message
+          : "Executable-profit calculation failed.",
+      ]);
+    }
+
+    if (!executableProfit.executable) {
+      return this.createRejectedDecision(
+        executableProfit.reasons,
+      );
     }
 
     const execution =
@@ -101,22 +152,10 @@ export class TradeOrchestrator {
       !execution.success ||
       !execution.simulation
     ) {
-      return {
-        approved: false,
-
-        decision: "SKIP",
-
-        allocatedCapital: 0,
-
-        executionScore: 0,
-
-        riskScore: 0,
-
-        reasons: [
-          execution.failureReason ??
-            "Execution simulation failed.",
-        ],
-      };
+      return this.createRejectedDecision([
+        execution.failureReason ??
+          "Execution simulation failed.",
+      ]);
     }
 
     const simulation =
@@ -139,8 +178,7 @@ export class TradeOrchestrator {
           simulation.depth.fillPercent,
 
         netProfit:
-          simulation.profit.breakdown
-            .netProfit,
+          executableProfit.executableProfit,
 
         executionTimeMs:
           execution.executionTimeMs,
@@ -155,13 +193,11 @@ export class TradeOrchestrator {
       );
 
     const simulationDecision =
-      simulation.decision
-        .recommendation;
+      simulation.decision.recommendation;
 
     const approved =
       risk.approved &&
-      simulationDecision ===
-        "EXECUTE";
+      simulationDecision === "EXECUTE";
 
     const decision:
       TradingRecommendation =
@@ -175,6 +211,14 @@ export class TradeOrchestrator {
         risk.reasons,
         approved,
       );
+
+    if (approved) {
+      reasons.push(
+        `Executable profit after fees, slippage, and safety buffer is ${executableProfit.executableProfitPercent.toFixed(
+          4,
+        )}%.`,
+      );
+    }
 
     return {
       approved,
@@ -190,7 +234,9 @@ export class TradeOrchestrator {
 
       riskScore,
 
-      reasons,
+      reasons: [
+        ...new Set(reasons),
+      ],
     };
   }
 
@@ -207,12 +253,12 @@ export class TradeOrchestrator {
 
     if (!topOpportunity) {
       return {
-        status:
-          "NO_OPPORTUNITY",
+        status: "NO_OPPORTUNITY",
 
         market: null,
 
         buyExchange: null,
+
         sellExchange: null,
 
         capital: null,
@@ -240,8 +286,7 @@ export class TradeOrchestrator {
 
         minimumCapital: 500,
 
-        maximumCapital:
-          50_000,
+        maximumCapital: 50_000,
 
         capitalStep: 500,
       });
@@ -254,8 +299,7 @@ export class TradeOrchestrator {
       bestCandidate.score <= 0
     ) {
       return {
-        status:
-          "OPTIMIZATION_FAILED",
+        status: "OPTIMIZATION_FAILED",
 
         market:
           topOpportunity.market,
@@ -279,14 +323,43 @@ export class TradeOrchestrator {
       };
     }
 
+    const accountCheck =
+      tradingAccountService.evaluateTrade(
+        bestCandidate.capital,
+      );
+
+    if (!accountCheck.approved) {
+      return {
+        status: "RISK_BLOCKED",
+
+        market:
+          topOpportunity.market,
+
+        buyExchange:
+          topOpportunity.buyExchange,
+
+        sellExchange:
+          topOpportunity.sellExchange,
+
+        capital:
+          bestCandidate.capital,
+
+        rankingScore:
+          topOpportunity.score,
+
+        riskLevel: null,
+
+        reasons:
+          accountCheck.reasons,
+      };
+    }
+
     const simulation =
-      bestCandidate.execution
-        .simulation;
+      bestCandidate.execution.simulation;
 
     if (!simulation) {
       return {
-        status:
-          "SIMULATION_MISSING",
+        status: "SIMULATION_MISSING",
 
         market:
           topOpportunity.market,
@@ -317,35 +390,28 @@ export class TradeOrchestrator {
           bestCandidate.capital,
 
         confidence:
-          simulation.confidence
-            .score,
+          simulation.confidence.score,
 
         fillPercent:
-          simulation.depth
-            .fillPercent,
+          simulation.depth.fillPercent,
 
         netProfit:
-          simulation.profit
-            .breakdown.netProfit,
+          simulation.profit.breakdown.netProfit,
 
         executionTimeMs:
-          bestCandidate.execution
-            .executionTimeMs,
+          bestCandidate.execution.executionTimeMs,
 
         liquidityScore:
-          topOpportunity
-            .liquidityScore,
+          topOpportunity.liquidityScore,
       });
 
     if (
       !risk.approved ||
-      simulation.decision
-        .recommendation !==
+      simulation.decision.recommendation !==
         "EXECUTE"
     ) {
       return {
-        status:
-          "RISK_BLOCKED",
+        status: "RISK_BLOCKED",
 
         market:
           topOpportunity.market,
@@ -399,8 +465,26 @@ export class TradeOrchestrator {
         risk.reasons.length > 0
           ? risk.reasons
           : [
-              "Opportunity passed ranking, optimization, simulation, and risk evaluation.",
+              "Opportunity passed account, ranking, optimization, simulation, and risk evaluation.",
             ],
+    };
+  }
+
+  private createRejectedDecision(
+    reasons: string[],
+  ): TradingDecision {
+    return {
+      approved: false,
+
+      decision: "SKIP",
+
+      allocatedCapital: 0,
+
+      executionScore: 0,
+
+      riskScore: 0,
+
+      reasons,
     };
   }
 

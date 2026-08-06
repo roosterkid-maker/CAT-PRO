@@ -58,16 +58,14 @@ const diagnostics: OpportunityEngineDiagnostics = {
 export class OpportunityEngine {
   evaluate(
     pair: ExchangePair,
-    policy: ArbitragePolicy =
-      defaultArbitragePolicy,
+    policy: ArbitragePolicy = defaultArbitragePolicy,
   ): ArbitrageOpportunity | null {
     diagnostics.evaluated += 1;
 
-    const evaluation =
-      opportunityEvaluator.evaluate(
-        pair,
-        policy,
-      );
+    const evaluation = opportunityEvaluator.evaluate(
+      pair,
+      policy,
+    );
 
     if (!evaluation) {
       diagnostics.evaluatorRejected += 1;
@@ -75,41 +73,40 @@ export class OpportunityEngine {
       return null;
     }
 
-    const buyPrice =
-      pair.buy.bestAskPrice;
+    const buyPrice = pair.buy.bestAskPrice;
+    const sellPrice = pair.sell.bestBidPrice;
 
-    const sellPrice =
-      pair.sell.bestBidPrice;
-
-    const buyAvailableQty =
-      pair.buy.bestAskQty;
-
-    const sellAvailableQty =
-      pair.sell.bestBidQty;
+    const buyAvailableQty = pair.buy.bestAskQty;
+    const sellAvailableQty = pair.sell.bestBidQty;
 
     if (
       buyPrice === null ||
       sellPrice === null ||
       buyAvailableQty === null ||
       sellAvailableQty === null ||
-      !Number.isFinite(
-        buyPrice,
-      ) ||
-      !Number.isFinite(
-        sellPrice,
-      ) ||
-      !Number.isFinite(
-        buyAvailableQty,
-      ) ||
-      !Number.isFinite(
-        sellAvailableQty,
-      ) ||
+      !Number.isFinite(buyPrice) ||
+      !Number.isFinite(sellPrice) ||
+      !Number.isFinite(buyAvailableQty) ||
+      !Number.isFinite(sellAvailableQty) ||
       buyPrice <= 0 ||
       sellPrice <= 0 ||
       buyAvailableQty <= 0 ||
       sellAvailableQty <= 0
     ) {
       diagnostics.invalidMarketData += 1;
+
+      console.log(
+        "[Opportunity Rejected: Invalid Market Data]",
+        {
+          market: pair.market,
+          buyExchange: pair.buy.exchange,
+          sellExchange: pair.sell.exchange,
+          buyPrice,
+          sellPrice,
+          buyAvailableQty,
+          sellAvailableQty,
+        },
+      );
 
       return null;
     }
@@ -120,6 +117,41 @@ export class OpportunityEngine {
     ) {
       diagnostics.spreadRejected += 1;
 
+      console.log(
+        "[Spread Rejected]",
+        {
+          market: pair.market,
+
+          buyExchange:
+            pair.buy.exchange,
+
+          sellExchange:
+            pair.sell.exchange,
+
+          buyPrice,
+
+          sellPrice,
+
+          rawSpread:
+            evaluation.rawSpread,
+
+          rawSpreadPercent:
+            evaluation.rawSpreadPercent,
+
+          minimumSpreadPercent:
+            policy.minimumSpreadPercent,
+
+          estimatedFees:
+            evaluation.estimatedFees,
+
+          netProfit:
+            evaluation.netProfit,
+
+          netProfitPercent:
+            evaluation.netProfitPercent,
+        },
+      );
+
       return null;
     }
 
@@ -129,20 +161,60 @@ export class OpportunityEngine {
     ) {
       diagnostics.netProfitRejected += 1;
 
+      console.log(
+        "[Net Profit Rejected]",
+        {
+          market: pair.market,
+
+          buyExchange:
+            pair.buy.exchange,
+
+          sellExchange:
+            pair.sell.exchange,
+
+          buyPrice,
+
+          sellPrice,
+
+          rawSpreadPercent:
+            evaluation.rawSpreadPercent,
+
+          estimatedFees:
+            evaluation.estimatedFees,
+
+          netProfit:
+            evaluation.netProfit,
+
+          netProfitPercent:
+            evaluation.netProfitPercent,
+
+          minimumNetProfitPercent:
+            policy.minimumNetProfitPercent,
+        },
+      );
+
       return null;
     }
 
     const requiredQty =
-      policy.referenceCapital /
-      buyPrice;
+      policy.referenceCapital / buyPrice;
 
     if (
-      !Number.isFinite(
-        requiredQty,
-      ) ||
+      !Number.isFinite(requiredQty) ||
       requiredQty <= 0
     ) {
       diagnostics.quantityRejected += 1;
+
+      console.log(
+        "[Opportunity Rejected: Invalid Required Quantity]",
+        {
+          market: pair.market,
+          buyPrice,
+          referenceCapital:
+            policy.referenceCapital,
+          requiredQty,
+        },
+      );
 
       return null;
     }
@@ -160,6 +232,16 @@ export class OpportunityEngine {
       availableExecutableQty <= 0
     ) {
       diagnostics.quantityRejected += 1;
+
+      console.log(
+        "[Opportunity Rejected: Invalid Executable Quantity]",
+        {
+          market: pair.market,
+          buyAvailableQty,
+          sellAvailableQty,
+          availableExecutableQty,
+        },
+      );
 
       return null;
     }
@@ -179,11 +261,10 @@ export class OpportunityEngine {
       requiredQty,
       availableExecutableQty,
 
-      executableQty:
-        Math.min(
-          requiredQty,
-          availableExecutableQty,
-        ),
+      executableQty: Math.min(
+        requiredQty,
+        availableExecutableQty,
+      ),
 
       liquidityScore: 0,
       enoughLiquidity: false,
@@ -219,11 +300,10 @@ export class OpportunityEngine {
 
       score: 0,
 
-      timestamp:
-        Math.max(
-          pair.buy.timestamp,
-          pair.sell.timestamp,
-        ),
+      timestamp: Math.max(
+        pair.buy.timestamp,
+        pair.sell.timestamp,
+      ),
     };
 
     const analysis =
@@ -233,108 +313,102 @@ export class OpportunityEngine {
       );
 
     if (
-      !analysis.liquidity
-        .enoughLiquidity
+      !analysis.liquidity.enoughLiquidity
     ) {
       diagnostics.liquidityRejected += 1;
     }
 
-    if (
-      !analysis.freshness.fresh
-    ) {
+    if (!analysis.freshness.fresh) {
       diagnostics.freshnessRejected += 1;
     }
 
-    if (
-      !analysis.fees.acceptable
-    ) {
+    if (!analysis.fees.acceptable) {
       diagnostics.feeRejected += 1;
     }
 
-    if (
-      !analysis.spread.acceptable
-    ) {
+    if (!analysis.spread.acceptable) {
       diagnostics.spreadAnalysisRejected += 1;
     }
 
-  if (!analysis.executable) {
-  console.log(
-    "[ExecutionAnalysis Rejected]",
-    {
-      market: pair.market,
+    if (!analysis.executable) {
+      console.log(
+        "[ExecutionAnalysis Rejected]",
+        {
+          market: pair.market,
 
-      buyExchange:
-        pair.buy.exchange,
+          buyExchange:
+            pair.buy.exchange,
 
-      sellExchange:
-        pair.sell.exchange,
+          sellExchange:
+            pair.sell.exchange,
 
-      rawSpreadPercent:
-        evaluation.rawSpreadPercent,
+          rawSpreadPercent:
+            evaluation.rawSpreadPercent,
 
-      netProfitPercent:
-        evaluation.netProfitPercent,
+          netProfitPercent:
+            evaluation.netProfitPercent,
 
-      liquidity: {
-        enough:
-          analysis.liquidity
-            .enoughLiquidity,
+          liquidity: {
+            enough:
+              analysis.liquidity
+                .enoughLiquidity,
 
-        score:
-          analysis.liquidity.score,
+            score:
+              analysis.liquidity.score,
 
-        reason:
-          analysis.liquidity.reason,
-      },
+            reason:
+              analysis.liquidity.reason,
+          },
 
-      freshness: {
-        fresh:
-          analysis.freshness.fresh,
+          freshness: {
+            fresh:
+              analysis.freshness.fresh,
 
-        score:
-          analysis.freshness.score,
+            score:
+              analysis.freshness.score,
 
-        reason:
-          analysis.freshness.reason,
-      },
+            reason:
+              analysis.freshness.reason,
+          },
 
-      fees: {
-        acceptable:
-          analysis.fees.acceptable,
+          fees: {
+            acceptable:
+              analysis.fees.acceptable,
 
-        score:
-          analysis.fees.score,
+            score:
+              analysis.fees.score,
 
-        reason:
-          analysis.fees.reason,
-      },
+            reason:
+              analysis.fees.reason,
+          },
 
-      spread: {
-        acceptable:
-          analysis.spread.acceptable,
+          spread: {
+            acceptable:
+              analysis.spread.acceptable,
 
-        score:
-          analysis.spread.score,
+            score:
+              analysis.spread.score,
 
-        reason:
-          analysis.spread.reason,
-      },
+            reason:
+              analysis.spread.reason,
+          },
 
-      decision: {
-        decision:
-          analysis.decision.decision,
+          decision: {
+            decision:
+              analysis.decision.decision,
 
-        reason:
-          analysis.decision.reason,
-      },
+            reason:
+              analysis.decision.reason,
+          },
 
-      overallScore:
-        analysis.overallScore,
-    },
-  );
+          overallScore:
+            analysis.overallScore,
+        },
+      );
 
-  return null;
-}
+      return null;
+    }
+
     diagnostics.accepted += 1;
 
     return {
@@ -374,8 +448,7 @@ export class OpportunityEngine {
     };
   }
 
-  getDiagnostics():
-  OpportunityDiagnostics {
+  getDiagnostics(): OpportunityDiagnostics {
     return {
       engine: {
         ...diagnostics,

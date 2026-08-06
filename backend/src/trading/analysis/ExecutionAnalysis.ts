@@ -25,6 +25,11 @@ import {
 } from "./analyzers/LiquidityAnalyzer";
 
 import {
+  priceDeviationAnalyzer,
+  type PriceDeviationAnalysis,
+} from "./analyzers/PriceDeviationAnalyzer";
+
+import {
   spreadAnalyzer,
   type SpreadAnalysis,
 } from "./analyzers/SpreadAnalyzer";
@@ -38,6 +43,7 @@ export interface ExecutionAnalysisResult {
   freshness: FreshnessAnalysis;
   fees: FeeAnalysis;
   spread: SpreadAnalysis;
+  priceDeviation: PriceDeviationAnalysis;
 
   overallScore: number;
 
@@ -85,12 +91,24 @@ export class ExecutionAnalysis {
         opportunity,
       );
 
+    const priceDeviation =
+      priceDeviationAnalyzer.analyze({
+        buyPrice:
+          opportunity.buyPrice,
+
+        sellPrice:
+          opportunity.sellPrice,
+
+        maximumDeviationPercent:
+          policy.maximumPriceDeviationPercent,
+      });
+
     const overallScore =
       scoreCalculator.calculate([
         {
           name: "Liquidity",
           score: liquidity.score,
-          weight: 35,
+          weight: 30,
         },
         {
           name: "Freshness",
@@ -100,12 +118,17 @@ export class ExecutionAnalysis {
         {
           name: "Fees",
           score: fees.score,
-          weight: 25,
+          weight: 20,
         },
         {
           name: "Spread",
           score: spread.score,
-          weight: 20,
+          weight: 15,
+        },
+        {
+          name: "PriceDeviation",
+          score: priceDeviation.score,
+          weight: 15,
         },
       ]);
 
@@ -113,7 +136,8 @@ export class ExecutionAnalysis {
       liquidity.enoughLiquidity &&
       freshness.fresh &&
       fees.acceptable &&
-      spread.acceptable;
+      spread.acceptable &&
+      priceDeviation.acceptable;
 
     const decision =
       decisionAnalyzer.analyze(
@@ -126,6 +150,7 @@ export class ExecutionAnalysis {
       freshness.reason,
       fees.reason,
       spread.reason,
+      priceDeviation.reason,
       decision.reason,
     ].filter(
       (reason): reason is string =>
@@ -140,6 +165,7 @@ export class ExecutionAnalysis {
       freshness,
       fees,
       spread,
+      priceDeviation,
 
       overallScore,
 

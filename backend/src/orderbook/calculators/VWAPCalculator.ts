@@ -6,10 +6,19 @@ export class VWAPCalculator {
     levels: OrderBookLevel[],
     requestedQuantity: number,
   ): VWAPResult {
+    if (
+      !Number.isFinite(requestedQuantity) ||
+      requestedQuantity <= 0
+    ) {
+      throw new Error(
+        "Requested quantity must be positive.",
+      );
+    }
+
     let remaining =
       requestedQuantity;
 
-    let filled = 0;
+    let filledQuantity = 0;
 
     let totalCost = 0;
 
@@ -24,25 +33,34 @@ export class VWAPCalculator {
           level.quantity,
         );
 
-      filled += fillQuantity;
-
       totalCost +=
         fillQuantity *
         level.price;
+
+      filledQuantity +=
+        fillQuantity;
 
       remaining -=
         fillQuantity;
     }
 
     const averagePrice =
-      filled > 0
-        ? totalCost / filled
+      filledQuantity > 0
+        ? totalCost /
+          filledQuantity
+        : 0;
+
+    const fillPercent =
+      requestedQuantity > 0
+        ? (filledQuantity /
+            requestedQuantity) *
+          100
         : 0;
 
     return {
       requestedQuantity,
 
-      filledQuantity: filled,
+      filledQuantity,
 
       averagePrice,
 
@@ -51,12 +69,7 @@ export class VWAPCalculator {
       unfilledQuantity:
         remaining,
 
-      fillPercent:
-        requestedQuantity > 0
-          ? (filled /
-              requestedQuantity) *
-            100
-          : 0,
+      fillPercent,
 
       partialFill:
         remaining > 0,

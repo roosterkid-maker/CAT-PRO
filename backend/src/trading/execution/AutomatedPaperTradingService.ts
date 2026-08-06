@@ -1,16 +1,16 @@
 import type { ArbitrageOpportunity } from "../../arbitrage/models/ArbitrageOpportunity";
 
-import {
-  tradingAccountService,
-} from "../account/TradingAccountService";
+import type {
+  ExecutionResult,
+} from "../models/ExecutionResult";
 
 import {
   tradingOrchestrator,
 } from "../orchestrator/TradingOrchestrator";
 
-import type {
-  ExecutionResult,
-} from "../models/ExecutionResult";
+import {
+  tradingAccountService,
+} from "../account/TradingAccountService";
 
 import {
   paperTradingService,
@@ -44,19 +44,11 @@ export class AutomatedPaperTradingService {
       requestedCapital,
     } = request;
 
-    const accountCheck =
-      tradingAccountService.evaluateTrade(
-        requestedCapital,
-      );
-
-    if (!accountCheck.approved) {
-      return {
-        approved: false,
-        result: null,
-        reasons: accountCheck.reasons,
-      };
-    }
-
+    /*
+     * Account validation, executable-profit validation,
+     * simulation and risk assessment are owned by
+     * TradingOrchestrator.
+     */
     const decision =
       tradingOrchestrator.evaluate(
         opportunity,

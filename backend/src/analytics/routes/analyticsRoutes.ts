@@ -1,8 +1,19 @@
+import {
+  opportunityRejectionAnalyticsController,
+} from "../controllers/OpportunityRejectionAnalyticsController";
+
 import { Router } from "express";
 
 import { analyticsService } from "../services/AnalyticsService";
 
 const router = Router();
+
+router.get(
+  "/opportunity-rejections",
+  opportunityRejectionAnalyticsController.getAnalytics.bind(
+    opportunityRejectionAnalyticsController,
+  ),
+);
 
 router.get(
   "/",

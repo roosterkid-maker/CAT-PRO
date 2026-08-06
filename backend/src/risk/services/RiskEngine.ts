@@ -45,15 +45,6 @@ export class RiskEngine {
       );
     }
 
-    if (
-      request.liquidityScore < 60
-    ) {
-      score -= 20;
-
-      reasons.push(
-        "Liquidity score below 60.",
-      );
-    }
 
     if (
       request.capital > 50_000

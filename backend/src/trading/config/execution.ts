@@ -2,6 +2,13 @@ import type {
   TradingExecutionConfig,
 } from "../models/ExecutionMode";
 
+export interface ExecutableProfitConfig {
+  buySlippagePercent: number;
+  sellSlippagePercent: number;
+  safetyBufferPercent: number;
+  minimumProfitPercent: number;
+}
+
 export const defaultTradingExecutionConfig: TradingExecutionConfig = {
   mode: "paper",
 
@@ -18,4 +25,15 @@ export const defaultTradingExecutionConfig: TradingExecutionConfig = {
   requireFreshBidAsk: false,
 
   killSwitchEnabled: true,
+};
+
+export const defaultExecutableProfitConfig: ExecutableProfitConfig = {
+  buySlippagePercent: 0.02,
+
+  sellSlippagePercent: 0.02,
+
+  safetyBufferPercent: 0.05,
+
+  minimumProfitPercent:
+    defaultTradingExecutionConfig.minimumNetProfitPercent,
 };

@@ -21,11 +21,11 @@ export class DecisionAnalyzer {
         decision: "SKIP",
         score: overallScore,
         reason:
-          "Opportunity is not executable.",
+          "Trade rejected because one or more execution requirements failed.",
       };
     }
 
-    if (overallScore >= 85) {
+    if (overallScore >= 90) {
       return {
         decision: "EXECUTE",
         score: overallScore,
@@ -34,12 +34,21 @@ export class DecisionAnalyzer {
       };
     }
 
+    if (overallScore >= 80) {
+      return {
+        decision: "EXECUTE",
+        score: overallScore,
+        reason:
+          "Good execution quality.",
+      };
+    }
+
     if (overallScore >= 65) {
       return {
         decision: "REVIEW",
         score: overallScore,
         reason:
-          "Opportunity requires manual review.",
+          "Execution quality is acceptable but should be reviewed.",
       };
     }
 
@@ -47,7 +56,7 @@ export class DecisionAnalyzer {
       decision: "SKIP",
       score: overallScore,
       reason:
-        "Execution quality is too low.",
+        "Overall execution score is below the acceptable threshold.",
     };
   }
 }

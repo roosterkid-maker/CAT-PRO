@@ -1,43 +1,57 @@
 export interface ArbitragePolicy {
   /**
-   * Opportunity ke liye minimum raw spread percentage.
+   * Minimum raw spread before further analysis.
    */
   minimumSpreadPercent: number;
 
   /**
-   * Buy aur sell fees ke baad minimum acceptable profit percentage.
+   * Minimum net profit after trading fees.
    */
   minimumNetProfitPercent: number;
 
   /**
-   * Is age se purani quote reject hogi.
+   * Maximum quote age.
    */
   maximumQuoteAgeMs: number;
 
   /**
-   * Comparison ke liye minimum exchanges.
+   * Minimum exchanges required.
    */
   minimumExchangeCount: number;
 
   /**
-   * Liquidity calculate karne ke liye reference trading capital.
-   *
-   * Example:
-   * ₹10,000 capital / buy price = required quantity.
+   * Reference capital used for executable quantity calculations.
    */
   referenceCapital: number;
 
   /**
-   * Required quantity ka minimum percentage jo top-of-book
-   * liquidity me available hona chahiye.
-   *
-   * 100 = complete quantity available honi chahiye.
+   * Minimum executable liquidity.
    */
   minimumLiquidityPercent: number;
 
   /**
-   * Legacy compatibility field.
-   * Executable-only mode me false rehna chahiye.
+   * Legacy compatibility.
    */
   allowLastPriceFallback: boolean;
+
+  /**
+   * Maximum acceptable deviation between exchanges.
+   *
+   * Example:
+   * CoinDCX = 100
+   * Binance = 101
+   *
+   * Deviation = 1%
+   */
+  maximumPriceDeviationPercent: number;
+
+  /**
+   * Maximum expected slippage before trade rejection.
+   */
+  maximumSlippagePercent: number;
+
+  /**
+   * Minimum execution confidence required.
+   */
+  minimumConfidenceScore: number;
 }

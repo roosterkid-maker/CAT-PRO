@@ -1,8 +1,13 @@
 import http from "node:http";
+import "dotenv/config";
+import { application } from "./core/bootstrap/Application";
+import { opportunityService } from "./arbitrage/services/OpportunityService";
 
 import cors from "cors";
 import express from "express";
+
 import analyticsRoutes from "./analytics/routes/analyticsRoutes";
+import capitalRoutes from "./modules/capital/routes/capitalRoutes";
 
 import executionRoutes from "./execution/routes/executionRoutes";
 import optimizerRoutes from "./optimizer/routes/optimizerRoutes";
@@ -28,10 +33,18 @@ import { websocketManager } from "./websocket/manager";
 const app = express();
 
 const PORT =
-  Number(process.env.PORT) ||
-  5000;
+  Number(process.env.PORT) || 5000;
 
 app.use(cors());
+app.get("/api/debug/opportunities", (_req, res) => {
+  const opportunities =
+    opportunityService.getOpportunities();
+
+  res.json({
+    total: opportunities.length,
+    opportunities,
+  });
+});
 
 app.use(express.json());
 
@@ -72,6 +85,11 @@ app.use(
 app.use(
   "/api/analytics",
   analyticsRoutes,
+);
+
+app.use(
+  "/api/capital",
+  capitalRoutes,
 );
 
 app.use(
@@ -141,17 +159,15 @@ initializeSocket(server);
 
 server.listen(
   PORT,
-  () => {
+  async () => {
     console.log(
       `Server running on port ${PORT}`,
     );
-
+    await application.initialize();
     void websocketManager
       .start()
       .catch(
-        (
-          error: unknown,
-        ) => {
+        (error: unknown) => {
           console.error(
             "[Server] Failed to start exchange services:",
             error,
@@ -204,17 +220,13 @@ async function shutdown(
 process.on(
   "SIGINT",
   () => {
-    void shutdown(
-      "SIGINT",
-    );
+    void shutdown("SIGINT");
   },
 );
 
 process.on(
   "SIGTERM",
   () => {
-    void shutdown(
-      "SIGTERM",
-    );
+    void shutdown("SIGTERM");
   },
 );

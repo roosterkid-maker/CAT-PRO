@@ -11,6 +11,10 @@ import type {
   SystemHealthReport,
 } from "./HealthReport";
 
+import {
+  tradingReadinessCalculator,
+} from "./TradingReadinessCalculator";
+
 export class HealthService {
   getReport(): SystemHealthReport {
     const memoryUsage =
@@ -46,31 +50,64 @@ export class HealthService {
       );
 
     /*
-     * This call also refreshes the current
+     * This call refreshes the current
      * opportunity diagnostics.
      */
     const opportunities =
       opportunityService.getOpportunities();
 
+    const diagnostics =
+      opportunityEngine.getDiagnostics();
+
     const quotesByExchange =
       this.getQuotesByExchange();
+
+    const exchanges =
+      exchangeManager
+        .getAll()
+        .map(
+          (exchange) => ({
+            name:
+              exchange.name,
+
+            connected:
+              exchange.isConnected(),
+          }),
+        );
+
+    const connectedExchanges =
+      exchanges.filter(
+        (exchange) =>
+          exchange.connected,
+      ).length;
+
+    const diagnosticsHealthy =
+      diagnostics.engine
+        .invalidMarketData === 0 &&
+      diagnostics.engine
+        .quantityRejected === 0;
+
+    const trading =
+      tradingReadinessCalculator.calculate({
+        connectedExchanges,
+
+        totalExchanges:
+          exchanges.length,
+
+        executableQuotes:
+          marketCache.executableSize(),
+
+        opportunities:
+          opportunities.length,
+
+        diagnosticsHealthy,
+      });
 
     return {
       timestamp:
         Date.now(),
 
-      exchanges:
-        exchangeManager
-          .getAll()
-          .map(
-            (exchange) => ({
-              name:
-                exchange.name,
-
-              connected:
-                exchange.isConnected(),
-            }),
-          ),
+      exchanges,
 
       cache: {
         cachedQuotes:
@@ -94,8 +131,7 @@ export class HealthService {
         opportunities:
           opportunities.length,
 
-        diagnostics:
-          opportunityEngine.getDiagnostics(),
+        diagnostics,
       },
 
       process: {
@@ -115,11 +151,13 @@ export class HealthService {
             memoryUsage.heapTotal,
         },
       },
+
+      trading,
     };
   }
 
   private getQuotesByExchange():
-    ExchangeQuoteCount[] {
+  ExchangeQuoteCount[] {
     return exchangeManager
       .getAll()
       .map(

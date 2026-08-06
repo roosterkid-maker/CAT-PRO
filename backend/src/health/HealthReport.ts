@@ -1,7 +1,10 @@
 import type { OpportunityDiagnostics } from "../arbitrage/engines/OpportunityEngine";
 
+import type { TradingReadiness } from "./models/TradingReadiness";
+
 export interface ExchangeHealth {
   name: string;
+
   connected: boolean;
 }
 
@@ -51,4 +54,6 @@ export interface SystemHealthReport {
       heapTotal: number;
     };
   };
+
+  trading: TradingReadiness;
 }
