@@ -7,7 +7,7 @@ const router = Router();
 
 router.get("/", (_request, response) => {
   const opportunities =
-    opportunityService.getOpportunities();
+    opportunityService.getLastOpportunities();
 
   const data =
     opportunityMapper.toDtoList(opportunities);

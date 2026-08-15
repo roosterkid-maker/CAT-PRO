@@ -41,11 +41,24 @@ export class DepthCalculator {
           executableQuantity
         : 0;
 
+    /*
+     * Summing decimal exchange quantities can
+     * produce a tiny IEEE-754 overshoot (for
+     * example 100.00000000000001%). Keep the
+     * public percentage contract bounded while
+     * preserving the exact executable quantity.
+     */
     const fillPercent =
       requestedQuantity > 0
-        ? (executableQuantity /
-            requestedQuantity) *
-          100
+        ? Math.max(
+            0,
+            Math.min(
+              100,
+              (executableQuantity /
+                requestedQuantity) *
+                100,
+            ),
+          )
         : 0;
 
     return {
@@ -58,7 +71,10 @@ export class DepthCalculator {
       averagePrice,
 
       remainingQuantity:
-        remaining,
+        Math.max(
+          0,
+          remaining,
+        ),
 
       fillPercent,
 

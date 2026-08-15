@@ -1,57 +1,82 @@
 export interface ArbitragePolicy {
   /**
-   * Minimum raw spread before further analysis.
+   * Opportunity ke liye minimum raw spread percentage.
    */
-  minimumSpreadPercent: number;
+  minimumSpreadPercent:
+    number;
 
   /**
-   * Minimum net profit after trading fees.
+   * Buy aur sell fees ke baad minimum acceptable
+   * profit percentage.
    */
-  minimumNetProfitPercent: number;
+  minimumNetProfitPercent:
+    number;
 
   /**
-   * Maximum quote age.
+   * Is age se purani quote reject hogi.
    */
-  maximumQuoteAgeMs: number;
+  maximumQuoteAgeMs:
+    number;
 
   /**
-   * Minimum exchanges required.
+   * Comparison ke liye minimum exchanges.
    */
-  minimumExchangeCount: number;
+  minimumExchangeCount:
+    number;
 
   /**
-   * Reference capital used for executable quantity calculations.
-   */
-  referenceCapital: number;
-
-  /**
-   * Minimum executable liquidity.
-   */
-  minimumLiquidityPercent: number;
-
-  /**
-   * Legacy compatibility.
-   */
-  allowLastPriceFallback: boolean;
-
-  /**
-   * Maximum acceptable deviation between exchanges.
+   * Account-side INR budget used for liquidity qualification. The engine
+   * converts it to the market quote asset before calculating quantity.
    *
    * Example:
-   * CoinDCX = 100
-   * Binance = 101
+   * ₹10,000 capital / buy price =
+   * required quantity.
+   */
+  referenceCapital:
+    number;
+
+  /**
+   * Required quantity ka minimum percentage
+   * jo top-of-book liquidity me available
+   * hona chahiye.
    *
-   * Deviation = 1%
+   * 100 = complete quantity available
+   * honi chahiye.
    */
-  maximumPriceDeviationPercent: number;
+  minimumLiquidityPercent:
+    number;
 
   /**
-   * Maximum expected slippage before trade rejection.
+   * Cross-exchange quote-integrity safety limit.
+   *
+   * This is NOT an arbitrage spread limit.
+   *
+   * It protects the engine from obviously
+   * corrupted, mismatched or incorrectly
+   * normalized prices.
+   *
+   * Example:
+   *
+   * maximumCrossExchangePriceRatio = 1.05
+   *
+   * Buy 100 / Sell 104
+   * ratio = 1.04x
+   * => quote integrity valid.
+   *
+   * Buy 100 / Sell 1000
+   * ratio = 10x
+   * => quote integrity rejected.
+   *
+   * Actual profitability remains owned by
+   * SpreadAnalyzer and profit calculations.
    */
-  maximumSlippagePercent: number;
+  maximumCrossExchangePriceRatio:
+    number;
 
   /**
-   * Minimum execution confidence required.
+   * Legacy compatibility field.
+   * Executable-only mode me false rehna chahiye.
    */
-  minimumConfidenceScore: number;
+  allowLastPriceFallback:
+    boolean;
 }

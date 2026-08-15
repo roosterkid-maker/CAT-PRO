@@ -3,7 +3,13 @@ import {
   mkdir,
 } from "node:fs/promises";
 
-import { dirname } from "node:path";
+import {
+  dirname,
+} from "node:path";
+
+import {
+  sensitiveDataRedactor,
+} from "../../../core/security/SensitiveDataRedactor";
 
 import type {
   LiveExecutionRequest,
@@ -22,21 +28,32 @@ export type ExecutionAuditEvent =
   | "EXECUTION_FAILED";
 
 export interface ExecutionAuditRecord {
-  id: string;
+  id:
+    string;
 
-  event: ExecutionAuditEvent;
+  event:
+    ExecutionAuditEvent;
 
-  timestamp: number;
+  timestamp:
+    number;
 
-  exchange: string;
+  exchange:
+    string;
 
-  market: string;
+  market:
+    string;
 
-  side: "buy" | "sell";
+  side:
+    "buy" |
+    "sell";
 
-  orderId: string | null;
+  orderId:
+    string |
+    null;
 
-  clientOrderId: string | null;
+  clientOrderId:
+    string |
+    null;
 
   request:
     | LiveExecutionRequest
@@ -46,14 +63,20 @@ export interface ExecutionAuditRecord {
     | LiveExecutionResult
     | null;
 
-  message: string | null;
+  message:
+    string |
+    null;
 
   metadata:
-    Record<string, unknown>;
+    Record<
+      string,
+      unknown
+    >;
 }
 
 export interface WriteExecutionAuditInput {
-  event: ExecutionAuditEvent;
+  event:
+    ExecutionAuditEvent;
 
   request?:
     | LiveExecutionRequest
@@ -63,10 +86,15 @@ export interface WriteExecutionAuditInput {
     | LiveExecutionResult
     | null;
 
-  message?: string | null;
+  message?:
+    string |
+    null;
 
   metadata?:
-    Record<string, unknown>;
+    Record<
+      string,
+      unknown
+    >;
 }
 
 export class ExecutionAuditLogger {
@@ -80,36 +108,37 @@ export class ExecutionAuditLogger {
   ) {}
 
   write(
-    input: WriteExecutionAuditInput,
+    input:
+      WriteExecutionAuditInput,
   ): Promise<void> {
     const record =
       this.createRecord(
         input,
       );
 
-    /*
-     * Serialise writes so concurrent executions cannot
-     * corrupt the JSONL audit file.
-     */
     this.writeQueue =
       this.writeQueue
-        .catch(() => {
-          /*
-           * A previous write failure must not permanently
-           * block future audit records.
-           */
-        })
-        .then(() =>
-          this.persist(
-            record,
-          ),
+        .catch(
+          () => {
+            /*
+             * Previous audit failure must not
+             * permanently block later records.
+             */
+          },
+        )
+        .then(
+          () =>
+            this.persist(
+              record,
+            ),
         );
 
     return this.writeQueue;
   }
 
   executionStarted(
-    request: LiveExecutionRequest,
+    request:
+      LiveExecutionRequest,
   ): Promise<void> {
     return this.write({
       event:
@@ -123,8 +152,11 @@ export class ExecutionAuditLogger {
   }
 
   orderCreated(
-    request: LiveExecutionRequest,
-    result: LiveExecutionResult,
+    request:
+      LiveExecutionRequest,
+
+    result:
+      LiveExecutionResult,
   ): Promise<void> {
     return this.write({
       event:
@@ -140,7 +172,8 @@ export class ExecutionAuditLogger {
   }
 
   orderStatusUpdated(
-    result: LiveExecutionResult,
+    result:
+      LiveExecutionResult,
   ): Promise<void> {
     return this.write({
       event:
@@ -154,7 +187,8 @@ export class ExecutionAuditLogger {
   }
 
   orderCancelled(
-    result: LiveExecutionResult,
+    result:
+      LiveExecutionResult,
   ): Promise<void> {
     return this.write({
       event:
@@ -168,8 +202,11 @@ export class ExecutionAuditLogger {
   }
 
   executionCompleted(
-    request: LiveExecutionRequest,
-    result: LiveExecutionResult,
+    request:
+      LiveExecutionRequest,
+
+    result:
+      LiveExecutionResult,
   ): Promise<void> {
     return this.write({
       event:
@@ -185,8 +222,12 @@ export class ExecutionAuditLogger {
   }
 
   executionFailed(
-    request: LiveExecutionRequest,
-    message: string,
+    request:
+      LiveExecutionRequest,
+
+    message:
+      string,
+
     result:
       | LiveExecutionResult
       | null = null,
@@ -204,7 +245,8 @@ export class ExecutionAuditLogger {
   }
 
   private createRecord(
-    input: WriteExecutionAuditInput,
+    input:
+      WriteExecutionAuditInput,
   ): ExecutionAuditRecord {
     const request =
       input.request ??
@@ -255,100 +297,114 @@ export class ExecutionAuditLogger {
             )
           : null,
 
-      result,
+      result:
+        result
+          ? sensitiveDataRedactor
+              .sanitize(
+                result,
+              )
+          : null,
 
       message:
-        input.message ??
-        null,
+        input.message
+          ? sensitiveDataRedactor
+              .redactString(
+                input.message,
+              )
+          : null,
 
       metadata:
-        input.metadata ??
-        {},
+        sensitiveDataRedactor
+          .sanitize(
+            input.metadata ??
+              {},
+          ),
     };
   }
 
   private sanitizeRequest(
-    request: LiveExecutionRequest,
+    request:
+      LiveExecutionRequest,
   ): LiveExecutionRequest {
-    /*
-     * The request currently contains no credentials.
-     * Keep this method as a permanent boundary so secrets
-     * are never added to logs accidentally in the future.
-     */
-    return {
-      exchange:
-        request.exchange,
+    return sensitiveDataRedactor
+      .sanitize({
+        exchange:
+          request.exchange,
 
-      market:
-        request.market,
+        market:
+          request.market,
 
-      side:
-        request.side,
+        side:
+          request.side,
 
-      orderType:
-        request.orderType,
+        orderType:
+          request.orderType,
 
-      quantity:
-        request.quantity,
+        quantity:
+          request.quantity,
 
-      ...(request.price !==
-      undefined
-        ? {
-            price:
-              request.price,
-          }
-        : {}),
+        ...(request.price !==
+        undefined
+          ? {
+              price:
+                request.price,
+            }
+          : {}),
 
-      ...(request.clientOrderId
-      ? {
-          clientOrderId:
-            request.clientOrderId,
-        }
-      : {}),
+        ...(request.clientOrderId
+          ? {
+              clientOrderId:
+                request.clientOrderId,
+            }
+          : {}),
 
-      ...(request.timeoutMs !==
-      undefined
-        ? {
-            timeoutMs:
-              request.timeoutMs,
-          }
-        : {}),
+        ...(request.timeoutMs !==
+        undefined
+          ? {
+              timeoutMs:
+                request.timeoutMs,
+            }
+          : {}),
 
-      ...(request.pollingIntervalMs !==
-      undefined
-        ? {
-            pollingIntervalMs:
-              request.pollingIntervalMs,
-          }
-        : {}),
+        ...(request.pollingIntervalMs !==
+        undefined
+          ? {
+              pollingIntervalMs:
+                request.pollingIntervalMs,
+            }
+          : {}),
 
-      ...(request.cancelOnTimeout !==
-      undefined
-        ? {
-            cancelOnTimeout:
-              request.cancelOnTimeout,
-          }
-        : {}),
-    };
+        ...(request.cancelOnTimeout !==
+        undefined
+          ? {
+              cancelOnTimeout:
+                request.cancelOnTimeout,
+            }
+          : {}),
+      });
   }
 
   private async persist(
-    record: ExecutionAuditRecord,
+    record:
+      ExecutionAuditRecord,
   ): Promise<void> {
     await mkdir(
       dirname(
         this.filePath,
       ),
       {
-        recursive: true,
+        recursive:
+          true,
       },
     );
 
     await appendFile(
       this.filePath,
+
       `${JSON.stringify(
         record,
       )}\n`,
+
       {
         encoding:
           "utf8",
@@ -356,17 +412,24 @@ export class ExecutionAuditLogger {
     );
   }
 
-  private createAuditId(): string {
+  private createAuditId():
+    string {
     return [
       "audit",
+
       Date.now(),
+
       Math.random()
-        .toString(36)
+        .toString(
+          36,
+        )
         .slice(
           2,
           10,
         ),
-    ].join("-");
+    ].join(
+      "-",
+    );
   }
 }
 

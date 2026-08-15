@@ -1,32 +1,68 @@
-import type { SystemHealthResponse } from "@/modules/system-health/types/SystemHealth";
+import type {
+  SystemHealthResponse,
+} from "@/modules/system-health/types/SystemHealth";
 
 interface SystemHealthWidgetProps {
-  health: SystemHealthResponse["data"] | undefined;
+  health:
+    | SystemHealthResponse["data"]
+    | undefined;
+
+  loading: boolean;
+
+  unavailable: boolean;
 }
 
 export default function SystemHealthWidget({
   health,
+  loading,
+  unavailable,
 }: SystemHealthWidgetProps) {
-  const exchanges = health?.exchanges ?? [];
+  if (!health) {
+    return (
+      <div className="rounded-xl border border-border-default bg-panel p-5">
+        <Header
+          status={
+            loading
+              ? "LOADING"
+              : "UNAVAILABLE"
+          }
+          healthy={false}
+        />
 
-  const connectedCount = exchanges.filter(
-    (exchange) => exchange.connected,
-  ).length;
+        <div className="rounded-lg border border-border-default bg-panel-light p-4 text-sm text-text-muted">
+          {loading
+            ? "Loading backend health evidence..."
+            : unavailable
+              ? "Backend health evidence is unavailable. No readiness is inferred."
+              : "Backend returned no health evidence. No readiness is inferred."}
+        </div>
+      </div>
+    );
+  }
 
-  const totalCount = exchanges.length;
+  const exchanges =
+    health.exchanges;
+
+  const connectedCount =
+    exchanges.filter(
+      (
+        exchange,
+      ) =>
+        exchange.connected,
+    ).length;
+
+  const totalCount =
+    exchanges.length;
 
   const allConnected =
     totalCount > 0 &&
     connectedCount === totalCount;
 
-  const uptimeSeconds =
-    health?.process.uptimeSeconds ?? 0;
-
   const heapUsed =
-    health?.process.memory.heapUsed ?? 0;
+    health.process.memory.heapUsed;
 
   const heapTotal =
-    health?.process.memory.heapTotal ?? 0;
+    health.process.memory.heapTotal;
 
   const memoryPercent =
     heapTotal > 0
@@ -38,58 +74,51 @@ export default function SystemHealthWidget({
 
   return (
     <div className="rounded-xl border border-border-default bg-panel p-5">
-      <div className="mb-5 flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-text-muted">
-            System
-          </p>
-
-          <h2 className="mt-1 text-2xl font-bold">
-            Health Monitor
-          </h2>
-        </div>
-
-        <span
-          className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-            allConnected
-              ? "border-success/30 bg-success/10 text-success"
-              : "border-warning/30 bg-warning/10 text-warning"
-          }`}
-        >
-          {allConnected
-            ? "READY"
-            : "DEGRADED"}
-        </span>
-      </div>
+      <Header
+        status={
+          allConnected
+            ? "ALL FEEDS CONNECTED"
+            : "FEED ISSUES"
+        }
+        healthy={
+          allConnected
+        }
+      />
 
       <div className="space-y-3">
         {exchanges.length === 0 ? (
           <div className="rounded-lg border border-border-default bg-panel-light p-4 text-sm text-text-muted">
-            Exchange health data unavailable.
+            The backend reported no exchange health records.
           </div>
         ) : (
-          exchanges.map((exchange) => (
-            <div
-              key={exchange.name}
-              className="flex items-center justify-between rounded-lg border border-border-default bg-panel-light px-4 py-3"
-            >
-              <p className="font-semibold">
-                {exchange.name}
-              </p>
-
-              <p
-                className={
-                  exchange.connected
-                    ? "font-semibold text-success"
-                    : "font-semibold text-danger"
+          exchanges.map(
+            (
+              exchange,
+            ) => (
+              <div
+                key={
+                  exchange.name
                 }
+                className="flex items-center justify-between rounded-lg border border-border-default bg-panel-light px-4 py-3"
               >
-                {exchange.connected
-                  ? "● ONLINE"
-                  : "○ OFFLINE"}
-              </p>
-            </div>
-          ))
+                <p className="font-semibold">
+                  {exchange.name}
+                </p>
+
+                <p
+                  className={
+                    exchange.connected
+                      ? "font-semibold text-success"
+                      : "font-semibold text-danger"
+                  }
+                >
+                  {exchange.connected
+                    ? "ONLINE"
+                    : "OFFLINE"}
+                </p>
+              </div>
+            ),
+          )
         )}
       </div>
 
@@ -101,22 +130,18 @@ export default function SystemHealthWidget({
 
         <HealthMetric
           label="Cached Quotes"
-          value={(
-            health?.cache.cachedQuotes ?? 0
-          ).toLocaleString()}
+          value={health.cache.cachedQuotes.toLocaleString()}
         />
 
         <HealthMetric
           label="Opportunities"
-          value={(
-            health?.engine.opportunities ?? 0
-          ).toLocaleString()}
+          value={health.engine.opportunities.toLocaleString()}
         />
 
         <HealthMetric
           label="Uptime"
           value={formatUptime(
-            uptimeSeconds,
+            health.process.uptimeSeconds,
           )}
         />
       </div>
@@ -146,6 +171,39 @@ export default function SystemHealthWidget({
           {formatBytes(heapTotal)}
         </p>
       </div>
+    </div>
+  );
+}
+
+function Header({
+  status,
+  healthy,
+}: {
+  status: string;
+
+  healthy: boolean;
+}) {
+  return (
+    <div className="mb-5 flex items-start justify-between gap-4">
+      <div>
+        <p className="text-xs uppercase tracking-[0.18em] text-text-muted">
+          Connectivity
+        </p>
+
+        <h2 className="mt-1 text-2xl font-bold">
+          Market Data Health
+        </h2>
+      </div>
+
+      <span
+        className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+          healthy
+            ? "border-success/30 bg-success/10 text-success"
+            : "border-warning/30 bg-warning/10 text-warning"
+        }`}
+      >
+        {status}
+      </span>
     </div>
   );
 }

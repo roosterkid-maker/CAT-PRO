@@ -1,39 +1,78 @@
-import type { Logger } from "../contracts/Logger";
+import type {
+  Logger,
+} from "../contracts/Logger";
+
+import {
+  sensitiveDataRedactor,
+} from "../security/SensitiveDataRedactor";
 
 export class ConsoleLogger
   implements Logger
 {
   info(
-    message: string,
+    message:
+      string,
   ): void {
     console.log(
-      `[INFO] ${message}`,
+      `[INFO] ${sensitiveDataRedactor.redactString(
+        message,
+      )}`,
     );
   }
 
   warn(
-    message: string,
+    message:
+      string,
   ): void {
     console.warn(
-      `[WARN] ${message}`,
+      `[WARN] ${sensitiveDataRedactor.redactString(
+        message,
+      )}`,
     );
   }
 
   error(
-    message: string,
-    error?: unknown,
+    message:
+      string,
+
+    error?:
+      unknown,
   ): void {
+    const safeMessage =
+      sensitiveDataRedactor
+        .redactString(
+          message,
+        );
+
+    if (
+      error ===
+      undefined
+    ) {
+      console.error(
+        `[ERROR] ${safeMessage}`,
+      );
+
+      return;
+    }
+
     console.error(
-      `[ERROR] ${message}`,
-      error,
+      `[ERROR] ${safeMessage}`,
+
+      sensitiveDataRedactor
+        .sanitize(
+          error,
+        ),
     );
   }
 
   debug(
-    message: string,
+    message:
+      string,
   ): void {
     console.debug(
-      `[DEBUG] ${message}`,
+      `[DEBUG] ${sensitiveDataRedactor.redactString(
+        message,
+      )}`,
     );
   }
 }

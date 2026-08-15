@@ -1,18 +1,36 @@
 import DashboardStatCard from "./DashboardStatCard";
 
 interface PortfolioWidgetProps {
-  capital: number;
+  capital:
+    | number
+    | null;
 
-  openTrades: number;
+  openTrades:
+    | number
+    | null;
 
-  expectedProfit: number;
+  expectedProfit:
+    | number
+    | null;
 
-  actualProfit: number;
+  actualProfit:
+    | number
+    | null;
 
-  winRate: number;
+  winRate:
+    | number
+    | null;
 }
 
-function formatCurrency(value: number): string {
+function formatCurrency(
+  value:
+    | number
+    | null,
+): string | null {
+  if (value === null) {
+    return null;
+  }
+
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -35,7 +53,7 @@ export default function PortfolioWidget({
         </p>
 
         <h2 className="mt-1 text-2xl font-bold">
-          Trading Capital
+          Portfolio Evidence
         </h2>
       </div>
 
@@ -43,7 +61,7 @@ export default function PortfolioWidget({
         <DashboardStatCard
           title="Capital"
           value={formatCurrency(capital)}
-          subtitle="Configured trading capital"
+          subtitle="Backend portfolio snapshot"
         />
 
         <DashboardStatCard
@@ -55,7 +73,7 @@ export default function PortfolioWidget({
         <DashboardStatCard
           title="Expected Profit"
           value={formatCurrency(expectedProfit)}
-          subtitle="Projected return"
+          subtitle="Active paper-trade estimate"
         />
 
         <DashboardStatCard
@@ -66,7 +84,13 @@ export default function PortfolioWidget({
 
         <DashboardStatCard
           title="Win Rate"
-          value={`${winRate.toFixed(1)}%`}
+          value={
+            winRate === null
+              ? null
+              : `${winRate.toFixed(
+                  1,
+                )}%`
+          }
           subtitle="Completed trades"
         />
       </div>

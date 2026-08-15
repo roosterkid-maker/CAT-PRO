@@ -1,20 +1,21 @@
-import axios from "axios";
+import {
+  api,
+} from "@/api/client";
 
 import type {
   SystemHealthResponse,
 } from "../types/SystemHealth";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ??
-  "http://localhost:5000";
-
-export async function fetchSystemHealth(): Promise<SystemHealthResponse> {
-  const response = await axios.get<SystemHealthResponse>(
-    `${API_BASE_URL}/api/system-health`,
-    {
-      timeout: 10_000,
-    },
-  );
+export async function fetchSystemHealth(
+  signal?: AbortSignal,
+): Promise<SystemHealthResponse> {
+  const response =
+    await api.get<SystemHealthResponse>(
+      "/api/system-health",
+      {
+        signal,
+      },
+    );
 
   return response.data;
 }

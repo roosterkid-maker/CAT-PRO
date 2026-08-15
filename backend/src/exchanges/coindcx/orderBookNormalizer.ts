@@ -11,7 +11,7 @@ import type {
 } from "./orderBook.types";
 
 
-function resolveMarket(
+export function resolveCoinDCXMarket(
   payload: CoinDCXOrderBookPayload,
 ): string | null {
   const rawSymbol =
@@ -31,23 +31,47 @@ function resolveMarket(
   );
 }
 
+export function resolveCoinDCXSourceTimestamp(
+  payload: CoinDCXOrderBookPayload,
+): number | null {
+  const timestamp =
+    payload.E ??
+    payload.ts;
+
+  return Number.isFinite(timestamp)
+    ? timestamp ?? null
+    : null;
+}
+
+export function resolveCoinDCXSourceVersion(
+  payload: CoinDCXOrderBookPayload,
+): number | null {
+  return Number.isSafeInteger(
+    payload.vs,
+  ) &&
+    (payload.vs ?? 0) >=
+      0
+    ? payload.vs ?? null
+    : null;
+}
+
 function resolveTimestamp(
   payload: CoinDCXOrderBookPayload,
 ): number {
-  const timestamp =
-    payload.E ??
-    payload.ts ??
-    Date.now();
-
-  return Number.isFinite(timestamp)
-    ? timestamp
-    : Date.now();
+  return (
+    resolveCoinDCXSourceTimestamp(
+      payload,
+    ) ??
+    Date.now()
+  );
 }
 
 function normalizeSide(
   side: CoinDCXOrderBookSide | undefined,
   direction: "bid" | "ask",
-  maximumLevels = COINDCX.ORDER_BOOK.DEPTH,
+  maximumLevels:
+    number = COINDCX.ORDER_BOOK.DEPTH,
+  preserveDeletions = false,
 ): OrderBookLevel[] {
   if (!side) {
     return [];
@@ -69,7 +93,11 @@ function normalizeSide(
       !Number.isFinite(price) ||
       !Number.isFinite(quantity) ||
       price <= 0 ||
-      quantity <= 0
+      quantity < 0 ||
+      (
+        !preserveDeletions &&
+        quantity === 0
+      )
     ) {
       continue;
     }
@@ -102,11 +130,13 @@ function normalizeSide(
   );
 }
 
-export function normalizeCoinDCXFullOrderBook(
+export function normalizeCoinDCXOrderBookSnapshot(
   payload: CoinDCXOrderBookPayload,
 ): OrderBook | null {
   const market =
-    resolveMarket(payload);
+    resolveCoinDCXMarket(
+      payload,
+    );
 
   if (!market) {
     return null;
@@ -131,16 +161,50 @@ export function normalizeCoinDCXFullOrderBook(
     return null;
   }
 
-  const bestBid =
-    bids[0];
+  return {
+    exchange: "coindcx",
 
-  const bestAsk =
-    asks[0];
+    market,
+
+    bids,
+    asks,
+
+    timestamp:
+      resolveTimestamp(payload),
+  };
+}
+
+export function normalizeCoinDCXOrderBookDelta(
+  payload: CoinDCXOrderBookPayload,
+): OrderBook | null {
+  const market =
+    resolveCoinDCXMarket(
+      payload,
+    );
+
+  if (!market) {
+    return null;
+  }
+
+  const bids =
+    normalizeSide(
+      payload.bids,
+      "bid",
+      Number.MAX_SAFE_INTEGER,
+      true,
+    );
+
+  const asks =
+    normalizeSide(
+      payload.asks,
+      "ask",
+      Number.MAX_SAFE_INTEGER,
+      true,
+    );
 
   if (
-    !bestBid ||
-    !bestAsk ||
-    bestAsk.price < bestBid.price
+    bids.length === 0 &&
+    asks.length === 0
   ) {
     return null;
   }
@@ -158,11 +222,11 @@ export function normalizeCoinDCXFullOrderBook(
   };
 }
 
-export function normalizeCoinDCXOrderBook(
+export function normalizeCoinDCXFullOrderBook(
   payload: CoinDCXOrderBookPayload,
-): ExecutableQuote | null {
+): OrderBook | null {
   const orderBook =
-    normalizeCoinDCXFullOrderBook(
+    normalizeCoinDCXOrderBookSnapshot(
       payload,
     );
 
@@ -176,7 +240,32 @@ export function normalizeCoinDCXOrderBook(
   const bestAsk =
     orderBook.asks[0];
 
-  if (!bestBid || !bestAsk) {
+  if (
+    !bestBid ||
+    !bestAsk ||
+    bestAsk.price < bestBid.price
+  ) {
+    return null;
+  }
+
+  return orderBook;
+}
+
+export function coinDCXOrderBookToExecutableQuote(
+  orderBook: OrderBook,
+): ExecutableQuote | null {
+  const bestBid =
+    orderBook.bids[0];
+
+  const bestAsk =
+    orderBook.asks[0];
+
+  if (
+    !bestBid ||
+    !bestAsk ||
+    bestAsk.price <
+      bestBid.price
+  ) {
     return null;
   }
 
@@ -211,4 +300,21 @@ export function normalizeCoinDCXOrderBook(
 
     executable: true,
   };
+}
+
+export function normalizeCoinDCXOrderBook(
+  payload: CoinDCXOrderBookPayload,
+): ExecutableQuote | null {
+  const orderBook =
+    normalizeCoinDCXFullOrderBook(
+      payload,
+    );
+
+  if (!orderBook) {
+    return null;
+  }
+
+  return coinDCXOrderBookToExecutableQuote(
+    orderBook,
+  );
 }

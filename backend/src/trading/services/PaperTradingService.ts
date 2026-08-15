@@ -1,172 +1,22 @@
-import { randomUUID } from "node:crypto";
-
-import type { ArbitrageOpportunity } from "../../arbitrage/models/ArbitrageOpportunity";
-import { executionCalculator } from "../calculators/ExecutionCalculator";
-import { defaultTradingExecutionConfig } from "../config/execution";
 import type { ExecutionResult } from "../models/ExecutionResult";
 import type { PaperTrade } from "../models/PaperTrade";
 
-import { paperTradeStore } from "./PaperTradeStore";
+import {
+  cloneStrategyAttribution,
+} from "../../strategies/models/StrategyAttribution";
+
+import {
+  paperTradeStore,
+  type PaperTradeStoreDiagnostics,
+  type PaperTradeStore,
+} from "./PaperTradeStore";
 
 export class PaperTradingService {
-  openTrade(
-    opportunity: ArbitrageOpportunity,
-    requestedCapital: number,
-  ): PaperTrade {
-    const config =
-      defaultTradingExecutionConfig;
-
-    if (!config.enabled) {
-      throw new Error(
-        "Trading execution is disabled.",
-      );
-    }
-
-    if (config.mode !== "paper") {
-      throw new Error(
-        `Paper trading is unavailable in ${config.mode} mode.`,
-      );
-    }
-
-    if (
-      !Number.isFinite(requestedCapital) ||
-      requestedCapital <= 0
-    ) {
-      throw new Error(
-        "Trading capital must be a positive number.",
-      );
-    }
-
-    if (
-      requestedCapital >
-      config.maximumCapitalPerTrade
-    ) {
-      throw new Error(
-        `Maximum paper-trade capital is ₹${config.maximumCapitalPerTrade}.`,
-      );
-    }
-
-    if (
-      paperTradeStore.countOpenTrades() >=
-      config.maximumOpenTrades
-    ) {
-      throw new Error(
-        "Maximum number of open paper trades reached.",
-      );
-    }
-
-    if (
-      opportunity.netProfitPercent <
-      config.minimumNetProfitPercent
-    ) {
-      throw new Error(
-        "Opportunity does not meet the minimum net-profit requirement.",
-      );
-    }
-
-    if (
-      config.requireFreshBidAsk &&
-      opportunity.usedLastPriceFallback
-    ) {
-      throw new Error(
-        "Executable bid/ask prices are required for this paper trade.",
-      );
-    }
-
-    if (!opportunity.quotesAreFresh) {
-      throw new Error(
-        "Opportunity contains stale exchange quotes.",
-      );
-    }
-
-    const execution =
-      executionCalculator.calculate(
-        opportunity.buyPrice,
-        opportunity.buyAvailableQty,
-        opportunity.sellAvailableQty,
-        requestedCapital,
-      );
-
-    if (!execution.enoughLiquidity) {
-      throw new Error(
-        `Only ${execution.liquidityPercent.toFixed(
-          1,
-        )}% liquidity is available for the requested capital.`,
-      );
-    }
-
-    const estimatedFees =
-      execution.executableQty *
-      opportunity.estimatedFees;
-
-    const expectedProfit =
-      execution.executableQty *
-      opportunity.netProfit;
-
-    const expectedProfitPercent =
-      execution.executableCapital > 0
-        ? (expectedProfit /
-            execution.executableCapital) *
-          100
-        : 0;
-
-    const now = Date.now();
-
-    const trade: PaperTrade = {
-      id: randomUUID(),
-
-      market:
-        opportunity.pair.market,
-
-      buyExchange:
-        opportunity.pair.buy.exchange,
-
-      sellExchange:
-        opportunity.pair.sell.exchange,
-
-      capital:
-        execution.executableCapital,
-
-      quantity:
-        execution.executableQty,
-
-      buyPrice:
-        opportunity.buyPrice,
-
-      sellPrice:
-        opportunity.sellPrice,
-
-      estimatedFees,
-      expectedProfit,
-      expectedProfitPercent,
-
-      status: "open",
-
-      openedAt: now,
-      closedAt: null,
-
-      currentPrice:
-        opportunity.buyPrice,
-
-      currentProfit: 0,
-      currentProfitPercent: 0,
-
-      highestProfit: 0,
-      lowestProfit: 0,
-
-      lastUpdatedAt: now,
-
-      actualSellPrice: null,
-      actualProfit: null,
-      actualProfitPercent: null,
-
-      failureReason: null,
-    };
-
-    return paperTradeStore.create(
-      trade,
-    );
-  }
+  constructor(
+    private readonly store:
+      PaperTradeStore =
+      paperTradeStore,
+  ) {}
 
   recordCompletedExecution(
     result: ExecutionResult,
@@ -179,7 +29,8 @@ export class PaperTradingService {
     }
 
     const completedAt =
-      result.completedAt ?? Date.now();
+      result.completedAt ??
+      result.startedAt;
 
     const quantity = Math.min(
       result.buy.filledQuantity,
@@ -196,6 +47,107 @@ export class PaperTradingService {
     }
 
     const trade: PaperTrade = {
+      strategyAttribution:
+        cloneStrategyAttribution(
+          result.strategyAttribution,
+        ),
+
+      priceCredibility:
+        result.priceCredibility
+          ? structuredClone(
+              result.priceCredibility,
+            )
+          : null,
+
+      paperExecutionStress:
+        result.paperExecutionStress
+          ? structuredClone(
+              result.paperExecutionStress,
+            )
+          : null,
+
+      paperVdaTaxWithholding:
+        result.paperVdaTaxWithholding
+          ? structuredClone(
+              result.paperVdaTaxWithholding,
+            )
+          : null,
+
+      capitalConversion:
+        result.capitalConversion
+          ? structuredClone(
+              result.capitalConversion,
+            )
+          : null,
+
+      quoteCapitalUsed:
+        result.quoteCapitalUsed ??
+        null,
+
+      quoteGrossProfit:
+        result.quoteGrossProfit ??
+        null,
+
+      quoteTotalFees:
+        result.quoteTotalFees ??
+        null,
+
+      quoteNetProfit:
+        result.quoteNetProfit ??
+        null,
+
+      quoteTdsWithheld:
+        result.quoteTdsWithheld ??
+        null,
+
+      quoteDeployableCashProfit:
+        result.quoteDeployableCashProfit ??
+        null,
+
+      tdsWithheld:
+        result.tdsWithheld ??
+        null,
+
+      deployableCashProfit:
+        result.deployableCashProfit ??
+        null,
+
+      executionQuality: {
+        schemaVersion:
+          1,
+        buyRequestedPrice:
+          result.buy.requestedPrice,
+        buyAverageFillPrice:
+          result.buy.averageFillPrice,
+        sellRequestedPrice:
+          result.sell.requestedPrice,
+        sellAverageFillPrice:
+          result.sell.averageFillPrice,
+        buyAdverseSlippagePercent:
+          this.calculateAdverseSlippagePercent(
+            "BUY",
+            result.buy.requestedPrice,
+            result.buy.averageFillPrice,
+          ),
+        sellAdverseSlippagePercent:
+          this.calculateAdverseSlippagePercent(
+            "SELL",
+            result.sell.requestedPrice,
+            result.sell.averageFillPrice,
+          ),
+        combinedAdverseSlippagePercent:
+          this.calculateAdverseSlippagePercent(
+            "BUY",
+            result.buy.requestedPrice,
+            result.buy.averageFillPrice,
+          ) +
+          this.calculateAdverseSlippagePercent(
+            "SELL",
+            result.sell.requestedPrice,
+            result.sell.averageFillPrice,
+          ),
+      },
+
       id: result.planId,
 
       market: result.market,
@@ -271,7 +223,7 @@ export class PaperTradingService {
         result.failureReason,
     };
 
-    return paperTradeStore.create(
+    return this.store.create(
       trade,
     );
   }
@@ -284,7 +236,7 @@ export class PaperTradingService {
   ): PaperTrade | undefined {
     const now = Date.now();
 
-    return paperTradeStore.update(id, {
+    return this.store.update(id, {
       status: "closed",
 
       closedAt: now,
@@ -303,13 +255,67 @@ export class PaperTradingService {
   }
 
   getTrades(): PaperTrade[] {
-    return paperTradeStore.getAll();
+    return this.store.getAll();
+  }
+
+  getTradeRevision(): number {
+    return this.store.getRevision();
   }
 
   getTrade(
     id: string,
   ): PaperTrade | undefined {
-    return paperTradeStore.getById(id);
+    return this.store.getById(id);
+  }
+
+  getStoreDiagnostics():
+    PaperTradeStoreDiagnostics {
+    return this.store
+      .getDiagnostics();
+  }
+
+  private calculateAdverseSlippagePercent(
+    side:
+      "BUY" | "SELL",
+
+    requestedPrice:
+      number,
+
+    averageFillPrice:
+      number,
+  ): number {
+    if (
+      !Number.isFinite(
+        requestedPrice,
+      ) ||
+      requestedPrice <=
+        0 ||
+      !Number.isFinite(
+        averageFillPrice,
+      ) ||
+      averageFillPrice <=
+        0
+    ) {
+      return 0;
+    }
+
+    const adverseDifference =
+      side ===
+        "BUY"
+        ? Math.max(
+            0,
+            averageFillPrice -
+              requestedPrice,
+          )
+        : Math.max(
+            0,
+            requestedPrice -
+              averageFillPrice,
+          );
+
+    return adverseDifference /
+      requestedPrice *
+      100;
   }
 }
 

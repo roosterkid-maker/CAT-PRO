@@ -3,40 +3,89 @@ import PortfolioWidget from "@/components/dashboard/PortfolioWidget";
 import SystemHealthWidget from "@/components/dashboard/SystemHealthWidget";
 import TopOpportunitiesPanel from "@/components/dashboard/TopOpportunitiesPanel";
 import TradingOverviewHero from "@/components/dashboard/TradingOverviewHero";
-import PortfolioSummaryCards from "@/modules/portfolio/components/PortfolioSummaryCards";
+import {
+  APP_PAGE_PATHS,
+} from "@/app/routes";
+import {
+  useOpportunities,
+} from "@/modules/arbitrage/hooks/useOpportunities";
+import {
+  usePaperTrades,
+} from "@/modules/paper-trading/hooks/usePaperTrades";
 import OpenPositionsPanel from "@/modules/portfolio/components/OpenPositionsPanel";
-import { useOpportunities } from "@/modules/arbitrage/hooks/useOpportunities";
-import MarketTable from "@/modules/market/components/MarketTable";
+import PortfolioSummaryCards from "@/modules/portfolio/components/PortfolioSummaryCards";
+import ExchangeBalancesPanel from "@/modules/portfolio/components/ExchangeBalancesPanel";
 import TradeHistoryPanel from "@/modules/portfolio/components/TradeHistoryPanel";
-import { usePaperTrades } from "@/modules/paper-trading/hooks/usePaperTrades";
-import { usePortfolioSummary } from "@/modules/portfolio/hooks/usePortfolioSummary";
-import { useSystemHealth } from "@/modules/system-health/hooks/useSystemHealth";
-
-import { useMarketStore } from "@/store/market.store";
+import {
+  usePortfolioSummary,
+} from "@/modules/portfolio/hooks/usePortfolioSummary";
+import ProductionReadinessOverview from "@/modules/production-safety/components/ProductionReadinessOverview";
+import {
+  useV18ProductionReadiness,
+} from "@/modules/production-safety/hooks/useV18ProductionReadiness";
+import {
+  useSystemHealth,
+} from "@/modules/system-health/hooks/useSystemHealth";
+import {
+  Link,
+} from "react-router-dom";
 
 export default function Dashboard() {
-  const marketCount = useMarketStore(
-    (state) =>
-      Object.keys(
-        state.markets,
-      ).length,
-  );
-
   const {
-    data: healthResponse,
+    data:
+      healthResponse,
+
+    isPending:
+      healthPending,
+
+    isError:
+      healthError,
   } = useSystemHealth();
 
   const {
-    data: opportunitiesResponse,
+    data:
+      opportunitiesResponse,
+
+    isPending:
+      opportunitiesPending,
+
+    isError:
+      opportunitiesError,
   } = useOpportunities();
 
   const {
-    data: paperTradesResponse,
+    data:
+      paperTradesResponse,
+
+    isPending:
+      paperTradesPending,
+
+    isError:
+      paperTradesError,
   } = usePaperTrades();
 
   const {
-    data: portfolioResponse,
+    data:
+      portfolioResponse,
+
+    isPending:
+      portfolioPending,
+
+    isError:
+      portfolioError,
   } = usePortfolioSummary();
+
+  const {
+    data:
+      readinessResponse,
+
+    isPending:
+      readinessPending,
+
+    isError:
+      readinessError,
+  } =
+    useV18ProductionReadiness();
 
   const health =
     healthResponse?.data;
@@ -44,136 +93,167 @@ export default function Dashboard() {
   const portfolio =
     portfolioResponse?.data;
 
+  const readiness =
+    readinessResponse?.data;
+
   const liveOpportunities =
-    opportunitiesResponse?.data ?? [];
+    opportunitiesResponse
+      ?.data;
 
   const paperTrades =
-    paperTradesResponse?.data ?? [];
+    paperTradesResponse
+      ?.data;
 
-  const exchangesOnline =
-    health?.exchanges.filter(
-      (exchange) =>
-        exchange.connected,
-    ).length ?? 0;
+  const opportunityItems =
+    liveOpportunities ?? [];
 
-  const totalExchanges =
-    health?.exchanges.length ?? 0;
-
-  const healthy =
-    totalExchanges > 0 &&
-    exchangesOnline ===
-      totalExchanges;
-
-  const cachedQuotes =
-    health?.cache.cachedQuotes ??
-    marketCount;
+  const paperTradeItems =
+    paperTrades ?? [];
 
   const executableOpportunities =
-    liveOpportunities.filter(
-      (opportunity) =>
-        opportunity.decision ===
-          "EXECUTE" &&
-        opportunity.enoughLiquidity &&
-        opportunity.quotesAreFresh,
-    ).length;
+    liveOpportunities
+      ? liveOpportunities.filter(
+          (
+            opportunity,
+          ) =>
+            opportunity.decision ===
+              "EXECUTE" &&
+            opportunity
+              .enoughLiquidity &&
+            opportunity
+              .quotesAreFresh,
+        ).length
+      : null;
 
   const activePaperTrades =
-    paperTrades.filter(
-      (trade) =>
-        trade.status === "detected" ||
-        trade.status === "validated" ||
-        trade.status === "open" ||
+    paperTradeItems.filter(
+      (
+        trade,
+      ) =>
+        trade.status ===
+          "detected" ||
+        trade.status ===
+          "validated" ||
+        trade.status ===
+          "open" ||
         trade.status ===
           "monitoring",
     );
 
   const completedPaperTrades =
-    paperTrades.filter(
-      (trade) =>
-        trade.status === "closed" ||
+    paperTradeItems.filter(
+      (
+        trade,
+      ) =>
+        trade.status ===
+          "closed" ||
         trade.status ===
           "target-hit",
     );
 
   const expectedProfit =
-    activePaperTrades.reduce(
-      (total, trade) =>
-        total +
-        trade.expectedProfit,
-      0,
-    );
-
-  const fallbackActualProfit =
-    completedPaperTrades.reduce(
-      (total, trade) =>
-        total +
-        (trade.actualProfit ?? 0),
-      0,
-    );
-
-  const fallbackWinningTrades =
-    completedPaperTrades.filter(
-      (trade) =>
-        (trade.actualProfit ?? 0) >
-        0,
-    );
-
-  const fallbackWinRate =
-    completedPaperTrades.length > 0
-      ? (
-          fallbackWinningTrades.length /
-          completedPaperTrades.length
-        ) * 100
-      : 0;
+    paperTrades
+      ? activePaperTrades.reduce(
+          (
+            total,
+            trade,
+          ) =>
+            total +
+            trade
+              .expectedProfit,
+          0,
+        )
+      : null;
 
   const portfolioCapital =
-    portfolio?.currentCapital ??
-    100_000;
+    portfolio
+      ?.currentCapital ??
+    null;
 
   const portfolioOpenTrades =
     portfolio?.openTrades ??
-    activePaperTrades.length;
+    (paperTrades
+      ? activePaperTrades.length
+      : null);
 
   const portfolioActualProfit =
-    portfolio?.totalRealizedProfit ??
-    fallbackActualProfit;
+    portfolio
+      ?.totalRealizedProfit ??
+    null;
 
   const portfolioWinRate =
-    portfolio?.winRatePercent ??
-    fallbackWinRate;
+    portfolio
+      ?.winRatePercent ??
+    null;
 
   return (
     <section className="space-y-6 p-6 xl:p-8">
       <TradingOverviewHero
-        exchangesOnline={
-          exchangesOnline
+        exchanges={
+          health?.exchanges
         }
         cachedMarkets={
-          cachedQuotes
+          health?.cache
+            .cachedQuotes ??
+          null
         }
         opportunities={
-          liveOpportunities.length
+          liveOpportunities
+            ?.length ??
+          null
         }
-        healthy={healthy}
+        healthLoading={
+          healthPending
+        }
+        healthUnavailable={
+          healthError ||
+          (!healthPending &&
+            !health)
+        }
+      />
+
+      <ProductionReadinessOverview
+        report={
+          readiness
+        }
+        loading={
+          readinessPending
+        }
+        unavailable={
+          readinessError
+        }
       />
 
       {portfolio ? (
-  <PortfolioSummaryCards
-    portfolio={portfolio}
-  />
-) : (
-  <div className="rounded-xl border border-border-default bg-panel p-6 text-sm text-text-muted">
-    Loading portfolio metrics...
-  </div>
-)}
+        <PortfolioSummaryCards
+          portfolio={
+            portfolio
+          }
+        />
+      ) : (
+        <EvidenceState
+          title="Portfolio metrics"
+          loading={
+            portfolioPending
+          }
+          unavailable={
+            portfolioError
+          }
+        />
+      )}
+
+      <ExchangeBalancesPanel />
 
       <ExecutionTerminalSummary
         referenceCapital={
-          portfolio?.availableCapital ??
-          10_000
+          portfolio
+            ?.availableCapital ??
+          null
         }
         liveOpportunities={
-          liveOpportunities.length
+          liveOpportunities
+            ?.length ??
+          null
         }
         executableOpportunities={
           executableOpportunities
@@ -184,8 +264,16 @@ export default function Dashboard() {
         expectedProfit={
           expectedProfit
         }
-        systemHealthy={
-          healthy
+        readiness={
+          readiness
+        }
+        readinessLoading={
+          readinessPending
+        }
+        readinessUnavailable={
+          readinessError ||
+          (!readinessPending &&
+            !readiness)
         }
       />
 
@@ -208,14 +296,34 @@ export default function Dashboard() {
           }
         />
 
-        <TopOpportunitiesPanel
-          opportunities={
-            liveOpportunities
-          }
-        />
+        {liveOpportunities ? (
+          <TopOpportunitiesPanel
+            opportunities={
+              opportunityItems
+            }
+          />
+        ) : (
+          <EvidenceState
+            title="Opportunity evidence"
+            loading={
+              opportunitiesPending
+            }
+            unavailable={
+              opportunitiesError
+            }
+          />
+        )}
 
         <SystemHealthWidget
-          health={health}
+          health={
+            health
+          }
+          loading={
+            healthPending
+          }
+          unavailable={
+            healthError
+          }
         />
       </div>
 
@@ -229,15 +337,94 @@ export default function Dashboard() {
             Market Terminal
           </h2>
         </div>
-        <OpenPositionsPanel
-  trades={activePaperTrades}
-/>
 
-        <MarketTable />
-        <TradeHistoryPanel
-  trades={completedPaperTrades}
-/>
+        {paperTrades ? (
+          <OpenPositionsPanel
+            trades={
+              activePaperTrades
+            }
+          />
+        ) : (
+          <EvidenceState
+            title="Open paper trades"
+            loading={
+              paperTradesPending
+            }
+            unavailable={
+              paperTradesError
+            }
+          />
+        )}
+
+        <div className="my-4 flex flex-col gap-3 rounded-lg border border-border-default bg-background-subtle p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-semibold text-text-primary">
+              Live market stream
+            </p>
+
+            <p className="mt-1 text-sm text-text-muted">
+              {health?.cache
+                .cachedQuotes ??
+                "Current"} market quotes are available in the dedicated terminal.
+            </p>
+          </div>
+
+          <Link
+            to={
+              APP_PAGE_PATHS.markets
+            }
+            className="inline-flex shrink-0 items-center justify-center rounded-lg border border-accent-primary/40 bg-accent-primary/10 px-4 py-2 text-sm font-semibold text-accent-primary transition hover:bg-accent-primary/20"
+          >
+            Open Markets terminal
+          </Link>
+        </div>
+
+        {paperTrades ? (
+          <TradeHistoryPanel
+            trades={
+              completedPaperTrades
+            }
+          />
+        ) : (
+          <EvidenceState
+            title="Paper trade history"
+            loading={
+              paperTradesPending
+            }
+            unavailable={
+              paperTradesError
+            }
+          />
+        )}
       </div>
     </section>
+  );
+}
+
+function EvidenceState({
+  title,
+  loading,
+  unavailable,
+}: {
+  title: string;
+
+  loading: boolean;
+
+  unavailable: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-border-default bg-panel p-6 text-sm text-text-muted">
+      <p className="font-semibold text-text-primary">
+        {title}
+      </p>
+
+      <p className="mt-1">
+        {loading
+          ? "Loading backend evidence..."
+          : unavailable
+            ? "Backend evidence is unavailable."
+            : "Backend returned no evidence."}
+      </p>
+    </div>
   );
 }

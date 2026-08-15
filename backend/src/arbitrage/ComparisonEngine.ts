@@ -9,22 +9,29 @@ export class ComparisonEngine {
     const snapshots =
       new Map<string, MarketSnapshot>();
 
-    for (const incomingQuote of quotes) {
+    for (
+      const incomingQuote
+      of quotes
+    ) {
       const market =
-        incomingQuote.market
-          .trim()
-          .toUpperCase();
+        this.normalizeMarket(
+          incomingQuote.market,
+        );
 
       const exchange =
         incomingQuote.exchange
           .trim()
           .toLowerCase();
 
-      if (!market || !exchange) {
+      if (
+        !market ||
+        !exchange
+      ) {
         continue;
       }
 
-      const quote: ExchangeQuote = {
+      const quote:
+        ExchangeQuote = {
         exchange,
         market,
 
@@ -57,35 +64,68 @@ export class ComparisonEngine {
       };
 
       const existing =
-        snapshots.get(market);
+        snapshots.get(
+          market,
+        );
 
       if (existing) {
-        existing.quotes[exchange] =
-          quote;
+        const currentQuote =
+          existing.quotes[
+            exchange
+          ];
 
-        existing.timestamp = Math.max(
-          existing.timestamp,
-          quote.timestamp,
-        );
+        if (
+          !currentQuote ||
+          quote.timestamp >=
+            currentQuote.timestamp
+        ) {
+          existing.quotes[
+            exchange
+          ] =
+            quote;
+        }
+
+        existing.timestamp =
+          Math.max(
+            existing.timestamp,
+            quote.timestamp,
+          );
 
         continue;
       }
 
-      snapshots.set(market, {
+      snapshots.set(
         market,
+        {
+          market,
 
-        quotes: {
-          [exchange]: quote,
+          quotes: {
+            [exchange]:
+              quote,
+          },
+
+          timestamp:
+            quote.timestamp,
         },
-
-        timestamp:
-          quote.timestamp,
-      });
+      );
     }
 
     return Array.from(
       snapshots.values(),
     );
+  }
+
+  private normalizeMarket(
+    rawMarket:
+      string,
+  ): string {
+    return rawMarket
+      .trim()
+      .toUpperCase()
+      .replace(
+        /[\s_\-/]+/g,
+        "",
+      );
   }
 }
 

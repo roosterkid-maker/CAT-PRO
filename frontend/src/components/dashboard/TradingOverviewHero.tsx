@@ -1,19 +1,76 @@
+import type {
+  ExchangeHealth,
+} from "@/modules/system-health/types/SystemHealth";
 import HeroCard from "@/shared/ui/HeroCard";
 import StatusBadge from "@/shared/ui/StatusBadge";
 
 interface TradingOverviewHeroProps {
-  exchangesOnline: number;
-  cachedMarkets: number;
-  opportunities: number;
-  healthy: boolean;
+  exchanges:
+    | ExchangeHealth[]
+    | undefined;
+
+  cachedMarkets:
+    | number
+    | null;
+
+  opportunities:
+    | number
+    | null;
+
+  healthLoading: boolean;
+
+  healthUnavailable: boolean;
 }
 
 export default function TradingOverviewHero({
-  exchangesOnline,
+  exchanges,
   cachedMarkets,
   opportunities,
-  healthy,
+  healthLoading,
+  healthUnavailable,
 }: TradingOverviewHeroProps) {
+  const connectedCount =
+    exchanges?.filter(
+      (
+        exchange,
+      ) =>
+        exchange.connected,
+    ).length ??
+    null;
+
+  const totalExchanges =
+    exchanges?.length ??
+    null;
+
+  const allFeedsConnected =
+    totalExchanges !== null &&
+    totalExchanges > 0 &&
+    connectedCount ===
+      totalExchanges;
+
+  const feedStatus =
+    healthLoading &&
+    !exchanges
+      ? "LOADING"
+      : healthUnavailable ||
+          !exchanges
+        ? "UNAVAILABLE"
+        : allFeedsConnected
+          ? "CONNECTED"
+          : "ISSUES";
+
+  const badgeStatus =
+    feedStatus ===
+    "CONNECTED"
+      ? "success"
+      : feedStatus ===
+          "LOADING"
+        ? "info"
+        : feedStatus ===
+            "ISSUES"
+          ? "warning"
+          : "danger";
+
   return (
     <div className="mb-8">
       <HeroCard
@@ -22,67 +79,87 @@ export default function TradingOverviewHero({
         status={
           <StatusBadge
             status={
-              healthy
-                ? "success"
-                : "danger"
+              badgeStatus
             }
           >
-            {healthy
-              ? "🟢 LIVE"
-              : "🔴 DEGRADED"}
+            MARKET DATA {feedStatus}
           </StatusBadge>
         }
       >
         <div className="grid gap-6 lg:grid-cols-4">
           <TerminalMetric
             label="EXCHANGES"
-            value={`${exchangesOnline}`}
-            color="text-success"
-          />
-
-          <TerminalMetric
-            label="MARKETS"
-            value={cachedMarkets.toLocaleString()}
-          />
-
-          <TerminalMetric
-            label="EXECUTION"
             value={
-              opportunities.toLocaleString()
-            }
-            color="text-success"
-          />
-
-          <TerminalMetric
-            label="SYSTEM"
-            value={
-              healthy
-                ? "READY"
-                : "DEGRADED"
+              connectedCount ===
+                null ||
+              totalExchanges ===
+                null
+                ? "Unavailable"
+                : `${connectedCount}/${totalExchanges}`
             }
             color={
-              healthy
+              allFeedsConnected
                 ? "text-success"
-                : "text-danger"
+                : "text-text-primary"
+            }
+          />
+
+          <TerminalMetric
+            label="CACHED QUOTES"
+            value={formatCount(
+              cachedMarkets,
+            )}
+          />
+
+          <TerminalMetric
+            label="OPPORTUNITIES"
+            value={formatCount(
+              opportunities,
+            )}
+          />
+
+          <TerminalMetric
+            label="FEED STATUS"
+            value={feedStatus}
+            color={
+              feedStatus ===
+              "CONNECTED"
+                ? "text-success"
+                : feedStatus ===
+                    "ISSUES"
+                  ? "text-warning"
+                  : "text-text-muted"
             }
           />
         </div>
 
         <div className="mt-8 flex flex-wrap gap-3">
-          <ExchangeBadge
-            name="CoinDCX"
-            online={healthy}
-          />
-
-          <ExchangeBadge
-            name="Binance"
-            online={healthy}
-          />
-
-          <ExchangeBadge
-            name="Bybit"
-            online={healthy}
-          />
+          {exchanges &&
+          exchanges.length > 0 ? (
+            exchanges.map(
+              (
+                exchange,
+              ) => (
+                <ExchangeBadge
+                  key={
+                    exchange.name
+                  }
+                  name={
+                    exchange.name
+                  }
+                  online={
+                    exchange.connected
+                  }
+                />
+              ),
+            )
+          ) : (
+            <p className="text-sm text-text-muted">
+              {healthLoading
+                ? "Loading exchange connectivity evidence..."
+                : "Exchange connectivity evidence is unavailable."}
+            </p>
+          )}
         </div>
       </HeroCard>
     </div>
@@ -135,7 +212,17 @@ function ExchangeBadge({
           : "border-danger/30 bg-danger/10 text-danger"
       }`}
     >
-      {online ? "●" : "○"} {name}
+      {online ? "ONLINE" : "OFFLINE"} {name}
     </div>
   );
+}
+
+function formatCount(
+  value:
+    | number
+    | null,
+): string {
+  return value === null
+    ? "Unavailable"
+    : value.toLocaleString();
 }

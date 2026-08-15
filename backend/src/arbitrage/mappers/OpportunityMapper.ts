@@ -29,6 +29,21 @@ export class OpportunityMapper {
       sellAvailableQty:
         opportunity.sellAvailableQty,
 
+      requestedCapitalInr:
+        opportunity.requestedCapitalInr,
+
+      quoteAsset:
+        opportunity.quoteAsset,
+
+      requestedQuoteCapital:
+        opportunity.requestedQuoteCapital,
+
+      executableQuoteCapital:
+        opportunity.executableQuoteCapital,
+
+      executableCapitalInr:
+        opportunity.executableCapitalInr,
+
       requiredQty:
         opportunity.requiredQty,
 

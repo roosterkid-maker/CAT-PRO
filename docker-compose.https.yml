@@ -1,0 +1,37 @@
+services:
+  backend:
+    environment:
+      FRONTEND_ORIGIN: ${CAT_PRO_PUBLIC_ORIGIN:?Set the exact HTTPS dashboard origin}
+
+  edge:
+    image: caddy:2.11.4-alpine
+    container_name: cat-pro-edge
+    restart: unless-stopped
+
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+    environment:
+      CAT_PRO_DASHBOARD_HOST: ${CAT_PRO_DASHBOARD_HOST:?Set the HTTPS dashboard hostname}
+      CAT_PRO_DASHBOARD_USER: ${CAT_PRO_DASHBOARD_USER:?Set the dashboard Basic Auth username}
+      CAT_PRO_DASHBOARD_PASSWORD_HASH: ${CAT_PRO_DASHBOARD_PASSWORD_HASH:?Set the dashboard bcrypt password hash}
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - cat-pro-caddy-data:/data
+      - cat-pro-caddy-config:/config
+
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - cat-network
+
+volumes:
+  cat-pro-caddy-data:
+  cat-pro-caddy-config:

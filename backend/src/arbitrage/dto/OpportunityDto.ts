@@ -15,6 +15,12 @@ export interface OpportunityDto {
   sellPrice: number;
   sellAvailableQty: number;
 
+  requestedCapitalInr?: number;
+  quoteAsset?: string;
+  requestedQuoteCapital?: number;
+  executableQuoteCapital?: number;
+  executableCapitalInr?: number;
+
   requiredQty: number;
 
   availableExecutableQty: number;

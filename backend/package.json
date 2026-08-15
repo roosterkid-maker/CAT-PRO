@@ -4,9 +4,12 @@
   "description": "Professional Crypto Arbitrage Scanner",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "ts-node src/server.ts",
+    "dev:watch": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "test": "npm run build && npm run test:deterministic",
+    "test:deterministic": "node dist/scripts/runDeterministicTests.js",
     "benchmark:vwap": "tsx tests/runners/VWAPBenchmarkRunner.ts",
     "benchmark:all": "npm run benchmark:vwap"
   },

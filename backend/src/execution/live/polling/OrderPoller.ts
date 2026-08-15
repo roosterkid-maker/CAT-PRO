@@ -96,10 +96,12 @@ export class OrderPoller {
         options.pollingIntervalMs,
       );
 
-      latestResult =
-        await adapter.getOrderStatus(
-          initialResult.orderId,
-        );
+       latestResult =
+  await adapter.getOrderStatus(
+    initialResult.orderId,
+    initialResult.market,
+    initialResult.product,
+  );
 
       await this.safeAudit(() =>
         executionAuditLogger.orderStatusUpdated(
@@ -130,11 +132,12 @@ export class OrderPoller {
       )
     ) {
       try {
-        const cancelledResult =
-          await adapter.cancelOrder(
-            initialResult.orderId,
-          );
-
+         const cancelledResult =
+  await adapter.cancelOrder(
+    initialResult.orderId,
+    initialResult.market,
+    initialResult.product,
+  );
         const timedOutResult:
           LiveExecutionResult = {
           ...cancelledResult,
@@ -264,6 +267,22 @@ export class OrderPoller {
     return {
       exchange:
         result.exchange,
+
+      ...(result.product
+        ? {product: result.product}
+        : {}),
+
+      ...(result.reduceOnly !== undefined
+        ? {reduceOnly: result.reduceOnly}
+        : {}),
+
+      ...(result.positionMode
+        ? {positionMode: result.positionMode}
+        : {}),
+
+      ...(result.positionSide
+        ? {positionSide: result.positionSide}
+        : {}),
 
       market:
         result.market,

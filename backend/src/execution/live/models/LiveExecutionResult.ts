@@ -13,6 +13,14 @@ export interface LiveExecutionResult {
 
   exchange: string;
 
+  product?: "SPOT" | "PERPETUAL";
+
+  reduceOnly?: boolean;
+
+  positionMode?: "ONE_WAY" | "HEDGE";
+
+  positionSide?: "LONG" | "SHORT";
+
   market: string;
 
   side:

@@ -17,44 +17,167 @@ export type ExecutionStatus =
   | "RUNNING"
   | "COMPLETED"
   | "FAILED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "EXPIRED";
+
+export type ExecutionOrderType =
+  | "market"
+  | "limit";
+
+export type ExecutionTimeInForce =
+  | "GTC"
+  | "IOC"
+  | "FOK";
 
 export interface ExecutionLeg {
-  exchange: string;
+  readonly exchange: string;
 
-  market: string;
+  readonly market: string;
 
-  side: OrderSide;
+  readonly side: OrderSide;
 
-  quantity: number;
+  readonly quantity: number;
 
-  limitPrice: number;
+  readonly limitPrice: number;
+
+  /**
+   * Added as an incremental migration field.
+   *
+   * Existing PAPER execution currently assumes
+   * limit-price based execution, therefore this
+   * remains optional until every execution path
+   * is migrated to the shared order validator.
+   */
+  readonly orderType?:
+    ExecutionOrderType;
+
+  readonly timeInForce?:
+    ExecutionTimeInForce;
+
+  /**
+   * Asset information allows the execution
+   * safety layer to validate balances without
+   * parsing market strings at execution time.
+   */
+  readonly baseAsset?:
+    string;
+
+  readonly quoteAsset?:
+    string;
 }
 
 export interface ExecutionPlan {
-  id: string;
+  readonly id: string;
 
-  market: string;
+  /**
+   * Schema version allows future execution plans
+   * to evolve without silently changing the
+   * meaning of historical plans.
+   */
+  readonly version?:
+    number;
 
-  mode: ExecutionMode;
+  readonly market: string;
 
-  strategy: ExecutionStrategy;
+  readonly mode:
+    ExecutionMode;
 
-  status: ExecutionStatus;
+  readonly strategy:
+    ExecutionStrategy;
 
-  capital: number;
+  readonly status:
+    ExecutionStatus;
 
-  expectedProfit: number;
+  readonly capital:
+    number;
 
-  expectedProfitPercent: number;
+  readonly expectedProfit:
+    number;
 
-  maximumSlippagePercent: number;
+  readonly expectedProfitPercent:
+    number;
 
-  timeoutMs: number;
+  /**
+   * Expected trading fees for both execution
+   * legs combined.
+   *
+   * Optional during the migration from the
+   * existing paper execution planner.
+   */
+  readonly expectedFees?:
+    number;
 
-  buy: ExecutionLeg;
+  /**
+   * Expected net profit after known execution
+   * costs.
+   */
+  readonly expectedNetProfit?:
+    number;
 
-  sell: ExecutionLeg;
+  readonly expectedNetProfitPercent?:
+    number;
 
-  createdAt: number;
+  readonly maximumSlippagePercent:
+    number;
+
+  /**
+   * Expected execution slippage calculated by
+   * the planner/simulator when available.
+   */
+  readonly expectedSlippagePercent?:
+    number;
+
+  /**
+   * Risk and execution scores captured when the
+   * plan is created.
+   *
+   * They become historical evidence of why the
+   * trade was approved.
+   */
+  readonly riskScore?:
+    number;
+
+  readonly executionScore?:
+    number;
+
+  readonly timeoutMs:
+    number;
+
+  readonly buy:
+    ExecutionLeg;
+
+  readonly sell:
+    ExecutionLeg;
+
+  readonly createdAt:
+    number;
+
+  /**
+   * Absolute expiration timestamp.
+   *
+   * Arbitrage plans should never remain
+   * executable indefinitely because the market
+   * state that created them becomes stale.
+   */
+  readonly expiresAt?:
+    number;
+
+  /**
+   * Timestamp of the underlying opportunity.
+   * This is different from createdAt: the quote
+   * may already be old when planning starts.
+   */
+  readonly opportunityTimestamp?:
+    number;
+
+  /**
+   * Optional deterministic fingerprint of the
+   * execution-critical plan fields.
+   *
+   * Later the live execution gateway can verify
+   * that a validated plan was not changed before
+   * submission.
+   */
+  readonly validationHash?:
+    string;
 }

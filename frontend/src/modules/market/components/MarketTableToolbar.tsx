@@ -1,28 +1,71 @@
-import { Badge } from "@/shared/ui/badge";
-import { Input } from "@/shared/ui/input";
-import { useSocketStore } from "@/store/socket.store";
+import {
+  Badge,
+} from "@/shared/ui/badge";
+
+import {
+  Input,
+} from "@/shared/ui/input";
+
+import {
+  useSocketStore,
+} from "@/store/socket.store";
 
 interface MarketTableToolbarProps {
-  search: string;
-  onSearchChange: (value: string) => void;
-  marketCount: number;
+  search:
+    string;
+
+  onSearchChange:
+    (
+      value:
+        string,
+    ) => void;
+
+  marketCount:
+    number;
+
+  exchange:
+    string;
+
+  exchanges:
+    string[];
+
+  onExchangeChange:
+    (
+      value:
+        string,
+    ) => void;
+
+  favoritesOnly:
+    boolean;
+
+  onFavoritesOnlyChange:
+    (
+      value:
+        boolean,
+    ) => void;
 }
 
 const badgeConfig = {
   connected: {
-    label: "● LIVE",
+    label:
+      "● MARKET DATA LIVE",
+
     className:
       "bg-success text-white hover:bg-success",
   },
 
   connecting: {
-    label: "● CONNECTING",
+    label:
+      "● CONNECTING",
+
     className:
       "bg-warning text-black hover:bg-warning",
   },
 
   disconnected: {
-    label: "● OFFLINE",
+    label:
+      "● OFFLINE",
+
     className:
       "bg-danger text-white hover:bg-danger",
   },
@@ -32,64 +75,118 @@ export default function MarketTableToolbar({
   search,
   onSearchChange,
   marketCount,
+  exchange,
+  exchanges,
+  onExchangeChange,
+  favoritesOnly,
+  onFavoritesOnlyChange,
 }: MarketTableToolbarProps) {
-  const status = useSocketStore(
-    (state) => state.status,
-  );
+  const status =
+    useSocketStore(
+      (state) =>
+        state.status,
+    );
 
-  const badge = badgeConfig[status];
+  const badge =
+    badgeConfig[
+      status
+    ];
 
   return (
     <div className="mb-5 rounded-xl border border-border-default bg-panel p-4">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex flex-1 items-center gap-4">
+        <div className="flex flex-1 flex-wrap items-center gap-3">
           <Input
             placeholder="Search market, exchange..."
-            value={search}
-            onChange={(event) =>
+            value={
+              search
+            }
+            onChange={(
+              event,
+            ) =>
               onSearchChange(
                 event.target.value,
               )
             }
-            className="max-w-md"
+            className="min-w-64 max-w-md"
           />
 
-          {/* Sprint 20.6 */}
-
           <select
-            disabled
-            className="rounded-lg border border-border-default bg-panel-light px-3 py-2 text-sm text-text-muted"
+            value={
+              exchange
+            }
+            onChange={(
+              event,
+            ) =>
+              onExchangeChange(
+                event.target.value,
+              )
+            }
+            className="rounded-lg border border-border-default bg-panel-light px-3 py-2 text-sm text-text-primary outline-none transition focus:border-brand"
           >
-            <option>
+            <option value="ALL">
               All Exchanges
             </option>
+
+            {exchanges.map(
+              (
+                item,
+              ) => (
+                <option
+                  key={
+                    item
+                  }
+                  value={
+                    item
+                  }
+                >
+                  {
+                    item
+                  }
+                </option>
+              ),
+            )}
           </select>
 
-          {/* Sprint 20.7 */}
-
-          <label className="flex items-center gap-2 text-sm text-text-muted">
+          <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border-default bg-panel-light px-3 py-2 text-sm text-text-muted">
             <input
-              disabled
               type="checkbox"
+              checked={
+                favoritesOnly
+              }
+              onChange={(
+                event,
+              ) =>
+                onFavoritesOnlyChange(
+                  event.target.checked,
+                )
+              }
             />
 
-            Favorites
+            Favorites only
           </label>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">
-            Markets {marketCount}
+            Markets{" "}
+            {
+              marketCount
+            }
           </Badge>
 
           <Badge variant="secondary">
-            Terminal
+            Read-only market view
           </Badge>
 
           <Badge
-            className={badge.className}
+            className={
+              badge.className
+            }
           >
-            {badge.label}
+            {
+              badge.label
+            }
           </Badge>
         </div>
       </div>

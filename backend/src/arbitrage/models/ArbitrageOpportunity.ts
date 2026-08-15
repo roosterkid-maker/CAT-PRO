@@ -15,10 +15,23 @@ export interface ArbitrageOpportunity {
   pair: ExchangePair;
 
   buyPrice: number;
+
   sellPrice: number;
 
   buyAvailableQty: number;
+
   sellAvailableQty: number;
+
+  /** Account capital is denominated in INR; market execution is denominated in quoteAsset. */
+  requestedCapitalInr?: number;
+
+  quoteAsset?: string;
+
+  requestedQuoteCapital?: number;
+
+  executableQuoteCapital?: number;
+
+  executableCapitalInr?: number;
 
   /**
    * Temporary compatibility fields.
@@ -37,27 +50,44 @@ export interface ArbitrageOpportunity {
   executableQty: number;
 
   liquidityScore: number;
+
   enoughLiquidity: boolean;
 
   freshnessScore: number;
+
   feeScore: number;
+
   spreadScore: number;
 
   decision: ExecutionDecision;
 
   analysisSummary: string[];
 
+  /** Gross price delta for one base unit, denominated in quoteAsset. */
   rawSpread: number;
+
   rawSpreadPercent: number;
 
+  /** Estimated fees for one base unit, denominated in quoteAsset. */
   estimatedFees: number;
 
+  /** Net profit for one base unit, denominated in quoteAsset; never INR unless quoteAsset is INR. */
   netProfit: number;
+
   netProfitPercent: number;
 
   usedLastPriceFallback: boolean;
+
   quotesAreFresh: boolean;
 
   score: number;
+
+  /**
+   * Unix timestamp (milliseconds) representing
+   * when this opportunity snapshot was generated.
+   *
+   * Used by the Version 4.0 Risk Engine to
+   * calculate quoteAgeMs before live execution.
+   */
   timestamp: number;
 }

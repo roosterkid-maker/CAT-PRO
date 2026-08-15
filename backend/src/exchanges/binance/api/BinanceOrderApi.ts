@@ -10,12 +10,17 @@ import {
   binanceHttpClient,
 } from "./BinanceHttpClient";
 
+import type {
+  BinanceRequestParameters,
+} from "./BinanceSigner";
+
 export type BinanceOrderSide =
   | "BUY"
   | "SELL";
 
 export type BinanceOrderType =
   | "LIMIT"
+  | "LIMIT_MAKER"
   | "MARKET";
 
 export type BinanceTimeInForce =
@@ -148,7 +153,20 @@ interface BinanceOrderResponse {
   isWorking?: unknown;
 }
 
+export interface BinanceSignedOrderClient {
+  synchronizeServerTime(): Promise<number>;
+  postSigned<T>(path: string, parameters?: BinanceRequestParameters, credentials?: BinanceCredentials): Promise<T>;
+  getSigned<T>(path: string, parameters?: BinanceRequestParameters, credentials?: BinanceCredentials): Promise<T>;
+  deleteSigned<T>(path: string, parameters?: BinanceRequestParameters, credentials?: BinanceCredentials): Promise<T>;
+}
+
 export class BinanceOrderApi {
+  constructor(
+    private readonly client:
+      BinanceSignedOrderClient =
+      binanceHttpClient,
+  ) {}
+
   async testOrder(
     request:
       CreateBinanceOrderRequest,
@@ -159,10 +177,10 @@ export class BinanceOrderApi {
       request,
     );
 
-    await binanceHttpClient
+    await this.client
       .synchronizeServerTime();
 
-    await binanceHttpClient.postSigned<
+    await this.client.postSigned<
       Record<string, never>
     >(
       BINANCE.REST.ORDER_TEST,
@@ -183,11 +201,11 @@ export class BinanceOrderApi {
       request,
     );
 
-    await binanceHttpClient
+    await this.client
       .synchronizeServerTime();
 
     const response =
-      await binanceHttpClient.postSigned<
+      await this.client.postSigned<
         BinanceOrderResponse
       >(
         BINANCE.REST.ORDER,
@@ -218,11 +236,11 @@ export class BinanceOrderApi {
         orderId,
       );
 
-    await binanceHttpClient
+    await this.client
       .synchronizeServerTime();
 
     const response =
-      await binanceHttpClient.getSigned<
+      await this.client.getSigned<
         BinanceOrderResponse
       >(
         BINANCE.REST.ORDER,
@@ -257,11 +275,11 @@ export class BinanceOrderApi {
         clientOrderId,
       );
 
-    await binanceHttpClient
+    await this.client
       .synchronizeServerTime();
 
     const response =
-      await binanceHttpClient.getSigned<
+      await this.client.getSigned<
         BinanceOrderResponse
       >(
         BINANCE.REST.ORDER,
@@ -296,11 +314,11 @@ export class BinanceOrderApi {
         orderId,
       );
 
-    await binanceHttpClient
+    await this.client
       .synchronizeServerTime();
 
     const response =
-      await binanceHttpClient.deleteSigned<
+      await this.client.deleteSigned<
         BinanceOrderResponse
       >(
         BINANCE.REST.ORDER,
@@ -335,11 +353,11 @@ export class BinanceOrderApi {
         clientOrderId,
       );
 
-    await binanceHttpClient
+    await this.client
       .synchronizeServerTime();
 
     const response =
-      await binanceHttpClient.deleteSigned<
+      await this.client.deleteSigned<
         BinanceOrderResponse
       >(
         BINANCE.REST.ORDER,
@@ -368,11 +386,11 @@ export class BinanceOrderApi {
         symbol,
       );
 
-    await binanceHttpClient
+    await this.client
       .synchronizeServerTime();
 
     const response =
-      await binanceHttpClient.getSigned<
+      await this.client.getSigned<
         BinanceOrderResponse[]
       >(
         BINANCE.REST.OPEN_ORDERS,
@@ -429,15 +447,13 @@ export class BinanceOrderApi {
     };
 
     if (
-      request.type ===
-      "LIMIT"
+      request.type === "LIMIT" || request.type === "LIMIT_MAKER"
     ) {
       parameters.price =
         request.price as number;
-
-      parameters.timeInForce =
-        request.timeInForce ??
-        "GTC";
+      if (request.type === "LIMIT") {
+        parameters.timeInForce = request.timeInForce ?? "GTC";
+      }
     }
 
     if (request.clientOrderId) {
@@ -469,10 +485,11 @@ export class BinanceOrderApi {
 
     if (
       request.type !== "LIMIT" &&
+      request.type !== "LIMIT_MAKER" &&
       request.type !== "MARKET"
     ) {
       throw new Error(
-        "Binance order type must be LIMIT or MARKET.",
+        "Binance order type must be LIMIT, LIMIT_MAKER or MARKET.",
       );
     }
 
@@ -488,8 +505,7 @@ export class BinanceOrderApi {
     }
 
     if (
-      request.type ===
-        "LIMIT" &&
+      (request.type === "LIMIT" || request.type === "LIMIT_MAKER") &&
       (
         request.price ===
           undefined ||
@@ -500,7 +516,7 @@ export class BinanceOrderApi {
       )
     ) {
       throw new Error(
-        "A positive price is required for a Binance LIMIT order.",
+        "A positive price is required for a Binance LIMIT or LIMIT_MAKER order.",
       );
     }
 
@@ -511,7 +527,7 @@ export class BinanceOrderApi {
         "LIMIT"
     ) {
       throw new Error(
-        "timeInForce is only supported for LIMIT orders in this adapter.",
+        "timeInForce is only supported for LIMIT orders; LIMIT_MAKER is maker-only without timeInForce.",
       );
     }
 

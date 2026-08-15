@@ -1,3 +1,14 @@
+import type {
+  StrategyAttribution,
+} from "../../strategies/models/StrategyAttribution";
+
+import type {
+  PaperCapitalConversionEvidence,
+  PaperExecutionStressEvidence,
+  PaperPriceCredibilityEvidence,
+  PaperVdaTaxWithholdingEvidence,
+} from "./PaperProfitEvidence";
+
 export type ExecutionLegSide =
   | "BUY"
   | "SELL";
@@ -46,6 +57,41 @@ export interface ExecutionLegResult {
 }
 
 export interface ExecutionResult {
+  strategyAttribution: StrategyAttribution;
+
+  /**
+   * Present only when the automatic PAPER path passed the final cross-venue
+   * credibility boundary. Historical and non-automated results remain
+   * explicitly outside the post-guard profitability cohort.
+   */
+  priceCredibility?:
+    PaperPriceCredibilityEvidence | null;
+
+  capitalConversion?:
+    PaperCapitalConversionEvidence | null;
+
+  paperExecutionStress?:
+    PaperExecutionStressEvidence | null;
+
+  paperVdaTaxWithholding?:
+    PaperVdaTaxWithholdingEvidence | null;
+
+  quoteCapitalUsed?: number;
+
+  quoteGrossProfit?: number;
+
+  quoteTotalFees?: number;
+
+  quoteNetProfit?: number;
+
+  quoteTdsWithheld?: number;
+
+  quoteDeployableCashProfit?: number;
+
+  tdsWithheld?: number;
+
+  deployableCashProfit?: number;
+
   planId: string;
 
   market: string;

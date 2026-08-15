@@ -26,7 +26,7 @@ export default function OpenPositionsPanel({
       <div className="flex items-center justify-between border-b border-border-default px-6 py-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-muted">
-            Live Portfolio
+            Paper Portfolio
           </p>
 
           <h2 className="mt-1 text-xl font-bold">

@@ -3,6 +3,11 @@ import { io, type Socket } from "socket.io-client";
 import { marketCache } from "../../services/cache.service";
 import type { ExchangeAdapter } from "../core/ExchangeAdapter";
 import { COINDCX } from "./constants";
+import {
+  coinDCXPublicTickerApi,
+  normalizeCoinDCXPublicTicker,
+  type CoinDCXPublicTickerApiContract,
+} from "./CoinDCXPublicTickerApi";
 import type { NormalizedTicker } from "./types";
 
 interface CoinDCXCurrentPricesPayload {
@@ -17,11 +22,27 @@ interface CoinDCXSocketResponse {
 export class CoinDCXWebSocket implements ExchangeAdapter {
   readonly name = COINDCX.NAME;
 
+  private static readonly PUBLIC_TICKER_REFRESH_MS =
+    60_000;
+
   private socket: Socket | null = null;
   private subscribed = false;
 
   private readonly markets = new Set<string>();
   private lastUpdate = 0;
+
+  private publicTickerRefreshTimer:
+    ReturnType<typeof setInterval> | null =
+    null;
+
+  private publicTickerRefreshInProgress =
+    false;
+
+  constructor(
+    private readonly publicTickerApi:
+      CoinDCXPublicTickerApiContract =
+      coinDCXPublicTickerApi,
+  ) {}
 
   private tickerCallback:
     | ((ticker: NormalizedTicker) => void)
@@ -31,6 +52,10 @@ export class CoinDCXWebSocket implements ExchangeAdapter {
     if (this.socket?.connected) {
       return;
     }
+
+    await this.refreshPublicTickerSnapshot();
+
+    this.startPublicTickerRefresh();
 
     this.socket = io(COINDCX.SOCKET.URL, {
       transports: ["websocket"],
@@ -67,6 +92,8 @@ export class CoinDCXWebSocket implements ExchangeAdapter {
   }
 
   async disconnect(): Promise<void> {
+    this.stopPublicTickerRefresh();
+
     if (!this.socket) {
       return;
     }
@@ -191,11 +218,9 @@ export class CoinDCXWebSocket implements ExchangeAdapter {
           timestamp,
         };
 
-        this.markets.add(normalizedMarket);
-        this.lastUpdate = timestamp;
-
-        marketCache.update(ticker);
-        this.tickerCallback?.(ticker);
+        this.publishTicker(
+          ticker,
+        );
       }
     } catch (error) {
       console.error(
@@ -203,5 +228,120 @@ export class CoinDCXWebSocket implements ExchangeAdapter {
         error,
       );
     }
+  }
+
+  private async refreshPublicTickerSnapshot():
+    Promise<void> {
+    if (
+      this.publicTickerRefreshInProgress
+    ) {
+      return;
+    }
+
+    this.publicTickerRefreshInProgress =
+      true;
+
+    try {
+      const receivedAt =
+        Date.now();
+
+      const tickers =
+        await this.publicTickerApi
+          .getTickers();
+
+      let published =
+        0;
+
+      for (const incoming of tickers) {
+        const ticker =
+          normalizeCoinDCXPublicTicker(
+            incoming,
+            receivedAt,
+          );
+
+        if (!ticker) {
+          continue;
+        }
+
+        this.publishTicker(
+          ticker,
+        );
+
+        published +=
+          1;
+      }
+
+      console.log(
+        `[${this.name}] Loaded ${published} ticker-only public REST markets for cross-exchange depth discovery.`,
+      );
+    } catch (
+      error:
+        unknown
+    ) {
+      console.warn(
+        `[${this.name}] Public ticker discovery snapshot failed; websocket discovery remains active: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.publicTickerRefreshInProgress =
+        false;
+    }
+  }
+
+  private startPublicTickerRefresh():
+    void {
+    if (
+      this.publicTickerRefreshTimer
+    ) {
+      return;
+    }
+
+    this.publicTickerRefreshTimer =
+      setInterval(
+        () => {
+          void this
+            .refreshPublicTickerSnapshot();
+        },
+        CoinDCXWebSocket
+          .PUBLIC_TICKER_REFRESH_MS,
+      );
+  }
+
+  private stopPublicTickerRefresh():
+    void {
+    if (
+      !this.publicTickerRefreshTimer
+    ) {
+      return;
+    }
+
+    clearInterval(
+      this.publicTickerRefreshTimer,
+    );
+
+    this.publicTickerRefreshTimer =
+      null;
+  }
+
+  private publishTicker(
+    ticker:
+      NormalizedTicker,
+  ): void {
+    this.markets.add(
+      ticker.market,
+    );
+
+    this.lastUpdate =
+      Math.max(
+        this.lastUpdate,
+        ticker.timestamp,
+      );
+
+    marketCache.update(
+      ticker,
+    );
+
+    this.tickerCallback?.(
+      ticker,
+    );
   }
 }

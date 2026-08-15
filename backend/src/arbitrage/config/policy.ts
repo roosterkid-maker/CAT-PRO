@@ -1,55 +1,58 @@
-import type { ArbitragePolicy } from "../models/ArbitragePolicy";
+import {
+  PROFIT_TIER_POLICY,
+} from "./profitTiers";
 
-export const defaultArbitragePolicy: ArbitragePolicy = {
-  /*
-   * Minimum raw spread before deeper analysis.
-   */
-  minimumSpreadPercent: 0.05,
+import type {
+  ArbitragePolicy,
+} from "../models/ArbitragePolicy";
 
-  /*
-   * Minimum executable profit after trading fees.
-   */
-  minimumNetProfitPercent: 0.01,
+export const defaultArbitragePolicy:
+  ArbitragePolicy = {
+  minimumSpreadPercent:
+    0.05,
 
-  /*
-   * Quotes older than this are rejected.
-   */
-  maximumQuoteAgeMs: 10_000,
+  minimumNetProfitPercent:
+    PROFIT_TIER_POLICY
+      .discoveryMinimumNetProfitPercent,
 
-  /*
-   * Minimum exchanges required.
-   */
-  minimumExchangeCount: 2,
+  maximumQuoteAgeMs:
+    10_000,
 
-  /*
-   * Reference capital used by execution analysis.
-   */
-  referenceCapital: 500,
+  minimumExchangeCount:
+    2,
 
-  /*
-   * Development value.
-   * Production will likely become 100.
-   */
-  minimumLiquidityPercent: 5,
+  referenceCapital:
+    500,
 
-  /*
-   * Never use last traded price.
-   * Only executable bid/ask.
+  /**
+   * Development-stage liquidity threshold.
+   *
+   * Partial-liquidity opportunities are allowed
+   * to reach the Capital Optimizer, which later
+   * determines the actually executable capital.
+   *
+   * This must be reviewed again before live
+   * capital is enabled.
    */
-  allowLastPriceFallback: false,
+  minimumLiquidityPercent:
+    5,
 
-  /*
-   * Protection against abnormal price differences.
+  /**
+   * Quote-integrity guard.
+   *
+   * 1.05 means the higher cross-exchange price
+   * may be at most 1.05x the lower price before
+   * the quote pair is treated as suspicious.
+   *
+   * Larger apparent spreads are rejected because
+   * observed production evidence showed that an
+   * isolated venue-book mismatch can manufacture
+   * unrealistic PAPER profit while remaining
+   * internally executable and fresh.
    */
-  maximumPriceDeviationPercent: 3.0,
+  maximumCrossExchangePriceRatio:
+    1.05,
 
-  /*
-   * Reject trades if expected slippage exceeds this.
-   */
-  maximumSlippagePercent: 0.30,
-
-  /*
-   * Minimum confidence required for execution.
-   */
-  minimumConfidenceScore: 80,
+  allowLastPriceFallback:
+    false,
 };

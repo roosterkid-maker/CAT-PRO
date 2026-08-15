@@ -1,6 +1,5 @@
 import { Router } from "express";
 
-import { opportunityService } from "../arbitrage/services/OpportunityService";
 import { paperTradingService } from "../trading/services/PaperTradingService";
 
 const router = Router();
@@ -35,61 +34,12 @@ router.get("/:id", (request, response) => {
   });
 });
 
-router.post("/", (request, response) => {
-  try {
-    const market = String(
-      request.body?.market ?? "",
-    ).toUpperCase();
-
-    const buyExchange = String(
-      request.body?.buyExchange ?? "",
-    ).toLowerCase();
-
-    const sellExchange = String(
-      request.body?.sellExchange ?? "",
-    ).toLowerCase();
-
-    const capital = Number(
-      request.body?.capital,
-    );
-
-    const opportunity = opportunityService
-      .getOpportunities()
-      .find(
-        (item) =>
-          item.pair.market === market &&
-          item.pair.buy.exchange === buyExchange &&
-          item.pair.sell.exchange === sellExchange,
-      );
-
-    if (!opportunity) {
-      response.status(404).json({
-        success: false,
-        message:
-          "Matching live opportunity was not found.",
-      });
-
-      return;
-    }
-
-    const trade = paperTradingService.openTrade(
-      opportunity,
-      capital,
-    );
-
-    response.status(201).json({
-      success: true,
-      data: trade,
-    });
-  } catch (error) {
-    response.status(400).json({
-      success: false,
-      message:
-        error instanceof Error
-          ? error.message
-          : "Unable to create paper trade.",
-    });
-  }
+router.post("/", (_request, response) => {
+  response.status(410).json({
+    success: false,
+    message:
+      "Legacy paper-trade creation is retired. Use /api/paper/execute so INR capital is converted through the authoritative quote-currency evidence path.",
+  });
 });
 
 export default router;

@@ -58,6 +58,15 @@ export class CapitalOptimizer {
               request.capitalStep,
         );
 
+      const executionCapital =
+        this.roundExecutionCapital(
+          capital *
+          (
+            request.executionCapitalMultiplier ??
+            1
+          ),
+        );
+
       const executionRequest:
         ExecutionRequest = {
         market:
@@ -75,7 +84,8 @@ export class CapitalOptimizer {
             .trim()
             .toLowerCase(),
 
-        capital,
+        capital:
+          executionCapital,
       };
 
       const execution =
@@ -91,6 +101,14 @@ export class CapitalOptimizer {
       const candidate:
         OptimizationCandidate = {
         capital,
+
+        executionCapital,
+
+        executionCapitalCurrency:
+          request.executionCapitalCurrency
+            ?.trim()
+            .toUpperCase() ||
+          "MARKET_QUOTE",
 
         score,
 
@@ -258,6 +276,22 @@ export class CapitalOptimizer {
     ) {
       throw new Error(
         "Capital step must be a positive number.",
+      );
+    }
+
+    if (
+      request.executionCapitalMultiplier !==
+        undefined &&
+      (
+        !Number.isFinite(
+          request.executionCapitalMultiplier,
+        ) ||
+        request.executionCapitalMultiplier <=
+          0
+      )
+    ) {
+      throw new Error(
+        "Execution-capital multiplier must be a positive number when provided.",
       );
     }
 
@@ -470,6 +504,16 @@ export class CapitalOptimizer {
       Math.round(
         value * 100,
       ) / 100
+    );
+  }
+
+  private roundExecutionCapital(
+    value: number,
+  ): number {
+    return Number(
+      value.toFixed(
+        12,
+      ),
     );
   }
 

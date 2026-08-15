@@ -18,8 +18,10 @@ export default function MainLayout({
   onPageChange,
 }: MainLayoutProps) {
   return (
-    <div className="flex h-screen flex-col bg-app-bg">
-      <Header />
+    <div className="cat-pro-shell flex h-screen flex-col bg-app-bg">
+      <Header
+        onPageChange={onPageChange}
+      />
 
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -27,7 +29,7 @@ export default function MainLayout({
           onPageChange={onPageChange}
         />
 
-        <main className="min-w-0 flex-1 overflow-auto p-6">
+        <main className="cat-pro-main min-w-0 flex-1 overflow-auto p-6">
           {children}
         </main>
       </div>

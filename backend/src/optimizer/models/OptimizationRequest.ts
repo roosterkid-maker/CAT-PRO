@@ -9,4 +9,9 @@ export interface OptimizationRequest {
   maximumCapital: number;
 
   capitalStep: number;
+
+  /** Converts account-side capital candidates into market-quote capital. */
+  executionCapitalMultiplier?: number;
+
+  executionCapitalCurrency?: string;
 }

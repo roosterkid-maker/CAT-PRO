@@ -1,8 +1,14 @@
-import type { ArbitrageOpportunity } from "../../arbitrage/models/ArbitrageOpportunity";
-import type { ArbitragePolicy } from "../../arbitrage/models/ArbitragePolicy";
+import type {
+  ArbitrageOpportunity,
+} from "../../arbitrage/models/ArbitrageOpportunity";
 
-import { executionCalculator } from "../calculators/ExecutionCalculator";
-import type { ExecutionContext } from "../models/ExecutionContext";
+import type {
+  ArbitragePolicy,
+} from "../../arbitrage/models/ArbitragePolicy";
+
+import type {
+  ExecutionContext,
+} from "../models/ExecutionContext";
 
 import {
   decisionAnalyzer,
@@ -25,147 +31,230 @@ import {
 } from "./analyzers/LiquidityAnalyzer";
 
 import {
-  priceDeviationAnalyzer,
-  type PriceDeviationAnalysis,
-} from "./analyzers/PriceDeviationAnalyzer";
+  quoteIntegrityAnalyzer,
+  type QuoteIntegrityAnalysis,
+} from "./analyzers/QuoteIntegrityAnalyzer";
 
 import {
   spreadAnalyzer,
   type SpreadAnalysis,
 } from "./analyzers/SpreadAnalyzer";
 
-import { scoreCalculator } from "./ScoreCalculator";
+import {
+  scoreCalculator,
+} from "./ScoreCalculator";
 
 export interface ExecutionAnalysisResult {
-  context: ExecutionContext;
+  context:
+    ExecutionContext;
 
-  liquidity: LiquidityAnalysis;
-  freshness: FreshnessAnalysis;
-  fees: FeeAnalysis;
-  spread: SpreadAnalysis;
-  priceDeviation: PriceDeviationAnalysis;
+  liquidity:
+    LiquidityAnalysis;
 
-  overallScore: number;
+  freshness:
+    FreshnessAnalysis;
 
-  executable: boolean;
+  fees:
+    FeeAnalysis;
 
-  decision: DecisionAnalysis;
+  spread:
+    SpreadAnalysis;
 
-  summary: string[];
+  quoteIntegrity:
+    QuoteIntegrityAnalysis;
+
+  overallScore:
+    number;
+
+  executable:
+    boolean;
+
+  decision:
+    DecisionAnalysis;
+
+  summary:
+    string[];
 }
 
 export class ExecutionAnalysis {
   analyze(
-    opportunity: ArbitrageOpportunity,
-    policy: ArbitragePolicy,
-    suppliedContext?: ExecutionContext,
-  ): ExecutionAnalysisResult {
-    const context =
-      suppliedContext ??
-      executionCalculator.calculate(
-        opportunity.buyPrice,
-        opportunity.buyAvailableQty,
-        opportunity.sellAvailableQty,
-        policy.referenceCapital,
-      );
+    opportunity:
+      ArbitrageOpportunity,
 
+    policy:
+      ArbitragePolicy,
+
+    /** Context already sized in the market quote asset by the opportunity engine. */
+    context:
+      ExecutionContext,
+  ): ExecutionAnalysisResult {
     const liquidity =
-      liquidityAnalyzer.analyze(
-        context,
-        policy.minimumLiquidityPercent,
-      );
+      liquidityAnalyzer
+        .analyze(
+          context,
+          policy.minimumLiquidityPercent,
+        );
 
     const freshness =
-      freshnessAnalyzer.analyze(
-        opportunity,
-        policy.maximumQuoteAgeMs,
-      );
+      freshnessAnalyzer
+        .analyze(
+          opportunity,
+          policy.maximumQuoteAgeMs,
+        );
 
     const fees =
-      feeAnalyzer.analyze(
-        opportunity,
-      );
+      feeAnalyzer
+        .analyze(
+          opportunity,
+        );
 
+    /*
+     * Spread is responsible for evaluating the
+     * actual arbitrage price difference.
+     */
     const spread =
-      spreadAnalyzer.analyze(
-        opportunity,
-      );
+      spreadAnalyzer
+        .analyze(
+          opportunity,
+        );
 
-    const priceDeviation =
-      priceDeviationAnalyzer.analyze({
-        buyPrice:
-          opportunity.buyPrice,
+    /*
+     * Quote integrity is a separate safety gate.
+     *
+     * It prevents obviously corrupted or
+     * incorrectly normalized cross-exchange
+     * prices without treating normal arbitrage
+     * divergence as an error.
+     */
+    const quoteIntegrity =
+      quoteIntegrityAnalyzer
+        .analyze({
+          buyPrice:
+            opportunity.buyPrice,
 
-        sellPrice:
-          opportunity.sellPrice,
+          sellPrice:
+            opportunity.sellPrice,
 
-        maximumDeviationPercent:
-          policy.maximumPriceDeviationPercent,
-      });
+          maximumPriceRatio:
+            policy
+              .maximumCrossExchangePriceRatio,
+        });
 
+    /*
+     * Total weight = 100.
+     */
     const overallScore =
-      scoreCalculator.calculate([
-        {
-          name: "Liquidity",
-          score: liquidity.score,
-          weight: 30,
-        },
-        {
-          name: "Freshness",
-          score: freshness.score,
-          weight: 20,
-        },
-        {
-          name: "Fees",
-          score: fees.score,
-          weight: 20,
-        },
-        {
-          name: "Spread",
-          score: spread.score,
-          weight: 15,
-        },
-        {
-          name: "PriceDeviation",
-          score: priceDeviation.score,
-          weight: 15,
-        },
-      ]);
+      scoreCalculator
+        .calculate([
+          {
+            name:
+              "Liquidity",
 
+            score:
+              liquidity.score,
+
+            weight:
+              30,
+          },
+
+          {
+            name:
+              "Freshness",
+
+            score:
+              freshness.score,
+
+            weight:
+              20,
+          },
+
+          {
+            name:
+              "Fees",
+
+            score:
+              fees.score,
+
+            weight:
+              20,
+          },
+
+          {
+            name:
+              "Spread",
+
+            score:
+              spread.score,
+
+            weight:
+              15,
+          },
+
+          {
+            name:
+              "QuoteIntegrity",
+
+            score:
+              quoteIntegrity.score,
+
+            weight:
+              15,
+          },
+        ]);
+
+    /*
+     * All independent safety gates must pass.
+     */
     const executable =
-      liquidity.enoughLiquidity &&
-      freshness.fresh &&
-      fees.acceptable &&
-      spread.acceptable &&
-      priceDeviation.acceptable;
+      liquidity
+        .enoughLiquidity &&
+      freshness
+        .fresh &&
+      fees
+        .acceptable &&
+      spread
+        .acceptable &&
+      quoteIntegrity
+        .acceptable;
 
     const decision =
-      decisionAnalyzer.analyze(
-        overallScore,
-        executable,
-      );
+      decisionAnalyzer
+        .analyze(
+          overallScore,
+          executable,
+        );
 
     const summary = [
       liquidity.reason,
       freshness.reason,
       fees.reason,
       spread.reason,
-      priceDeviation.reason,
+      quoteIntegrity.reason,
       decision.reason,
     ].filter(
-      (reason): reason is string =>
-        typeof reason === "string" &&
-        reason.trim().length > 0,
+      (
+        reason,
+      ): reason is string =>
+        typeof reason ===
+          "string" &&
+        reason
+          .trim()
+          .length >
+          0,
     );
 
     return {
       context,
 
       liquidity,
+
       freshness,
+
       fees,
+
       spread,
-      priceDeviation,
+
+      quoteIntegrity,
 
       overallScore,
 

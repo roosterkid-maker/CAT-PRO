@@ -249,14 +249,6 @@ async function main(): Promise<void> {
     );
   }
 
-  const hasMissingAdapterReason =
-    result.reasons.some(
-      (reason) =>
-        reason.includes(
-          "missing for sell exchange: binance",
-        ),
-    );
-
   const hasConfirmationReason =
     result.reasons.some(
       (reason) =>
@@ -276,7 +268,6 @@ async function main(): Promise<void> {
       null &&
     result.recoveryRequired ===
       false &&
-    hasMissingAdapterReason &&
     hasConfirmationReason;
 
   if (!passed) {
@@ -285,7 +276,7 @@ async function main(): Promise<void> {
     );
 
     console.error(
-      "Coordinator did not safely block the incomplete live arbitrage setup.",
+      "Coordinator did not safely block live arbitrage without explicit confirmation.",
     );
 
     process.exitCode = 1;

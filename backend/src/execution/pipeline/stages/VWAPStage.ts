@@ -74,6 +74,29 @@ export class VWAPStage
     context.sellVWAP =
       sellVWAP;
 
+    const quantityTolerance =
+      Math.max(
+        1e-12,
+        quantity *
+          1e-9,
+      );
+
+    if (
+      buyVWAP.filledQuantity <
+        quantity -
+          quantityTolerance ||
+      sellVWAP.filledQuantity <
+        quantity -
+          quantityTolerance
+    ) {
+      return {
+        success: false,
+        context,
+        reason:
+          `Two-leg full-depth simulation is incomplete: BUY ${buyVWAP.fillPercent.toFixed(2)}%, SELL ${sellVWAP.fillPercent.toFixed(2)}%.`,
+      };
+    }
+
     return {
       success: true,
       context,

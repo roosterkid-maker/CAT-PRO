@@ -1,9 +1,18 @@
-import { opportunityService } from "../../arbitrage/services/OpportunityService";
-import { opportunityRankingService } from "../../ranking/services/OpportunityRankingService";
+import {
+  opportunityService,
+} from "../../arbitrage/services/OpportunityService";
 
-import type { ExecutionResult } from "../models/ExecutionResult";
+import {
+  opportunityRankingService,
+} from "../../ranking/services/OpportunityRankingService";
 
-import { automatedPaperTradingService } from "./AutomatedPaperTradingService";
+import type {
+  ExecutionResult,
+} from "../models/ExecutionResult";
+
+import {
+  automatedPaperTradingService,
+} from "./AutomatedPaperTradingService";
 
 export type AutomatedPaperCycleStatus =
   | "NO_OPPORTUNITY"
@@ -12,38 +21,52 @@ export type AutomatedPaperCycleStatus =
   | "EXECUTED";
 
 export interface AutomatedPaperCycleResult {
-  status: AutomatedPaperCycleStatus;
+  status:
+    AutomatedPaperCycleStatus;
 
-  opportunityId: string | null;
+  opportunityId:
+    string | null;
 
-  market: string | null;
+  market:
+    string | null;
 
-  requestedCapital: number | null;
+  requestedCapital:
+    number | null;
 
-  result: ExecutionResult | null;
+  result:
+    ExecutionResult | null;
 
-  reasons: string[];
+  reasons:
+    string[];
 }
 
 export class AutomatedPaperTradingCycleService {
-  run(): AutomatedPaperCycleResult {
+  async run():
+    Promise<AutomatedPaperCycleResult> {
     const ranking =
       opportunityRankingService.rank();
 
     const topRanked =
       ranking.opportunities[0];
 
-    if (!topRanked) {
+    if (
+      !topRanked
+    ) {
       return {
-        status: "NO_OPPORTUNITY",
+        status:
+          "NO_OPPORTUNITY",
 
-        opportunityId: null,
+        opportunityId:
+          null,
 
-        market: null,
+        market:
+          null,
 
-        requestedCapital: null,
+        requestedCapital:
+          null,
 
-        result: null,
+        result:
+          null,
 
         reasons: [
           "No ranked opportunity is currently available.",
@@ -52,7 +75,8 @@ export class AutomatedPaperTradingCycleService {
     }
 
     const sourceOpportunities =
-      opportunityService.getOpportunities();
+      opportunityService
+        .getOpportunities();
 
     const opportunity =
       sourceOpportunities.find(
@@ -65,18 +89,24 @@ export class AutomatedPaperTradingCycleService {
             topRanked.sellExchange,
       );
 
-    if (!opportunity) {
+    if (
+      !opportunity
+    ) {
       return {
-        status: "OPPORTUNITY_EXPIRED",
+        status:
+          "OPPORTUNITY_EXPIRED",
 
-        opportunityId: null,
+        opportunityId:
+          null,
 
         market:
           topRanked.market,
 
-        requestedCapital: null,
+        requestedCapital:
+          null,
 
-        result: null,
+        result:
+          null,
 
         reasons: [
           "The ranked opportunity is no longer available.",
@@ -91,10 +121,12 @@ export class AutomatedPaperTradingCycleService {
       !Number.isFinite(
         requestedCapital,
       ) ||
-      requestedCapital <= 0
+      requestedCapital <=
+        0
     ) {
       return {
-        status: "EXECUTION_REJECTED",
+        status:
+          "EXECUTION_REJECTED",
 
         opportunityId:
           opportunity.id,
@@ -102,9 +134,11 @@ export class AutomatedPaperTradingCycleService {
         market:
           opportunity.pair.market,
 
-        requestedCapital: null,
+        requestedCapital:
+          null,
 
-        result: null,
+        result:
+          null,
 
         reasons: [
           "Ranking did not provide a valid recommended capital.",
@@ -113,17 +147,19 @@ export class AutomatedPaperTradingCycleService {
     }
 
     const execution =
-      automatedPaperTradingService.execute({
-        opportunity,
-        requestedCapital,
-      });
+      await automatedPaperTradingService
+        .execute({
+          opportunity,
+          requestedCapital,
+        });
 
     if (
       !execution.approved ||
       !execution.result
     ) {
       return {
-        status: "EXECUTION_REJECTED",
+        status:
+          "EXECUTION_REJECTED",
 
         opportunityId:
           opportunity.id,
@@ -133,7 +169,8 @@ export class AutomatedPaperTradingCycleService {
 
         requestedCapital,
 
-        result: null,
+        result:
+          execution.result,
 
         reasons:
           execution.reasons,
@@ -141,7 +178,8 @@ export class AutomatedPaperTradingCycleService {
     }
 
     return {
-      status: "EXECUTED",
+      status:
+        "EXECUTED",
 
       opportunityId:
         opportunity.id,

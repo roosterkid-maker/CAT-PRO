@@ -1,14 +1,87 @@
-import { Router } from "express";
+import {
+  Router,
+} from "express";
 
-import { capitalController } from "../controllers/CapitalController";
+import {
+  capitalReservationService,
+} from "../../../trading/capital/CapitalReservationService";
 
-const capitalRoutes = Router();
+import {
+  capitalController,
+} from "../controllers/CapitalController";
+
+const capitalRoutes =
+  Router();
 
 capitalRoutes.get(
   "/state",
   capitalController.getState.bind(
     capitalController,
   ),
+);
+
+/*
+ * Version 13.2
+ *
+ * GET /api/capital/reservations
+ *
+ * Read-only reservation diagnostics.
+ */
+capitalRoutes.get(
+  "/reservations",
+  (
+    _request,
+    response,
+  ) => {
+    response.status(200).json({
+      success:
+        true,
+
+      data:
+        capitalReservationService
+          .getDiagnostics(),
+    });
+  },
+);
+
+/*
+ * GET /api/capital/reservations/:id
+ *
+ * Inspect one active or historical
+ * capital reservation.
+ */
+capitalRoutes.get(
+  "/reservations/:id",
+  (
+    request,
+    response,
+  ) => {
+    const reservation =
+      capitalReservationService
+        .getById(
+          request.params.id,
+        );
+
+    if (!reservation) {
+      response.status(404).json({
+        success:
+          false,
+
+        error:
+          "Capital reservation not found.",
+      });
+
+      return;
+    }
+
+    response.status(200).json({
+      success:
+        true,
+
+      data:
+        reservation,
+    });
+  },
 );
 
 capitalRoutes.post(

@@ -1,29 +1,46 @@
-import { Router } from "express";
+import {
+  Router,
+} from "express";
 
-import { automatedPaperTradingCycleService } from "../execution/AutomatedPaperTradingCycleService";
+import {
+  automatedPaperTradingCycleService,
+} from "../execution/AutomatedPaperTradingCycleService";
 
-const router = Router();
+const router =
+  Router();
 
 router.post(
   "/cycle",
-  (_request, response) => {
+  async (
+    _request,
+    response,
+  ) => {
     try {
       const result =
-        automatedPaperTradingCycleService.run();
+        await automatedPaperTradingCycleService
+          .run();
 
-      response.json({
-        success: true,
-        data: result,
-      });
-    } catch (error) {
-      response.status(400).json({
-        success: false,
+      return response.json({
+        success:
+          true,
 
-        message:
-          error instanceof Error
-            ? error.message
-            : "Automated paper-trading cycle failed.",
+        data:
+          result,
       });
+    } catch (
+      error: unknown
+    ) {
+      return response
+        .status(400)
+        .json({
+          success:
+            false,
+
+          message:
+            error instanceof Error
+              ? error.message
+              : "Automated paper-trading cycle failed.",
+        });
     }
   },
 );

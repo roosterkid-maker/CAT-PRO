@@ -1,3 +1,7 @@
+import {
+  PROFIT_TIER_POLICY,
+} from "../../arbitrage/config/profitTiers";
+
 import type {
   TradingExecutionConfig,
 } from "../models/ExecutionMode";
@@ -16,9 +20,13 @@ export const defaultTradingExecutionConfig: TradingExecutionConfig = {
 
   maximumCapitalPerTrade: 10_000,
 
-  minimumNetProfitPercent: 0.5,
+  minimumNetProfitPercent:
+    PROFIT_TIER_POLICY
+      .liveMinimumNetProfitPercent,
 
-  targetProfitPercent: 0.5,
+  targetProfitPercent:
+    PROFIT_TIER_POLICY
+      .liveMinimumNetProfitPercent,
 
   maximumOpenTrades: 1,
 

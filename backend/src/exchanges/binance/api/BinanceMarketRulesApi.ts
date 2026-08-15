@@ -39,6 +39,15 @@ export interface BinanceMarketRules {
     string[];
 }
 
+export interface BinanceMarketRulesSource {
+  getMarketRules(
+    symbol: string,
+  ): Promise<BinanceMarketRules>;
+
+  getAllMarketRules():
+    Promise<BinanceMarketRules[]>;
+}
+
 interface BinanceExchangeInfoResponse {
   symbols?: unknown;
 }
@@ -79,7 +88,48 @@ interface BinanceFilterResponse {
   maxNotional?: unknown;
 }
 
-export class BinanceMarketRulesApi {
+export class BinanceMarketRulesApi
+  implements BinanceMarketRulesSource
+{
+  async getAllMarketRules():
+    Promise<BinanceMarketRules[]> {
+    const response =
+      await binanceHttpClient.getPublic<
+        BinanceExchangeInfoResponse
+      >(
+        `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.EXCHANGE_INFO}`,
+      );
+
+    if (
+      !Array.isArray(
+        response.symbols,
+      )
+    ) {
+      throw new Error(
+        "Invalid Binance exchange-info response.",
+      );
+    }
+
+    const rules =
+      response.symbols.map(
+        (symbol) =>
+          this.normalizeRules(
+            symbol,
+          ),
+      );
+
+    if (
+      rules.length ===
+      0
+    ) {
+      throw new Error(
+        "Binance exchange-info returned no market rules.",
+      );
+    }
+
+    return rules;
+  }
+
   async getMarketRules(
     symbol: string,
   ): Promise<BinanceMarketRules> {
@@ -92,7 +142,7 @@ export class BinanceMarketRulesApi {
       await binanceHttpClient.getPublic<
         BinanceExchangeInfoResponse
       >(
-        BINANCE.REST.EXCHANGE_INFO,
+        `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.EXCHANGE_INFO}`,
         {
           symbol:
             normalizedSymbol,

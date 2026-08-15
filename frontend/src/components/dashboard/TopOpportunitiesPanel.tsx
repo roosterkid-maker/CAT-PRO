@@ -18,7 +18,7 @@ export default function TopOpportunitiesPanel({
       <div className="mb-5 flex items-center justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.18em] text-text-muted">
-            Live Execution
+            Opportunity Engine
           </p>
 
           <h2 className="mt-1 text-2xl font-bold">
@@ -27,14 +27,14 @@ export default function TopOpportunitiesPanel({
         </div>
 
         <span className="text-sm text-success">
-          {top.length} Live
+          {top.length} Ranked
         </span>
       </div>
 
       <div className="space-y-3">
         {top.length === 0 && (
           <div className="rounded-lg border border-border-default bg-panel-light p-6 text-center text-text-muted">
-            No executable opportunities.
+            No ranked opportunities reported.
           </div>
         )}
 

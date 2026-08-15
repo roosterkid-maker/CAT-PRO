@@ -1,32 +1,64 @@
-import { orderBookService } from "../../orderbook/services/OrderBookService";
-import type { OrderBook } from "../../orderbook/models/OrderBook";
-import type { OrderBookLevel } from "../../orderbook/models/OrderBookLevel";
+import {
+  orderBookService,
+} from "../../orderbook/services/OrderBookService";
 
-import { marketCache } from "../../services/cache.service";
+import type {
+  OrderBook,
+} from "../../orderbook/models/OrderBook";
+
+import type {
+  OrderBookLevel,
+} from "../../orderbook/models/OrderBookLevel";
+
+import {
+  marketCache,
+} from "../../services/cache.service";
+
+import {
+  crossExchangeMarketMakingPublicTradeTapeService,
+} from "../../strategies/cross-exchange-market-making/CrossExchangeMarketMakingPublicTradeTapeService";
 
 import {
   ConnectionPool,
   type ConnectionPoolConfig,
 } from "../core/ConnectionPool";
 
-import type { ExchangeAdapter } from "../core/ExchangeAdapter";
-import type { SocketWorker } from "../core/SocketWorker";
-import type { NormalizedTicker } from "../coindcx/types";
+import {
+  spotMarketUniverseSelector,
+} from "../core/SpotMarketUniverseSelector";
 
-import { BINANCE } from "./constants";
+import type {
+  ExchangeAdapter,
+} from "../core/ExchangeAdapter";
+
+import type {
+  SocketWorker,
+} from "../core/SocketWorker";
+
+import type {
+  NormalizedTicker,
+} from "../coindcx/types";
+
+import {
+  BINANCE,
+} from "./constants";
 
 import type {
   BinanceBookTicker,
+  BinanceAggregateTrade,
+  BinanceCombinedAggregateTradeMessage,
   BinanceCombinedDepthMessage,
   BinanceCombinedStreamMessage,
   BinanceExchangeInfoResponse,
   BinancePartialDepth,
   BinanceSubscriptionResponse,
+  BinanceTicker24Hour,
 } from "./types";
 
 type BinanceCombinedMessage =
   | BinanceCombinedStreamMessage
-  | BinanceCombinedDepthMessage;
+  | BinanceCombinedDepthMessage
+  | BinanceCombinedAggregateTradeMessage;
 
 type BinanceMessage =
   | BinanceCombinedMessage
@@ -35,36 +67,72 @@ type BinanceMessage =
 export class BinanceAdapter
   implements ExchangeAdapter
 {
-  readonly name = BINANCE.NAME;
+  readonly name =
+    BINANCE.NAME;
 
   private pool:
     | ConnectionPool<string>
-    | null = null;
+    | null =
+    null;
 
   private readonly markets =
     new Set<string>();
 
-  private lastUpdate = 0;
+  private selectedSymbols:
+    string[] = [];
 
-  private subscriptionRequestId = 1;
+  private lastUpdate =
+    0;
 
-  private depthUpdateCount = 0;
+  private subscriptionRequestId =
+    1;
+
+  private depthUpdateCount =
+    0;
+
+  private tickerUpdateCount =
+    0;
 
   private tickerCallback:
-    | ((ticker: NormalizedTicker) => void)
-    | null = null;
+    | ((
+        ticker:
+          NormalizedTicker,
+      ) => void)
+    | null =
+    null;
 
-  async connect(): Promise<void> {
-    if (this.pool?.isStarted()) {
+  async connect():
+    Promise<void> {
+    if (
+      this.pool?.isStarted()
+    ) {
       return;
     }
 
     const symbols =
-      await this.loadTradingSymbols();
+      this.selectedSymbols.length >
+        0
+        ? [...this.selectedSymbols]
+        : await this.loadTradingSymbols();
 
-    if (symbols.length === 0) {
+    if (
+      symbols.length ===
+      0
+    ) {
       throw new Error(
-        `[${this.name}] No active USDT Spot symbols found.`,
+        `[${this.name}] No active supported-quote Spot symbols found.`,
+      );
+    }
+
+    if (
+      this.selectedSymbols.length ===
+      0
+    ) {
+      this.selectedSymbols =
+        [...symbols];
+    } else {
+      console.log(
+        `[${this.name}] Reusing ${symbols.length} cached market subscriptions for bounded pool recovery.`,
       );
     }
 
@@ -73,7 +141,8 @@ export class BinanceAdapter
       name:
         `${this.name} Market Data Pool`,
 
-      items: symbols,
+      items:
+        symbols,
 
       batchSize:
         BINANCE.SYMBOLS_PER_WORKER,
@@ -91,7 +160,9 @@ export class BinanceAdapter
         reconnectDelay:
           BINANCE.RECONNECT_DELAY,
 
-        onOpen: (worker) => {
+        onOpen: (
+          worker,
+        ) => {
           this.subscribeWorker(
             worker,
             batch,
@@ -103,7 +174,9 @@ export class BinanceAdapter
           _worker,
           message,
         ) => {
-          this.handleMessage(message);
+          this.handleMessage(
+            message,
+          );
         },
 
         onClose: (
@@ -139,19 +212,26 @@ export class BinanceAdapter
       `[${this.name}] Started ${
         Math.ceil(
           symbols.length /
-            BINANCE.SYMBOLS_PER_WORKER,
+            BINANCE
+              .SYMBOLS_PER_WORKER,
         )
-      } workers for ${symbols.length} USDT markets.`,
+      } workers for ${symbols.length} bounded spot markets.`,
     );
   }
 
-  async disconnect(): Promise<void> {
+  async disconnect():
+    Promise<void> {
     this.pool?.stop();
-    this.pool = null;
+
+    this.pool =
+      null;
+
+    this.markets.clear();
   }
 
   async subscribe(
-    _markets: string[],
+    _markets:
+      string[],
   ): Promise<void> {
     /*
      * Subscriptions are assigned when
@@ -160,7 +240,8 @@ export class BinanceAdapter
   }
 
   async unsubscribe(
-    _markets: string[],
+    _markets:
+      string[],
   ): Promise<void> {
     /*
      * Dynamic symbol removal is not required
@@ -168,108 +249,281 @@ export class BinanceAdapter
      */
   }
 
-  isConnected(): boolean {
-    return (
+  isConnected():
+    boolean {
+    const connectedWorkers =
       this.pool
         ?.getConnectedWorkerCount() ??
+      0;
+
+    if (
+      connectedWorkers >
       0
-    ) > 0;
+    ) {
+      return true;
+    }
+
+    /*
+     * A worker reconnect is normally shorter than the executable-quote
+     * freshness window. Recent authoritative market data therefore remains
+     * stronger health evidence than an instantaneous socket-state sample.
+     */
+    return (
+      this.lastUpdate >
+        0 &&
+      Date.now() -
+        this.lastUpdate <=
+        BINANCE
+          .CONNECTION_ACTIVITY_GRACE_MS
+    );
   }
 
-  getMarketCount(): number {
+  getMarketCount():
+    number {
     return this.markets.size;
   }
 
-  getLastUpdate(): number {
+  getLastUpdate():
+    number {
     return this.lastUpdate;
   }
 
   onTicker(
     callback: (
-      ticker: NormalizedTicker,
+      ticker:
+        NormalizedTicker,
     ) => void,
   ): void {
-    this.tickerCallback = callback;
+    this.tickerCallback =
+      callback;
   }
 
   private async loadTradingSymbols():
-  Promise<string[]> {
-    const response = await fetch(
-      BINANCE.REST.EXCHANGE_INFO,
-      {
-        signal:
-          AbortSignal.timeout(
-            10_000,
-          ),
-      },
-    );
+    Promise<string[]> {
+    const [
+      exchangeInfoResult,
+      activityResult,
+    ] = await Promise.allSettled([
+      fetch(
+        `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.EXCHANGE_INFO}`,
+        {signal: AbortSignal.timeout(BINANCE.PUBLIC_REST_TIMEOUT_MS)},
+      ),
+      fetch(
+        `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.TICKER_24HR}`,
+        {signal: AbortSignal.timeout(BINANCE.PUBLIC_REST_TIMEOUT_MS)},
+      ),
+    ]);
 
-    if (!response.ok) {
+    if (exchangeInfoResult.status === "rejected") {
+      throw exchangeInfoResult.reason;
+    }
+
+    const response = exchangeInfoResult.value;
+
+    if (
+      !response.ok
+    ) {
       throw new Error(
         `ExchangeInfo failed with HTTP ${response.status}.`,
       );
     }
 
     const data =
-      (await response.json()) as
-        BinanceExchangeInfoResponse;
+      (
+        await response.json()
+      ) as BinanceExchangeInfoResponse;
 
-    if (!Array.isArray(data.symbols)) {
+    if (
+      !Array.isArray(
+        data.symbols,
+      )
+    ) {
       throw new Error(
         "Invalid Binance ExchangeInfo response.",
       );
     }
 
-    return data.symbols
+    const allowedQuotes =
+      new Set<string>([
+        BINANCE.QUOTE_ASSET,
+        ...BINANCE.SECONDARY_QUOTE_ASSETS,
+      ]);
+
+    const activeSymbols =
+      data.symbols
       .filter(
-        (symbol) =>
+        (
+          symbol,
+        ) =>
           symbol.status ===
             "TRADING" &&
-          symbol.quoteAsset ===
-            BINANCE.QUOTE_ASSET &&
+          allowedQuotes.has(symbol.quoteAsset.toUpperCase()) &&
           symbol
             .isSpotTradingAllowed !==
             false,
       )
-      .map((symbol) =>
-        symbol.symbol.toUpperCase(),
+      .map((symbol) => ({
+        symbol: symbol.symbol.toUpperCase(),
+        baseAsset: symbol.baseAsset.toUpperCase(),
+        quoteAsset: symbol.quoteAsset.toUpperCase(),
+      }));
+
+    const maximumMarkets =
+      this.resolveMaximumMarkets();
+
+    let activityEvidence: Array<{
+      symbol: string;
+      turnover24h: number;
+      volume24h: number;
+    }> = [];
+
+    if (
+      activityResult.status === "fulfilled" &&
+      activityResult.value.ok
+    ) {
+      const activity =
+        (await activityResult.value.json()) as BinanceTicker24Hour[];
+
+      if (Array.isArray(activity)) {
+        activityEvidence = activity
+          .map((ticker) => ({
+            symbol: String(ticker.symbol ?? ""),
+            turnover24h: Number(ticker.quoteVolume),
+            volume24h: Number(ticker.volume),
+          }));
+      }
+    } else {
+      console.warn(
+        `[${this.name}] 24h activity ranking unavailable; using deterministic catalog fallback.`,
       );
+    }
+
+    const externalMarkets =
+      new Set(
+        marketCache.getAll()
+          .filter((quote) => quote.exchange.trim().toLowerCase() !== "binance")
+          .map((quote) => quote.market),
+      );
+
+    const selection =
+      spotMarketUniverseSelector.select(
+        activeSymbols,
+        activityEvidence,
+        externalMarkets,
+        maximumMarkets,
+        BINANCE.QUOTE_ASSET,
+        BINANCE.SECONDARY_QUOTE_ASSETS,
+        BINANCE.SECONDARY_QUOTE_RESERVE_RATIO,
+      );
+
+    const selectedSymbols = [...selection.selected];
+
+    console.log(
+      `[${this.name}] Selected ${selectedSymbols.length} of ${activeSymbols.length} active spot markets (primary=${selection.selectedPrimaryMarkets}, secondary=${selection.selectedSecondaryMarkets}, anchors=${selection.selectedAnchorMarkets}, overlap=${selection.selectedExternalOverlapMarkets}, activity=${selection.selectedWithActivityEvidence}, quotes=${JSON.stringify(selection.quoteDistribution)}, limit=${maximumMarkets}).`,
+    );
+
+    return selectedSymbols;
+  }
+
+  private resolveMaximumMarkets():
+    number {
+    const rawValue =
+      process.env.BINANCE_MAX_MARKETS;
+
+    if (
+      rawValue === undefined ||
+      rawValue.trim().length ===
+        0
+    ) {
+      return BINANCE
+        .DEFAULT_MAX_MARKETS;
+    }
+
+    const parsed =
+      Number(
+        rawValue,
+      );
+
+    if (
+      !Number.isSafeInteger(
+        parsed,
+      ) ||
+      parsed <=
+        0
+    ) {
+      console.warn(
+        `[${this.name}] Invalid BINANCE_MAX_MARKETS="${rawValue}". Using default ${BINANCE.DEFAULT_MAX_MARKETS}.`,
+      );
+
+      return BINANCE
+        .DEFAULT_MAX_MARKETS;
+    }
+
+    return Math.min(
+      parsed,
+      BINANCE
+        .ABSOLUTE_MAX_MARKETS,
+    );
   }
 
   private subscribeWorker(
-    worker: SocketWorker,
-    symbols: string[],
-    workerIndex: number,
+    worker:
+      SocketWorker,
+
+    symbols:
+      string[],
+
+    workerIndex:
+      number,
   ): void {
     /*
      * Partial-depth events do not contain
-     * the symbol. Combined mode wraps each
-     * event with its stream name.
+     * the symbol.
+     *
+     * Combined mode wraps each payload
+     * with its stream name.
      */
     const propertyRequestId =
       this.subscriptionRequestId++;
 
     worker.send({
-      method: "SET_PROPERTY",
+      method:
+        "SET_PROPERTY",
 
       params: [
         "combined",
         true,
       ],
 
-      id: propertyRequestId,
+      id:
+        propertyRequestId,
     });
 
     const streams =
       symbols.flatMap(
-        (symbol) => {
+        (
+          symbol,
+        ) => {
           const normalizedSymbol =
-            symbol.toLowerCase();
+            symbol
+              .toLowerCase();
 
           return [
             `${normalizedSymbol}@bookTicker`,
 
             `${normalizedSymbol}@depth${BINANCE.DEPTH.LEVELS}@${BINANCE.DEPTH.UPDATE_SPEED}`,
+
+            ...(
+              crossExchangeMarketMakingPublicTradeTapeService
+                .isWatched(
+                  "binance",
+                  symbol,
+                )
+                ? [
+                    `${normalizedSymbol}@aggTrade`,
+                  ]
+                : []
+            ),
           ];
         },
       );
@@ -278,11 +532,14 @@ export class BinanceAdapter
       this.subscriptionRequestId++;
 
     worker.send({
-      method: "SUBSCRIBE",
+      method:
+        "SUBSCRIBE",
 
-      params: streams,
+      params:
+        streams,
 
-      id: subscriptionRequestId,
+      id:
+        subscriptionRequestId,
     });
 
     console.log(
@@ -291,17 +548,21 @@ export class BinanceAdapter
   }
 
   private handleMessage(
-    rawMessage: string,
+    rawMessage:
+      string,
   ): void {
     try {
       const parsed =
         JSON.parse(
           rawMessage,
-        ) as BinanceMessage;
+        ) as
+          BinanceMessage;
 
       if (
-        "result" in parsed &&
-        "id" in parsed
+        "result" in
+          parsed &&
+        "id" in
+          parsed
       ) {
         console.log(
           `[${this.name}] Request acknowledged. ID: ${parsed.id}`,
@@ -311,14 +572,34 @@ export class BinanceAdapter
       }
 
       if (
-        !("stream" in parsed) ||
-        !("data" in parsed)
+        !(
+          "stream" in
+          parsed
+        ) ||
+        !(
+          "data" in
+          parsed
+        )
       ) {
         return;
       }
 
       const stream =
-        parsed.stream.toLowerCase();
+        parsed.stream
+          .toLowerCase();
+
+      if (
+        stream.includes(
+          "@aggtrade",
+        )
+      ) {
+        this.recordPublicTrade(
+          parsed.data as
+            BinanceAggregateTrade,
+        );
+
+        return;
+      }
 
       if (
         stream.includes(
@@ -334,7 +615,9 @@ export class BinanceAdapter
       }
 
       if (
-        stream.includes("@depth")
+        stream.includes(
+          "@depth",
+        )
       ) {
         this.updateOrderBook(
           stream,
@@ -342,7 +625,9 @@ export class BinanceAdapter
             BinancePartialDepth,
         );
       }
-    } catch (error) {
+    } catch (
+      error
+    ) {
       console.error(
         `[${this.name}] Invalid market-data payload:`,
         error,
@@ -350,20 +635,78 @@ export class BinanceAdapter
     }
   }
 
+  private recordPublicTrade(
+    trade:
+      BinanceAggregateTrade,
+  ): void {
+    const price =
+      Number(
+        trade.p,
+      );
+    const quantity =
+      Number(
+        trade.q,
+      );
+
+    crossExchangeMarketMakingPublicTradeTapeService
+      .record({
+        id:
+          `binance:${trade.s}:${trade.a}`,
+        exchange:
+          "binance",
+        market:
+          trade.s,
+        price,
+        quantity,
+        occurredAt:
+          trade.T,
+        aggressorSide:
+          trade.m
+            ? "SELL"
+            : "BUY",
+        source:
+          "BINANCE_AGG_TRADE",
+      });
+  }
+
+  /*
+   * -------------------------------------------------
+   * BOOK TICKER
+   * -------------------------------------------------
+   *
+   * BookTicker remains useful because it provides
+   * lightweight top-of-book changes.
+   *
+   * However it is NOT the only source responsible
+   * for refreshing MarketCache anymore.
+   *
+   * Partial-depth snapshots also refresh executable
+   * quote timestamps so unchanged best prices do not
+   * incorrectly become "stale".
+   */
   private updateMarket(
-    ticker: BinanceBookTicker,
+    ticker:
+      BinanceBookTicker,
   ): void {
     const bestBidPrice =
-      Number(ticker.b);
+      Number(
+        ticker.b,
+      );
 
     const bestBidQty =
-      Number(ticker.B);
+      Number(
+        ticker.B,
+      );
 
     const bestAskPrice =
-      Number(ticker.a);
+      Number(
+        ticker.a,
+      );
 
     const bestAskQty =
-      Number(ticker.A);
+      Number(
+        ticker.A,
+      );
 
     if (
       !ticker.s ||
@@ -379,10 +722,14 @@ export class BinanceAdapter
       !Number.isFinite(
         bestAskQty,
       ) ||
-      bestBidPrice <= 0 ||
-      bestAskPrice <= 0 ||
-      bestBidQty < 0 ||
-      bestAskQty < 0 ||
+      bestBidPrice <=
+        0 ||
+      bestAskPrice <=
+        0 ||
+      bestBidQty <
+        0 ||
+      bestAskQty <
+        0 ||
       bestAskPrice <
         bestBidPrice
     ) {
@@ -390,67 +737,74 @@ export class BinanceAdapter
     }
 
     const market =
-      ticker.s.toUpperCase();
+      ticker.s
+        .trim()
+        .toUpperCase();
+
+    if (
+      market.length ===
+      0
+    ) {
+      return;
+    }
 
     const timestamp =
       Date.now();
 
-    const spread =
-      bestAskPrice -
-      bestBidPrice;
+    const normalizedTicker =
+      this.createNormalizedTicker(
+        market,
+        bestBidPrice,
+        bestBidQty,
+        bestAskPrice,
+        bestAskQty,
+        timestamp,
+      );
 
-    const lastPrice =
-      (
-        bestBidPrice +
-        bestAskPrice
-      ) / 2;
-
-    const normalizedTicker:
-      NormalizedTicker = {
-      exchange: "binance",
-
-      market,
-
-      lastPrice,
-
-      bid: bestBidPrice,
-      ask: bestAskPrice,
-
-      bestBidPrice,
-      bestBidQty,
-
-      bestAskPrice,
-      bestAskQty,
-
-      spread,
-
-      timestamp,
-    };
-
-    this.markets.add(market);
-
-    this.lastUpdate =
-      timestamp;
-
-    marketCache.update(
+    this.publishExecutableQuote(
       normalizedTicker,
     );
 
-    this.tickerCallback?.(
-      normalizedTicker,
-    );
+    this.tickerUpdateCount +=
+      1;
   }
 
+  /*
+   * -------------------------------------------------
+   * PARTIAL DEPTH
+   * -------------------------------------------------
+   *
+   * This is now the authoritative synchronization
+   * path for:
+   *
+   * OrderBookService
+   * +
+   * MarketCache
+   *
+   * The same received snapshot timestamp is used
+   * in both stores.
+   *
+   * Result:
+   *
+   * OpportunityEvaluator sees freshness derived from
+   * the same market-data event that execution VWAP /
+   * depth verification sees.
+   */
   private updateOrderBook(
-    stream: string,
-    depth: BinancePartialDepth,
+    stream:
+      string,
+
+    depth:
+      BinancePartialDepth,
   ): void {
     const market =
       this.extractMarketFromStream(
         stream,
       );
 
-    if (!market) {
+    if (
+      !market
+    ) {
       return;
     }
 
@@ -467,17 +821,23 @@ export class BinanceAdapter
       );
 
     if (
-      bids.length === 0 ||
-      asks.length === 0
+      bids.length ===
+        0 ||
+      asks.length ===
+        0
     ) {
       return;
     }
 
     const bestBid =
-      bids[0];
+      bids[
+        0
+      ];
 
     const bestAsk =
-      asks[0];
+      asks[
+        0
+      ];
 
     if (
       !bestBid ||
@@ -493,46 +853,177 @@ export class BinanceAdapter
 
     const orderBook:
       OrderBook = {
-      exchange: "binance",
+      exchange:
+        "binance",
 
       market,
 
       bids,
+
       asks,
 
       timestamp,
     };
 
     /*
-     * Binance partial-depth messages contain
-     * a complete fresh top-N book, not deltas.
-     * Therefore replace instead of merge.
+     * Binance partial-depth payloads are complete
+     * fresh top-N snapshots, not incremental deltas.
+     *
+     * Therefore replace() is correct.
      */
     orderBookService.replace(
       orderBook,
     );
 
-    this.depthUpdateCount += 1;
+    /*
+     * CRITICAL FRESHNESS SYNCHRONIZATION
+     *
+     * Previously this fresh depth event updated only
+     * OrderBookService.
+     *
+     * OpportunityEvaluator reads MarketCache instead,
+     * therefore an unchanged @bookTicker could become
+     * older than maximumQuoteAgeMs even while the
+     * Binance depth stream was healthy and fresh.
+     *
+     * Publish the exact same top-of-book snapshot and
+     * timestamp into MarketCache.
+     */
+    const normalizedTicker =
+      this.createNormalizedTicker(
+        market,
+        bestBid.price,
+        bestBid.quantity,
+        bestAsk.price,
+        bestAsk.quantity,
+        timestamp,
+      );
+
+    this.publishExecutableQuote(
+      normalizedTicker,
+    );
+
+    this.depthUpdateCount +=
+      1;
 
     if (
-      this.depthUpdateCount === 1 ||
+      this.depthUpdateCount ===
+        1 ||
       this.depthUpdateCount %
-        1_000 ===
+          5_000 ===
         0
     ) {
       console.log(
-        `[${this.name}] OrderBook cache updated: ${market} | bids=${bids.length} | asks=${asks.length} | cached=${orderBookService.size()}`,
+        `[${this.name}] Synchronized depth: ${market} | bids=${bids.length} | asks=${asks.length} | bid=${bestBid.price} | ask=${bestAsk.price} | books=${orderBookService.size()} | depthUpdates=${this.depthUpdateCount}`,
       );
     }
   }
 
+  /*
+   * Build one consistent top-of-book model regardless
+   * of whether the source event was @bookTicker or
+   * partial-depth.
+   */
+  private createNormalizedTicker(
+    market:
+      string,
+
+    bestBidPrice:
+      number,
+
+    bestBidQty:
+      number,
+
+    bestAskPrice:
+      number,
+
+    bestAskQty:
+      number,
+
+    timestamp:
+      number,
+  ): NormalizedTicker {
+    const spread =
+      bestAskPrice -
+      bestBidPrice;
+
+    const lastPrice =
+      (
+        bestBidPrice +
+        bestAskPrice
+      ) /
+      2;
+
+    return {
+      exchange:
+        "binance",
+
+      market,
+
+      lastPrice,
+
+      // Backward-compatible fields.
+      bid:
+        bestBidPrice,
+
+      ask:
+        bestAskPrice,
+
+      // Executable top-of-book.
+      bestBidPrice,
+
+      bestBidQty,
+
+      bestAskPrice,
+
+      bestAskQty,
+
+      spread,
+
+      timestamp,
+    };
+  }
+
+  /*
+   * Single publication path prevents timestamp drift
+   * between different Binance handlers.
+   */
+  private publishExecutableQuote(
+    ticker:
+      NormalizedTicker,
+  ): void {
+    this.markets.add(
+      ticker.market,
+    );
+
+    this.lastUpdate =
+      Math.max(
+        this.lastUpdate,
+        ticker.timestamp,
+      );
+
+    marketCache.update(
+      ticker,
+    );
+
+    this.tickerCallback?.(
+      ticker,
+    );
+  }
+
   private extractMarketFromStream(
-    stream: string,
+    stream:
+      string,
   ): string | null {
     const separatorIndex =
-      stream.indexOf("@");
+      stream.indexOf(
+        "@",
+      );
 
-    if (separatorIndex <= 0) {
+    if (
+      separatorIndex <=
+      0
+    ) {
       return null;
     }
 
@@ -545,7 +1036,8 @@ export class BinanceAdapter
         .trim()
         .toUpperCase();
 
-    return market || null;
+    return market ||
+      null;
   }
 
   private normalizeDepthSide(
@@ -558,46 +1050,64 @@ export class BinanceAdapter
         >
       | undefined,
 
-    side: "bid" | "ask",
+    side:
+      "bid" |
+      "ask",
   ): OrderBookLevel[] {
-    if (!Array.isArray(levels)) {
+    if (
+      !Array.isArray(
+        levels,
+      )
+    ) {
       return [];
     }
 
     const normalized:
-      OrderBookLevel[] = [];
+      OrderBookLevel[] =
+      [];
 
     for (
       const [
         rawPrice,
         rawQuantity,
-      ] of levels
+      ]
+      of levels
     ) {
       const price =
-        Number(rawPrice);
+        Number(
+          rawPrice,
+        );
 
       const quantity =
-        Number(rawQuantity);
+        Number(
+          rawQuantity,
+        );
 
       if (
-        !Number.isFinite(price) ||
+        !Number.isFinite(
+          price,
+        ) ||
         !Number.isFinite(
           quantity,
         ) ||
-        price <= 0 ||
-        quantity <= 0
+        price <=
+          0 ||
+        quantity <=
+          0
       ) {
         continue;
       }
 
       normalized.push({
         price,
+
         quantity,
       });
     }
 
     normalized.sort(
-      side === "bid"
+      side ===
+        "bid"
         ? (
             first,
             second,
@@ -614,7 +1124,8 @@ export class BinanceAdapter
 
     return normalized.slice(
       0,
-      BINANCE.DEPTH.LEVELS,
+      BINANCE.DEPTH
+        .LEVELS,
     );
   }
 }

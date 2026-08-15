@@ -3,6 +3,8 @@ import {
 } from "../../arbitrage/config/fees";
 
 export interface ExecutableProfitInput {
+  market: string;
+
   capital: number;
 
   buyExchange: string;
@@ -59,11 +61,13 @@ export class ExecutableProfitCalculator {
     const buyFees =
       getExchangeFees(
         input.buyExchange,
+        input.market,
       );
 
     const sellFees =
       getExchangeFees(
         input.sellExchange,
+        input.market,
       );
 
     const quantity =
@@ -228,6 +232,11 @@ export class ExecutableProfitCalculator {
   private validateInput(
     input: ExecutableProfitInput,
   ): void {
+    this.requireNonEmptyString(
+      input.market,
+      "Market",
+    );
+
     this.requireNonEmptyString(
       input.buyExchange,
       "Buy exchange",

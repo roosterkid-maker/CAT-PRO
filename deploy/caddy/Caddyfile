@@ -1,0 +1,22 @@
+{$CAT_PRO_DASHBOARD_HOST} {
+  encode zstd gzip
+
+  basic_auth {
+    {$CAT_PRO_DASHBOARD_USER} {$CAT_PRO_DASHBOARD_PASSWORD_HASH}
+  }
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "same-origin"
+    -Server
+  }
+
+  reverse_proxy gateway:80 {
+    transport http {
+      dial_timeout 2s
+      response_header_timeout 60s
+    }
+  }
+}

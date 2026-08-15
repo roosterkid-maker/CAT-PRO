@@ -1,14 +1,37 @@
 export type RiskLevel =
   | "LOW"
   | "MEDIUM"
-  | "HIGH";
+  | "HIGH"
+  | "BLOCKED";
+
+export interface RiskAssessmentChecks {
+  marketIntegrity: boolean;
+
+  executionQuality: boolean;
+
+  capitalAvailable: boolean;
+
+  exposureAllowed: boolean;
+
+  dailyLimitsAllowed: boolean;
+}
 
 export interface RiskAssessment {
-  level: RiskLevel;
+  level:
+    RiskLevel;
 
-  approved: boolean;
+  approved:
+    boolean;
 
-  score: number;
+  score:
+    number;
 
-  reasons: string[];
+  reasons:
+    string[];
+
+  warnings:
+    string[];
+
+  checks:
+    RiskAssessmentChecks;
 }

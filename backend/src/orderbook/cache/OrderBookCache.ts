@@ -4,6 +4,8 @@ export class OrderBookCache {
   private readonly books =
     new Map<string, OrderBook>();
 
+  private revision = 0;
+
   private key(
     exchange: string,
     market: string,
@@ -21,6 +23,8 @@ export class OrderBookCache {
       ),
       book,
     );
+
+    this.revision += 1;
   }
 
   get(
@@ -53,20 +57,27 @@ export class OrderBookCache {
     exchange: string,
     market: string,
   ): void {
-    this.books.delete(
+    if (this.books.delete(
       this.key(
         exchange,
         market,
       ),
-    );
+    )) {
+      this.revision += 1;
+    }
   }
 
   clear(): void {
+    if (this.books.size > 0) this.revision += 1;
     this.books.clear();
   }
 
   size(): number {
     return this.books.size;
+  }
+
+  getRevision(): number {
+    return this.revision;
   }
 
   getAll(): OrderBook[] {

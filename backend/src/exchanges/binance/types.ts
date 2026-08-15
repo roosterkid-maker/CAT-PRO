@@ -31,6 +31,14 @@ export interface BinanceExchangeInfoResponse {
   symbols: BinanceExchangeSymbol[];
 }
 
+export interface BinanceTicker24Hour {
+  symbol: string;
+
+  volume: string;
+
+  quoteVolume: string;
+}
+
 export type BinanceDepthLevel = [
   string,
   string,
@@ -48,4 +56,35 @@ export interface BinanceCombinedDepthMessage {
   stream: string;
 
   data: BinancePartialDepth;
+}
+
+export interface BinanceAggregateTrade {
+  e:
+    "aggTrade";
+
+  s:
+    string;
+
+  a:
+    number;
+
+  p:
+    string;
+
+  q:
+    string;
+
+  T:
+    number;
+
+  m:
+    boolean;
+}
+
+export interface BinanceCombinedAggregateTradeMessage {
+  stream:
+    string;
+
+  data:
+    BinanceAggregateTrade;
 }

@@ -1,80 +1,529 @@
 import crypto from "node:crypto";
-import type { TradingDecision } from "../orchestrator/TradingOrchestrator";
-import type { ExecutionPlan } from "../models/ExecutionPlan";
+
+import type {
+  ExecutionPlan,
+} from "../models/ExecutionPlan";
+
+import type {
+  ExecutionPlanningRequest,
+} from "../models/ExecutionPlanningRequest";
 
 export class ExecutionPlanner {
   createPlan(
-    decision: TradingDecision,
-    market: string,
-    buyExchange: string,
-    sellExchange: string,
-    buyPrice: number,
-    sellPrice: number,
+    request:
+      ExecutionPlanningRequest,
   ): ExecutionPlan {
-    if (!decision.approved) {
+    if (
+      !request.decision.approved
+    ) {
       throw new Error(
         "Trading decision is not approved.",
       );
     }
 
+    this.validateRequest(
+      request,
+    );
+
+    const createdAt =
+      Date.now();
+
     const quantity =
-      decision.allocatedCapital /
-      buyPrice;
+      request.quantity;
 
-    return {
-      id: crypto.randomUUID(),
+    const quoteToAccountConversionRate =
+      request.quoteToAccountConversionRate;
 
-      market,
+    const grossProfit =
+      (
+        request.sellPrice -
+        request.buyPrice
+      ) *
+      quantity *
+      quoteToAccountConversionRate;
 
-      mode: "PAPER",
+    const grossProfitPercent =
+      (
+        (
+          request.sellPrice -
+          request.buyPrice
+        ) /
+        request.buyPrice
+      ) *
+      100;
 
-      strategy: "PARALLEL",
+    const expectedFees =
+      (
+        request.expectedFees ??
+        0
+      ) *
+      quoteToAccountConversionRate;
 
-      status: "READY",
+    const expectedNetProfit =
+      grossProfit -
+      expectedFees;
+
+    const expectedProfitCapital =
+      request.reservationCapital;
+
+    const expectedNetProfitPercent =
+      expectedProfitCapital >
+      0
+        ? (
+            expectedNetProfit /
+            expectedProfitCapital
+          ) *
+          100
+        : 0;
+
+    const timeoutMs =
+      request.timeoutMs ??
+      3_000;
+
+    const maximumSlippagePercent =
+      request
+        .maximumSlippagePercent ??
+      0.05;
+
+    const expiresAt =
+      createdAt +
+      timeoutMs;
+
+    const basePlan = {
+      version:
+        1,
+
+      market:
+        request.market
+          .trim()
+          .toUpperCase(),
+
+      mode:
+        request.mode ??
+        "PAPER",
+
+      strategy:
+        request.strategy ??
+        "PARALLEL",
+
+      status:
+        "READY" as const,
 
       capital:
-        decision.allocatedCapital,
+        request.reservationCapital,
 
       expectedProfit:
-        (sellPrice - buyPrice) *
-        quantity,
+        grossProfit,
 
       expectedProfitPercent:
-        ((sellPrice - buyPrice) /
-          buyPrice) *
-        100,
+        grossProfitPercent,
 
-      maximumSlippagePercent:
-        0.05,
+      expectedFees,
 
-      timeoutMs: 3000,
+      expectedNetProfit,
+
+      expectedNetProfitPercent,
+
+      maximumSlippagePercent,
+
+      expectedSlippagePercent:
+        request
+          .expectedSlippagePercent,
+
+      riskScore:
+        request.decision
+          .riskScore,
+
+      executionScore:
+        request.decision
+          .executionScore,
+
+      timeoutMs,
 
       buy: {
-        exchange: buyExchange,
+        exchange:
+          request.buyExchange
+            .trim()
+            .toLowerCase(),
 
-        market,
+        market:
+          request.market
+            .trim()
+            .toUpperCase(),
 
-        side: "BUY",
+        side:
+          "BUY" as const,
 
         quantity,
 
-        limitPrice: buyPrice,
+        limitPrice:
+          request.buyPrice,
+
+        orderType:
+          "limit" as const,
+
+        baseAsset:
+          request.baseAsset
+            ?.trim()
+            .toUpperCase(),
+
+        quoteAsset:
+          request.quoteAsset
+            ?.trim()
+            .toUpperCase(),
       },
 
       sell: {
-        exchange: sellExchange,
+        exchange:
+          request.sellExchange
+            .trim()
+            .toLowerCase(),
 
-        market,
+        market:
+          request.market
+            .trim()
+            .toUpperCase(),
 
-        side: "SELL",
+        side:
+          "SELL" as const,
 
         quantity,
 
-        limitPrice: sellPrice,
+        limitPrice:
+          request.sellPrice,
+
+        orderType:
+          "limit" as const,
+
+        baseAsset:
+          request.baseAsset
+            ?.trim()
+            .toUpperCase(),
+
+        quoteAsset:
+          request.quoteAsset
+            ?.trim()
+            .toUpperCase(),
       },
 
-      createdAt: Date.now(),
+      createdAt,
+
+      expiresAt,
+
+      opportunityTimestamp:
+        request
+          .opportunityTimestamp,
     };
+
+    const validationHash =
+      this.createValidationHash(
+        basePlan,
+      );
+
+    return {
+      id:
+        crypto.randomUUID(),
+
+      ...basePlan,
+
+      validationHash,
+    };
+  }
+
+  private validateRequest(
+    request:
+      ExecutionPlanningRequest,
+  ): void {
+    if (
+      !request.market.trim()
+    ) {
+      throw new Error(
+        "Execution plan requires a market.",
+      );
+    }
+
+    if (
+      !request.buyExchange
+        .trim()
+    ) {
+      throw new Error(
+        "Execution plan requires a buy exchange.",
+      );
+    }
+
+    if (
+      !request.sellExchange
+        .trim()
+    ) {
+      throw new Error(
+        "Execution plan requires a sell exchange.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        request.buyPrice,
+      ) ||
+      request.buyPrice <=
+        0
+    ) {
+      throw new Error(
+        "Execution plan buy price must be positive.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        request.sellPrice,
+      ) ||
+      request.sellPrice <=
+        0
+    ) {
+      throw new Error(
+        "Execution plan sell price must be positive.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        request.decision
+          .allocatedCapital,
+      ) ||
+      request.decision
+        .allocatedCapital <=
+        0
+    ) {
+      throw new Error(
+        "Execution plan requires positive allocated capital.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        request.quantity,
+      ) ||
+      request.quantity <=
+        0
+    ) {
+      throw new Error(
+        "Execution plan requires an explicitly converted positive quantity.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        request.reservationCapital,
+      ) ||
+      request.reservationCapital <=
+        0
+    ) {
+      throw new Error(
+        "Execution plan requires explicit positive account-currency reservation capital.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        request.quoteToAccountConversionRate,
+      ) ||
+      request.quoteToAccountConversionRate <=
+        0
+    ) {
+      throw new Error(
+        "Execution plan requires an explicit positive quote-to-account conversion rate.",
+      );
+    }
+
+    if (
+      request.expectedFees !==
+        undefined &&
+      (
+        !Number.isFinite(
+          request.expectedFees,
+        ) ||
+        request.expectedFees <
+          0
+      )
+    ) {
+      throw new Error(
+        "Expected execution fees must be finite and non-negative.",
+      );
+    }
+
+    if (
+      request.timeoutMs !==
+        undefined &&
+      (
+        !Number.isSafeInteger(
+          request.timeoutMs,
+        ) ||
+        request.timeoutMs <=
+          0
+      )
+    ) {
+      throw new Error(
+        "Execution timeout must be a positive integer.",
+      );
+    }
+
+    if (
+      request
+        .maximumSlippagePercent !==
+        undefined &&
+      (
+        !Number.isFinite(
+          request
+            .maximumSlippagePercent,
+        ) ||
+        request
+          .maximumSlippagePercent <
+          0
+      )
+    ) {
+      throw new Error(
+        "Maximum slippage percent must be finite and non-negative.",
+      );
+    }
+
+    if (
+      request
+        .expectedSlippagePercent !==
+        undefined &&
+      (
+        !Number.isFinite(
+          request
+            .expectedSlippagePercent,
+        ) ||
+        request
+          .expectedSlippagePercent <
+          0
+      )
+    ) {
+      throw new Error(
+        "Expected slippage percent must be finite and non-negative.",
+      );
+    }
+
+    if (
+      request
+        .opportunityTimestamp !==
+        undefined &&
+      (
+        !Number.isSafeInteger(
+          request
+            .opportunityTimestamp,
+        ) ||
+        request
+          .opportunityTimestamp <=
+          0
+      )
+    ) {
+      throw new Error(
+        "Opportunity timestamp must be a positive integer.",
+      );
+    }
+  }
+
+  private createValidationHash(
+    plan: {
+      version: number;
+
+      market: string;
+
+      mode: string;
+
+      strategy: string;
+
+      capital: number;
+
+      expectedProfit: number;
+
+      expectedProfitPercent: number;
+
+      expectedFees: number;
+
+      expectedNetProfit: number;
+
+      expectedNetProfitPercent: number;
+
+      maximumSlippagePercent: number;
+
+      expectedSlippagePercent?:
+        number;
+
+      riskScore?:
+        number;
+
+      executionScore?:
+        number;
+
+      timeoutMs: number;
+
+      buy: {
+        exchange: string;
+
+        market: string;
+
+        side: string;
+
+        quantity: number;
+
+        limitPrice: number;
+
+        orderType:
+          string;
+
+        baseAsset?:
+          string;
+
+        quoteAsset?:
+          string;
+      };
+
+      sell: {
+        exchange: string;
+
+        market: string;
+
+        side: string;
+
+        quantity: number;
+
+        limitPrice: number;
+
+        orderType:
+          string;
+
+        baseAsset?:
+          string;
+
+        quoteAsset?:
+          string;
+      };
+
+      createdAt: number;
+
+      expiresAt: number;
+
+      opportunityTimestamp?:
+        number;
+    },
+  ): string {
+    const payload =
+      JSON.stringify(
+        plan,
+      );
+
+    return crypto
+      .createHash(
+        "sha256",
+      )
+      .update(
+        payload,
+      )
+      .digest(
+        "hex",
+      );
   }
 }
 

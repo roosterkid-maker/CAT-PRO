@@ -1,6 +1,15 @@
 import axios from "axios";
 
+import {
+  API_BASE_URL,
+} from "../config/runtimeUrls";
+
 export const api = axios.create({
-    baseURL: "http://localhost:5000",
-    timeout: 10000,
+  baseURL: API_BASE_URL,
+  timeout: 10_000,
+  headers: {
+    Accept: "application/json",
+  },
 });
+
+export { API_BASE_URL };

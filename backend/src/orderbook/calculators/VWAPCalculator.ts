@@ -27,6 +27,22 @@ export class VWAPCalculator {
         break;
       }
 
+      if (
+        !level ||
+        !Number.isFinite(
+          level.price,
+        ) ||
+        !Number.isFinite(
+          level.quantity,
+        ) ||
+        level.price <= 0 ||
+        level.quantity <= 0
+      ) {
+        throw new Error(
+          "VWAP levels must contain positive finite price and quantity.",
+        );
+      }
+
       const fillQuantity =
         Math.min(
           remaining,

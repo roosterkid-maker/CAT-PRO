@@ -51,6 +51,33 @@ export interface LoadedCoinDCXMarket {
   orderTypes: string[];
 }
 
+export function normalizeCoinDCXCurrencyRoles(
+  market: CoinDCXMarketDetails,
+): {
+  baseCurrency: string;
+  quoteCurrency: string;
+} {
+  /*
+   * CoinDCX names these fields from its settlement-ledger perspective:
+   * `base_currency_short_name` is the price/settlement asset (USDT in
+   * BTCUSDT), while `target_currency_short_name` is the traded asset
+   * (BTC). CAT PRO uses the conventional market-data meaning.
+   */
+  return {
+    baseCurrency:
+      market.target_currency_short_name
+        ?.trim()
+        .toUpperCase() ??
+      "",
+
+    quoteCurrency:
+      market.base_currency_short_name
+        ?.trim()
+        .toUpperCase() ??
+      "",
+  };
+}
+
 export async function loadMarkets(): Promise<
   LoadedCoinDCXMarket[]
 > {
@@ -99,17 +126,12 @@ export async function loadMarkets(): Promise<
         .toUpperCase() ??
       "";
 
-    const baseCurrency =
-      market.base_currency_short_name
-        ?.trim()
-        .toUpperCase() ??
-      "";
-
-    const quoteCurrency =
-      market.target_currency_short_name
-        ?.trim()
-        .toUpperCase() ??
-      "";
+    const {
+      baseCurrency,
+      quoteCurrency,
+    } = normalizeCoinDCXCurrencyRoles(
+      market,
+    );
 
     if (
       !symbol ||

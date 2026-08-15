@@ -10,7 +10,9 @@ import type {
   LiveExecutionRequest,
 } from "../../execution/live/models/LiveExecutionRequest";
 
-
+import {
+  arbitragePnLService,
+} from "../metrics/ArbitragePnLService";
 
 import type {
   ArbitrageLiveExecutionResult,
@@ -83,7 +85,8 @@ export class ArbitrageExecutionCoordinator {
     }
 
     if (
-      preflightReasons.length > 0
+      preflightReasons.length >
+      0
     ) {
       return this.createBlockedResult(
         opportunity,
@@ -104,20 +107,39 @@ export class ArbitrageExecutionCoordinator {
         sellExchange,
       );
 
-    if (!buyAdapter.isConnected()) {
-      preflightReasons.push(
-        `Buy exchange adapter is not connected: ${buyExchange}.`,
-      );
-    }
+    const buyAdapterStatus =
+      liveExecutionService
+        .getExchangeStatus(
+          buyExchange,
+        );
 
-    if (!sellAdapter.isConnected()) {
+    const sellAdapterStatus =
+      liveExecutionService
+        .getExchangeStatus(
+          sellExchange,
+        );
+
+    if (
+      !buyAdapterStatus
+        .adapterConnected
+    ) {
       preflightReasons.push(
-        `Sell exchange adapter is not connected: ${sellExchange}.`,
+        `Buy exchange LIVE execution availability is blocked: ${buyExchange} (liveEnabled=${buyAdapterStatus.liveExecutionEnabled}, verification=${buyAdapterStatus.verificationState}).`,
       );
     }
 
     if (
-      preflightReasons.length > 0
+      !sellAdapterStatus
+        .adapterConnected
+    ) {
+      preflightReasons.push(
+        `Sell exchange LIVE execution availability is blocked: ${sellExchange} (liveEnabled=${sellAdapterStatus.liveExecutionEnabled}, verification=${sellAdapterStatus.verificationState}).`,
+      );
+    }
+
+    if (
+      preflightReasons.length >
+      0
     ) {
       return this.createBlockedResult(
         opportunity,
@@ -168,7 +190,10 @@ export class ArbitrageExecutionCoordinator {
         opportunity.buyPrice,
 
       clientOrderId:
-        `arb-buy-${executionSuffix}`,
+        this.createClientOrderId(
+          "arb-buy",
+          executionSuffix,
+        ),
 
       ...commonOptions,
     };
@@ -193,31 +218,35 @@ export class ArbitrageExecutionCoordinator {
         opportunity.sellPrice,
 
       clientOrderId:
-        `arb-sell-${executionSuffix}`,
+        this.createClientOrderId(
+          "arb-sell",
+          executionSuffix,
+        ),
 
       ...commonOptions,
     };
 
     /*
-     * Cross-exchange spot arbitrage assumes balances are
-     * already pre-positioned on both exchanges.
+     * Cross-exchange spot arbitrage assumes balances
+     * are already pre-positioned on both exchanges.
      *
      * Both legs are submitted concurrently to reduce
-     * directional exposure. This is not atomic: either leg
-     * can still fail or partially fill.
+     * directional exposure. Execution is not atomic:
+     * either leg can still fail or partially fill.
      */
     const [
       buySettlement,
       sellSettlement,
-    ] = await Promise.allSettled([
-      buyAdapter.execute(
-        buyRequest,
-      ),
+    ] =
+      await Promise.allSettled([
+        buyAdapter.execute(
+          buyRequest,
+        ),
 
-      sellAdapter.execute(
-        sellRequest,
-      ),
-    ]);
+        sellAdapter.execute(
+          sellRequest,
+        ),
+      ]);
 
     const buyResult =
       buySettlement.status ===
@@ -231,7 +260,8 @@ export class ArbitrageExecutionCoordinator {
         ? sellSettlement.value
         : null;
 
-    const reasons: string[] = [];
+    const reasons:
+      string[] = [];
 
     if (
       buySettlement.status ===
@@ -274,12 +304,16 @@ export class ArbitrageExecutionCoordinator {
     }
 
     const buyFilledQuantity =
-      buyResult?.filledQuantity ??
-      0;
+      this.toNonNegativeNumber(
+        buyResult?.filledQuantity ??
+        0,
+      );
 
     const sellFilledQuantity =
-      sellResult?.filledQuantity ??
-      0;
+      this.toNonNegativeNumber(
+        sellResult?.filledQuantity ??
+        0,
+      );
 
     const matchedFilledQuantity =
       Math.min(
@@ -331,10 +365,33 @@ export class ArbitrageExecutionCoordinator {
       );
     }
 
+    if (
+      buyResult &&
+      buyResult.status !==
+        "FILLED" &&
+      !buyResult.failureReason
+    ) {
+      reasons.push(
+        `Buy leg ended with status ${buyResult.status}.`,
+      );
+    }
+
+    if (
+      sellResult &&
+      sellResult.status !==
+        "FILLED" &&
+      !sellResult.failureReason
+    ) {
+      reasons.push(
+        `Sell leg ended with status ${sellResult.status}.`,
+      );
+    }
+
     const completedAt =
       Date.now();
 
-    return {
+    const executionResult:
+      ArbitrageLiveExecutionResult = {
       success:
         bothFilled,
 
@@ -381,15 +438,32 @@ export class ArbitrageExecutionCoordinator {
       recoveryRequired,
 
       reasons: [
-        ...new Set(reasons),
+        ...new Set(
+          reasons,
+        ),
       ],
     };
+
+    /*
+     * P&L service records only results where both
+     * execution-leg results are available.
+     */
+    arbitragePnLService.record(
+  executionResult,
+  {
+    persist:
+      true,
+  },
+);
+
+    return executionResult;
   }
 
   private validateOpportunity(
     opportunity: ArbitrageOpportunity,
   ): string[] {
-    const reasons: string[] = [];
+    const reasons:
+      string[] = [];
 
     if (
       opportunity.decision !==
@@ -420,7 +494,8 @@ export class ArbitrageExecutionCoordinator {
       !Number.isFinite(
         opportunity.executableQty,
       ) ||
-      opportunity.executableQty <= 0
+      opportunity.executableQty <=
+        0
     ) {
       reasons.push(
         "Executable quantity must be positive.",
@@ -431,7 +506,8 @@ export class ArbitrageExecutionCoordinator {
       !Number.isFinite(
         opportunity.buyPrice,
       ) ||
-      opportunity.buyPrice <= 0
+      opportunity.buyPrice <=
+        0
     ) {
       reasons.push(
         "Buy price is invalid.",
@@ -442,7 +518,8 @@ export class ArbitrageExecutionCoordinator {
       !Number.isFinite(
         opportunity.sellPrice,
       ) ||
-      opportunity.sellPrice <= 0
+      opportunity.sellPrice <=
+        0
     ) {
       reasons.push(
         "Sell price is invalid.",
@@ -459,7 +536,14 @@ export class ArbitrageExecutionCoordinator {
     }
 
     if (
-      opportunity.netProfit <= 0 ||
+      !Number.isFinite(
+        opportunity.netProfit,
+      ) ||
+      opportunity.netProfit <=
+        0 ||
+      !Number.isFinite(
+        opportunity.netProfitPercent,
+      ) ||
       opportunity.netProfitPercent <=
         0
     ) {
@@ -500,7 +584,8 @@ export class ArbitrageExecutionCoordinator {
   }
 
   private createBlockedResult(
-    opportunity: ArbitrageOpportunity,
+    opportunity:
+      ArbitrageOpportunity,
     buyExchange: string,
     sellExchange: string,
     startedAt: number,
@@ -510,7 +595,8 @@ export class ArbitrageExecutionCoordinator {
       Date.now();
 
     return {
-      success: false,
+      success:
+        false,
 
       status:
         "BLOCKED",
@@ -528,15 +614,20 @@ export class ArbitrageExecutionCoordinator {
 
       sellExchange,
 
-      buyResult: null,
+      buyResult:
+        null,
 
-      sellResult: null,
+      sellResult:
+        null,
 
-      matchedFilledQuantity: 0,
+      matchedFilledQuantity:
+        0,
 
-      unmatchedBuyQuantity: 0,
+      unmatchedBuyQuantity:
+        0,
 
-      unmatchedSellQuantity: 0,
+      unmatchedSellQuantity:
+        0,
 
       startedAt,
 
@@ -546,12 +637,62 @@ export class ArbitrageExecutionCoordinator {
         completedAt -
         startedAt,
 
-      recoveryRequired: false,
+      recoveryRequired:
+        false,
 
       reasons: [
-        ...new Set(reasons),
+        ...new Set(
+          reasons,
+        ),
       ],
     };
+  }
+
+  private createClientOrderId(
+    prefix: string,
+    suffix: string,
+  ): string {
+    /*
+     * Binance client-order IDs allow at most 36
+     * characters. Keep IDs compact and unique.
+     */
+    const normalizedPrefix =
+      prefix
+        .replace(
+          /[^a-zA-Z0-9_-]/g,
+          "",
+        )
+        .slice(
+          0,
+          10,
+        );
+
+    const compactSuffix =
+      suffix
+        .replace(
+          /[^a-zA-Z0-9_-]/g,
+          "",
+        )
+        .slice(
+          -24,
+        );
+
+    return `${normalizedPrefix}-${compactSuffix}`
+      .slice(
+        0,
+        36,
+      );
+  }
+
+  private toNonNegativeNumber(
+    value: number,
+  ): number {
+    return (
+      Number.isFinite(value) &&
+      value >= 0
+    )
+      ? value
+      : 0;
   }
 
   private getErrorMessage(

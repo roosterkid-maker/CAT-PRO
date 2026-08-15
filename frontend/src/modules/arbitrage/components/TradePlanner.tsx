@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
 
 import { useCreatePaperTrade } from "@/modules/paper-trading/hooks/usePaperTrades";
-import { evaluateTradingIntelligence } from "@/modules/trading/services/tradingIntelligence";
 import DecisionCard from "@/shared/ui/DecisionCard";
 import { formatPrice } from "@/shared/utils/formatPrice";
 
@@ -73,6 +72,29 @@ function Metric({
   );
 }
 
+function EvidenceMetric({
+  label,
+  value,
+}: {
+  label: string;
+
+  value:
+    | string
+    | number;
+}) {
+  return (
+    <div className="rounded-lg border border-border-default bg-panel/50 p-3">
+      <p className="text-xs uppercase tracking-wide text-text-muted">
+        {label}
+      </p>
+
+      <p className="mt-2 font-mono text-lg font-bold text-text-primary">
+        {value}
+      </p>
+    </div>
+  );
+}
+
 export default function TradePlanner({
   opportunity,
 }: TradePlannerProps) {
@@ -80,21 +102,18 @@ export default function TradePlanner({
 
   const createPaperTrade = useCreatePaperTrade();
 
-  const intelligence =
-    evaluateTradingIntelligence(opportunity);
-
   const decisionColor:
     | "green"
     | "yellow"
     | "red" =
-    intelligence.decision.decision === "EXECUTE"
+    opportunity.decision === "EXECUTE"
       ? "green"
-      : intelligence.decision.decision === "REVIEW"
+      : opportunity.decision === "REVIEW"
         ? "yellow"
         : "red";
 
   const isTradeSkipped =
-    intelligence.decision.decision === "SKIP";
+    opportunity.decision === "SKIP";
 
   const calculation = useMemo(() => {
     const safeCapital =
@@ -102,27 +121,99 @@ export default function TradePlanner({
         ? capital
         : 0;
 
-    const quantity =
-      opportunity.buyPrice > 0
-        ? safeCapital / opportunity.buyPrice
+    const referenceCapitalInr =
+      opportunity.requestedCapitalInr;
+
+    const referenceQuoteCapital =
+      opportunity.requestedQuoteCapital;
+
+    const inrToQuoteRate =
+      referenceCapitalInr !== undefined &&
+      Number.isFinite(referenceCapitalInr) &&
+      referenceCapitalInr > 0 &&
+      referenceQuoteCapital !== undefined &&
+      Number.isFinite(referenceQuoteCapital) &&
+      referenceQuoteCapital > 0
+        ? referenceQuoteCapital /
+          referenceCapitalInr
+        : opportunity.quoteAsset === "INR"
+          ? 1
+          : null;
+
+    if (
+      safeCapital <= 0 ||
+      inrToQuoteRate === null ||
+      !Number.isFinite(inrToQuoteRate) ||
+      inrToQuoteRate <= 0 ||
+      !Number.isFinite(opportunity.buyPrice) ||
+      opportunity.buyPrice <= 0
+    ) {
+      return {
+        conversionAvailable: false,
+        quantity: 0,
+        deployedCapitalInr: 0,
+        grossProfit: 0,
+        totalFees: 0,
+        netProfit: 0,
+        roi: 0,
+      };
+    }
+
+    const quoteToInrRate =
+      1 / inrToQuoteRate;
+
+    const requestedQuoteCapital =
+      safeCapital * inrToQuoteRate;
+
+    const requestedQuantity =
+      requestedQuoteCapital /
+      opportunity.buyPrice;
+
+    const executableQuantity =
+      Number.isFinite(
+        opportunity.availableExecutableQty,
+      ) &&
+      opportunity.availableExecutableQty > 0
+        ? opportunity.availableExecutableQty
         : 0;
 
+    const quantity =
+      Math.min(
+        requestedQuantity,
+        executableQuantity,
+      );
+
+    const deployedCapitalInr =
+      quantity *
+      opportunity.buyPrice *
+      quoteToInrRate;
+
     const grossProfit =
-      quantity * opportunity.rawSpread;
+      quantity *
+      opportunity.rawSpread *
+      quoteToInrRate;
 
     const totalFees =
-      quantity * opportunity.estimatedFees;
+      quantity *
+      opportunity.estimatedFees *
+      quoteToInrRate;
 
     const netProfit =
-      quantity * opportunity.netProfit;
+      quantity *
+      opportunity.netProfit *
+      quoteToInrRate;
 
     const roi =
-      safeCapital > 0
-        ? (netProfit / safeCapital) * 100
+      deployedCapitalInr > 0
+        ? (netProfit /
+            deployedCapitalInr) *
+          100
         : 0;
 
     return {
+      conversionAvailable: true,
       quantity,
+      deployedCapitalInr,
       grossProfit,
       totalFees,
       netProfit,
@@ -253,7 +344,7 @@ export default function TradePlanner({
 
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Metric
-          title="You Receive"
+          title="Executable Quantity"
           value={formatQuantity(
             calculation.quantity,
           )}
@@ -290,52 +381,77 @@ export default function TradePlanner({
         <p className="mt-2 text-4xl font-bold tabular-nums text-success">
           {calculation.roi.toFixed(2)}%
         </p>
+
+        <p className="mt-2 text-xs text-text-muted">
+          Sized on {formatCurrency(calculation.deployedCapitalInr)} deployable capital after INR-to-{opportunity.quoteAsset ?? "quote"} conversion and current depth.
+        </p>
       </div>
+
+      {!calculation.conversionAvailable ? (
+        <p className="mt-3 rounded-lg border border-danger/25 bg-danger/5 px-3 py-2 text-sm text-danger">
+          Fresh INR-to-market-quote conversion evidence is unavailable. Preview and PAPER execution are blocked fail-closed.
+        </p>
+      ) : null}
 
       <div className="mt-6">
         <DecisionCard
-          title={`Trade Decision: ${intelligence.decision.decision}`}
+          title={`Backend Decision: ${opportunity.decision}`}
           color={decisionColor}
         >
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-text-muted">
-                Confidence
-              </p>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <EvidenceMetric
+              label="Overall Score"
+              value={
+                opportunity.overallScore
+              }
+            />
 
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {
-                  intelligence.confidence
-                    .confidence
-                }
-                %
-              </p>
-            </div>
+            <EvidenceMetric
+              label="Liquidity"
+              value={
+                opportunity.enoughLiquidity
+                  ? "SUFFICIENT"
+                  : "INSUFFICIENT"
+              }
+            />
 
-            <div>
-              <p className="text-xs uppercase tracking-wide text-text-muted">
-                Risk
-              </p>
+            <EvidenceMetric
+              label="Quote Freshness"
+              value={
+                opportunity.quotesAreFresh
+                  ? "FRESH"
+                  : "STALE"
+              }
+            />
 
-              <p className="mt-2 text-2xl font-bold">
-                {intelligence.risk.risk}
-              </p>
-            </div>
+            <EvidenceMetric
+              label="Fee Score"
+              value={
+                opportunity.feeScore
+              }
+            />
           </div>
 
           <div className="mt-5">
             <p className="text-xs uppercase tracking-wide text-text-muted">
-              Reasons
+              Backend Analysis
             </p>
 
             <div className="mt-3 space-y-2">
-              {intelligence.summary.map(
+              {opportunity.analysisSummary
+                .length === 0 ? (
+                <p className="text-sm text-text-muted">
+                  No backend analysis summary was reported.
+                </p>
+              ) : null}
+
+              {opportunity.analysisSummary.map(
                 (reason) => (
                   <p
                     key={reason}
                     className="text-sm text-text-primary"
                   >
-                    ✓ {reason}
+                    - {reason}
                   </p>
                 ),
               )}
@@ -351,22 +467,25 @@ export default function TradePlanner({
             createPaperTrade.isPending ||
             capital <= 0 ||
             capital > 10_000 ||
-            isTradeSkipped
+            isTradeSkipped ||
+            !calculation.conversionAvailable
           }
           onClick={() => {
             createPaperTrade.reset();
 
-          createPaperTrade.mutate({
-          opportunityId: opportunity.id,
-          requestedCapital: capital,
-          });
+            createPaperTrade.mutate({
+              opportunityId:
+                opportunity.id,
+              requestedCapital:
+                capital,
+            });
           }}
           className="w-full rounded-xl bg-brand px-6 py-4 text-lg font-semibold text-white transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {createPaperTrade.isPending
             ? "Starting Paper Trade..."
             : isTradeSkipped
-              ? "Trade Not Recommended"
+              ? "Backend Decision: Skip"
               : "Start Paper Trade"}
         </button>
 

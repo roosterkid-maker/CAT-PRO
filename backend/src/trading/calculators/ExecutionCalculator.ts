@@ -5,7 +5,7 @@ export class ExecutionCalculator {
     buyPrice: number,
     buyAvailableQty: number,
     sellAvailableQty: number,
-    requestedCapital: number,
+    requestedQuoteCapital: number,
   ): ExecutionContext {
     if (
       !Number.isFinite(buyPrice) ||
@@ -35,8 +35,8 @@ export class ExecutionCalculator {
     }
 
     if (
-      !Number.isFinite(requestedCapital) ||
-      requestedCapital <= 0
+      !Number.isFinite(requestedQuoteCapital) ||
+      requestedQuoteCapital <= 0
     ) {
       throw new Error(
         "Requested capital must be a positive number.",
@@ -44,7 +44,7 @@ export class ExecutionCalculator {
     }
 
     const requestedQty =
-      requestedCapital / buyPrice;
+      requestedQuoteCapital / buyPrice;
 
     const availableQty = Math.min(
       buyAvailableQty,
@@ -69,7 +69,7 @@ export class ExecutionCalculator {
 
     const unfilledCapital = Math.max(
       0,
-      requestedCapital -
+      requestedQuoteCapital -
         executableCapital,
     );
 
@@ -107,7 +107,8 @@ export class ExecutionCalculator {
       fillPercent < 100;
 
     return {
-      requestedCapital,
+      requestedCapital:
+        requestedQuoteCapital,
 
       requestedQty,
 

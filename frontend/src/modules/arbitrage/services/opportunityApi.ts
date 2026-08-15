@@ -1,20 +1,40 @@
-import axios from "axios";
+import {
+  api,
+} from "@/api/client";
+
+import type {
+  CandidateLastLookResponse,
+} from "../types/LastLook";
 
 import type {
   OpportunitiesResponse,
 } from "../types/Opportunity";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ??
-  "http://localhost:5000";
-
 export async function fetchOpportunities(): Promise<OpportunitiesResponse> {
-  const response = await axios.get<OpportunitiesResponse>(
-    `${API_BASE_URL}/api/opportunities`,
-    {
-      timeout: 10_000,
-    },
-  );
+  const response =
+    await api.get<OpportunitiesResponse>(
+      "/api/opportunities",
+    );
+
+  return response.data;
+}
+
+export async function fetchOpportunityLastLook(
+  opportunityId: string,
+): Promise<CandidateLastLookResponse> {
+  const response =
+    await api.get<CandidateLastLookResponse>(
+      `/api/debug/candidates/${encodeURIComponent(
+        opportunityId,
+      )}/last-look`,
+      {
+        validateStatus: (
+          status,
+        ) =>
+          status === 200 ||
+          status === 404,
+      },
+    );
 
   return response.data;
 }

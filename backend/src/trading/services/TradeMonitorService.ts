@@ -7,14 +7,27 @@ import { paperTradeStore } from "./PaperTradeStore";
 export class TradeMonitorService {
   monitorOpenTrades(): void {
     const activeTrades = paperTradeStore
-      .getAll()
-      .filter(
-        (trade) =>
-          trade.status === "open" ||
-          trade.status === "monitoring",
-      );
+      .getByStatuses([
+        "open",
+        "monitoring",
+      ]);
 
     for (const trade of activeTrades) {
+      const conversion =
+        trade.capitalConversion;
+
+      if (!conversion) {
+        paperTradeStore.update(trade.id, {
+          status: "failed",
+          failureReason:
+            "Legacy open trade has no INR/quote conversion evidence; monitoring stopped fail-closed.",
+          lastUpdatedAt:
+            Date.now(),
+        });
+
+        continue;
+      }
+
       const quote = marketCache.get(
         trade.sellExchange,
         trade.market,
@@ -56,9 +69,13 @@ export class TradeMonitorService {
         continue;
       }
 
-      const currentProfit =
+      const currentGrossProfitInr =
         (currentPrice - trade.buyPrice) *
-          trade.quantity -
+          trade.quantity *
+        conversion.quoteToInrRate;
+
+      const currentProfit =
+        currentGrossProfitInr -
         trade.estimatedFees;
 
       const currentProfitPercent =

@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { defaultArbitragePolicy } from "./config/policy";
 
+import {
+  exchangeCapabilityService,
+} from "../execution/capabilities/services/ExchangeCapabilityService";
+
+import {
+  centralPaperCapitalValuationService,
+} from "../strategies/services/CentralPaperCapitalValuationService";
+
 import type { ArbitrageOpportunity } from "./models/ArbitrageOpportunity";
 import type { ExchangePair } from "./models/ExchangePair";
 
@@ -49,8 +57,66 @@ export class SpreadEngine {
     const rawSpreadPercent =
       (rawSpread / buyPrice) * 100;
 
+    const buyCapability =
+      exchangeCapabilityService
+        .getCachedCapability(
+          pair.buy.exchange,
+          pair.market,
+          "spot",
+        );
+
+    const sellCapability =
+      exchangeCapabilityService
+        .getCachedCapability(
+          pair.sell.exchange,
+          pair.market,
+          "spot",
+        );
+
+    const quoteAsset =
+      buyCapability?.quoteAsset
+        .trim()
+        .toUpperCase() ??
+      null;
+
+    if (
+      !quoteAsset ||
+      sellCapability?.quoteAsset
+        .trim()
+        .toUpperCase() !==
+        quoteAsset
+    ) {
+      return null;
+    }
+
+    const requestedCapitalInr =
+      defaultArbitragePolicy.referenceCapital;
+
+    const capitalConversion =
+      centralPaperCapitalValuationService
+        .convertInrToAsset(
+          quoteAsset,
+          requestedCapitalInr,
+          `spread:${pair.market}:${pair.buy.exchange}:${pair.sell.exchange}`,
+        );
+
+    const requestedQuoteCapital =
+      capitalConversion?.targetQuantity ??
+      null;
+
+    if (
+      requestedQuoteCapital === null ||
+      !Number.isFinite(
+        requestedQuoteCapital,
+      ) ||
+      requestedQuoteCapital <=
+        0
+    ) {
+      return null;
+    }
+
     const requiredQty =
-      defaultArbitragePolicy.referenceCapital /
+      requestedQuoteCapital /
       buyPrice;
 
     if (
@@ -81,6 +147,17 @@ export class SpreadEngine {
         availableExecutableQty,
       );
 
+    const executableQuoteCapital =
+      executableQty *
+      buyPrice;
+
+    const executableCapitalInr =
+      requestedCapitalInr *
+      (
+        executableQuoteCapital /
+        requestedQuoteCapital
+      );
+
     const liquidityPercent =
       Math.min(
         100,
@@ -103,6 +180,12 @@ export class SpreadEngine {
 
       buyAvailableQty,
       sellAvailableQty,
+
+      requestedCapitalInr,
+      quoteAsset,
+      requestedQuoteCapital,
+      executableQuoteCapital,
+      executableCapitalInr,
 
       requiredQty,
       availableExecutableQty,

@@ -84,11 +84,21 @@ export default function PortfolioSummaryCards({
         <h2 className="mt-1 text-2xl font-bold text-text-primary">
           Capital & Trading Metrics
         </h2>
+
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-text-secondary">
+          <span className="font-semibold uppercase tracking-[0.12em] text-warning">
+            Credibility-adjusted PAPER view
+          </span>
+
+          <span>
+            {portfolio.excludedDistortedTrades} distorted fills / {formatCurrency(portfolio.excludedDistortedPnl)} excluded; raw append-only ledger preserved.
+          </span>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
-          title="Current Capital"
+          title="Credible PAPER Capital"
           value={formatCurrency(
             portfolio.currentCapital,
           )}
@@ -98,7 +108,7 @@ export default function PortfolioSummaryCards({
         />
 
         <MetricCard
-          title="Available Capital"
+          title="Credible Available Capital"
           value={formatCurrency(
             portfolio.availableCapital,
           )}
@@ -128,7 +138,7 @@ export default function PortfolioSummaryCards({
         />
 
         <MetricCard
-          title="Total Realized P&L"
+          title="Credible PAPER P&L"
           value={formatCurrency(
             portfolio.totalRealizedProfit,
           )}
@@ -152,11 +162,11 @@ export default function PortfolioSummaryCards({
         />
 
         <MetricCard
-          title="Win Rate"
+          title="Accepted Settlement Rate"
           value={`${portfolio.winRatePercent.toFixed(
             1,
           )}%`}
-          subtitle={`${portfolio.winningTrades} wins · ${portfolio.losingTrades} losses`}
+          subtitle={`${portfolio.winningTrades} positive · ${portfolio.losingTrades} negative accepted PAPER closes; not LIVE win rate`}
           positive={
             portfolio.winRatePercent > 50
           }

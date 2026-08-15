@@ -1,19 +1,21 @@
 import type { ArbitrageOpportunity } from "../models/ArbitrageOpportunity";
-import { exchangeFees } from "../config/fees";
+import { getExchangeFeeEvidence } from "../config/fees";
 
 export class FeeEngine {
   apply(
     opportunity: ArbitrageOpportunity,
   ): ArbitrageOpportunity | null {
     const buyFeeConfig =
-      exchangeFees[
-        opportunity.pair.buy.exchange
-      ];
+      getExchangeFeeEvidence(
+        opportunity.pair.buy.exchange,
+        opportunity.pair.market,
+      );
 
     const sellFeeConfig =
-      exchangeFees[
-        opportunity.pair.sell.exchange
-      ];
+      getExchangeFeeEvidence(
+        opportunity.pair.sell.exchange,
+        opportunity.pair.market,
+      );
 
     if (
       !buyFeeConfig ||

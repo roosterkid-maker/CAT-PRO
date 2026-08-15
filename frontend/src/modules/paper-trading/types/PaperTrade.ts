@@ -5,11 +5,28 @@ export type PaperTradeStatus =
   | "monitoring"
   | "target-hit"
   | "closed"
-  | "completed"
   | "cancelled"
   | "failed";
 
 export interface PaperTrade {
+  capitalConversion?: {
+    schemaVersion: 1;
+    accountCurrency: "INR";
+    marketQuoteAsset: string;
+    requestedCapitalInr: number;
+    allocatedQuoteCapital: number;
+    quoteToInrRate: number;
+    inrToQuoteEvidenceId: string;
+    quoteToInrEvidenceId: string;
+    generatedAt: number;
+    expiresAt: number;
+  } | null;
+
+  quoteCapitalUsed?: number | null;
+  quoteGrossProfit?: number | null;
+  quoteTotalFees?: number | null;
+  quoteNetProfit?: number | null;
+
   id: string;
 
   market: string;

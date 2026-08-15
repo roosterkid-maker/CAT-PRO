@@ -27,6 +27,13 @@ export interface PortfolioSummary {
   bestTradeProfit: number;
   worstTradeProfit: number;
 
+  accountingBasis: "CREDIBILITY_ADJUSTED";
+  storedClosedTrades: number;
+  excludedDistortedTrades: number;
+  excludedDistortedPnl: number;
+  ledgerCurrentCapital: number;
+  ledgerAvailableCapital: number;
+
   generatedAt: number;
 }
 

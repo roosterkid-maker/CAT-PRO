@@ -45,3 +45,6 @@ coverage/
 .DS_Store
 Thumbs.db
 Desktop.ini
+# Runtime trading data
+*.jsonl
+reports/

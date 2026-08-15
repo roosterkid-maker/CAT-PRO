@@ -15,17 +15,26 @@ export interface Opportunity {
   sellPrice: number;
   sellAvailableQty: number;
 
+  requestedCapitalInr?: number;
+  quoteAsset?: string;
+  requestedQuoteCapital?: number;
+  executableQuoteCapital?: number;
+  executableCapitalInr?: number;
+
   requiredQty: number;
 
   availableExecutableQty: number;
 
   executableQty: number;
 
+  /** Per-base-unit amount in quoteAsset. */
   rawSpread: number;
   rawSpreadPercent: number;
 
+  /** Per-base-unit amount in quoteAsset. */
   estimatedFees: number;
 
+  /** Per-base-unit amount in quoteAsset, not account INR unless quoteAsset is INR. */
   netProfit: number;
   netProfitPercent: number;
 

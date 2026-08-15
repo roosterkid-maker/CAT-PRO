@@ -1,14 +1,51 @@
-import { executionSimulator } from "../../execution/services/ExecutionSimulator";
-import { capitalOptimizer } from "../../optimizer/services/CapitalOptimizer";
-import { opportunityRankingService } from "../../ranking/services/OpportunityRankingService";
-import { riskEngine } from "../../risk/services/RiskEngine";
+import {
+  executionHealthService,
+} from "../../execution/live/health/ExecutionHealthService";
 
-import type { ArbitrageOpportunity } from "../../arbitrage/models/ArbitrageOpportunity";
+import {
+  liveExecutionService,
+} from "../../execution/live/LiveExecutionService";
 
-import { tradingAccountService } from "../account/TradingAccountService";
+import {
+  executionSimulator,
+} from "../../execution/services/ExecutionSimulator";
+
+import {
+  capitalOptimizer,
+} from "../../optimizer/services/CapitalOptimizer";
+
+import {
+  opportunityRankingService,
+} from "../../ranking/services/OpportunityRankingService";
+
+import {
+  riskEngine,
+} from "../../risk/services/RiskEngine";
+
+import {
+  freshnessIntegrityService,
+} from "../../freshness/services/FreshnessIntegrityService";
+
+import type {
+  ArbitrageOpportunity,
+} from "../../arbitrage/models/ArbitrageOpportunity";
+
+import {
+  opportunityService,
+} from "../../arbitrage/services/OpportunityService";
+
+import {
+  tradingAccountService,
+} from "../account/TradingAccountService";
+
 import {
   defaultExecutableProfitConfig,
 } from "../config/execution";
+
+import type {
+  ExecutableProfitConfig,
+} from "../config/execution";
+
 import {
   executableProfitCalculator,
 } from "../profit/ExecutableProfitCalculator";
@@ -21,8 +58,10 @@ export type TradingRecommendation =
 export interface TradingDecision {
   approved: boolean;
 
-  decision: TradingRecommendation;
+  decision:
+    TradingRecommendation;
 
+  /** Executable capital denominated in the opportunity market's quote asset. */
   allocatedCapital: number;
 
   executionScore: number;
@@ -40,59 +79,89 @@ export type TradeCycleStatus =
   | "READY";
 
 export interface TradeCycleResult {
-  status: TradeCycleStatus;
+  status:
+    TradeCycleStatus;
 
-  market: string | null;
+  market:
+    | string
+    | null;
 
-  buyExchange: string | null;
+  buyExchange:
+    | string
+    | null;
 
-  sellExchange: string | null;
+  sellExchange:
+    | string
+    | null;
 
-  capital: number | null;
+  capital:
+    | number
+    | null;
 
-  rankingScore: number | null;
+  rankingScore:
+    | number
+    | null;
 
   riskLevel:
     | "LOW"
     | "MEDIUM"
     | "HIGH"
+    | "BLOCKED"
     | null;
 
   reasons: string[];
 }
 
 export class TradeOrchestrator {
-  /**
-   * Backward-compatible evaluation method used by
-   * AutomatedPaperTradingService and ExecutionPlanner.
-   */
   evaluate(
-    opportunity: ArbitrageOpportunity,
-    requestedCapital: number,
+    opportunity:
+      ArbitrageOpportunity,
+
+    executionCapital:
+      number,
+
+    accountCapital =
+      executionCapital,
+
+    executableProfitConfig:
+      ExecutableProfitConfig =
+      defaultExecutableProfitConfig,
   ): TradingDecision {
     console.log(
       "[TradingOrchestrator] Evaluating opportunity:",
       {
-        market: opportunity.pair.market,
-        requestedCapital,
+        market:
+          opportunity.pair.market,
+
+        executionCapital,
+
+        accountCapital,
       },
     );
 
     if (
-      !Number.isFinite(requestedCapital) ||
-      requestedCapital <= 0
+      !Number.isFinite(
+        executionCapital,
+      ) ||
+      executionCapital <=
+        0
     ) {
-      return this.createRejectedDecision([
-        "Requested capital must be a positive number.",
-      ]);
+      return this.createRejectedDecision(
+        [
+          "Requested capital must be a positive number.",
+        ],
+      );
     }
 
     const accountCheck =
-      tradingAccountService.evaluateTrade(
-        requestedCapital,
-      );
+      tradingAccountService
+        .evaluateTrade(
+          accountCapital,
+        );
 
-    if (!accountCheck.approved) {
+    if (
+      !accountCheck.approved
+    ) {
       return this.createRejectedDecision(
         accountCheck.reasons,
       );
@@ -102,8 +171,54 @@ export class TradeOrchestrator {
 
     try {
       executableProfit =
-        executableProfitCalculator.calculate({
-          capital: requestedCapital,
+        executableProfitCalculator
+          .calculate({
+            market:
+              opportunity.pair.market,
+
+            capital:
+              executionCapital,
+
+            buyExchange:
+              opportunity.pair.buy.exchange,
+
+            sellExchange:
+              opportunity.pair.sell.exchange,
+
+            buyPrice:
+              opportunity.buyPrice,
+
+            sellPrice:
+              opportunity.sellPrice,
+
+            ...executableProfitConfig,
+          });
+    } catch (
+      error:
+        unknown
+    ) {
+      return this.createRejectedDecision(
+        [
+          error instanceof Error
+            ? error.message
+            : "Executable-profit calculation failed.",
+        ],
+      );
+    }
+
+    if (
+      !executableProfit.executable
+    ) {
+      return this.createRejectedDecision(
+        executableProfit.reasons,
+      );
+    }
+
+    const execution =
+      executionSimulator
+        .simulate({
+          market:
+            opportunity.pair.market,
 
           buyExchange:
             opportunity.pair.buy.exchange,
@@ -111,51 +226,20 @@ export class TradeOrchestrator {
           sellExchange:
             opportunity.pair.sell.exchange,
 
-          buyPrice:
-            opportunity.buyPrice,
-
-          sellPrice:
-            opportunity.sellPrice,
-
-          ...defaultExecutableProfitConfig,
+            capital:
+              executionCapital,
         });
-    } catch (error: unknown) {
-      return this.createRejectedDecision([
-        error instanceof Error
-          ? error.message
-          : "Executable-profit calculation failed.",
-      ]);
-    }
-
-    if (!executableProfit.executable) {
-      return this.createRejectedDecision(
-        executableProfit.reasons,
-      );
-    }
-
-    const execution =
-      executionSimulator.simulate({
-        market:
-          opportunity.pair.market,
-
-        buyExchange:
-          opportunity.pair.buy.exchange,
-
-        sellExchange:
-          opportunity.pair.sell.exchange,
-
-        capital:
-          requestedCapital,
-      });
 
     if (
       !execution.success ||
       !execution.simulation
     ) {
-      return this.createRejectedDecision([
-        execution.failureReason ??
-          "Execution simulation failed.",
-      ]);
+      return this.createRejectedDecision(
+        [
+          execution.failureReason ??
+            "Execution simulation failed.",
+        ],
+      );
     }
 
     const simulation =
@@ -163,29 +247,103 @@ export class TradeOrchestrator {
 
     const executionScore =
       this.clampScore(
-        simulation.confidence.score,
+        simulation
+          .confidence
+          .score,
       );
 
+    /*
+     * Version 13.5
+     *
+     * Re-check the actual exchange books
+     * immediately before unified risk.
+     */
+    const pairIntegrity =
+      freshnessIntegrityService
+        .evaluatePair(
+          opportunity.pair.buy,
+          opportunity.pair.sell,
+        );
+
     const risk =
-      riskEngine.assess({
-        capital:
-          requestedCapital,
+      riskEngine
+        .assess({
+          capital:
+            accountCapital,
 
-        confidence:
-          simulation.confidence.score,
+          market:
+            opportunity.pair.market,
 
-        fillPercent:
-          simulation.depth.fillPercent,
+          buyExchange:
+            opportunity.pair.buy.exchange,
 
-        netProfit:
-          executableProfit.executableProfit,
+          sellExchange:
+            opportunity.pair.sell.exchange,
 
-        executionTimeMs:
-          execution.executionTimeMs,
+          quotesFresh:
+            pairIntegrity
+              .buy
+              .fresh &&
+            pairIntegrity
+              .sell
+              .fresh,
 
-        liquidityScore:
-          opportunity.liquidityScore,
-      });
+          pairSynchronized:
+            pairIntegrity
+              .synchronized,
+
+          timestampSkewMs:
+            pairIntegrity
+              .timestampSkewMs,
+
+          maximumPairSkewMs:
+            pairIntegrity
+              .maximumPairSkewMs,
+
+          confidence:
+            simulation
+              .confidence
+              .score,
+
+          fillPercent:
+            simulation
+              .depth
+              .fillPercent,
+
+          netProfit:
+            executableProfit
+              .executableProfit,
+
+          executionTimeMs:
+            execution
+              .executionTimeMs,
+
+          liquidityScore:
+            opportunity
+              .liquidityScore,
+
+          quoteAgeMs:
+            this.calculateQuoteAgeMs(
+              opportunity.timestamp,
+            ),
+
+          exchangeConnected:
+            this.areExecutionExchangesReady(
+              opportunity.pair.buy.exchange,
+              opportunity.pair.sell.exchange,
+            ),
+
+          balanceAvailable:
+            this.isBalanceAvailable(
+              accountCapital,
+            ),
+
+          dailyLoss:
+            this.getAccountDailyLoss(),
+
+          dailyTradeCount:
+            this.getAccountDailyTradeCount(),
+        });
 
     const riskScore =
       this.clampScore(
@@ -193,11 +351,14 @@ export class TradeOrchestrator {
       );
 
     const simulationDecision =
-      simulation.decision.recommendation;
+      simulation
+        .decision
+        .recommendation;
 
     const approved =
       risk.approved &&
-      simulationDecision === "EXECUTE";
+      simulationDecision ===
+        "EXECUTE";
 
     const decision:
       TradingRecommendation =
@@ -207,12 +368,18 @@ export class TradeOrchestrator {
 
     const reasons =
       this.collectReasons(
-        simulation.confidence.reasons,
+        simulation
+          .confidence
+          .reasons,
+
         risk.reasons,
+
         approved,
       );
 
-    if (approved) {
+    if (
+      approved
+    ) {
       reasons.push(
         `Executable profit after fees, slippage, and safety buffer is ${executableProfit.executableProfitPercent.toFixed(
           4,
@@ -227,7 +394,7 @@ export class TradeOrchestrator {
 
       allocatedCapital:
         approved
-          ? requestedCapital
+          ? executionCapital
           : 0,
 
       executionScore,
@@ -235,37 +402,49 @@ export class TradeOrchestrator {
       riskScore,
 
       reasons: [
-        ...new Set(reasons),
+        ...new Set(
+          reasons,
+        ),
       ],
     };
   }
 
-  /**
-   * Evaluates the highest-ranked opportunity and
-   * determines whether it is ready for execution.
-   */
-  executeCycle(): TradeCycleResult {
+  executeCycle():
+    TradeCycleResult {
     const ranking =
-      opportunityRankingService.rank();
+      opportunityRankingService
+        .rank();
 
     const topOpportunity =
-      ranking.opportunities[0];
+      ranking
+        .opportunities[
+          0
+        ];
 
-    if (!topOpportunity) {
+    if (
+      !topOpportunity
+    ) {
       return {
-        status: "NO_OPPORTUNITY",
+        status:
+          "NO_OPPORTUNITY",
 
-        market: null,
+        market:
+          null,
 
-        buyExchange: null,
+        buyExchange:
+          null,
 
-        sellExchange: null,
+        sellExchange:
+          null,
 
-        capital: null,
+        capital:
+          null,
 
-        rankingScore: null,
+        rankingScore:
+          null,
 
-        riskLevel: null,
+        riskLevel:
+          null,
 
         reasons: [
           "No ranked opportunity is currently available.",
@@ -274,32 +453,38 @@ export class TradeOrchestrator {
     }
 
     const optimization =
-      capitalOptimizer.optimize({
-        market:
-          topOpportunity.market,
+      capitalOptimizer
+        .optimize({
+          market:
+            topOpportunity.market,
 
-        buyExchange:
-          topOpportunity.buyExchange,
+          buyExchange:
+            topOpportunity.buyExchange,
 
-        sellExchange:
-          topOpportunity.sellExchange,
+          sellExchange:
+            topOpportunity.sellExchange,
 
-        minimumCapital: 500,
+          minimumCapital:
+            500,
 
-        maximumCapital: 50_000,
+          maximumCapital:
+            50_000,
 
-        capitalStep: 500,
-      });
+          capitalStep:
+            500,
+        });
 
     const bestCandidate =
       optimization.best;
 
     if (
       !bestCandidate ||
-      bestCandidate.score <= 0
+      bestCandidate.score <=
+        0
     ) {
       return {
-        status: "OPTIMIZATION_FAILED",
+        status:
+          "OPTIMIZATION_FAILED",
 
         market:
           topOpportunity.market,
@@ -310,12 +495,14 @@ export class TradeOrchestrator {
         sellExchange:
           topOpportunity.sellExchange,
 
-        capital: null,
+        capital:
+          null,
 
         rankingScore:
           topOpportunity.score,
 
-        riskLevel: null,
+        riskLevel:
+          null,
 
         reasons: [
           "Capital optimizer did not produce a profitable executable candidate.",
@@ -324,13 +511,17 @@ export class TradeOrchestrator {
     }
 
     const accountCheck =
-      tradingAccountService.evaluateTrade(
-        bestCandidate.capital,
-      );
+      tradingAccountService
+        .evaluateTrade(
+          bestCandidate.capital,
+        );
 
-    if (!accountCheck.approved) {
+    if (
+      !accountCheck.approved
+    ) {
       return {
-        status: "RISK_BLOCKED",
+        status:
+          "RISK_BLOCKED",
 
         market:
           topOpportunity.market,
@@ -347,7 +538,8 @@ export class TradeOrchestrator {
         rankingScore:
           topOpportunity.score,
 
-        riskLevel: null,
+        riskLevel:
+          null,
 
         reasons:
           accountCheck.reasons,
@@ -355,11 +547,16 @@ export class TradeOrchestrator {
     }
 
     const simulation =
-      bestCandidate.execution.simulation;
+      bestCandidate
+        .execution
+        .simulation;
 
-    if (!simulation) {
+    if (
+      !simulation
+    ) {
       return {
-        status: "SIMULATION_MISSING",
+        status:
+          "SIMULATION_MISSING",
 
         market:
           topOpportunity.market,
@@ -376,7 +573,8 @@ export class TradeOrchestrator {
         rankingScore:
           topOpportunity.score,
 
-        riskLevel: null,
+        riskLevel:
+          null,
 
         reasons: [
           "Best optimization candidate does not contain a simulation result.",
@@ -384,34 +582,128 @@ export class TradeOrchestrator {
       };
     }
 
+    /*
+     * Resolve the newest underlying
+     * opportunity snapshot.
+     */
+    const currentOpportunity =
+      this.findOpportunity(
+        topOpportunity.market,
+        topOpportunity.buyExchange,
+        topOpportunity.sellExchange,
+      );
+
+    const pairIntegrity =
+      currentOpportunity
+        ? freshnessIntegrityService
+            .evaluatePair(
+              currentOpportunity.pair.buy,
+              currentOpportunity.pair.sell,
+            )
+        : null;
+
     const risk =
-      riskEngine.assess({
-        capital:
-          bestCandidate.capital,
+      riskEngine
+        .assess({
+          capital:
+            bestCandidate.capital,
 
-        confidence:
-          simulation.confidence.score,
+          market:
+            topOpportunity.market,
 
-        fillPercent:
-          simulation.depth.fillPercent,
+          buyExchange:
+            topOpportunity.buyExchange,
 
-        netProfit:
-          simulation.profit.breakdown.netProfit,
+          sellExchange:
+            topOpportunity.sellExchange,
 
-        executionTimeMs:
-          bestCandidate.execution.executionTimeMs,
+          quotesFresh:
+            pairIntegrity
+              ? pairIntegrity
+                  .buy
+                  .fresh &&
+                pairIntegrity
+                  .sell
+                  .fresh
+              : false,
 
-        liquidityScore:
-          topOpportunity.liquidityScore,
-      });
+          pairSynchronized:
+            pairIntegrity
+              ?.synchronized ??
+            false,
+
+          timestampSkewMs:
+            pairIntegrity
+              ?.timestampSkewMs ??
+            null,
+
+          maximumPairSkewMs:
+            pairIntegrity
+              ?.maximumPairSkewMs ??
+            null,
+
+          confidence:
+            simulation
+              .confidence
+              .score,
+
+          fillPercent:
+            simulation
+              .depth
+              .fillPercent,
+
+          netProfit:
+            simulation
+              .profit
+              .breakdown
+              .netProfit,
+
+          executionTimeMs:
+            bestCandidate
+              .execution
+              .executionTimeMs,
+
+          liquidityScore:
+            topOpportunity
+              .liquidityScore,
+
+          quoteAgeMs:
+            this.calculateQuoteAgeMs(
+              this.findOpportunityTimestamp(
+                topOpportunity.market,
+                topOpportunity.buyExchange,
+                topOpportunity.sellExchange,
+              ),
+            ),
+
+          exchangeConnected:
+            this.areExecutionExchangesReady(
+              topOpportunity.buyExchange,
+              topOpportunity.sellExchange,
+            ),
+
+          balanceAvailable:
+            this.isBalanceAvailable(
+              bestCandidate.capital,
+            ),
+
+          dailyLoss:
+            this.getAccountDailyLoss(),
+
+          dailyTradeCount:
+            this.getAccountDailyTradeCount(),
+        });
 
     if (
       !risk.approved ||
-      simulation.decision.recommendation !==
+      simulation
+        .decision
+        .recommendation !==
         "EXECUTE"
     ) {
       return {
-        status: "RISK_BLOCKED",
+        status:
+          "RISK_BLOCKED",
 
         market:
           topOpportunity.market,
@@ -432,7 +724,8 @@ export class TradeOrchestrator {
           risk.level,
 
         reasons:
-          risk.reasons.length > 0
+          risk.reasons.length >
+          0
             ? risk.reasons
             : [
                 `Execution decision is ${simulation.decision.recommendation}.`,
@@ -441,7 +734,8 @@ export class TradeOrchestrator {
     }
 
     return {
-      status: "READY",
+      status:
+        "READY",
 
       market:
         topOpportunity.market,
@@ -462,36 +756,256 @@ export class TradeOrchestrator {
         risk.level,
 
       reasons:
-        risk.reasons.length > 0
+        risk.reasons.length >
+        0
           ? risk.reasons
           : [
-              "Opportunity passed account, ranking, optimization, simulation, and risk evaluation.",
+              "Opportunity passed account, ranking, optimization, simulation, and unified risk evaluation.",
             ],
     };
   }
 
+  private findOpportunity(
+    market:
+      string,
+
+    buyExchange:
+      string,
+
+    sellExchange:
+      string,
+  ): ArbitrageOpportunity | null {
+    const normalizedMarket =
+      market
+        .trim()
+        .toUpperCase();
+
+    const normalizedBuyExchange =
+      buyExchange
+        .trim()
+        .toLowerCase();
+
+    const normalizedSellExchange =
+      sellExchange
+        .trim()
+        .toLowerCase();
+
+    return (
+      opportunityService
+        .getOpportunities()
+        .find(
+          (
+            item,
+          ) =>
+            item.pair.market
+              .trim()
+              .toUpperCase() ===
+              normalizedMarket &&
+            item.pair.buy.exchange
+              .trim()
+              .toLowerCase() ===
+              normalizedBuyExchange &&
+            item.pair.sell.exchange
+              .trim()
+              .toLowerCase() ===
+              normalizedSellExchange,
+        ) ??
+      null
+    );
+  }
+
+  private findOpportunityTimestamp(
+    market:
+      string,
+
+    buyExchange:
+      string,
+
+    sellExchange:
+      string,
+  ): number {
+    return (
+      this.findOpportunity(
+        market,
+        buyExchange,
+        sellExchange,
+      )?.timestamp ??
+      Number.NaN
+    );
+  }
+
+  private calculateQuoteAgeMs(
+    opportunityTimestamp:
+      number,
+  ): number {
+    if (
+      !Number.isFinite(
+        opportunityTimestamp,
+      ) ||
+      opportunityTimestamp <=
+        0
+    ) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    return Math.max(
+      0,
+
+      Date.now() -
+        opportunityTimestamp,
+    );
+  }
+
+  private areExecutionExchangesReady(
+    buyExchange:
+      string,
+
+    sellExchange:
+      string,
+  ): boolean {
+    const account =
+      tradingAccountService
+        .getAccount();
+
+    if (
+      account.mode !==
+      "LIVE"
+    ) {
+      return true;
+    }
+
+    const exchanges = [
+      buyExchange,
+      sellExchange,
+    ].map(
+      (
+        exchange,
+      ) =>
+        exchange
+          .trim()
+          .toLowerCase(),
+    );
+
+    if (
+      exchanges.some(
+        (
+          exchange,
+        ) =>
+          !exchange,
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      !liveExecutionService
+        .areExchangesConnected(
+          ...exchanges,
+        )
+    ) {
+      return false;
+    }
+
+    const healthReport =
+      executionHealthService
+        .getReport();
+
+    return exchanges.every(
+      (
+        exchange,
+      ) => {
+        const exchangeHealth =
+          healthReport
+            .exchanges
+            .find(
+              (
+                item,
+              ) =>
+                item.exchange ===
+                exchange,
+            );
+
+        return (
+          exchangeHealth !==
+            undefined &&
+          exchangeHealth
+            .adapterRegistered &&
+          exchangeHealth
+            .adapterConnected &&
+          exchangeHealth
+            .status !==
+            "UNHEALTHY"
+        );
+      },
+    );
+  }
+
+  private isBalanceAvailable(
+    requestedCapital:
+      number,
+  ): boolean {
+    const account =
+      tradingAccountService
+        .getAccount();
+
+    return (
+      Number.isFinite(
+        requestedCapital,
+      ) &&
+      requestedCapital >
+        0 &&
+      requestedCapital <=
+        account.availableCapital
+    );
+  }
+
+  private getAccountDailyLoss():
+    number {
+    return tradingAccountService
+      .getAccount()
+      .todayLoss;
+  }
+
+  private getAccountDailyTradeCount():
+    number {
+    return tradingAccountService
+      .getAccount()
+      .tradesToday;
+  }
+
   private createRejectedDecision(
-    reasons: string[],
+    reasons:
+      string[],
   ): TradingDecision {
     return {
-      approved: false,
+      approved:
+        false,
 
-      decision: "SKIP",
+      decision:
+        "SKIP",
 
-      allocatedCapital: 0,
+      allocatedCapital:
+        0,
 
-      executionScore: 0,
+      executionScore:
+        0,
 
-      riskScore: 0,
+      riskScore:
+        0,
 
       reasons,
     };
   }
 
   private collectReasons(
-    executionReasons: string[],
-    riskReasons: string[],
-    approved: boolean,
+    executionReasons:
+      string[],
+
+    riskReasons:
+      string[],
+
+    approved:
+      boolean,
   ): string[] {
     const reasons = [
       ...executionReasons,
@@ -500,7 +1014,8 @@ export class TradeOrchestrator {
 
     if (
       approved &&
-      reasons.length === 0
+      reasons.length ===
+        0
     ) {
       reasons.push(
         "Trade passed execution and risk evaluation.",
@@ -509,7 +1024,8 @@ export class TradeOrchestrator {
 
     if (
       !approved &&
-      reasons.length === 0
+      reasons.length ===
+        0
     ) {
       reasons.push(
         "Trade did not satisfy the execution requirements.",
@@ -517,22 +1033,33 @@ export class TradeOrchestrator {
     }
 
     return [
-      ...new Set(reasons),
+      ...new Set(
+        reasons,
+      ),
     ];
   }
 
   private clampScore(
-    value: number,
+    value:
+      number,
   ): number {
-    if (!Number.isFinite(value)) {
+    if (
+      !Number.isFinite(
+        value,
+      )
+    ) {
       return 0;
     }
 
     return Math.max(
       0,
+
       Math.min(
         100,
-        Math.round(value),
+
+        Math.round(
+          value,
+        ),
       ),
     );
   }
@@ -541,8 +1068,5 @@ export class TradeOrchestrator {
 export const tradingOrchestrator =
   new TradeOrchestrator();
 
-/**
- * Alias retained for newer integrations.
- */
 export const tradeOrchestrator =
   tradingOrchestrator;

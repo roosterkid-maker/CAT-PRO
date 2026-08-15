@@ -18,8 +18,12 @@ export default function TradeHistoryPanel({
     <div className="rounded-xl border border-border-default bg-panel">
       <div className="border-b border-border-default px-6 py-4">
         <h2 className="text-xl font-bold">
-          Trade History
+          Paper Trade History
         </h2>
+
+        <p className="mt-1 text-xs text-text-muted">
+          Realized values only. Missing accounting evidence is shown as unavailable.
+        </p>
       </div>
 
       {trades.length === 0 ? (
@@ -76,8 +80,10 @@ export default function TradeHistoryPanel({
                   </td>
 
                   <td className="px-4 py-3">
-                    {trade.actualSellPrice ??
-                      trade.sellPrice}
+                    {trade.actualSellPrice ===
+                    null
+                      ? "Unavailable"
+                      : trade.actualSellPrice}
                   </td>
 
                   <td className="px-4 py-3">
@@ -87,18 +93,21 @@ export default function TradeHistoryPanel({
                   </td>
 
                   <td className="px-4 py-3 font-semibold">
-                    {formatCurrency(
-                      trade.actualProfit ??
-                        trade.expectedProfit,
-                    )}
+                    {trade.actualProfit ===
+                    null
+                      ? "Unavailable"
+                      : formatCurrency(
+                          trade.actualProfit,
+                        )}
                   </td>
 
                   <td className="px-4 py-3">
-                    {(
-                      trade.actualProfitPercent ??
-                      trade.expectedProfitPercent
-                    ).toFixed(2)}
-                    %
+                    {trade.actualProfitPercent ===
+                    null
+                      ? "Unavailable"
+                      : `${trade.actualProfitPercent.toFixed(
+                          2,
+                        )}%`}
                   </td>
 
                   <td className="px-4 py-3">

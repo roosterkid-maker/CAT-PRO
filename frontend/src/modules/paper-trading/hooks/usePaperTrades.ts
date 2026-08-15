@@ -7,6 +7,8 @@ import {
 import {
   createPaperTrade,
   fetchPaperTrades,
+  fetchPaperTradingReadiness,
+  runSuccessfulDemoSimulation,
 } from "../services/paperTradingApi";
 
 export function usePaperTrades() {
@@ -30,5 +32,29 @@ export function useCreatePaperTrade() {
         queryKey: ["paper-trades"],
       });
     },
+  });
+}
+
+export function usePaperTradingReadiness() {
+  return useQuery({
+    queryKey: [
+      "paper-trading",
+      "readiness",
+    ],
+    queryFn:
+      fetchPaperTradingReadiness,
+    refetchInterval:
+      5_000,
+    staleTime:
+      3_000,
+    retry:
+      2,
+  });
+}
+
+export function useSuccessfulDemoSimulation() {
+  return useMutation({
+    mutationFn:
+      runSuccessfulDemoSimulation,
   });
 }
