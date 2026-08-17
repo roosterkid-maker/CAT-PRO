@@ -50,3 +50,9 @@ backups/
 
 # Runtime state / journals
 *.jsonl
+
+# GitHub workflow excluded from snapshot
+.github/workflows/
+
+# GitHub workflow excluded from snapshot
+.github/workflows/

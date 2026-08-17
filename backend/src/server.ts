@@ -33,6 +33,10 @@ import {
 } from "./arbitrage/services/UnoCoinFeeSynchronizationService";
 
 import {
+  coreExchangeAuthenticatedReadVerificationService,
+} from "./execution/live/verification/CoreExchangeAuthenticatedReadVerificationService";
+
+import {
   coinSwitchFeeSynchronizationService,
 } from "./arbitrage/services/CoinSwitchFeeSynchronizationService";
 
@@ -687,6 +691,24 @@ server.listen(
         .start();
 
       try {
+        await coreExchangeAuthenticatedReadVerificationService
+          .verify();
+      } catch (
+        error:
+          unknown
+      ) {
+        console.error(
+          "[Core Exchange Authenticated Read] Initial verification failed; affected exchange readiness remains blocked:",
+          error instanceof Error
+            ? error.message
+            : error,
+        );
+      }
+
+      coreExchangeAuthenticatedReadVerificationService
+        .start();
+
+      try {
         await unoCoinFeeSynchronizationService
           .synchronize();
       } catch (
@@ -922,6 +944,10 @@ const shutdown =
 
     unoCoinAuthenticatedReadVerificationService
       .stop();
+
+    coreExchangeAuthenticatedReadVerificationService
+      .stop();
+
 
     coinSwitchFeeSynchronizationService
       .stop();
