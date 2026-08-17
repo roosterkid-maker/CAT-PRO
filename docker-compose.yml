@@ -1,0 +1,137 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: cat-pro-backend:latest
+    container_name: cat-pro-backend
+    restart: unless-stopped
+    init: true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    env_file:
+      - ./backend/.env
+
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      CAT_PRO_BACKEND_HOST: "0.0.0.0"
+      FRONTEND_ORIGIN: ${CAT_PRO_PUBLIC_ORIGIN:-http://localhost:8080}
+      TRADING_MODE: paper
+      TRADING_EXECUTION_MODE: paper
+      AUTOMATED_PAPER_TRADING_CONFIRMATION: ""
+      LIVE_TRADING_ENABLED: "false"
+      ARBITRAGE_LIVE_CONFIRMATION: ""
+      STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION: ""
+      LIVE_TRADING_CONFIRMATION: ""
+      LIVE_ORDER_SUBMISSION_CONFIRMATION: ""
+      CAT_PRO_PRIVATE_FILL_STREAMS_ENABLED: ${CAT_PRO_PRIVATE_FILL_STREAMS_ENABLED:-false}
+
+    expose:
+      - "5000"
+
+    volumes:
+      - ./backend/logs:/app/logs
+
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    networks:
+      - cat-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: cat-pro-frontend:latest
+    container_name: cat-pro-frontend
+    restart: unless-stopped
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    expose:
+      - "80"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://127.0.0.1/ || exit 1"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - cat-network
+
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: cat-pro-gateway
+    restart: unless-stopped
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+
+    ports:
+      - "${CAT_PRO_BIND_ADDRESS:-127.0.0.1}:${CAT_PRO_HTTP_PORT:-8080}:80"
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://127.0.0.1/ || exit 1"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - cat-network
+
+networks:
+  cat-network:
+    driver: bridge

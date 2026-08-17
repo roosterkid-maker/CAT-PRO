@@ -1,0 +1,26 @@
+{
+  "name": "VWAP Small",
+
+  "levels": [
+    {
+      "price": 100,
+      "quantity": 1
+    },
+    {
+      "price": 101,
+      "quantity": 1
+    },
+    {
+      "price": 102,
+      "quantity": 2
+    }
+  ],
+
+  "requestedQuantity": 3,
+
+  "expected": {
+    "filledQuantity": 3,
+    "averagePrice": 101,
+    "partialFill": false
+  }
+}

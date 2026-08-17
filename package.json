@@ -1,0 +1,30 @@
+{
+  "name": "cat-pro",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Private multi-exchange automated crypto trading bot",
+  "scripts": {
+    "install:all": "npm install --prefix backend && npm install --prefix frontend",
+    "build:backend": "npm run build --prefix backend",
+    "build:frontend": "npm run build --prefix frontend",
+    "build": "npm run build:backend && npm run build:frontend",
+    "test:backend": "npm run test:deterministic --prefix backend",
+    "lint:frontend": "npm run lint --prefix frontend",
+    "check:architecture": "node scripts/checkArchitectureBoundaries.mjs",
+    "check:scripts": "node --check scripts/checkVpsPreflight.mjs && node --check scripts/runtimeReadinessPolicy.mjs && node --check scripts/checkRuntimeReadiness.mjs && node --check scripts/testRuntimeReadinessPolicy.mjs && node --check scripts/checkArchitectureBoundaries.mjs && node --check scripts/runShadowBenchmark.mjs",
+    "test:scripts": "node scripts/checkArchitectureBoundaries.mjs && node scripts/testRuntimeReadinessPolicy.mjs",
+    "preflight:vps": "node scripts/checkVpsPreflight.mjs",
+    "preflight:vps:paper": "node scripts/checkVpsPreflight.mjs --stage=paper",
+    "verify:runtime:shadow": "node scripts/checkRuntimeReadiness.mjs --stage=shadow",
+    "verify:runtime:paper": "node scripts/checkRuntimeReadiness.mjs --stage=paper",
+    "verify:runtime:paper-soak": "node scripts/checkRuntimeReadiness.mjs --stage=paper-soak",
+    "benchmark:shadow": "node scripts/runShadowBenchmark.mjs",
+    "validate": "npm run check:scripts && npm run test:scripts && npm run build:backend && npm run test:backend && npm run lint:frontend && npm run build:frontend",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:backend:watch": "npm run dev:watch --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

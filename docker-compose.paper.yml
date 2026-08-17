@@ -1,0 +1,8 @@
+services:
+  backend:
+    environment:
+      AUTOMATED_PAPER_TRADING_CONFIRMATION: ${CAT_PRO_PAPER_CONFIRMATION:?Set CAT_PRO_PAPER_CONFIRMATION to the exact PAPER-only confirmation after runtime PAPER gates pass}
+      LIVE_TRADING_ENABLED: "false"
+      ARBITRAGE_LIVE_CONFIRMATION: ""
+      LIVE_TRADING_CONFIRMATION: ""
+      LIVE_ORDER_SUBMISSION_CONFIRMATION: ""
