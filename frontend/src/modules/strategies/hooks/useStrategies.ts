@@ -17,6 +17,7 @@ import {
   fetchPerpetualPerpetualPaperClosure,
   fetchDynamicMarketMakingPaperClosure,
   fetchPersonalStrategyOneBot,
+  fetchPersonalStrategyOnePerformanceSummary,
   fetchStrategy,
   updatePersonalBotControl,
 } from "../services/strategyApi";
@@ -26,8 +27,29 @@ export function usePersonalStrategyOneBot() {
     queryKey: ["strategies", "personal-bot"],
     queryFn: fetchPersonalStrategyOneBot,
     refetchInterval: 5_000,
+    refetchIntervalInBackground: false,
     staleTime: 3_000,
     retry: 2,
+  });
+}
+
+export function usePersonalStrategyOnePerformanceSummary() {
+  return useQuery({
+    queryKey: [
+      "strategies",
+      "personal-bot",
+      "performance-summary",
+    ],
+    queryFn:
+      fetchPersonalStrategyOnePerformanceSummary,
+    refetchInterval:
+      5_000,
+    refetchIntervalInBackground:
+      false,
+    staleTime:
+      4_000,
+    retry:
+      2,
   });
 }
 

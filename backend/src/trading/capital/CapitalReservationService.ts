@@ -4,15 +4,35 @@ import {
 
 import {
   tradingAccountService,
+  type ExchangeBalanceSnapshot,
+  type TradingAccountCheckResult,
 } from "../account/TradingAccountService";
 
 import type {
+  ActiveInventoryReservationAggregate,
   CapitalReservation,
   CapitalReservationDiagnostics,
+  CapitalReservationInventoryAvailability,
+  CapitalReservationInventoryHold,
+  CapitalReservationInventoryRequirement,
   CapitalReservationStatus,
   CreateCapitalReservationRequest,
   CreateCapitalReservationResult,
 } from "./CapitalReservation";
+
+export interface CapitalReservationAccountPort {
+  evaluateTrade(amount: number): TradingAccountCheckResult;
+  reserveCapital(amount: number): boolean;
+  releaseCapital(amount: number): void;
+  getExchangeBalance(exchange: string, asset: string): ExchangeBalanceSnapshot | null;
+}
+
+interface NormalizedInventoryRequirement {
+  readonly exchange: string;
+  readonly asset: string;
+  readonly amount: number;
+  readonly maximumAgeMs: number;
+}
 
 export class CapitalReservationService {
   private static readonly DEFAULT_TTL_MS =
@@ -30,6 +50,12 @@ export class CapitalReservationService {
   private static readonly HISTORY_CAPACITY =
     500;
 
+  private static readonly DEFAULT_MAXIMUM_BALANCE_AGE_MS =
+    15_000;
+
+  private static readonly MAXIMUM_BALANCE_AGE_MS =
+    5 * 60_000;
+
   private readonly active =
     new Map<
       string,
@@ -41,6 +67,10 @@ export class CapitalReservationService {
       string,
       string
     >();
+
+  /** Allocation-free aggregate lookup used by the synchronous admission path. */
+  private readonly activeInventoryByKey =
+    new Map<string, number>();
 
   private readonly history:
     CapitalReservation[] =
@@ -77,6 +107,13 @@ export class CapitalReservationService {
   private lastFinalizedAt:
     number | null =
     null;
+
+  constructor(
+    private readonly account: CapitalReservationAccountPort =
+      tradingAccountService,
+    private readonly now: () => number =
+      Date.now,
+  ) {}
 
   start(): void {
     if (
@@ -121,7 +158,12 @@ export class CapitalReservationService {
   ): CreateCapitalReservationResult {
     this.start();
 
-    this.sweepExpired();
+    const now =
+      this.now();
+
+    this.sweepExpired(
+      now,
+    );
 
     const ownerId =
       request.ownerId
@@ -188,12 +230,32 @@ export class CapitalReservationService {
       );
     }
 
+    let inventoryRequirements:
+      readonly NormalizedInventoryRequirement[] =
+      [];
+
+    try {
+      inventoryRequirements =
+        this.normalizeInventoryRequirements(
+          request.inventoryRequirements ??
+            [],
+        );
+    } catch (
+      error: unknown
+    ) {
+      reasons.push(
+        error instanceof Error
+          ? error.message
+          : "Exchange-asset inventory requirements are invalid.",
+      );
+    }
+
     if (
       reasons.length ===
       0
     ) {
       const accountCheck =
-        tradingAccountService
+        this.account
           .evaluateTrade(
             request.amount,
           );
@@ -201,6 +263,30 @@ export class CapitalReservationService {
       reasons.push(
         ...accountCheck
           .reasons,
+      );
+    }
+
+    let inventoryHolds:
+      readonly CapitalReservationInventoryHold[] =
+      [];
+
+    if (
+      reasons.length ===
+        0 &&
+      inventoryRequirements.length >
+        0
+    ) {
+      const evaluated =
+        this.evaluateInventoryRequirements(
+          inventoryRequirements,
+          now,
+        );
+
+      inventoryHolds =
+        evaluated.holds;
+
+      reasons.push(
+        ...evaluated.reasons,
       );
     }
 
@@ -223,7 +309,7 @@ export class CapitalReservationService {
     }
 
     const reserved =
-      tradingAccountService
+      this.account
         .reserveCapital(
           request.amount,
         );
@@ -244,9 +330,6 @@ export class CapitalReservationService {
         ],
       };
     }
-
-    const now =
-      Date.now();
 
     const reservation:
       CapitalReservation = {
@@ -276,7 +359,35 @@ export class CapitalReservationService {
 
       reason:
         null,
+
+      inventoryHolds,
     };
+
+    try {
+      this.applyInventoryHolds(
+        inventoryHolds,
+      );
+    } catch (
+      error: unknown
+    ) {
+      this.account.releaseCapital(
+        request.amount,
+      );
+      this.totalRejected +=
+        1;
+
+      return {
+        approved:
+          false,
+        reservation:
+          null,
+        reasons: [
+          error instanceof Error
+            ? error.message
+            : "Unable to apply exchange-asset inventory holds.",
+        ],
+      };
+    }
 
     this.active.set(
       reservation.id,
@@ -389,6 +500,156 @@ export class CapitalReservationService {
       );
   }
 
+  getInventoryAvailability(
+    exchange: string,
+    asset: string,
+    requestedAmount = 0,
+    maximumAgeMs =
+      CapitalReservationService.DEFAULT_MAXIMUM_BALANCE_AGE_MS,
+    now =
+      this.now(),
+  ): CapitalReservationInventoryAvailability {
+    this.sweepExpired(
+      now,
+    );
+
+    const normalizedExchange =
+      exchange.trim().toLowerCase();
+    const normalizedAsset =
+      asset.trim().toUpperCase();
+    const reasons:
+      string[] =
+      [];
+
+    if (!normalizedExchange) {
+      reasons.push(
+        "Inventory availability requires an exchange.",
+      );
+    }
+
+    if (!normalizedAsset) {
+      reasons.push(
+        "Inventory availability requires an asset.",
+      );
+    }
+
+    if (
+      !Number.isFinite(requestedAmount) ||
+      requestedAmount < 0
+    ) {
+      reasons.push(
+        "Requested inventory amount must be finite and non-negative.",
+      );
+    }
+
+    if (
+      !Number.isSafeInteger(maximumAgeMs) ||
+      maximumAgeMs <= 0 ||
+      maximumAgeMs > CapitalReservationService.MAXIMUM_BALANCE_AGE_MS
+    ) {
+      reasons.push(
+        `Maximum inventory balance age must be between 1 and ${CapitalReservationService.MAXIMUM_BALANCE_AGE_MS} milliseconds.`,
+      );
+    }
+
+    const key =
+      this.createInventoryKey(
+        normalizedExchange,
+        normalizedAsset,
+      );
+    const activeReservedAmount =
+      this.activeInventoryByKey.get(key) ??
+      0;
+    const snapshot =
+      normalizedExchange &&
+      normalizedAsset
+        ? this.account.getExchangeBalance(
+            normalizedExchange,
+            normalizedAsset,
+          )
+        : null;
+
+    if (!snapshot) {
+      reasons.push(
+        "Exchange balance has not been synchronized.",
+      );
+    }
+
+    const snapshotAgeMs =
+      snapshot
+        ? now - snapshot.synchronizedAt
+        : null;
+
+    if (
+      snapshot &&
+      (
+        !Number.isSafeInteger(snapshot.synchronizedAt) ||
+        snapshot.synchronizedAt <= 0 ||
+        snapshotAgeMs === null ||
+        snapshotAgeMs < 0 ||
+        snapshotAgeMs > maximumAgeMs
+      )
+    ) {
+      reasons.push(
+        "Exchange balance snapshot is stale or has an invalid timestamp.",
+      );
+    }
+
+    if (
+      snapshot &&
+      (
+        !Number.isFinite(snapshot.availableBalance) ||
+        snapshot.availableBalance < 0
+      )
+    ) {
+      reasons.push(
+        "Exchange available balance is invalid.",
+      );
+    }
+
+    const availableAfterReservations =
+      snapshot &&
+      Number.isFinite(snapshot.availableBalance) &&
+      snapshot.availableBalance >= 0
+        ? Math.max(
+            0,
+            snapshot.availableBalance - activeReservedAmount,
+          )
+        : null;
+
+    if (
+      availableAfterReservations !== null &&
+      Number.isFinite(requestedAmount) &&
+      requestedAmount >= 0 &&
+      availableAfterReservations + 1e-12 < requestedAmount
+    ) {
+      reasons.push(
+        `Insufficient ${normalizedAsset || "asset"} balance on ${normalizedExchange || "exchange"} after active reservations.`,
+      );
+    }
+
+    return {
+      approved:
+        reasons.length === 0,
+      exchange:
+        normalizedExchange,
+      asset:
+        normalizedAsset,
+      requestedAmount,
+      snapshotAvailableBalance:
+        snapshot?.availableBalance ?? null,
+      activeReservedAmount,
+      availableAfterReservations,
+      snapshotSynchronizedAt:
+        snapshot?.synchronizedAt ?? null,
+      snapshotAgeMs,
+      maximumAgeMs,
+      reasons: [
+        ...new Set(reasons),
+      ],
+    };
+  }
+
   getDiagnostics():
     CapitalReservationDiagnostics {
     this.sweepExpired();
@@ -407,6 +668,42 @@ export class CapitalReservationService {
         0,
       );
 
+    const activeInventoryReservations =
+      active.filter(
+        (reservation) =>
+          reservation.inventoryHolds.length > 0,
+      ).length;
+
+    const activeInventoryHolds:
+      ActiveInventoryReservationAggregate[] =
+      [...this.activeInventoryByKey.entries()]
+        .map(
+          ([key, reservedAmount]) => {
+            const [exchange, asset] =
+              this.parseInventoryKey(key);
+
+            return {
+              exchange,
+              asset,
+              reservedAmount,
+              reservationCount:
+                active.filter(
+                  (reservation) =>
+                    reservation.inventoryHolds.some(
+                      (hold) =>
+                        hold.exchange === exchange &&
+                        hold.asset === asset,
+                    ),
+                ).length,
+            };
+          },
+        )
+        .sort(
+          (first, second) =>
+            first.exchange.localeCompare(second.exchange) ||
+            first.asset.localeCompare(second.asset),
+        );
+
     return {
       running:
         this.timer !==
@@ -420,6 +717,14 @@ export class CapitalReservationService {
         active.length,
 
       activeReservedCapital,
+
+      activeInventoryReservations,
+
+      unscopedActiveReservations:
+        active.length -
+        activeInventoryReservations,
+
+      activeInventoryHolds,
 
       totalCreated:
         this.totalCreated,
@@ -464,7 +769,7 @@ export class CapitalReservationService {
 
   sweepExpired(
     now =
-      Date.now(),
+      this.now(),
   ): number {
     this.lastSweepAt =
       now;
@@ -516,7 +821,7 @@ export class CapitalReservationService {
       string,
 
     now =
-      Date.now(),
+      this.now(),
   ): CapitalReservation | null {
     const reservation =
       this.active.get(
@@ -542,10 +847,14 @@ export class CapitalReservationService {
      * PnL is handled separately by the
      * account settlement layer.
      */
-    tradingAccountService
+    this.account
       .releaseCapital(
         reservation.amount,
       );
+
+    this.releaseInventoryHolds(
+      reservation.inventoryHolds,
+    );
 
     const finalized:
       CapitalReservation = {
@@ -625,6 +934,257 @@ export class CapitalReservationService {
       `${ownerType.trim().toUpperCase()}:` +
       ownerId.trim()
     );
+  }
+
+  private normalizeInventoryRequirements(
+    requirements:
+      readonly CapitalReservationInventoryRequirement[],
+  ): readonly NormalizedInventoryRequirement[] {
+    const aggregated =
+      new Map<
+        string,
+        NormalizedInventoryRequirement
+      >();
+
+    for (const requirement of requirements) {
+      const exchange =
+        requirement.exchange.trim().toLowerCase();
+      const asset =
+        requirement.asset.trim().toUpperCase();
+      const maximumAgeMs =
+        requirement.maximumAgeMs ??
+        CapitalReservationService.DEFAULT_MAXIMUM_BALANCE_AGE_MS;
+
+      if (!exchange) {
+        throw new Error(
+          "Exchange-asset reservation requires an exchange.",
+        );
+      }
+
+      if (!asset) {
+        throw new Error(
+          "Exchange-asset reservation requires an asset.",
+        );
+      }
+
+      if (
+        !Number.isFinite(requirement.amount) ||
+        requirement.amount <= 0
+      ) {
+        throw new Error(
+          `Exchange-asset reservation amount must be positive for ${exchange} ${asset}.`,
+        );
+      }
+
+      if (
+        !Number.isSafeInteger(maximumAgeMs) ||
+        maximumAgeMs <= 0 ||
+        maximumAgeMs > CapitalReservationService.MAXIMUM_BALANCE_AGE_MS
+      ) {
+        throw new Error(
+          `Maximum inventory balance age must be between 1 and ${CapitalReservationService.MAXIMUM_BALANCE_AGE_MS} milliseconds.`,
+        );
+      }
+
+      const key =
+        this.createInventoryKey(
+          exchange,
+          asset,
+        );
+      const existing =
+        aggregated.get(key);
+      const amount =
+        (existing?.amount ?? 0) +
+        requirement.amount;
+
+      if (!Number.isFinite(amount)) {
+        throw new Error(
+          `Aggregated exchange-asset reservation amount overflowed for ${exchange} ${asset}.`,
+        );
+      }
+
+      aggregated.set(
+        key,
+        {
+          exchange,
+          asset,
+          amount,
+          maximumAgeMs:
+            Math.min(
+              existing?.maximumAgeMs ?? maximumAgeMs,
+              maximumAgeMs,
+            ),
+        },
+      );
+    }
+
+    return [...aggregated.values()]
+      .sort(
+        (first, second) =>
+          first.exchange.localeCompare(second.exchange) ||
+          first.asset.localeCompare(second.asset),
+      );
+  }
+
+  private evaluateInventoryRequirements(
+    requirements:
+      readonly NormalizedInventoryRequirement[],
+    now:
+      number,
+  ): {
+    readonly holds: readonly CapitalReservationInventoryHold[];
+    readonly reasons: readonly string[];
+  } {
+    const holds:
+      CapitalReservationInventoryHold[] =
+      [];
+    const reasons:
+      string[] =
+      [];
+
+    for (const requirement of requirements) {
+      const availability =
+        this.getInventoryAvailability(
+          requirement.exchange,
+          requirement.asset,
+          requirement.amount,
+          requirement.maximumAgeMs,
+          now,
+        );
+
+      if (
+        !availability.approved ||
+        availability.snapshotAvailableBalance === null ||
+        availability.availableAfterReservations === null ||
+        availability.snapshotSynchronizedAt === null ||
+        availability.snapshotAgeMs === null
+      ) {
+        reasons.push(
+          ...availability.reasons,
+        );
+        continue;
+      }
+
+      holds.push({
+        exchange:
+          availability.exchange,
+        asset:
+          availability.asset,
+        amount:
+          requirement.amount,
+        snapshotAvailableBalance:
+          availability.snapshotAvailableBalance,
+        reservedBefore:
+          availability.activeReservedAmount,
+        availableAfterReservation:
+          availability.availableAfterReservations -
+          requirement.amount,
+        snapshotSynchronizedAt:
+          availability.snapshotSynchronizedAt,
+        snapshotAgeMs:
+          availability.snapshotAgeMs,
+        maximumAgeMs:
+          requirement.maximumAgeMs,
+      });
+    }
+
+    return {
+      holds:
+        reasons.length === 0
+          ? holds
+          : [],
+      reasons: [
+        ...new Set(reasons),
+      ],
+    };
+  }
+
+  private applyInventoryHolds(
+    holds:
+      readonly CapitalReservationInventoryHold[],
+  ): void {
+    const updates:
+      Array<readonly [string, number]> =
+      [];
+
+    for (const hold of holds) {
+      const key =
+        this.createInventoryKey(
+          hold.exchange,
+          hold.asset,
+        );
+      const current =
+        this.activeInventoryByKey.get(key) ??
+        0;
+      const next =
+        current + hold.amount;
+
+      if (
+        !Number.isFinite(next) ||
+        next <= 0
+      ) {
+        throw new Error(
+          "Exchange-asset inventory hold overflowed.",
+        );
+      }
+
+      updates.push([
+        key,
+        next,
+      ]);
+    }
+
+    for (const [key, next] of updates) {
+      this.activeInventoryByKey.set(
+        key,
+        next,
+      );
+    }
+  }
+
+  private releaseInventoryHolds(
+    holds:
+      readonly CapitalReservationInventoryHold[],
+  ): void {
+    for (const hold of holds) {
+      const key =
+        this.createInventoryKey(
+          hold.exchange,
+          hold.asset,
+        );
+      const current =
+        this.activeInventoryByKey.get(key) ??
+        0;
+      const next =
+        current - hold.amount;
+
+      if (next > 1e-12) {
+        this.activeInventoryByKey.set(
+          key,
+          next,
+        );
+      } else {
+        this.activeInventoryByKey.delete(
+          key,
+        );
+      }
+    }
+  }
+
+  private createInventoryKey(
+    exchange: string,
+    asset: string,
+  ): string {
+    return `${exchange.trim().toLowerCase()}\u0000${asset.trim().toUpperCase()}`;
+  }
+
+  private parseInventoryKey(
+    key: string,
+  ): readonly [string, string] {
+    const [exchange = "", asset = ""] =
+      key.split("\u0000", 2);
+
+    return [exchange, asset];
   }
 }
 

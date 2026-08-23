@@ -47,6 +47,7 @@ import {
 } from "../../strategies/bootstrap/StrategyBootstrap";
 
 import {
+  isPersonalBotPaperRuntimeArmed,
   personalBotRuntimeControlService,
 } from "../../strategies/services/PersonalBotRuntimeControlService";
 
@@ -54,8 +55,13 @@ import {
   paperCapitalConfigurationService,
 } from "../../trading/capital/PaperCapitalConfigurationService";
 
-const PAPER_CONFIRMATION =
-  "ENABLE_AUTOMATED_PAPER_TRADING";
+import {
+  strategyOneExecutionPolicyService,
+} from "../../trading/policy/StrategyOneExecutionPolicyService";
+
+import {
+  PROFIT_TIER_POLICY,
+} from "../../arbitrage/config/profitTiers";
 
 const DEFAULT_CONFIG:
   AutomatedPaperExecutionControllerConfig = {
@@ -63,7 +69,7 @@ const DEFAULT_CONFIG:
     1_000,
 
   minimumNetProfitPercent:
-    0.5,
+    PROFIT_TIER_POLICY.qualificationMinimumNetProfitPercent,
 
   maximumSnapshotAgeMs:
     7_500,
@@ -142,8 +148,14 @@ export class AutomatedPaperExecutionControllerService {
     };
   }
 
-  private readonly attemptedGenerations =
-    new Set<string>();
+  private readonly lastAttemptedGenerationByCandidateKey =
+    new Map<
+      string,
+      string
+    >();
+
+  private attemptedCandidateGenerations =
+    0;
 
   private readonly routeLastAttemptAt =
     new Map<
@@ -326,8 +338,11 @@ export class AutomatedPaperExecutionControllerService {
       liveExecutionAllowed:
         false,
 
+      armingAuthority:
+        "PERSISTED_DASHBOARD_CONTROL",
+
       confirmationVariable:
-        "AUTOMATED_PAPER_TRADING_CONFIRMATION",
+        null,
 
       config:
         structuredClone(
@@ -362,8 +377,7 @@ export class AutomatedPaperExecutionControllerService {
         this.executionRejected,
 
       attemptedCandidateGenerations:
-        this.attemptedGenerations
-          .size,
+        this.attemptedCandidateGenerations,
 
       lastCycleAt:
         this.lastCycleAt,
@@ -397,15 +411,15 @@ export class AutomatedPaperExecutionControllerService {
    */
   isPaperExecutionArmed():
     boolean {
-    return (
-      personalBotRuntimeControlService
-        .getControl()
-        .enabled &&
-      process.env
-        .AUTOMATED_PAPER_TRADING_CONFIRMATION
-        ?.trim() ===
-      PAPER_CONFIRMATION
-    );
+    return isPersonalBotPaperRuntimeArmed({
+      control:
+        personalBotRuntimeControlService
+          .getControl(),
+
+      account:
+        tradingAccountService
+          .getAccount(),
+    });
   }
 
   /**
@@ -426,9 +440,11 @@ export class AutomatedPaperExecutionControllerService {
       );
 
     const generationAlreadyAttempted =
-      this.attemptedGenerations.has(
-        candidateGeneration,
-      );
+      this.lastAttemptedGenerationByCandidateKey
+        .get(
+          qualification.key,
+        ) ===
+      candidateGeneration;
 
     const lastRouteAttempt =
       this.routeLastAttemptAt.get(
@@ -616,7 +632,7 @@ export class AutomatedPaperExecutionControllerService {
 
           reasons: [
             "Shadow performance is ready for paper automation, but automated PAPER execution has not been explicitly armed.",
-            `Set AUTOMATED_PAPER_TRADING_CONFIRMATION=${PAPER_CONFIRMATION} only when automated PAPER execution is intentionally required.`,
+            "Turn on PAPER BOT from the authenticated dashboard only when simulated PAPER execution is intentionally required.",
             "Live execution remains disabled.",
           ],
         });
@@ -945,10 +961,16 @@ export class AutomatedPaperExecutionControllerService {
        * One execution attempt per continuous
        * candidate generation.
        */
-      this.attemptedGenerations
-        .add(
+      this.lastAttemptedGenerationByCandidateKey
+        .set(
+          selected
+            .qualification
+            .key,
           generation,
         );
+
+      this.attemptedCandidateGenerations +=
+        1;
 
       this.routeLastAttemptAt
         .set(
@@ -1501,8 +1523,8 @@ export class AutomatedPaperExecutionControllerService {
 
     return [
       candidate.key,
-      candidate.firstSeenAt,
-      candidate.reappearances,
+      candidate.latest.buyQuoteTimestamp,
+      candidate.latest.sellQuoteTimestamp,
     ].join(
       "|",
     );
@@ -1750,10 +1772,30 @@ export class AutomatedPaperExecutionControllerService {
 export const automatedPaperExecutionControllerService =
   new AutomatedPaperExecutionControllerService(
     {},
-    () => ({
-      maximumCapitalPerTrade:
-        paperCapitalConfigurationService
-          .getConfiguration()
-          .maximumCapitalPerTrade,
-    }),
+    () => {
+      const paperPolicy =
+        strategyOneExecutionPolicyService
+          .getActivePolicy()
+          .values
+          .paper;
+
+      return {
+        maximumCapitalPerTrade:
+          paperCapitalConfigurationService
+            .getConfiguration()
+            .maximumCapitalPerTrade,
+
+        minimumNetProfitPercent:
+          paperPolicy
+            .minimumNetProfitPercent,
+
+        maximumSnapshotAgeMs:
+          paperPolicy
+            .maximumSnapshotAgeMs,
+
+        routeCooldownMs:
+          paperPolicy
+            .routeCooldownMs,
+      };
+    },
   );

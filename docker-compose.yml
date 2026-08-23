@@ -15,7 +15,10 @@ services:
         max-file: "5"
 
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: true
+      - path: ./backend/.env.zebpay
+        required: false
 
     environment:
       NODE_ENV: production
@@ -27,8 +30,10 @@ services:
       AUTOMATED_PAPER_TRADING_CONFIRMATION: ""
       LIVE_TRADING_ENABLED: "false"
       ARBITRAGE_LIVE_CONFIRMATION: ""
+      STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION: ""
       LIVE_TRADING_CONFIRMATION: ""
       LIVE_ORDER_SUBMISSION_CONFIRMATION: ""
+      CAT_PRO_PRIVATE_FILL_STREAMS_ENABLED: ${CAT_PRO_PRIVATE_FILL_STREAMS_ENABLED:-false}
 
     expose:
       - "5000"

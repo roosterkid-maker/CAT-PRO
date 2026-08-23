@@ -8,10 +8,6 @@ import {
 } from "../config/profitTiers";
 
 import {
-  comparisonEngine,
-} from "../ComparisonEngine";
-
-import {
   exchangePairGenerator,
 } from "../engines/ExchangePairGenerator";
 
@@ -24,9 +20,22 @@ import type {
   ArbitrageOpportunity,
 } from "../models/ArbitrageOpportunity";
 
+import type {
+  MarketSnapshot,
+} from "../models/MarketSnapshot";
+
+import {
+  opportunityRejectionStore,
+  type OpportunityRejectionRecord,
+} from "./OpportunityRejectionStore";
+
 import {
   marketCache,
 } from "../../services/cache.service";
+
+import type {
+  ExecutableQuote,
+} from "../../core/models/ExecutableQuote";
 
 import {
   bybitExecutionUniverseService,
@@ -35,6 +44,12 @@ import {
 import {
   environment,
 } from "../../config/Environment";
+
+import {
+  STRATEGY_ONE_TINY_LIVE_BASKET_POLICY,
+  type StrategyOneTinyLiveBasketBookObservation,
+  type StrategyOneTinyLiveBasketRoute,
+} from "../execution/StrategyOneTinyLiveBasketPolicy";
 
 export interface OpportunityServiceConfig {
   diagnosticsLogLevel:
@@ -125,6 +140,50 @@ export interface OpportunitySnapshot {
 
   opportunities:
     ArbitrageOpportunity[];
+
+  /**
+   * Exact executable books for the immutable pilot basket. Timing observers
+   * use these independently from opportunity economics, so a zero/negative
+   * spread cannot leave an otherwise healthy route stuck at NO DATA.
+   */
+  pilotRouteBooks?:
+    readonly StrategyOneTinyLiveBasketBookObservation[];
+}
+
+export interface ExactRouteEvaluationInput {
+  readonly market: string;
+  readonly buyExchange: string;
+  readonly sellExchange: string;
+  readonly minimumBuyTimestamp?: number;
+  readonly minimumSellTimestamp?: number;
+}
+
+export interface ExactRouteEvaluationEvidence {
+  readonly buyPrice: number | null;
+  readonly sellPrice: number | null;
+  readonly buyQuantity: number | null;
+  readonly sellQuantity: number | null;
+  readonly buyTimestamp: number | null;
+  readonly sellTimestamp: number | null;
+  readonly rawSpreadPercent: number | null;
+}
+
+export interface ExactRouteEvaluationResult {
+  readonly evaluatedAt: number;
+  readonly opportunity: ArbitrageOpportunity | null;
+  readonly rejection: OpportunityRejectionRecord | null;
+  readonly evidence: ExactRouteEvaluationEvidence;
+  readonly reason: string;
+}
+
+const PILOT_ROUTES_BY_MARKET = new Map<
+  string,
+  readonly StrategyOneTinyLiveBasketRoute[]
+>();
+
+for (const route of STRATEGY_ONE_TINY_LIVE_BASKET_POLICY.routes) {
+  const existing = PILOT_ROUTES_BY_MARKET.get(route.market) ?? [];
+  PILOT_ROUTES_BY_MARKET.set(route.market, [...existing, route]);
 }
 
 export type OpportunitySnapshotListener = (
@@ -193,8 +252,20 @@ export class OpportunityService {
     >();
 
   private readonly recentSnapshotHistory:
-    OpportunitySnapshotHistoryItem[] =
-    [];
+    Array<
+      OpportunitySnapshotHistoryItem |
+      undefined
+    > =
+    new Array(
+      OpportunityService
+        .MAXIMUM_SNAPSHOT_HISTORY,
+    );
+
+  private recentSnapshotHistoryCount =
+    0;
+
+  private recentSnapshotHistoryWriteIndex =
+    0;
 
   private lastDiagnostics:
     OpportunityPipelineDiagnostics | null =
@@ -260,6 +331,155 @@ export class OpportunityService {
       .length;
   }
 
+  /**
+   * Evaluate one action-time route from the two authoritative executable
+   * cache entries only. This deliberately avoids a full-universe rescan and
+   * the shared last-snapshot race on the LIVE fallback path. An accepted
+   * result is still registered in the same immutable opportunity store so
+   * every downstream authority check resolves the exact evaluated ID.
+   */
+  evaluateExactRoute(
+    input:
+      ExactRouteEvaluationInput,
+  ): ExactRouteEvaluationResult {
+    this.removeExpiredSnapshots();
+
+    const market =
+      input.market
+        .trim()
+        .toUpperCase();
+    const buyExchange =
+      input.buyExchange
+        .trim()
+        .toLowerCase();
+    const sellExchange =
+      input.sellExchange
+        .trim()
+        .toLowerCase();
+    const evaluatedAt =
+      Date.now();
+
+    const buy =
+      marketCache.get(
+        buyExchange,
+        market,
+      );
+    const sell =
+      marketCache.get(
+        sellExchange,
+        market,
+      );
+
+    const evidence =
+      exactRouteEvidence(
+        buy,
+        sell,
+      );
+
+    const invalidReason =
+      validateExactRouteQuotes({
+        market,
+        buyExchange,
+        sellExchange,
+        buy,
+        sell,
+        minimumBuyTimestamp:
+          input.minimumBuyTimestamp,
+        minimumSellTimestamp:
+          input.minimumSellTimestamp,
+      });
+
+    if (invalidReason) {
+      return {
+        evaluatedAt,
+        opportunity:
+          null,
+        rejection:
+          null,
+        evidence,
+        reason:
+          invalidReason,
+      };
+    }
+
+    const opportunity =
+      opportunityEngine.evaluate({
+        market,
+        buy:
+          buy!,
+        sell:
+          sell!,
+      });
+
+    if (opportunity) {
+      this.storeOpportunity(
+        opportunity,
+      );
+
+      return {
+        evaluatedAt,
+        opportunity:
+          structuredClone(
+            opportunity,
+          ),
+        rejection:
+          null,
+        evidence,
+        reason:
+          opportunity.decision ===
+            "EXECUTE"
+            ? "The exact refreshed route passed the authoritative opportunity engine."
+            : `The exact refreshed route produced decision ${opportunity.decision}, not EXECUTE.`,
+      };
+    }
+
+    const rejection =
+      opportunityRejectionStore
+        .getRecent(
+          50,
+        )
+        .find(
+          (
+            item,
+          ) =>
+            item.rejectedAt >=
+              evaluatedAt &&
+            item.market
+              .trim()
+              .toUpperCase() ===
+              market &&
+            item.buyExchange
+              .trim()
+              .toLowerCase() ===
+              buyExchange &&
+            item.sellExchange
+              .trim()
+              .toLowerCase() ===
+              sellExchange,
+        ) ??
+      null;
+
+    const reason =
+      rejection?.reason ??
+      (
+        evidence.rawSpreadPercent !==
+          null &&
+        evidence.rawSpreadPercent <=
+          0
+          ? `The refreshed route has a non-positive raw spread (${evidence.rawSpreadPercent.toFixed(6)}%).`
+          : "The exact refreshed route did not pass the authoritative opportunity engine."
+      );
+
+    return {
+      evaluatedAt,
+      opportunity:
+        null,
+      rejection,
+      evidence,
+      reason,
+    };
+  }
+
   private scanOpportunities():
     ArbitrageOpportunity[] {
     const scanStartedHighResolution =
@@ -296,42 +516,127 @@ export class OpportunityService {
      * Keep the broad catalog for diagnostics, but run the hot path only over
      * genuine quantity-bearing quotes.
      */
-    const executableQuotes =
-      marketCache
-        .getExecutable();
-
-    const executionUniverse =
+    const executionQuality =
       bybitExecutionUniverseService
-        .filterQuotesWithReport(
-          executableQuotes,
+        .getOpportunityEligibilitySnapshot(
           qualityGeneratedAt,
         );
 
-    const cachedQuotes =
-      executionUniverse
-        .quotes;
-
-    const executionQualityReport =
-      executionUniverse
-        .report;
-
-    const snapshots =
-      comparisonEngine
-        .groupByMarket(
-          cachedQuotes,
-        );
-
     let exchangePairCount =
+      0;
+
+    let executionQualityEligibleQuoteCount =
+      0;
+
+    let marketSnapshotCount =
       0;
 
     const opportunities:
       ArbitrageOpportunity[] =
       [];
 
+    const pilotRouteBooks:
+      StrategyOneTinyLiveBasketBookObservation[] =
+      [];
+
     for (
-      const snapshot
-      of snapshots
+      const [
+        market,
+        quotesByExchange,
+      ]
+      of marketCache
+        .executableMarketEntries()
     ) {
+      const quotes:
+        MarketSnapshot["quotes"] =
+        {};
+
+      let timestamp =
+        0;
+
+      let quoteCount =
+        0;
+
+      for (
+        const quote
+        of quotesByExchange.values()
+      ) {
+        if (
+          quote.exchange ===
+            "bybit" &&
+          !executionQuality
+            .eligibleMarkets
+            .has(
+              quote.market,
+            )
+        ) {
+          continue;
+        }
+
+        quotes[
+          quote.exchange
+        ] =
+          quote;
+
+        executionQualityEligibleQuoteCount +=
+          1;
+
+        quoteCount +=
+          1;
+
+        if (
+          quote.timestamp >
+          timestamp
+        ) {
+          timestamp =
+            quote.timestamp;
+        }
+      }
+
+      if (
+        quoteCount ===
+          0
+      ) {
+        continue;
+      }
+
+      /*
+       * Timing calibration is deliberately independent from arbitrage
+       * economics. Capture only the two executable top-of-book timestamps for
+       * each configured pilot direction before the positive-spread filter.
+       * This bounded (maximum 11 records) read prevents rare or currently
+       * negative-spread routes from remaining permanently at NO DATA.
+       */
+      for (const route of PILOT_ROUTES_BY_MARKET.get(market) ?? []) {
+        const buyQuote = quotes[route.buyExchange];
+        const sellQuote = quotes[route.sellExchange];
+
+        if (
+          !buyQuote?.executable ||
+          !sellQuote?.executable
+        ) {
+          continue;
+        }
+
+        pilotRouteBooks.push({
+          market: route.market,
+          buyExchange: route.buyExchange,
+          sellExchange: route.sellExchange,
+          buyTimestamp: buyQuote.timestamp,
+          sellTimestamp: sellQuote.timestamp,
+        });
+      }
+
+      marketSnapshotCount +=
+        1;
+
+      const snapshot:
+        MarketSnapshot = {
+        market,
+        quotes,
+        timestamp,
+      };
+
       const pairBatch =
         exchangePairGenerator
           .generatePositiveSpreadCandidates(
@@ -455,22 +760,22 @@ export class OpportunityService {
         cachedQuoteCount,
 
       executionQualityEligibleQuotes:
-        cachedQuotes.length,
+        executionQualityEligibleQuoteCount,
 
       executionQualityFilteredQuotes:
         cachedQuoteCount -
-        cachedQuotes.length,
+        executionQualityEligibleQuoteCount,
 
       bybitObservedMarkets:
-        executionQualityReport
+        executionQuality
           .observedMarkets,
 
       bybitExecutionEligibleMarkets:
-        executionQualityReport
+        executionQuality
           .executionEligibleMarkets,
 
       marketSnapshots:
-        snapshots.length,
+        marketSnapshotCount,
 
       exchangePairs:
         exchangePairCount,
@@ -507,15 +812,15 @@ export class OpportunityService {
     };
 
     this.lastDiagnostics =
-      structuredClone(
-        diagnosticsSnapshot,
-      );
+      diagnosticsSnapshot;
 
     this.lastOpportunitySnapshot = {
       generatedAt,
 
       opportunities:
         opportunities,
+
+      pilotRouteBooks,
     };
 
     /*
@@ -541,40 +846,9 @@ export class OpportunityService {
       const opportunity
       of opportunities
     ) {
-      const routeKey =
-        this.createRouteKey(
-          opportunity,
-        );
-
-      const supersededOpportunityId =
-        this.latestOpportunityIdByRoute
-          .get(
-            routeKey,
-          );
-
-      if (
-        supersededOpportunityId !==
-          undefined &&
-        supersededOpportunityId !==
-          opportunity.id
-      ) {
-        this.opportunitySnapshots
-          .delete(
-            supersededOpportunityId,
-          );
-      }
-
-      this.opportunitySnapshots
-        .set(
-          opportunity.id,
-          opportunity,
-        );
-
-      this.latestOpportunityIdByRoute
-        .set(
-          routeKey,
-          opportunity.id,
-        );
+      this.storeOpportunity(
+        opportunity,
+      );
     }
 
     /*
@@ -717,11 +991,50 @@ export class OpportunityService {
         ),
       );
 
+    const count =
+      Math.min(
+        normalizedLimit,
+        this.recentSnapshotHistoryCount,
+      );
+
+    const startIndex =
+      (
+        this.recentSnapshotHistoryWriteIndex -
+        count +
+        OpportunityService
+          .MAXIMUM_SNAPSHOT_HISTORY
+      ) %
+      OpportunityService
+        .MAXIMUM_SNAPSHOT_HISTORY;
+
+    const items:
+      OpportunitySnapshotHistoryItem[] =
+      [];
+
+    for (
+      let offset = 0;
+      offset < count;
+      offset += 1
+    ) {
+      const item =
+        this.recentSnapshotHistory[
+          (
+            startIndex +
+            offset
+          ) %
+          OpportunityService
+            .MAXIMUM_SNAPSHOT_HISTORY
+        ];
+
+      if (item) {
+        items.push(
+          item,
+        );
+      }
+    }
+
     return structuredClone(
-      this.recentSnapshotHistory
-        .slice(
-          -normalizedLimit,
-        ),
+      items,
     );
   }
 
@@ -741,8 +1054,8 @@ export class OpportunityService {
     opportunities:
       readonly ArbitrageOpportunity[],
   ): void {
-    this.recentSnapshotHistory
-      .push({
+    const item:
+      OpportunitySnapshotHistoryItem = {
         generatedAt,
 
         opportunityCount:
@@ -792,17 +1105,28 @@ export class OpportunityService {
                 opportunity.timestamp,
             }),
           ),
-      });
+      };
 
-    while (
-      this.recentSnapshotHistory
-        .length >
+    this.recentSnapshotHistory[
+      this.recentSnapshotHistoryWriteIndex
+    ] =
+      item;
+
+    this.recentSnapshotHistoryWriteIndex =
+      (
+        this.recentSnapshotHistoryWriteIndex +
+        1
+      ) %
       OpportunityService
-        .MAXIMUM_SNAPSHOT_HISTORY
-    ) {
-      this.recentSnapshotHistory
-        .shift();
-    }
+        .MAXIMUM_SNAPSHOT_HISTORY;
+
+    this.recentSnapshotHistoryCount =
+      Math.min(
+        OpportunityService
+          .MAXIMUM_SNAPSHOT_HISTORY,
+        this.recentSnapshotHistoryCount +
+          1,
+      );
   }
 
   private publishSnapshot(
@@ -1011,6 +1335,44 @@ export class OpportunityService {
     }
   }
 
+  private storeOpportunity(
+    opportunity:
+      ArbitrageOpportunity,
+  ): void {
+    const routeKey =
+      this.createRouteKey(
+        opportunity,
+      );
+    const supersededOpportunityId =
+      this.latestOpportunityIdByRoute
+        .get(
+          routeKey,
+        );
+
+    if (
+      supersededOpportunityId !==
+        undefined &&
+      supersededOpportunityId !==
+        opportunity.id
+    ) {
+      this.opportunitySnapshots
+        .delete(
+          supersededOpportunityId,
+        );
+    }
+
+    this.opportunitySnapshots
+      .set(
+        opportunity.id,
+        opportunity,
+      );
+    this.latestOpportunityIdByRoute
+      .set(
+        routeKey,
+        opportunity.id,
+      );
+  }
+
   private removeRouteIndex(
     opportunityId:
       string,
@@ -1061,3 +1423,101 @@ export class OpportunityService {
 
 export const opportunityService =
   new OpportunityService();
+
+function exactRouteEvidence(
+  buy:
+    ExecutableQuote | undefined,
+  sell:
+    ExecutableQuote | undefined,
+): ExactRouteEvaluationEvidence {
+  const buyPrice =
+    buy?.bestAskPrice ??
+    null;
+  const sellPrice =
+    sell?.bestBidPrice ??
+    null;
+  const rawSpreadPercent =
+    buyPrice !== null &&
+    sellPrice !== null &&
+    Number.isFinite(
+      buyPrice,
+    ) &&
+    Number.isFinite(
+      sellPrice,
+    ) &&
+    buyPrice >
+      0
+      ? (
+          sellPrice -
+          buyPrice
+        ) /
+        buyPrice *
+        100
+      : null;
+
+  return {
+    buyPrice,
+    sellPrice,
+    buyQuantity:
+      buy?.bestAskQty ??
+      null,
+    sellQuantity:
+      sell?.bestBidQty ??
+      null,
+    buyTimestamp:
+      buy?.timestamp ??
+      null,
+    sellTimestamp:
+      sell?.timestamp ??
+      null,
+    rawSpreadPercent,
+  };
+}
+
+function validateExactRouteQuotes(
+  input: {
+    readonly market: string;
+    readonly buyExchange: string;
+    readonly sellExchange: string;
+    readonly buy: ExecutableQuote | undefined;
+    readonly sell: ExecutableQuote | undefined;
+    readonly minimumBuyTimestamp?: number;
+    readonly minimumSellTimestamp?: number;
+  },
+): string | null {
+  if (
+    !input.buy ||
+    !input.buy.executable
+  ) {
+    return `Fresh executable BUY book is unavailable for ${input.market} on ${input.buyExchange}.`;
+  }
+
+  if (
+    !input.sell ||
+    !input.sell.executable
+  ) {
+    return `Fresh executable SELL book is unavailable for ${input.market} on ${input.sellExchange}.`;
+  }
+
+  if (
+    input.buy.timestamp <
+      (
+        input.minimumBuyTimestamp ??
+        0
+      )
+  ) {
+    return "The BUY cache entry does not contain the completed action-time refresh.";
+  }
+
+  if (
+    input.sell.timestamp <
+      (
+        input.minimumSellTimestamp ??
+        0
+      )
+  ) {
+    return "The SELL cache entry does not contain the completed action-time refresh.";
+  }
+
+  return null;
+}

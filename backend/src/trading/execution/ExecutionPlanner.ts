@@ -8,6 +8,10 @@ import type {
   ExecutionPlanningRequest,
 } from "../models/ExecutionPlanningRequest";
 
+import {
+  strategyOneExecutionPolicyService,
+} from "../policy/StrategyOneExecutionPolicyService";
+
 export class ExecutionPlanner {
   createPlan(
     request:
@@ -52,11 +56,12 @@ export class ExecutionPlanner {
       ) *
       100;
 
+    const expectedFeesQuote =
+      request.expectedFees ??
+      0;
+
     const expectedFees =
-      (
-        request.expectedFees ??
-        0
-      ) *
+      expectedFeesQuote *
       quoteToAccountConversionRate;
 
     const expectedNetProfit =
@@ -89,9 +94,24 @@ export class ExecutionPlanner {
       createdAt +
       timeoutMs;
 
+    const activePolicy =
+      strategyOneExecutionPolicyService
+        .getActivePolicy();
+
     const basePlan = {
       version:
         1,
+
+      policyIdentity: {
+        policyId:
+          activePolicy.policyId,
+
+        revision:
+          activePolicy.revision,
+
+        policyHash:
+          activePolicy.policyHash,
+      },
 
       market:
         request.market
@@ -171,6 +191,11 @@ export class ExecutionPlanner {
           request.quoteAsset
             ?.trim()
             .toUpperCase(),
+
+        balanceReservationAmount:
+          quantity *
+            request.buyPrice +
+          expectedFeesQuote,
       },
 
       sell: {
@@ -204,6 +229,9 @@ export class ExecutionPlanner {
           request.quoteAsset
             ?.trim()
             .toUpperCase(),
+
+        balanceReservationAmount:
+          quantity,
       },
 
       createdAt,
@@ -428,6 +456,14 @@ export class ExecutionPlanner {
     plan: {
       version: number;
 
+      policyIdentity: {
+        policyId: string;
+
+        revision: number;
+
+        policyHash: string;
+      };
+
       market: string;
 
       mode: string;
@@ -478,6 +514,9 @@ export class ExecutionPlanner {
 
         quoteAsset?:
           string;
+
+        balanceReservationAmount?:
+          number;
       };
 
       sell: {
@@ -499,6 +538,9 @@ export class ExecutionPlanner {
 
         quoteAsset?:
           string;
+
+        balanceReservationAmount?:
+          number;
       };
 
       createdAt: number;

@@ -7,18 +7,23 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Coins,
+  Database,
+  Maximize2,
   Power,
   Radio,
   RefreshCw,
   Route,
   ShieldCheck,
+  Target,
   TrendingUp,
   WalletCards,
   Workflow,
+  X,
   Zap,
 } from "lucide-react";
 
 import {
+  useEffect,
   useState,
 } from "react";
 
@@ -41,23 +46,82 @@ import type {
 } from "@/modules/strategies/types/PersonalStrategyOneBot";
 
 import {
+  useActivateStrategyOneTinyLiveAccountLease,
+  useApproveStrategyOneTimingCalibration,
+  useArmStrategyOneTinyLive,
+  useDisarmStrategyOneTinyLive,
+  useProposeStrategyOneTimingCalibration,
+  useRestoreStrategyOnePaperAccountMode,
   useRunStrategyOnePilotPreflight,
   useStrategyOnePilotPreview,
+  useStrategyOneTinyLiveOpportunityAudit,
+  useStrategyOneTinyLivePreArm,
+  useStrategyOneTimingCalibrations,
 } from "@/modules/tiny-live/hooks/useTinyLivePreflight";
 
 import type {
   StrategyOnePilotPreflightRunReport,
+  StrategyOnePilotCandidate,
   StrategyOnePilotPreviewReport,
+  StrategyOneTinyLiveOpportunityAuditReport,
+  StrategyOneTinyLivePreArmDiagnostics,
+  StrategyOneTimingCalibrationDiagnostics,
+  StrategyOneTimingCalibrationRecord,
 } from "@/modules/tiny-live/types/TinyLivePreflight";
 
+interface StrategyOnePreArmRoute {
+  market: string;
+  buyExchange: "binance" | "bybit" | "coindcx";
+  sellExchange: "binance" | "bybit" | "coindcx";
+}
+
+const CONTROLLED_BATCH_ATTEMPTS = 10;
+const TIMING_BOOTSTRAP_ATTEMPTS = 2;
+
 export default function BotDashboard() {
+  const [pilotAcknowledged, setPilotAcknowledged] = useState(false);
+  const [preArmAcknowledged, setPreArmAcknowledged] = useState(false);
+  const [timingApprovalConfirmation, setTimingApprovalConfirmation] = useState("");
+  const [leaseConfirmation, setLeaseConfirmation] = useState("");
+  const [modeTransition, setModeTransition] = useState<SimpleOperatingMode | null>(null);
+  const [modeTransitionError, setModeTransitionError] = useState<string | null>(null);
+  const [liveConfirmationOpen, setLiveConfirmationOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<BotViewMode>("FOCUS");
+  const [missionOpen, setMissionOpen] = useState(false);
+  const deepAuditEnabled = viewMode === "DEEP_AUDIT";
   const query = usePersonalStrategyOneBot();
   const control = usePersonalBotControl();
-  const pilotQuery = useStrategyOnePilotPreview();
+  const pilotQuery = useStrategyOnePilotPreview(deepAuditEnabled);
   const pilotPreflight = useRunStrategyOnePilotPreflight();
-  const [pilotAcknowledged, setPilotAcknowledged] = useState(false);
+  // This lightweight authority snapshot is the single source of truth for the
+  // global PAPER / Tiny-LIVE selector, so it must remain available in every view.
+  const preArmQuery = useStrategyOneTinyLivePreArm(true);
+  const timingCalibrationQuery = useStrategyOneTimingCalibrations(deepAuditEnabled);
+  const opportunityAuditQuery = useStrategyOneTinyLiveOpportunityAudit(deepAuditEnabled);
+  const proposeTimingCalibration = useProposeStrategyOneTimingCalibration();
+  const approveTimingCalibration = useApproveStrategyOneTimingCalibration();
+  const armPreArm = useArmStrategyOneTinyLive();
+  const disarmPreArm = useDisarmStrategyOneTinyLive();
+  const activateAccountLease = useActivateStrategyOneTinyLiveAccountLease();
+  const restorePaperAccountMode = useRestoreStrategyOnePaperAccountMode();
   const report = query.data?.data;
   const pilotPreview = pilotQuery.data?.data ?? null;
+  const preArmDiagnostics = preArmQuery.data?.data ?? null;
+  const tinyLiveStatus = tinyLiveAuthorityStatus(preArmDiagnostics);
+
+  useEffect(() => {
+    if (!missionOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMissionOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [missionOpen]);
 
   if (!report) {
     return (
@@ -75,10 +139,109 @@ export default function BotDashboard() {
   const appearance = stateAppearance(report.state);
   const feed = report.opportunity.accepted;
   const latestExecution = report.recentExecutions[0] ?? null;
+  const currentPilotRoute = (pilotPreview?.evidence.fullyPreflightableMatches ?? 0) > 0 &&
+    pilotPreview?.selected && isSupportedPreArmRoute(pilotPreview.selected)
+    ? pilotPreview.selected
+    : null;
+  const suggestedPreArmRoute = toPreArmRoute(currentPilotRoute);
+  const timingCalibrationDiagnostics = timingCalibrationQuery.data?.data ?? null;
+  const preArmCapitalPerLegInr = preArmDiagnostics?.pilotBasket?.capitalPerLegInr ??
+    pilotPreview?.requestedCapitalPerLegInr ??
+    report.capitalPlacement.pilot.requestedPerLegInr;
 
-  function toggleBot(): void {
-    if (!report || control.isPending) return;
-    control.mutate(!report.control.enabled);
+  const activePreArm = preArmDiagnostics?.activeArm ?? null;
+  const activeAccountLease = preArmDiagnostics?.accountModeLease.activeLease ?? null;
+  const tinyLiveActive = preArmDiagnostics?.accountModeLease.accountMode === "LIVE" &&
+    activeAccountLease?.state === "ACTIVE";
+  const paperExecutionEnabled = report.control.enabled;
+  const operatingMode: SimpleOperatingMode = tinyLiveActive
+    ? "TINY_LIVE"
+    : paperExecutionEnabled
+      ? "PAPER"
+      : "OFF";
+
+  async function stopTinyLiveAuthority(): Promise<void> {
+    if (activeAccountLease) {
+      await restorePaperAccountMode.mutateAsync({
+        leaseId: activeAccountLease.id,
+        confirmation: activeAccountLease.requiredRestorePhrase,
+      });
+    }
+
+    if (activePreArm) {
+      await disarmPreArm.mutateAsync({
+        preArmId: activePreArm.id,
+        confirmation: `DISARM ${activePreArm.id}`,
+      });
+    }
+  }
+
+  async function selectOperatingMode(target: SimpleOperatingMode): Promise<void> {
+    if (modeTransition || target === operatingMode) return;
+
+    setModeTransition(target);
+    setModeTransitionError(null);
+
+    try {
+      if (target === "PAPER") {
+        await stopTinyLiveAuthority();
+        if (!paperExecutionEnabled) await control.mutateAsync(true);
+        setLiveConfirmationOpen(false);
+        return;
+      }
+
+      if (target === "OFF") {
+        await stopTinyLiveAuthority();
+        if (paperExecutionEnabled) await control.mutateAsync(false);
+        setLiveConfirmationOpen(false);
+        return;
+      }
+
+      const basket = preArmDiagnostics?.pilotBasket;
+      if (!basket) {
+        throw new Error("Tiny-LIVE status abhi available nahi hai. Refresh karke dobara try karein.");
+      }
+      if (preArmDiagnostics.runtimeGateEnabled !== true) {
+        throw new Error("Tiny-LIVE runtime AWS par enabled nahi hai. DEEP AUDIT mein exact runtime blocker dekhein.");
+      }
+
+      // PAPER and LIVE execution are intentionally mutually exclusive.
+      if (paperExecutionEnabled) await control.mutateAsync(false);
+
+      let preArmId = activePreArm?.id ?? null;
+      if (!preArmId) {
+        const armResult = await armPreArm.mutateAsync({
+          market: "PILOT_BASKET",
+          buyExchange: "coindcx",
+          sellExchange: "binance",
+          durationMinutes: basket.durationMinutes,
+          maximumAttempts: basket.maximumAttempts,
+          pilotBasketId: basket.id,
+          confirmation: basketArmPhrase(basket.capitalPerLegInr),
+        });
+        preArmId = armResult.data.id;
+      }
+
+      await activateAccountLease.mutateAsync({
+        preArmId,
+        confirmation: `ACTIVATE TINY-LIVE ACCOUNT LEASE ${preArmId}`,
+      });
+      setLiveConfirmationOpen(false);
+    } catch (error) {
+      setModeTransitionError(readRequestError(error));
+      setViewMode("DEEP_AUDIT");
+    } finally {
+      setModeTransition(null);
+    }
+  }
+
+  function requestOperatingMode(target: SimpleOperatingMode): void {
+    if (target === "TINY_LIVE" && operatingMode !== "TINY_LIVE") {
+      setModeTransitionError(null);
+      setLiveConfirmationOpen(true);
+      return;
+    }
+    void selectOperatingMode(target);
   }
 
   function runPilotPreflight(): void {
@@ -90,68 +253,235 @@ export default function BotDashboard() {
     });
   }
 
+  function armOneShot(): void {
+    const basket = preArmDiagnostics?.pilotBasket;
+
+    if (
+      !basket ||
+      !preArmAcknowledged ||
+      armPreArm.isPending
+    ) {
+      return;
+    }
+
+    armPreArm.mutate({
+      market: "PILOT_BASKET",
+      buyExchange: "coindcx",
+      sellExchange: "binance",
+      durationMinutes: basket.durationMinutes,
+      maximumAttempts: basket.maximumAttempts,
+      pilotBasketId: basket.id,
+      confirmation: basketArmPhrase(basket.capitalPerLegInr),
+    });
+  }
+
+  function proposeTimingReview(): void {
+    if (
+      !suggestedPreArmRoute ||
+      report?.control.enabled !== false ||
+      proposeTimingCalibration.isPending
+    ) {
+      return;
+    }
+
+    proposeTimingCalibration.mutate({
+      routeKey: timingRouteKey(suggestedPreArmRoute),
+      bootstrapAttempts: TIMING_BOOTSTRAP_ATTEMPTS,
+    }, {
+      onSuccess: () => setTimingApprovalConfirmation(""),
+    });
+  }
+
+  function approveTimingReview(id: string, requiredPhrase: string): void {
+    if (
+      timingApprovalConfirmation !== requiredPhrase ||
+      approveTimingCalibration.isPending
+    ) {
+      return;
+    }
+
+    approveTimingCalibration.mutate({
+      id,
+      confirmation: timingApprovalConfirmation,
+    }, {
+      onSuccess: () => setTimingApprovalConfirmation(""),
+    });
+  }
+
+  function disarmOneShot(): void {
+    const active = preArmQuery.data?.data.activeArm;
+
+    if (!active || disarmPreArm.isPending) {
+      return;
+    }
+
+    disarmPreArm.mutate({
+      preArmId: active.id,
+      confirmation: `DISARM ${active.id}`,
+    });
+  }
+
+  function activateTinyLiveLease(): void {
+    const active = preArmQuery.data?.data.activeArm;
+    const requiredPhrase = active
+      ? `ACTIVATE TINY-LIVE ACCOUNT LEASE ${active.id}`
+      : "";
+
+    if (
+      !active ||
+      report?.control.enabled !== false ||
+      leaseConfirmation !== requiredPhrase ||
+      activateAccountLease.isPending
+    ) {
+      return;
+    }
+
+    activateAccountLease.mutate({
+      preArmId: active.id,
+      confirmation: leaseConfirmation,
+    }, {
+      onSuccess: () => setLeaseConfirmation(""),
+    });
+  }
+
+  function restorePaperMode(): void {
+    const lease = preArmQuery.data?.data.accountModeLease.activeLease;
+
+    if (
+      !lease ||
+      leaseConfirmation !== lease.requiredRestorePhrase ||
+      restorePaperAccountMode.isPending
+    ) {
+      return;
+    }
+
+    restorePaperAccountMode.mutate({
+      leaseId: lease.id,
+      confirmation: leaseConfirmation,
+    }, {
+      onSuccess: () => setLeaseConfirmation(""),
+    });
+  }
+
   return (
     <section className="space-y-5 pb-8">
       <div className="bot-command-hero relative overflow-hidden rounded-2xl border">
         <div className="pointer-events-none absolute -left-24 top-0 size-80 rounded-full bg-emerald-500/10 blur-3xl" />
         <div className="pointer-events-none absolute -right-16 top-0 size-72 rounded-full bg-amber-500/10 blur-3xl" />
 
-        <div className="relative border-b border-white/8 px-5 py-5 lg:px-7">
+        <div className="bot-command-header relative border-b border-white/8 px-5 py-5 lg:px-7">
           <div className="flex flex-wrap items-center justify-between gap-5">
-            <div className="flex items-center gap-4">
+            <div className="bot-command-heading flex items-center gap-4">
               <div className="grid size-12 place-items-center rounded-xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-300 shadow-[0_0_28px_rgba(52,211,153,.12)]">
                 <Bot className="size-6" />
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h1 className="text-2xl font-semibold tracking-tight text-white">CAT PRO BOT</h1>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-[10px] font-bold tracking-[0.14em] text-slate-300">PAPER ONLY</span>
+                  <span className="rounded-full border border-cyan-300/20 bg-cyan-300/8 px-2.5 py-1 font-mono text-[10px] font-bold tracking-[0.12em] text-cyan-200">PAPER ANALYTICS</span>
+                  <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] font-bold tracking-[0.12em] ${tinyLiveStatus.tone}`}>{tinyLiveStatus.label}</span>
                 </div>
                 <p className="mt-1 text-sm text-slate-400">One operational view for opportunities, execution, strategy and P&amp;L.</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="bot-command-controls flex items-center gap-3">
+              <BotViewModeSwitch mode={viewMode} onChange={setViewMode} />
+              <button
+                type="button"
+                onClick={() => setMissionOpen(true)}
+                className="mission-launch-button flex items-center justify-center gap-2 rounded-xl border border-violet-300/25 bg-violet-400/8 px-3 py-2.5 font-mono text-[9px] font-bold tracking-[0.12em] text-violet-200 transition hover:border-violet-300/45 hover:bg-violet-400/14"
+                aria-label="Open full-screen PAPER Mission Control"
+              >
+                <Maximize2 className="size-4" />
+                <span>MISSION</span>
+              </button>
               <div className={`hidden rounded-lg border px-3 py-2 text-right sm:block ${appearance.surface}`}>
                 <p className="font-mono text-[10px] uppercase tracking-[0.13em] text-slate-400">Runtime</p>
                 <p className={`mt-1 text-xs font-bold ${appearance.text}`}>{appearance.label}</p>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={report.control.enabled}
-                aria-label={report.control.enabled ? "Turn automatic PAPER bot off" : "Turn automatic PAPER bot on"}
-                disabled={control.isPending}
-                onClick={toggleBot}
-                className={`group flex min-w-32 items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition disabled:cursor-wait disabled:opacity-60 ${report.control.enabled ? "border-emerald-400/35 bg-emerald-400/12" : "border-slate-600 bg-slate-800/70"}`}
-              >
-                <span className={`grid size-8 place-items-center rounded-lg ${report.control.enabled ? "bg-emerald-400 text-emerald-950" : "bg-slate-700 text-slate-300"}`}>
-                  {control.isPending ? <RefreshCw className="size-4 animate-spin" /> : <Power className="size-4" />}
-                </span>
-                <span className="text-left">
-                  <span className="block text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-400">BOT CONTROL</span>
-                  <span className={`block text-sm font-bold ${report.control.enabled ? "text-emerald-300" : "text-slate-300"}`}>{report.control.enabled ? "ON" : "OFF"}</span>
-                </span>
-              </button>
+              <SimpleOperatingModeControl
+                mode={operatingMode}
+                pending={modeTransition}
+                onSelect={requestOperatingMode}
+              />
             </div>
           </div>
 
-          {control.isError ? (
+          {modeTransitionError || control.isError ? (
             <p className="mt-3 rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-xs text-red-300">
-              Control update failed: {control.error instanceof Error ? control.error.message : "Unknown error"}
+              Mode change blocked: {modeTransitionError ?? readRequestError(control.error)}
             </p>
           ) : null}
         </div>
 
-        <div className="relative grid gap-px bg-white/8 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="bot-command-metrics relative grid grid-cols-2 gap-px bg-white/8 xl:grid-cols-6">
           <HeroMetric icon={<CircleDollarSign />} label="Credible PAPER P&L" value={formatWholeRupees(report.performance.realizedPnl)} detail={`Today ${signedWholeRupees(report.performance.realizedPnlToday)}`} tone={report.performance.realizedPnl >= 0 ? "positive" : "negative"} />
           <HeroMetric icon={<Coins />} label="PAPER capital budget" value={`₹${formatInteger(report.paper.capitalBudgetInr)}`} detail={`₹${formatInteger(report.paper.minimumCapitalPerTrade)}–₹${formatInteger(report.paper.maximumCapitalPerTrade)} / trade`} />
-          <HeroMetric icon={<Activity />} label="Successful trades / hour" value={formatInteger(report.performance.successfulCurrentClockHour)} detail={`${report.performance.currentClockHourLabel} · IST`} tone="positive" />
+          <HeroMetric
+            icon={<Activity />}
+            label={report.control.enabled ? "Successful PAPER trades / hour" : "PAPER closes this IST hour"}
+            value={formatInteger(report.performance.successfulCurrentClockHour)}
+            detail={report.control.enabled
+              ? `${report.performance.currentClockHourLabel} · IST · automation ON`
+              : `${report.performance.currentClockHourLabel} · settled before pause · automation OFF`}
+            tone={report.control.enabled ? "positive" : "default"}
+          />
           <HeroMetric icon={<CheckCircle2 />} label="Credible executions" value={formatInteger(report.performance.successfulExecutions)} detail={`${report.performance.excludedUncredibleExecutions} distorted fill${report.performance.excludedUncredibleExecutions === 1 ? "" : "s"} excluded`} tone="positive" />
           <HeroMetric icon={<TrendingUp />} label="Accepted settlement rate" value={report.performance.winRatePercent === null ? "NO DATA" : `${report.performance.winRatePercent.toFixed(1)}%`} detail={`${report.performance.winningExecutions} positive PAPER closes · not LIVE`} />
           <HeroMetric icon={<Zap />} label="Daily attempt safety cap" value={`${report.paper.dailyActivity.reservationAttempts}/${report.paper.maximumDailyTrades}`} detail={`${report.paper.dailyActivity.settledPaperExecutions} settled · ${report.paper.dailyActivity.remainingAttemptBudget} attempts remaining`} tone={report.paper.dailyActivity.remainingAttemptBudget === 0 ? "warning" : "default"} />
         </div>
       </div>
+
+      {viewMode === "FOCUS" ? (
+        <BotFocusCockpit report={report} latestExecution={latestExecution} feed={feed} diagnostics={preArmDiagnostics} />
+      ) : viewMode === "CAPITAL_MANAGER" ? (
+        <PersonalCapitalManagerView report={report} />
+      ) : (
+        <div className="bot-deep-audit space-y-5">
+      <div className="rounded-xl border border-cyan-300/15 bg-cyan-300/[0.035] px-4 py-3 text-xs leading-5 text-text-muted">
+        <strong className="font-mono text-cyan-200">ADVANCED AUDIT</strong>
+        <span className="ml-2">Heavy Tiny-LIVE diagnostics poll only while this view is open. FOCUS and Capital Manager stay lightweight.</span>
+      </div>
+
+      <StrategyOnePreArmedOneShotPanel
+        diagnostics={preArmDiagnostics}
+        timingDiagnostics={timingCalibrationDiagnostics}
+        candidate={currentPilotRoute}
+        suggestedRoute={suggestedPreArmRoute}
+        capitalPerLegInr={preArmCapitalPerLegInr}
+        acknowledged={preArmAcknowledged}
+        loading={preArmQuery.isPending}
+        arming={armPreArm.isPending}
+        disarming={disarmPreArm.isPending}
+        paperBotEnabled={report.control.enabled}
+        paperControlPending={control.isPending}
+        leaseConfirmation={leaseConfirmation}
+        activatingLease={activateAccountLease.isPending}
+        restoringPaper={restorePaperAccountMode.isPending}
+        timingApprovalConfirmation={timingApprovalConfirmation}
+        proposingTiming={proposeTimingCalibration.isPending}
+        approvingTiming={approveTimingCalibration.isPending}
+        timingError={timingCalibrationQuery.error ?? proposeTimingCalibration.error ?? approveTimingCalibration.error}
+        error={preArmQuery.error ?? armPreArm.error ?? disarmPreArm.error ?? activateAccountLease.error ?? restorePaperAccountMode.error ?? control.error}
+        onAcknowledgedChange={setPreArmAcknowledged}
+        onLeaseConfirmationChange={setLeaseConfirmation}
+        onTimingApprovalConfirmationChange={setTimingApprovalConfirmation}
+        onProposeTiming={proposeTimingReview}
+        onApproveTiming={approveTimingReview}
+        onArm={armOneShot}
+        onDisarm={disarmOneShot}
+        onActivateLease={activateTinyLiveLease}
+        onRestorePaper={restorePaperMode}
+        onPaperControlChange={(enabled) => control.mutate(enabled)}
+      />
+
+      <StrategyOneTinyLiveOpportunityAuditPanel
+        audit={opportunityAuditQuery.data?.data ?? null}
+        loading={opportunityAuditQuery.isPending}
+        error={opportunityAuditQuery.error}
+        onRefresh={() => void opportunityAuditQuery.refetch()}
+      />
 
       <HotPathLatencyPanel hotPath={report.hotPath} />
 
@@ -195,7 +525,7 @@ export default function BotDashboard() {
         </article>
 
         <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
-          <PanelHeader icon={<Activity className="size-4" />} eyebrow="EXECUTION PULSE" title="Latest successful execution" right={<span className="font-mono text-[10px] text-text-muted">AUTO REFRESH 5S</span>} />
+          <PanelHeader icon={<Activity className="size-4" />} eyebrow="PAPER EXECUTION PULSE" title="Latest PAPER execution" right={<span className="font-mono text-[10px] text-text-muted">SIMULATED · AUTO REFRESH 5S</span>} />
           {latestExecution ? (
             <div className="p-5">
               <div className="rounded-xl border border-emerald-400/20 bg-gradient-to-br from-emerald-400/10 to-transparent p-4">
@@ -207,7 +537,7 @@ export default function BotDashboard() {
                       <p className="mt-0.5 text-xs text-text-muted">{latestExecution.strategyName}</p>
                     </div>
                   </div>
-                  <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[10px] font-bold text-emerald-300">SUCCESS</span>
+                  <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[10px] font-bold text-emerald-300">PAPER SUCCESS</span>
                 </div>
                 <div className="mt-5 flex items-center gap-3 rounded-lg border border-white/8 bg-black/15 px-3 py-3">
                   <ExchangeName name={latestExecution.buyExchange} action="BUY" />
@@ -241,7 +571,7 @@ export default function BotDashboard() {
       </div>
 
       <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
-        <PanelHeader icon={<Route className="size-4" />} eyebrow="EXECUTION LEDGER" title="Successfully executed trades" right={<span className="rounded-full border border-border-default bg-panel-light px-2.5 py-1 font-mono text-[10px] text-text-muted">{report.recentExecutions.length} RECENT</span>} />
+        <PanelHeader icon={<Route className="size-4" />} eyebrow="SIMULATED EXECUTION LEDGER" title="PAPER executed trades" right={<span className="rounded-full border border-border-default bg-panel-light px-2.5 py-1 font-mono text-[10px] text-text-muted">{report.recentExecutions.length} RECENT</span>} />
         <div className="overflow-x-auto">
           <div className="min-w-[1120px]">
             <div className="grid grid-cols-[1.1fr_1.35fr_1fr_.8fr_.8fr_1fr_.8fr_.8fr] gap-4 border-b border-border-default bg-panel-light/50 px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.11em] text-text-muted">
@@ -279,11 +609,978 @@ export default function BotDashboard() {
       </article>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <SafetyFact icon={<ShieldCheck />} label="Execution mode" value="PAPER simulation only" passed />
+        <SafetyFact icon={<ShieldCheck />} label="PAPER ledger" value="SIMULATED · NOT REAL FILLS" passed />
         <SafetyFact icon={<Activity />} label="Market scanner" value={report.control.scannerActive ? "Active while BOT is ON or OFF" : "Unavailable"} passed={report.control.scannerActive} />
-        <SafetyFact icon={<Power />} label="Real orders" value="Disabled · 0 submitted" passed={!report.safety.liveExecutionAllowed && !report.safety.orderSubmissionAllowed} />
+        <SafetyFact icon={<Power />} label="Tiny-LIVE authority" value={tinyLiveStatus.label} passed={preArmDiagnostics?.activeArm === null} />
       </div>
+        </div>
+      )}
+
+      {missionOpen ? (
+        <MissionControlOverlay
+          report={report}
+          execution={latestExecution}
+          feed={feed}
+          onClose={() => setMissionOpen(false)}
+        />
+      ) : null}
+
+      {liveConfirmationOpen ? (
+        <TinyLiveModeConfirmation
+          capitalPerLegInr={preArmDiagnostics?.pilotBasket?.capitalPerLegInr ?? 500}
+          maximumAttempts={preArmDiagnostics?.pilotBasket?.maximumAttempts ?? 10}
+          durationMinutes={preArmDiagnostics?.pilotBasket?.durationMinutes ?? 180}
+          pending={modeTransition === "TINY_LIVE"}
+          onCancel={() => setLiveConfirmationOpen(false)}
+          onConfirm={() => void selectOperatingMode("TINY_LIVE")}
+        />
+      ) : null}
     </section>
+  );
+}
+
+type SimpleOperatingMode = "OFF" | "PAPER" | "TINY_LIVE";
+type BotViewMode = "FOCUS" | "CAPITAL_MANAGER" | "DEEP_AUDIT";
+
+function SimpleOperatingModeControl({
+  mode,
+  pending,
+  onSelect,
+}: {
+  mode: SimpleOperatingMode;
+  pending: SimpleOperatingMode | null;
+  onSelect: (mode: SimpleOperatingMode) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-emerald-300/20 bg-black/35 p-1.5" aria-label="CAT PRO operating mode">
+      <p className="px-1 pb-1.5 font-mono text-[8px] font-bold tracking-[0.16em] text-emerald-200/65">OPERATING MODE</p>
+      <div className="flex items-center gap-1">
+        {(["OFF", "PAPER", "TINY_LIVE"] as const).map((option) => {
+          const selected = mode === option;
+          const busy = pending === option;
+          const label = option === "TINY_LIVE" ? "LIVE" : option;
+          return (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={selected}
+              disabled={pending !== null}
+              onClick={() => onSelect(option)}
+              className={`flex min-w-16 items-center justify-center gap-1.5 rounded-lg border px-2.5 py-2 font-mono text-[9px] font-bold tracking-[0.1em] transition disabled:cursor-wait disabled:opacity-60 ${
+                selected
+                  ? option === "TINY_LIVE"
+                    ? "border-amber-300/45 bg-amber-300/14 text-amber-200 shadow-[0_0_18px_rgba(252,211,77,.14)]"
+                    : option === "PAPER"
+                      ? "border-emerald-300/45 bg-emerald-300/14 text-emerald-200 shadow-[0_0_18px_rgba(52,211,153,.14)]"
+                      : "border-slate-500/50 bg-slate-600/20 text-slate-200"
+                  : "border-transparent text-slate-500 hover:border-emerald-300/20 hover:text-emerald-200"
+              }`}
+            >
+              {busy ? <RefreshCw className="size-3 animate-spin" /> : selected ? <Power className="size-3" /> : null}
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TinyLiveModeConfirmation({
+  capitalPerLegInr,
+  maximumAttempts,
+  durationMinutes,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  capitalPerLegInr: number;
+  maximumAttempts: number;
+  durationMinutes: number;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] grid place-items-center bg-black/80 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="tiny-live-mode-title">
+      <article className="w-full max-w-lg overflow-hidden rounded-2xl border border-amber-300/35 bg-[#030b08] shadow-[0_0_70px_rgba(251,191,36,.13)]">
+        <div className="flex items-start justify-between gap-4 border-b border-amber-300/15 px-5 py-4">
+          <div>
+            <p className="font-mono text-[9px] font-bold tracking-[0.16em] text-amber-300">REAL ORDER MODE</p>
+            <h2 id="tiny-live-mode-title" className="mt-1 text-lg font-semibold text-white">Turn Tiny-LIVE ON?</h2>
+          </div>
+          <button type="button" onClick={onCancel} disabled={pending} className="rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-50" aria-label="Cancel Tiny-LIVE mode change"><X className="size-4" /></button>
+        </div>
+        <div className="space-y-3 px-5 py-5 text-sm leading-6 text-slate-300">
+          <p>PAPER automatically pause hoga. Existing safety checks pass hone par real exchange orders submit ho sakte hain.</p>
+          <div className="grid grid-cols-3 gap-2 font-mono text-[10px]">
+            <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">₹{formatInteger(capitalPerLegInr)} / LEG</span>
+            <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">MAX {maximumAttempts}</span>
+            <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">{formatInteger(durationMinutes / 60)} HOURS</span>
+          </div>
+          <p className="text-xs text-slate-500">No transfer or withdrawal. Fresh timing approval, inventory, fee, depth, profit and last-look gates remain mandatory.</p>
+        </div>
+        <div className="flex justify-end gap-3 border-t border-white/8 px-5 py-4">
+          <button type="button" onClick={onCancel} disabled={pending} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:opacity-50">Cancel</button>
+          <button type="button" onClick={onConfirm} disabled={pending} className="flex items-center gap-2 rounded-lg border border-amber-300/40 bg-amber-300/15 px-4 py-2 text-sm font-bold text-amber-200 transition hover:bg-amber-300/20 disabled:cursor-wait disabled:opacity-60">
+            {pending ? <RefreshCw className="size-4 animate-spin" /> : <Power className="size-4" />}
+            {pending ? "Starting..." : "Confirm Tiny-LIVE"}
+          </button>
+        </div>
+      </article>
+    </div>
+  );
+}
+
+function BotViewModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: BotViewMode;
+  onChange: (mode: BotViewMode) => void;
+}) {
+  return (
+    <div className="focus-mode-switch flex items-center rounded-xl border border-cyan-300/20 bg-black/20 p-1">
+      {(["FOCUS", "CAPITAL_MANAGER", "DEEP_AUDIT"] as const).map((option) => {
+        const selected = mode === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(option)}
+            className={`relative rounded-lg px-3 py-2 font-mono text-[9px] font-bold tracking-[0.13em] transition ${
+              selected
+                ? "bg-cyan-300/12 text-cyan-200 shadow-[inset_0_0_18px_rgba(34,211,238,.08),0_0_14px_rgba(34,211,238,.08)]"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            {option === "FOCUS" ? "FOCUS" : option === "CAPITAL_MANAGER" ? "CAPITAL" : "DEEP AUDIT"}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PersonalCapitalManagerView({report}: {report: PersonalStrategyOneBotData}) {
+  const manager = report.capitalManager;
+  const route = manager.route;
+  const verifiedInr = manager.capitalTruth.verifiedInrSubtotal;
+  const rebalancing = manager.rebalancing;
+  const normalizedCapital = rebalancing.inventory.totals;
+
+  return (
+    <div className="capital-manager-view space-y-5">
+      <article className="capital-manager-hero relative overflow-hidden rounded-2xl border border-cyan-300/20 bg-panel">
+        <div className="pointer-events-none absolute -left-20 -top-24 size-80 rounded-full bg-cyan-400/8 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 right-0 size-80 rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-5 border-b border-white/8 px-5 py-5 lg:px-7">
+          <div className="flex items-center gap-4">
+            <span className="capital-manager-orb grid size-12 shrink-0 place-items-center rounded-xl border border-cyan-300/25 bg-cyan-300/8 text-cyan-200"><WalletCards className="size-6" /></span>
+            <div>
+              <p className="font-mono text-[9px] font-bold tracking-[0.18em] text-cyan-200">V{manager.version} PERSONAL CAPITAL OWNER</p>
+              <h2 className="mt-1 text-xl font-semibold text-white">Personal Capital Manager</h2>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-text-muted">One advisory owner for five-exchange inventory, pilot allocation, reserve separation and the next exact operator action.</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full border px-3 py-1.5 font-mono text-[9px] font-bold ${capitalManagerStateTone(manager.state)}`}>{manager.state.replaceAll("_", " ")}</span>
+            <span className="rounded-full border border-amber-300/25 bg-amber-300/8 px-3 py-1.5 font-mono text-[9px] font-bold text-amber-200">ADVISORY ONLY</span>
+          </div>
+        </div>
+
+        <div className="relative grid grid-cols-2 gap-px bg-white/8 lg:grid-cols-4">
+          <FocusHeadline label="Recommended bankroll" value={`₹${formatInteger(manager.pilotPolicy.recommendedStartingBankrollInr)}`} detail="Tiny-LIVE starting boundary" tone="cyan" />
+          <FocusHeadline label="Maximum exchange exposure" value={`₹${formatInteger(manager.pilotPolicy.maximumInitialExchangeExposureInr)}`} detail="across active route venues" />
+          <FocusHeadline label="Off-exchange reserve" value={`₹${formatInteger(manager.pilotPolicy.offExchangeReserveInr)}`} detail="linked bank · not observed by bot" />
+          <FocusHeadline label="Pilot sizing" value={`₹${formatInteger(manager.pilotPolicy.requestedPerLegInr)} / leg`} detail={`₹${formatInteger(manager.pilotPolicy.minimumTwoLegInventoryInr)} two-leg minimum`} tone="positive" />
+        </div>
+      </article>
+
+      <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+        <PanelHeader icon={<Database className="size-4" />} eyebrow="PHASE A · UNIFIED CAPITAL TRUTH" title="Verified capital without false conversion" right={<span className={`rounded-full border px-2.5 py-1 font-mono text-[8px] font-bold ${manager.capitalTruth.valuationState === "FULLY_INR_DENOMINATED" ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-amber-400/25 bg-amber-400/10 text-amber-300"}`}>{manager.capitalTruth.valuationState.replaceAll("_", " ")}</span>} />
+        <div className="grid grid-cols-2 gap-px bg-border-default lg:grid-cols-4">
+          <FocusHeadline label="Verified INR subtotal" value={verifiedInr.totalInr === null ? "NO DATA" : formatWholeRupees(verifiedInr.totalInr)} detail={`${verifiedInr.contributingExchanges} exchanges with explicit INR`} tone="cyan" />
+          <FocusHeadline label="All-asset INR value" value={manager.capitalTruth.allAssetPortfolioValueInr === null ? "NO DATA" : formatWholeRupees(manager.capitalTruth.allAssetPortfolioValueInr)} detail={manager.capitalTruth.allAssetPortfolioValueInr === null ? `${manager.capitalTruth.positiveUnvaluedAssetCount} native assets need valuation` : "fully INR-denominated evidence"} />
+          <FocusHeadline label="PAPER equity" value={formatWholeRupees(manager.capitalTruth.paper.accountingEquityInr)} detail="isolated · excluded from LIVE balances" />
+          <FocusHeadline label="TDS receivable" value={formatWholeRupees(manager.capitalTruth.paper.tdsReceivableInr)} detail="recoverable claim · locked from PAPER spendable cash" tone="cyan" />
+        </div>
+        <div className="grid gap-px border-t border-border-default bg-border-default md:grid-cols-3 2xl:grid-cols-6">
+          <CapitalTruthMetric label="PAPER gross" value={signedWholeRupees(manager.profitTruth.grossTradingProfitInr)} />
+          <CapitalTruthMetric label="Trading fees" value={formatWholeRupees(manager.profitTruth.tradingFeesInr)} />
+          <CapitalTruthMetric label="Economic net P&L" value={signedWholeRupees(manager.profitTruth.economicNetPnlInr)} positive={manager.profitTruth.economicNetPnlInr >= 0} />
+          <CapitalTruthMetric label="Modeled TDS total" value={formatWholeRupees(manager.profitTruth.tdsWithheldInr)} />
+          <CapitalTruthMetric label="Deployable PAPER cash" value={signedWholeRupees(manager.profitTruth.deployableCashPnlInr)} positive={manager.profitTruth.deployableCashPnlInr >= 0} />
+          <CapitalTruthMetric label="Pending P&L" value="NO DATA" />
+        </div>
+        <p className="border-t border-border-default px-5 py-3 text-[10px] text-text-muted">INR is summed only when explicitly present. BTC, USDT and other assets remain in native units until authoritative conversion evidence exists. PAPER profit is evidence—not withdrawable money.</p>
+      </article>
+
+      <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+        <PanelHeader
+          icon={<Workflow className="size-4" />}
+          eyebrow="V158 · PHASE A/B INTEGRATION"
+          title="Five-exchange capital & rebalancing truth"
+          right={<span className={`rounded-full border px-2.5 py-1 font-mono text-[8px] font-bold ${rebalancing.allocation.state === "READY" ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-amber-400/25 bg-amber-400/10 text-amber-300"}`}>{rebalancing.allocation.state.replaceAll("_", " ")}</span>}
+        />
+        <div className="grid grid-cols-2 gap-px bg-border-default lg:grid-cols-4">
+          <FocusHeadline label="Authoritative wallet capital" value={normalizedCapital.authoritativeTotalCapitalUsdt === null ? "NO DATA" : `${formatNumber(normalizedCapital.authoritativeTotalCapitalUsdt)} USDT`} detail={rebalancing.inventory.state.replaceAll("_", " ")} tone="cyan" />
+          <FocusHeadline label="Deployable after holds" value={normalizedCapital.authoritativeAvailableCapitalUsdt === null ? "NO DATA" : `${formatNumber(normalizedCapital.authoritativeAvailableCapitalUsdt)} USDT`} detail={`${formatNumber(rebalancing.allocation.capital.reservedInventoryUsdt ?? 0)} USDT reservation-aware`} />
+          <FocusHeadline label="Valuation coverage" value={`${formatInteger(normalizedCapital.currentValuations)}/${formatInteger(normalizedCapital.positiveAssets)}`} detail={`${formatInteger(normalizedCapital.unavailableValuations)} unavailable · never counted as zero`} />
+          <FocusHeadline label="Rebalancing action" value={rebalancing.plan.currentAction.replaceAll("_", " ")} detail={`${rebalancing.plan.desiredMoves.length} analysis-only proposal(s)`} tone={rebalancing.plan.state === "BLOCKED" ? undefined : "positive"} />
+        </div>
+
+        <div className="border-t border-border-default px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[9px] font-bold tracking-[0.13em] text-cyan-200">DYNAMIC STRATEGY #1 TARGETS</p>
+              <p className="mt-1 max-w-4xl text-[10px] leading-4 text-text-muted">{rebalancing.policyBasis.formula}</p>
+            </div>
+            <span className="rounded-full border border-emerald-400/20 bg-emerald-400/8 px-3 py-1 font-mono text-[8px] font-bold text-emerald-300">STATIC EQUAL: OFF</span>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            {rebalancing.allocation.policy.targets.map((target) => {
+              const actual = rebalancing.allocation.exchanges.find((exchange) => exchange.exchange === target.exchange);
+              const inventory = rebalancing.inventory.exchanges.find((exchange) => exchange.exchange === target.exchange);
+              return (
+                <div key={target.exchange} className="rounded-xl border border-white/7 bg-black/18 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-semibold text-text-primary">{inventory?.displayName ?? target.exchange}</p>
+                    <span className={`rounded-full border px-2 py-1 font-mono text-[8px] font-bold ${actual?.state === "BALANCED" ? "border-emerald-400/20 bg-emerald-400/8 text-emerald-300" : actual ? "border-amber-400/20 bg-amber-400/8 text-amber-300" : "border-border-default bg-panel-light text-text-muted"}`}>{actual?.state ?? "NO DATA"}</span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <CompactStat label="Target" value={`${formatNumber(target.targetPercent)}%`} />
+                    <CompactStat label="Actual" value={actual ? `${formatNumber(actual.currentCapitalUsdt)} USDT` : "NO DATA"} />
+                  </div>
+                  <p className="mt-3 text-[9px] leading-4 text-text-muted">Available {actual ? `${formatNumber(actual.availableCapitalUsdt)} USDT` : "NO DATA"} · reserve {formatNumber(target.emergencyReserveUsdt)} USDT</p>
+                  {(inventory?.unvaluedPositiveAssets.length ?? 0) > 0 && <p className="mt-2 font-mono text-[8px] text-amber-300">UNVALUED: {inventory!.unvaluedPositiveAssets.join(", ")}</p>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="grid gap-px border-t border-border-default bg-border-default xl:grid-cols-[1.15fr_.85fr]">
+          <div className="bg-[#07111d] p-5">
+            <p className="font-mono text-[9px] font-bold tracking-[0.13em] text-text-muted">ADVISORY MOVE PLAN</p>
+            {rebalancing.plan.desiredMoves.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {rebalancing.plan.desiredMoves.map((move) => (
+                  <div key={`${move.sequence}:${move.sourceExchange}:${move.destinationExchange}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/7 bg-black/18 px-3 py-3">
+                    <span className="font-mono text-[10px] font-bold text-text-primary">{move.sourceExchange} → {move.destinationExchange}</span>
+                    <span className="font-mono text-[10px] font-bold text-cyan-200">{formatNumber(move.amountUsdt)} USDT · ANALYSIS ONLY</span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="mt-3 text-xs leading-5 text-text-muted">{rebalancing.plan.blockers[0] ?? rebalancing.plan.reasons[0] ?? "No capital move is currently required."}</p>}
+          </div>
+          <div className="bg-[#07111d] p-5">
+            <p className="font-mono text-[9px] font-bold tracking-[0.13em] text-text-muted">AUTHORITY BOUNDARY</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <MissionSafetyCell label="Phase A truth" value="ACTIVE" passed />
+              <MissionSafetyCell label="Phase B advice" value="ACTIVE" passed />
+              <MissionSafetyCell label="Phase C transfer" value="LOCKED" passed />
+              <MissionSafetyCell label="Auto rebalance" value="LOCKED" passed />
+            </div>
+            <p className="mt-3 font-mono text-[8px] font-bold text-emerald-300">NO TRANSFER · NO WITHDRAWAL · NO ORDER</p>
+          </div>
+        </div>
+      </article>
+
+      <div className="grid gap-5 xl:grid-cols-[1.15fr_.85fr]">
+        <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+          <PanelHeader
+            icon={<Route className="size-4" />}
+            eyebrow="CURRENT INVENTORY OBJECTIVE"
+            title="Best Strategy #1 route"
+            right={<span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${route ? fundingStateTone(route.fundingState) : "border-border-default bg-panel-light text-text-muted"}`}>{route?.fundingState ?? "NO ROUTE"}</span>}
+          />
+          {route ? (
+            <>
+              <div className="border-b border-border-default bg-gradient-to-r from-cyan-300/6 via-transparent to-violet-400/6 px-5 py-5">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <CoinMark symbol={route.baseAsset ?? route.market} />
+                    <div><p className="font-mono text-lg font-bold text-text-primary">{route.market}</p><p className="mt-1 text-[9px] uppercase tracking-[0.12em] text-text-muted">Historical rank {route.historicalRank === null ? "NO MATCH" : `#${route.historicalRank}`} · {route.historicalSettlements === null ? "NO DATA" : `${formatInteger(route.historicalSettlements)} settlements`}</p></div>
+                  </div>
+                  <div className="flex min-w-[250px] items-center gap-3 rounded-xl border border-white/7 bg-black/20 p-3">
+                    <ExchangeName name={route.buyExchange} action="BUY" />
+                    <ArrowRight className="size-4 text-cyan-200" />
+                    <ExchangeName name={route.sellExchange} action="SELL" />
+                  </div>
+                </div>
+              </div>
+              <div className="grid gap-px bg-border-default md:grid-cols-2">
+                {route.requirements.map((requirement) => <InventoryRequirementCard key={`${requirement.side}:${requirement.exchange}:${requirement.asset ?? "unknown"}`} requirement={requirement} />)}
+              </div>
+            </>
+          ) : <EmptyState title="No current EXECUTE route" detail="Manager will wait for a fresh Strategy #1 route before recommending any exchange funding." />}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-default px-5 py-3 text-[10px]">
+            <span className="text-text-muted">Historical ranking never substitutes for current depth, fees, rules or balances.</span>
+            <span className="font-mono font-bold text-emerald-300">NO TRANSFER INITIATED</span>
+          </div>
+        </article>
+
+        <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+          <PanelHeader icon={<ShieldCheck className="size-4" />} eyebrow="CAPITAL BOUNDARY" title="Reserve and authority" right={<span className="focus-runtime-orb focus-runtime-orb-small" aria-hidden="true"><span /></span>} />
+          <div className="grid grid-cols-2 gap-px bg-border-default">
+            <MissionSafetyCell label="PAPER capital" value="ISOLATED" passed={manager.safety.paperCapitalIsolated} />
+            <MissionSafetyCell label="Fund movement" value="OFF" passed={!manager.safety.automaticFundMovementAllowed} />
+            <MissionSafetyCell label="Bank withdrawal" value="OFF" passed={!manager.safety.bankWithdrawalAllowed} />
+            <MissionSafetyCell label="LIVE orders" value="0" passed={!manager.safety.orderSubmissionAllowed} />
+          </div>
+          <div className="space-y-3 border-t border-border-default px-5 py-4 text-xs leading-5 text-text-muted">
+            <p><span className="font-semibold text-text-primary">₹1,000 reserve location:</span> operator-linked bank account.</p>
+            <p>The reserve is a declared policy—not authenticated bank evidence. CAT PRO cannot read or spend it.</p>
+            <p className="font-mono text-[9px] font-bold text-emerald-300">PAPER EXECUTION AFFECTED: NO</p>
+          </div>
+        </article>
+      </div>
+
+      <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+        <PanelHeader icon={<WalletCards className="size-4" />} eyebrow="AUTHENTICATED FIVE-EXCHANGE EVIDENCE" title="Inventory map" right={<LivePill active={manager.evidence.allExchangeBalancesFresh} label={`${manager.evidence.freshExchanges}/${manager.evidence.exchanges} FRESH`} />} />
+        <div className="grid gap-px bg-border-default md:grid-cols-2 2xl:grid-cols-5">
+          {manager.venues.map((venue) => (
+            <div key={venue.exchange} className="min-w-0 bg-[#07111d] p-4">
+              <div className="flex items-start justify-between gap-2"><div><p className="text-[8px] font-bold uppercase tracking-[0.13em] text-text-muted">Exchange</p><p className="mt-1 font-semibold text-text-primary">{venue.displayName}</p></div><span className={`rounded-full border px-2 py-1 font-mono text-[8px] font-bold ${capitalManagerBalanceTone(venue.status)}`}>{venue.status}</span></div>
+              <div className="mt-4 space-y-2">
+                {venue.assets.length > 0 ? venue.assets.map((asset) => (
+                  <div key={asset.asset} className="flex items-center justify-between gap-3 rounded-lg border border-white/6 bg-black/18 px-3 py-2"><span className="font-mono text-[9px] font-bold text-cyan-200">{asset.asset}</span><span className="truncate font-mono text-[10px] font-bold text-text-primary">{formatNumber(asset.availableBalance)}</span></div>
+                )) : <p className="rounded-lg border border-white/6 bg-black/18 px-3 py-3 text-center font-mono text-[9px] text-text-muted">NO POSITIVE ASSET</p>}
+              </div>
+              <p className="mt-3 text-[9px] text-text-muted">{venue.positiveAssetCount} positive · {venue.synchronizedAssetCount} fetched{venue.assetsTruncated ? " · list clipped" : ""}</p>
+            </div>
+          ))}
+        </div>
+        <p className="border-t border-border-default px-5 py-3 text-[10px] text-text-muted">Balances remain in native asset units. BTC, INR and USDT are never added into a false combined total.</p>
+      </article>
+
+      <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+        <PanelHeader icon={<Target className="size-4" />} eyebrow="CURRENT ROUTE INVENTORY" title="Exact per-asset operating requirement" right={<span className={`rounded-full border px-2.5 py-1 font-mono text-[8px] font-bold ${manager.allocation.status === "TARGETS_AVAILABLE" ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-amber-400/25 bg-amber-400/10 text-amber-300"}`}>{manager.allocation.status.replaceAll("_", " ")}</span>} />
+        {manager.allocation.targets.length > 0 ? (
+          <div className="grid gap-px bg-border-default md:grid-cols-2">
+            {manager.allocation.targets.map((target) => (
+              <div key={`${target.side}:${target.exchange}:${target.asset}`} className="bg-[#07111d] p-5">
+                <div className="flex items-start justify-between gap-3"><div><p className="font-mono text-[9px] font-bold text-cyan-200">{target.side.replaceAll("_", " ")}</p><p className="mt-1 text-lg font-semibold text-text-primary">{target.exchange} · {target.asset}</p></div><span className={`rounded-full border px-2 py-1 font-mono text-[8px] font-bold ${target.state === "DEFICIT" ? "border-red-400/25 bg-red-400/10 text-red-300" : target.state === "SURPLUS" ? "border-cyan-400/25 bg-cyan-400/10 text-cyan-300" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"}`}>{target.state}</span></div>
+                <div className="mt-4 grid grid-cols-3 gap-2"><CompactStat label="Current" value={formatNumber(target.currentAmount)} /><CompactStat label="Target" value={formatNumber(target.targetAmount)} /><CompactStat label={target.deficitAmount > 0 ? "Deficit" : "Surplus"} value={formatNumber(target.deficitAmount > 0 ? target.deficitAmount : target.surplusAmount)} /></div>
+                <p className="mt-3 text-[10px] leading-4 text-text-muted">{target.reason}</p>
+              </div>
+            ))}
+          </div>
+        ) : <EmptyState title="Waiting for current route evidence" detail="No allocation target is invented from historical rank alone." />}
+        {manager.allocation.demandRanking.length > 0 && (
+          <div className="border-t border-border-default px-5 py-4"><p className="font-mono text-[9px] font-bold tracking-[0.13em] text-text-muted">DURABLE DEMAND RANKING</p><div className="mt-3 flex flex-wrap gap-2">{manager.allocation.demandRanking.map((item) => <span key={`${item.side}:${item.exchange}:${item.rank}`} className="rounded-lg border border-white/7 bg-black/18 px-3 py-2 font-mono text-[9px] text-text-muted"><strong className="text-text-primary">{item.side} #{item.rank} {item.exchange}</strong> · {formatNumber(item.settlementSharePercent)}% · {formatInteger(item.uniqueSettlements)} settlements</span>)}</div></div>
+        )}
+        <p className="border-t border-border-default px-5 py-3 text-[10px] text-text-muted">{manager.allocation.explanation}</p>
+      </article>
+
+      <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+        <PanelHeader icon={<Workflow className="size-4" />} eyebrow="OPERATOR ACTION QUEUE" title="What happens next" right={<span className="rounded-full border border-border-default bg-panel-light px-2.5 py-1 font-mono text-[9px] text-text-muted">{manager.actions.length} ACTIONS</span>} />
+        <div className="grid gap-3 p-4 lg:grid-cols-2 2xl:grid-cols-3">
+          {manager.actions.map((action) => (
+            <div key={`${action.priority}:${action.kind}:${action.exchange ?? "none"}:${action.asset ?? "none"}`} className="capital-manager-action rounded-xl border border-white/7 bg-black/18 p-4">
+              <div className="flex items-start justify-between gap-3"><span className="grid size-8 shrink-0 place-items-center rounded-lg border border-cyan-300/18 bg-cyan-300/7 font-mono text-[10px] font-bold text-cyan-200">{String(action.priority).padStart(2, "0")}</span><span className={`rounded-full border px-2 py-1 font-mono text-[8px] font-bold ${capitalManagerActionTone(action.state)}`}>{action.state.replaceAll("_", " ")}</span></div>
+              <p className="mt-4 font-mono text-[9px] font-bold tracking-[0.11em] text-text-primary">{action.kind.replaceAll("_", " ")}</p>
+              <p className="mt-2 text-xs leading-5 text-text-muted">{action.instruction}</p>
+              <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/6 pt-3 font-mono text-[8px]"><span className={action.operatorApprovalRequired ? "text-amber-300" : "text-text-muted"}>{action.operatorApprovalRequired ? "OPERATOR APPROVAL" : "NO ACTION"}</span><span className="text-emerald-300">AUTO: OFF</span></div>
+            </div>
+          ))}
+        </div>
+      </article>
+    </div>
+  );
+}
+
+function BotFocusCockpit({
+  report,
+  latestExecution,
+  feed,
+  diagnostics,
+}: {
+  report: PersonalStrategyOneBotData;
+  latestExecution: PersonalBotExecution | null;
+  feed: PersonalBotOpportunity[];
+  diagnostics: StrategyOneTinyLivePreArmDiagnostics | null;
+}) {
+  const attemptUsage = report.paper.maximumDailyTrades > 0
+    ? (report.paper.dailyActivity.reservationAttempts / report.paper.maximumDailyTrades) * 100
+    : null;
+  const soakProgress = report.soak.status === "PASSED"
+    ? 100
+    : report.soak.minimumConsecutivePasses > 0
+      ? (report.soak.consecutivePasses / report.soak.minimumConsecutivePasses) * 100
+      : null;
+
+  return (
+    <div className="focus-cockpit space-y-5">
+      <div className="grid gap-5 xl:grid-cols-[1.65fr_.85fr]">
+        <FocusPerformanceChart performance={report.performance} />
+
+        <article className="focus-gauge-deck overflow-hidden rounded-2xl border border-border-default bg-panel">
+          <PanelHeader
+            icon={<Activity className="size-4" />}
+            eyebrow="ORBITAL TELEMETRY"
+            title="PAPER evidence rings"
+            right={<span className="font-mono text-[9px] text-cyan-200">REAL DATA</span>}
+          />
+          <div className="grid grid-cols-3 gap-px bg-border-default">
+            <CircularGauge
+              label="Attempt use"
+              value={attemptUsage}
+              detail={`${formatInteger(report.paper.dailyActivity.reservationAttempts)} / ${formatInteger(report.paper.maximumDailyTrades)}`}
+              accent="cyan"
+            />
+            <CircularGauge
+              label="Accepted rate"
+              value={report.performance.winRatePercent}
+              detail="credible PAPER · not LIVE"
+              accent="green"
+            />
+            <CircularGauge
+              label="Soak gate"
+              value={soakProgress}
+              detail={`${formatInteger(report.soak.consecutivePasses)} / ${formatInteger(report.soak.minimumConsecutivePasses)} consecutive`}
+              accent="violet"
+            />
+          </div>
+          <div className="border-t border-border-default px-5 py-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-text-muted">Runtime verdict</p>
+                <p className="mt-1 font-mono text-sm font-bold text-emerald-300">{report.state.replaceAll("_", " ")}</p>
+              </div>
+              <span className="focus-runtime-orb" aria-hidden="true"><span /></span>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-text-muted">{report.nextAction}</p>
+          </div>
+        </article>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[1.25fr_.75fr]">
+        <FocusOpportunityBoard feed={feed} report={report} />
+        <FocusLatestExecution execution={latestExecution} report={report} />
+      </div>
+
+      <LiveExecutionReplay execution={latestExecution} />
+
+      <FocusLightningRail hotPath={report.hotPath} />
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <SafetyFact icon={<ShieldCheck />} label="PAPER ledger" value="SIMULATED · NOT REAL FILLS" passed />
+        <SafetyFact icon={<Radio />} label="Scanner" value={report.control.scannerActive ? `${report.opportunity.current} current opportunities` : "Unavailable"} passed={report.control.scannerActive} />
+        <SafetyFact
+          icon={<Power />}
+          label="Tiny-LIVE authority"
+          value={diagnostics ? tinyLiveAuthorityStatus(diagnostics).label : "CHECK IN DEEP AUDIT"}
+          passed={diagnostics !== null && diagnostics.activeArm === null}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LiveExecutionReplay({
+  execution,
+  immersive = false,
+}: {
+  execution: PersonalBotExecution | null;
+  immersive?: boolean;
+}) {
+  const stages = execution ? [
+    {
+      label: "SIGNAL",
+      value: `${execution.baseAsset}/${execution.quoteAsset}`,
+      detail: "stored opportunity evidence",
+    },
+    {
+      label: "QUALIFIED",
+      value: `${execution.pnlPercent >= 0 ? "+" : ""}${execution.pnlPercent.toFixed(3)}%`,
+      detail: `${formatWholeRupees(execution.capital)} PAPER capital`,
+    },
+    {
+      label: "BUY LEG",
+      value: execution.buyExchange,
+      detail: `QTY ${formatNumber(execution.quantity)} · @ ${formatNumber(execution.buyPrice)}`,
+    },
+    {
+      label: "SELL LEG",
+      value: execution.sellExchange,
+      detail: `QTY ${formatNumber(execution.quantity)} · @ ${formatNumber(execution.sellPrice)}`,
+    },
+    {
+      label: "RECONCILED",
+      value: formatWholeRupees(execution.fees + execution.tdsWithheld),
+      detail: "fees + GST and TDS recorded",
+    },
+    {
+      label: "SETTLED",
+      value: signedWholeRupees(execution.pnl),
+      detail: formatTime(execution.completedAt ?? execution.executedAt),
+    },
+  ] : [];
+
+  return (
+    <article className={`execution-replay overflow-hidden rounded-2xl border border-border-default bg-panel ${immersive ? "execution-replay-immersive" : ""}`}>
+      <PanelHeader
+        icon={<Workflow className="size-4" />}
+        eyebrow="SIX-STAGE PAPER PLAYBACK"
+        title="PAPER execution replay"
+        right={<span className="rounded-full border border-amber-300/25 bg-amber-300/8 px-2.5 py-1 font-mono text-[9px] font-bold text-amber-200">PAPER REPLAY · NOT LIVE</span>}
+      />
+      {execution ? (
+        <div className="execution-replay-viewport overflow-x-auto">
+          <div className="execution-replay-track relative grid min-w-[920px] grid-cols-6 gap-3 px-5 py-7">
+            <div className="execution-replay-beam" aria-hidden="true"><span /></div>
+            {stages.map((stage, index) => (
+              <div
+                key={stage.label}
+                className="execution-replay-stage relative z-10 rounded-xl border border-cyan-300/14 bg-[#07111d]/95 p-4"
+                style={{"--replay-delay": `${index * 0.32}s`} as React.CSSProperties}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="execution-replay-node" aria-hidden="true"><span /></span>
+                  <span className="font-mono text-[8px] text-cyan-200/50">0{index + 1}</span>
+                </div>
+                <p className="mt-4 font-mono text-[9px] font-bold tracking-[0.14em] text-cyan-200">{stage.label}</p>
+                <p className={`mt-2 truncate font-mono text-sm font-bold ${index === stages.length - 1 && execution.pnl >= 0 ? "text-emerald-300" : "text-text-primary"}`}>{stage.value}</p>
+                <p className="execution-replay-detail mt-1 text-[9px] leading-4 text-text-muted">{stage.detail}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <EmptyState title="No closed settlement to replay" detail="The playback activates only when both simulated legs, reconciliation and PAPER accounting are stored." />
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-default px-5 py-3 text-[9px] text-text-muted">
+        <span>Playback visualizes one persisted closed Strategy #1 PAPER settlement.</span>
+        <span className="font-mono text-emerald-300">NO EXCHANGE ORDER SUBMITTED</span>
+      </div>
+    </article>
+  );
+}
+
+function MissionControlOverlay({
+  report,
+  execution,
+  feed,
+  onClose,
+}: {
+  report: PersonalStrategyOneBotData;
+  execution: PersonalBotExecution | null;
+  feed: PersonalBotOpportunity[];
+  onClose: () => void;
+}) {
+  const topOpportunity = feed[0] ?? null;
+  const appearance = stateAppearance(report.state);
+  return (
+    <div className="mission-control fixed inset-0 z-[100] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="mission-control-title">
+      <div className="mission-control-grid" aria-hidden="true" />
+      <div className="mission-control-shell relative mx-auto min-h-[100dvh] max-w-[1920px]">
+        <header className="mission-control-header sticky top-0 z-20 flex flex-wrap items-center justify-between gap-4 border-b border-cyan-300/15 px-5 py-4 backdrop-blur-xl lg:px-8">
+          <div className="flex min-w-0 items-center gap-4">
+            <span className="mission-control-emblem grid size-11 shrink-0 place-items-center rounded-xl border border-cyan-300/25 bg-cyan-300/8 text-cyan-200"><Bot className="size-5" /></span>
+            <div className="min-w-0">
+              <p className="font-mono text-[9px] font-bold tracking-[0.2em] text-cyan-200">HOPUN HFT BOT · STRATEGY #1</p>
+              <h2 id="mission-control-title" className="truncate text-xl font-semibold tracking-tight text-white">PAPER Mission Control</h2>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`hidden rounded-full border px-3 py-1.5 font-mono text-[9px] font-bold sm:inline-flex ${appearance.surface} ${appearance.text}`}>{appearance.label}</span>
+            <span className="rounded-full border border-amber-300/25 bg-amber-300/8 px-3 py-1.5 font-mono text-[9px] font-bold text-amber-200">PAPER REPLAY · NOT LIVE FILLS</span>
+            <button type="button" onClick={onClose} className="grid size-11 place-items-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:border-cyan-300/30 hover:text-cyan-200" aria-label="Close Mission Control">
+              <X className="size-5" />
+            </button>
+          </div>
+        </header>
+
+        <main className="space-y-5 px-4 py-5 pb-28 sm:px-5 lg:px-8">
+          <section className="mission-control-metrics grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-cyan-300/12 bg-cyan-300/10 lg:grid-cols-4">
+            <FocusHeadline label="Today net P&L" value={signedWholeRupees(report.performance.realizedPnlToday)} tone={report.performance.realizedPnlToday >= 0 ? "positive" : "negative"} />
+            <FocusHeadline label="Credible today" value={formatInteger(report.performance.successfulToday)} detail="closed PAPER settlements" tone="cyan" />
+            <FocusHeadline label="Fresh opportunities" value={formatInteger(report.opportunity.current)} detail="accepted Strategy #1 evidence" />
+            <FocusHeadline label="Lightning path" value={report.hotPath.state} detail={`P95 ${formatLatency(report.hotPath.scanner.marketUpdateToDecisionMs.p95Ms)}`} tone={report.hotPath.state === "PASS" ? "positive" : report.hotPath.state === "MISS" ? "negative" : "cyan"} />
+          </section>
+
+          <LiveExecutionReplay execution={execution} immersive />
+
+          <section className="grid gap-5 xl:grid-cols-[1.25fr_.75fr]">
+            <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+              <PanelHeader icon={<Radio className="size-4" />} eyebrow="NEXT PAPER TARGET" title="Top accepted opportunity" right={<LivePill active={report.control.scannerActive} label={`${feed.length} ACCEPTED`} />} />
+              {topOpportunity ? (
+                <div className="grid gap-4 p-5 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+                  <div className="flex items-center gap-3"><CoinMark symbol={topOpportunity.market} /><div><p className="font-mono text-lg font-bold text-text-primary">{topOpportunity.market}</p><p className="text-[9px] uppercase tracking-[0.12em] text-text-muted">PAPER candidate</p></div></div>
+                  <div className="flex items-center gap-3 rounded-xl border border-white/7 bg-black/20 p-3"><ExchangeName name={topOpportunity.buyExchange} action="BUY" /><ArrowRight className="size-4 text-cyan-200" /><ExchangeName name={topOpportunity.sellExchange} action="SELL" /></div>
+                  <div className="sm:text-right"><p className="font-mono text-xl font-bold text-emerald-300">+{topOpportunity.netProfitPercent.toFixed(3)}%</p><p className="mt-1 text-[9px] text-text-muted">estimated PAPER return</p></div>
+                </div>
+              ) : <EmptyState title="Radar clear" detail="No currently accepted Strategy #1 PAPER opportunity is being claimed." />}
+            </article>
+
+            <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+              <PanelHeader icon={<ShieldCheck className="size-4" />} eyebrow="SAFETY LOCK" title="Execution boundary" right={<span className="focus-runtime-orb focus-runtime-orb-small" aria-hidden="true"><span /></span>} />
+              <div className="grid grid-cols-3 gap-px bg-border-default">
+                <MissionSafetyCell label="Mode" value="PAPER" passed />
+                <MissionSafetyCell label="LIVE" value="OFF" passed={!report.safety.liveExecutionAllowed} />
+                <MissionSafetyCell label="Orders" value="0" passed={!report.safety.orderSubmissionAllowed} />
+              </div>
+              <p className="border-t border-border-default px-5 py-4 text-xs leading-5 text-text-muted">{report.nextAction}</p>
+            </article>
+          </section>
+
+          <FocusLightningRail hotPath={report.hotPath} />
+        </main>
+
+        <footer className="mission-control-footer fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-[1920px] items-center justify-between gap-4 border-t border-cyan-300/15 px-5 py-3 backdrop-blur-xl lg:px-8">
+          <div className="flex items-center gap-2 font-mono text-[9px] text-slate-400"><span className="size-2 rounded-full bg-emerald-300 shadow-[0_0_12px_#19f6a5]" />SNAPSHOT {formatTime(report.generatedAt)}</div>
+          <p className="font-mono text-[9px] font-bold tracking-[0.13em] text-amber-200">SIMULATION ONLY · LIVE EXECUTION OFF · ORDER SUBMISSION OFF</p>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function MissionSafetyCell({label, value, passed}: {label: string; value: string; passed: boolean}) {
+  return <div className="bg-[#07111d] px-3 py-5 text-center"><p className="text-[8px] font-bold uppercase tracking-[0.13em] text-text-muted">{label}</p><p className={`mt-2 font-mono text-lg font-bold ${passed ? "text-emerald-300" : "text-red-300"}`}>{value}</p></div>;
+}
+
+function FocusPerformanceChart({
+  performance,
+}: {
+  performance: PersonalStrategyOneBotData["performance"];
+}) {
+  const buckets = performance.hourlySuccessfulTrades;
+  const width = 760;
+  const height = 270;
+  const left = 30;
+  const right = 18;
+  const top = 26;
+  const bottom = 34;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const step = plotWidth / Math.max(1, buckets.length);
+  const maxTrades = Math.max(1, ...buckets.map((bucket) => bucket.successfulTrades));
+  const minimumPnl = Math.min(0, ...buckets.map((bucket) => bucket.realizedPnl));
+  const maximumPnl = Math.max(1, ...buckets.map((bucket) => bucket.realizedPnl));
+  const pnlRange = Math.max(1, maximumPnl - minimumPnl);
+  const xAt = (index: number) => left + step * index + step / 2;
+  const pnlY = (value: number) => top + ((maximumPnl - value) / pnlRange) * plotHeight;
+  const zeroY = pnlY(0);
+  const linePath = buckets.map((bucket, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${pnlY(bucket.realizedPnl).toFixed(2)}`).join(" ");
+  const areaPath = buckets.length > 0
+    ? `${linePath} L ${xAt(buckets.length - 1).toFixed(2)} ${zeroY.toFixed(2)} L ${xAt(0).toFixed(2)} ${zeroY.toFixed(2)} Z`
+    : "";
+  const currentIndex = buckets.findIndex((bucket) => bucket.current);
+
+  return (
+    <article className="focus-chart-card overflow-hidden rounded-2xl border border-border-default bg-panel">
+      <PanelHeader
+        icon={<BarChart3 className="size-4" />}
+        eyebrow="24-HOUR QUANTUM TRACE · IST"
+        title="Trades and hourly net P&L"
+        right={<LivePill active label={`${formatInteger(performance.successfulToday)} TODAY`} />}
+      />
+      <div className="grid gap-px border-b border-border-default bg-border-default sm:grid-cols-3">
+        <FocusHeadline label="Today net P&L" value={signedWholeRupees(performance.realizedPnlToday)} tone={performance.realizedPnlToday >= 0 ? "positive" : "negative"} />
+        <FocusHeadline label="Current IST hour" value={formatInteger(performance.successfulCurrentClockHour)} detail={performance.currentClockHourLabel} tone="cyan" />
+        <FocusHeadline label="Credible today" value={formatInteger(performance.successfulToday)} detail="closed PAPER settlements" />
+      </div>
+      <div className="focus-chart-viewport overflow-x-auto">
+        <div className="relative min-w-[680px] p-4 sm:min-w-0 sm:p-5">
+        <div className="absolute right-5 top-4 flex items-center gap-4 font-mono text-[9px] text-text-muted">
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-cyan-300/35" />TRADES</span>
+          <span className="flex items-center gap-1.5"><span className="h-0.5 w-4 bg-emerald-300" />NET P&amp;L</span>
+        </div>
+        <svg className="mt-4 h-auto w-full overflow-visible" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Hourly successful PAPER trades and net profit or loss for 24 IST clock-hour buckets">
+          <defs>
+            <linearGradient id="focusPnlArea" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#19f6a5" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="#19f6a5" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="focusTradeBar" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#67e8f9" stopOpacity="0.5" />
+              <stop offset="100%" stopColor="#4f7cff" stopOpacity="0.08" />
+            </linearGradient>
+          </defs>
+
+          {[0, 1, 2, 3, 4].map((line) => {
+            const y = top + (plotHeight / 4) * line;
+            return <line key={line} x1={left} y1={y} x2={width - right} y2={y} stroke="rgba(127,153,175,.10)" strokeWidth="1" />;
+          })}
+
+          {currentIndex >= 0 ? (
+            <rect x={left + step * currentIndex} y={top} width={step} height={plotHeight} rx="6" fill="rgba(34,211,238,.055)" stroke="rgba(34,211,238,.16)" />
+          ) : null}
+
+          {buckets.map((bucket, index) => {
+            const barHeight = (bucket.successfulTrades / maxTrades) * plotHeight * 0.72;
+            return (
+              <g key={bucket.hour}>
+                <rect
+                  x={xAt(index) - Math.max(4, step * 0.22)}
+                  y={top + plotHeight - barHeight}
+                  width={Math.max(8, step * 0.44)}
+                  height={barHeight}
+                  rx="3"
+                  fill="url(#focusTradeBar)"
+                  stroke={bucket.current ? "rgba(103,232,249,.72)" : "rgba(103,232,249,.18)"}
+                >
+                  <title>{`${bucket.label}: ${bucket.successfulTrades} successful, ${signedCurrency(bucket.realizedPnl)} net P&L`}</title>
+                </rect>
+                {index % 3 === 0 ? (
+                  <text x={xAt(index)} y={height - 10} textAnchor="middle" fill="rgba(127,153,175,.72)" fontSize="9" fontFamily="monospace">
+                    {String(bucket.hour).padStart(2, "0")}:00
+                  </text>
+                ) : null}
+              </g>
+            );
+          })}
+
+          {areaPath ? <path d={areaPath} fill="url(#focusPnlArea)" /> : null}
+          {linePath ? <path className="focus-chart-line" d={linePath} fill="none" stroke="#19f6a5" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /> : null}
+          <line x1={left} y1={zeroY} x2={width - right} y2={zeroY} stroke="rgba(255,255,255,.12)" strokeDasharray="4 6" />
+          {buckets.map((bucket, index) => (
+            <circle key={`pnl-${bucket.hour}`} cx={xAt(index)} cy={pnlY(bucket.realizedPnl)} r={bucket.current ? 4 : 2.4} fill={bucket.realizedPnl >= 0 ? "#19f6a5" : "#ff4d6d"} stroke="#061019" strokeWidth="1.5">
+              <title>{`${bucket.label}: ${signedCurrency(bucket.realizedPnl)} net P&L`}</title>
+            </circle>
+          ))}
+        </svg>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function FocusHeadline({
+  label,
+  value,
+  detail,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  tone?: "default" | "positive" | "negative" | "cyan";
+}) {
+  const toneClass = tone === "positive"
+    ? "text-emerald-300"
+    : tone === "negative"
+      ? "text-red-300"
+      : tone === "cyan"
+        ? "text-cyan-200"
+        : "text-text-primary";
+  return (
+    <div className="bg-[#07111d] px-5 py-4">
+      <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-text-muted">{label}</p>
+      <p className={`mt-2 font-mono text-xl font-bold ${toneClass}`}>{value}</p>
+      {detail ? <p className="mt-1 text-[10px] text-text-muted">{detail}</p> : null}
+    </div>
+  );
+}
+
+function CircularGauge({
+  label,
+  value,
+  detail,
+  accent,
+}: {
+  label: string;
+  value: number | null;
+  detail: string;
+  accent: "cyan" | "green" | "violet";
+}) {
+  const normalized = value === null ? 0 : Math.min(100, Math.max(0, value));
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference * (1 - normalized / 100);
+  const colors = {
+    cyan: {stroke: "#39ff88", text: "text-cyan-200"},
+    green: {stroke: "#19f6a5", text: "text-emerald-300"},
+    violet: {stroke: "#7dffab", text: "text-violet-300"},
+  } as const;
+  const color = colors[accent];
+
+  return (
+    <div className="focus-gauge-cell bg-[#07111d] px-3 py-5 text-center">
+      <div className="focus-gauge-visual relative mx-auto size-24">
+        <svg className="size-full -rotate-90" viewBox="0 0 112 112" aria-hidden="true">
+          <circle cx="56" cy="56" r={radius} fill="rgba(2,8,15,.72)" stroke="rgba(127,153,175,.12)" strokeWidth="8" />
+          <circle
+            className="focus-gauge-ring"
+            cx="56"
+            cy="56"
+            r={radius}
+            fill="none"
+            stroke={color.stroke}
+            strokeWidth="8"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+          />
+        </svg>
+        <div className="absolute inset-0 grid place-items-center">
+          <div>
+            <p className={`font-mono text-xl font-bold ${value === null ? "text-text-muted" : color.text}`}>
+              {value === null ? "—" : `${Math.round(normalized)}%`}
+            </p>
+            <p className="mt-0.5 text-[8px] font-bold uppercase tracking-[0.11em] text-text-muted">{label}</p>
+          </div>
+        </div>
+      </div>
+      <p className="mt-2 min-h-8 text-[9px] leading-4 text-text-muted">{detail}</p>
+    </div>
+  );
+}
+
+function FocusOpportunityBoard({
+  feed,
+  report,
+}: {
+  feed: PersonalBotOpportunity[];
+  report: PersonalStrategyOneBotData;
+}) {
+  return (
+    <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+      <PanelHeader
+        icon={<Radio className="size-4" />}
+        eyebrow="LIVE PAPER RADAR"
+        title="Accepted opportunity constellation"
+        right={<LivePill active={report.control.scannerActive} label={`${report.opportunity.current} FRESH`} />}
+      />
+      {feed.length > 0 ? (
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(250px,1fr))] gap-3 p-4">
+          {feed.slice(0, 4).map((opportunity, index) => (
+            <div key={opportunity.id} className="focus-opportunity-card relative overflow-hidden rounded-xl border border-cyan-300/14 bg-black/18 p-4">
+              <span className="absolute right-3 top-3 font-mono text-[8px] text-cyan-200/60">NODE {String(index + 1).padStart(2, "0")}</span>
+              <div className="flex items-center gap-3">
+                <CoinMark symbol={opportunity.market} />
+                <div>
+                  <p className="font-mono text-base font-bold text-text-primary">{opportunity.market}</p>
+                  <p className="mt-0.5 text-[9px] uppercase tracking-[0.12em] text-text-muted">Strategy #1 · PAPER</p>
+                </div>
+              </div>
+              <div className="mt-4 flex items-center gap-2 rounded-lg border border-white/6 bg-black/20 px-3 py-2.5">
+                <ExchangeName name={opportunity.buyExchange} action="BUY" />
+                <span className="relative flex w-9 items-center justify-center">
+                  <span className="absolute h-px w-full bg-gradient-to-r from-cyan-300/20 via-cyan-300 to-violet-400/30" />
+                  <ArrowRight className="relative size-3 text-cyan-200" />
+                </span>
+                <ExchangeName name={opportunity.sellExchange} action="SELL" />
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                <FocusMiniMetric label="Net return" value={`${opportunity.netProfitPercent >= 0 ? "+" : ""}${opportunity.netProfitPercent.toFixed(3)}%`} positive={opportunity.netProfitPercent >= 0} />
+                <FocusMiniMetric label="Modeled P&L" value={opportunity.modeledNetProfitInr === null ? "NO DATA" : signedWholeRupees(opportunity.modeledNetProfitInr)} positive={opportunity.modeledNetProfitInr !== null && opportunity.modeledNetProfitInr >= 0} />
+                <FocusMiniMetric label="Score" value={formatInteger(opportunity.score)} />
+              </div>
+              <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/5">
+                <div className="h-full rounded-full bg-gradient-to-r from-cyan-300 via-blue-400 to-violet-400 shadow-[0_0_10px_rgba(34,211,238,.45)]" style={{width: `${Math.min(100, Math.max(0, opportunity.score))}%`}} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="Radar clear right now" detail={`The scanner has ${report.opportunity.executable} EXECUTE decision${report.opportunity.executable === 1 ? "" : "s"}; only currently accepted Strategy #1 PAPER opportunities appear here.`} />
+      )}
+    </article>
+  );
+}
+
+function FocusLatestExecution({
+  execution,
+  report,
+}: {
+  execution: PersonalBotExecution | null;
+  report: PersonalStrategyOneBotData;
+}) {
+  return (
+    <article className="focus-execution-core overflow-hidden rounded-2xl border border-border-default bg-panel">
+      <PanelHeader
+        icon={<Zap className="size-4" />}
+        eyebrow="SETTLEMENT CORE"
+        title="Latest PAPER execution"
+        right={<span className="focus-runtime-orb focus-runtime-orb-small" aria-hidden="true"><span /></span>}
+      />
+      {execution ? (
+        <div className="p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <CoinMark symbol={execution.baseAsset} />
+              <div>
+                <p className="font-mono text-xl font-bold text-text-primary">{execution.baseAsset}<span className="text-sm text-text-muted">/{execution.quoteAsset}</span></p>
+                <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-text-muted">closed · credible · PAPER</p>
+              </div>
+            </div>
+            <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[9px] font-bold text-emerald-300">PAPER SUCCESS</span>
+          </div>
+          <div className="focus-route-beam mt-6 flex items-center gap-3 rounded-xl border border-white/7 bg-black/20 p-3">
+            <ExchangeName name={execution.buyExchange} action="BUY" />
+            <div className="relative flex w-14 items-center justify-center">
+              <span className="absolute h-px w-full bg-gradient-to-r from-cyan-300/20 via-emerald-300 to-violet-400/20" />
+              <ArrowRight className="relative size-4 text-emerald-300" />
+            </div>
+            <ExchangeName name={execution.sellExchange} action="SELL" />
+          </div>
+          <div className="mt-5 rounded-xl border border-emerald-300/12 bg-emerald-300/5 p-4 text-center">
+            <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-text-muted">Economic PAPER P&amp;L</p>
+            <p className={`mt-2 font-mono text-3xl font-bold ${execution.pnl >= 0 ? "text-emerald-300" : "text-red-300"}`}>{signedWholeRupees(execution.pnl)}</p>
+            <p className="mt-1 font-mono text-xs text-text-muted">{execution.pnlPercent >= 0 ? "+" : ""}{execution.pnlPercent.toFixed(3)}% return</p>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <CompactStat label="Deployable cash Δ" value={signedWholeRupees(execution.deployableCashProfit)} positive={execution.deployableCashProfit >= 0} />
+            <CompactStat label="Fees + GST" value={formatWholeRupees(execution.fees)} />
+            <CompactStat label="TDS withheld" value={formatWholeRupees(execution.tdsWithheld)} />
+            <CompactStat label="Completed" value={timeAgo(execution.completedAt ?? execution.executedAt)} />
+          </div>
+          <div className="mt-5 border-t border-border-default pt-4">
+            <div className="flex items-center justify-between gap-3 text-[10px]">
+              <span className="uppercase tracking-[0.12em] text-text-muted">Owner cycle</span>
+              <span className="font-mono font-bold text-cyan-200">{report.lastExecutionCycle?.status ?? "NO CYCLE"}</span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <EmptyState title="No successful execution evidence" detail="This core activates only after both PAPER legs, reconciliation and accounting complete." />
+      )}
+    </article>
+  );
+}
+
+function FocusLightningRail({
+  hotPath,
+}: {
+  hotPath: PersonalStrategyOneBotData["hotPath"];
+}) {
+  const metrics = [
+    {label: "UPDATE → DECISION", distribution: hotPath.scanner.marketUpdateToDecisionMs},
+    {label: "DECISION → QUEUE", distribution: hotPath.automation.decisionToQueueMs},
+    {label: "CANDIDATE → START", distribution: hotPath.automation.candidateDecisionToExecutionStartMs},
+    {label: "DECISION → COMPLETE", distribution: hotPath.automation.decisionToExecutionCompleteMs},
+  ];
+  return (
+    <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
+      <div className="grid gap-px bg-border-default md:grid-cols-[1.1fr_repeat(4,1fr)]">
+        <div className="bg-[#07111d] px-5 py-4">
+          <div className="flex items-center gap-2 text-cyan-200"><Zap className="size-4" /><span className="font-mono text-[9px] font-bold tracking-[0.14em]">LIGHTNING PATH</span></div>
+          <p className={`mt-2 font-mono text-lg font-bold ${hotPath.state === "PASS" ? "text-emerald-300" : hotPath.state === "MISS" ? "text-red-300" : "text-amber-300"}`}>{hotPath.state}</p>
+          <p className="mt-1 text-[9px] text-text-muted">code-side only · n≤{hotPath.sampleWindowCapacity}</p>
+        </div>
+        {metrics.map((metric) => (
+          <div key={metric.label} className="bg-[#07111d] px-5 py-4">
+            <p className="font-mono text-[8px] font-bold tracking-[0.11em] text-text-muted">{metric.label}</p>
+            <p className="mt-2 font-mono text-lg font-bold text-text-primary">{formatLatency(metric.distribution.p95Ms)}</p>
+            <p className="mt-1 font-mono text-[9px] text-cyan-200/70">P99 {formatLatency(metric.distribution.p99Ms)}</p>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function FocusMiniMetric({label, value, positive}: {label: string; value: string; positive?: boolean}) {
+  return (
+    <div>
+      <p className="text-[8px] font-semibold uppercase tracking-[0.1em] text-text-muted">{label}</p>
+      <p className={`mt-1 truncate font-mono text-[11px] font-bold ${positive === undefined ? "text-text-primary" : positive ? "text-emerald-300" : "text-red-300"}`}>{value}</p>
+    </div>
   );
 }
 
@@ -530,8 +1827,8 @@ function HistoricalCapitalPlacementPanel({placement}: {
         />
         <ActivityMetric
           label="Historical routes"
-          value={formatInteger(placement.routes.length)}
-          detail={`${placement.buyVenues.length} BUY venues · ${placement.sellVenues.length} SELL venues`}
+          value={formatInteger(placement.totalRoutes)}
+          detail={`${placement.buyVenues.length} BUY venues · ${placement.sellVenues.length} SELL venues · top ${placement.routes.length} loaded`}
         />
         <ActivityMetric
           label="Tiny-LIVE pilot / leg"
@@ -597,7 +1894,7 @@ function HistoricalCapitalPlacementPanel({placement}: {
               <span className={`w-fit rounded border px-1.5 py-0.5 font-mono text-[8px] font-bold ${route.liveAdapterFoundationReady ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-red-400/25 bg-red-400/10 text-red-300"}`}>{route.liveAdapterFoundationReady ? "2/2" : "BLOCKED"}</span>
             </div>
           ))}
-          {placement.routes.length === 0 ? <EmptyState title="No historical route evidence" detail="The report will populate from unique credible closed Strategy #1 PAPER settlements." /> : null}
+          {placement.totalRoutes === 0 ? <EmptyState title="No historical route evidence" detail="The report will populate from unique credible closed Strategy #1 PAPER settlements." /> : null}
         </div>
       </div>
 
@@ -605,6 +1902,787 @@ function HistoricalCapitalPlacementPanel({placement}: {
         <p className="text-text-muted">Current depth, fees, order rules and authenticated balances must still pass at action time.</p>
         <p className="font-mono font-bold text-emerald-300">NO AUTOMATIC FUND MOVEMENT · LIVE/OFF</p>
       </div>
+    </article>
+  );
+}
+
+function StrategyOnePreArmedOneShotPanel({
+  diagnostics,
+  timingDiagnostics,
+  candidate,
+  suggestedRoute,
+  capitalPerLegInr,
+  acknowledged,
+  loading,
+  arming,
+  disarming,
+  paperBotEnabled,
+  paperControlPending,
+  leaseConfirmation,
+  activatingLease,
+  restoringPaper,
+  timingApprovalConfirmation,
+  proposingTiming,
+  approvingTiming,
+  timingError,
+  error,
+  onAcknowledgedChange,
+  onLeaseConfirmationChange,
+  onTimingApprovalConfirmationChange,
+  onProposeTiming,
+  onApproveTiming,
+  onArm,
+  onDisarm,
+  onActivateLease,
+  onRestorePaper,
+  onPaperControlChange,
+}: {
+  diagnostics: StrategyOneTinyLivePreArmDiagnostics | null;
+  timingDiagnostics: StrategyOneTimingCalibrationDiagnostics | null;
+  candidate: StrategyOnePilotCandidate | null;
+  suggestedRoute: StrategyOnePreArmRoute | null;
+  capitalPerLegInr: number;
+  acknowledged: boolean;
+  loading: boolean;
+  arming: boolean;
+  disarming: boolean;
+  paperBotEnabled: boolean;
+  paperControlPending: boolean;
+  leaseConfirmation: string;
+  activatingLease: boolean;
+  restoringPaper: boolean;
+  timingApprovalConfirmation: string;
+  proposingTiming: boolean;
+  approvingTiming: boolean;
+  timingError: Error | null;
+  error: Error | null;
+  onAcknowledgedChange: (checked: boolean) => void;
+  onLeaseConfirmationChange: (value: string) => void;
+  onTimingApprovalConfirmationChange: (value: string) => void;
+  onProposeTiming: () => void;
+  onApproveTiming: (id: string, requiredPhrase: string) => void;
+  onArm: () => void;
+  onDisarm: () => void;
+  onActivateLease: () => void;
+  onRestorePaper: () => void;
+  onPaperControlChange: (enabled: boolean) => void;
+}) {
+  const active = diagnostics?.activeArm ?? null;
+  const accountLease = diagnostics?.accountModeLease ?? null;
+  const activeAccountLease = accountLease?.activeLease ?? null;
+  const route = active?.routeScope === "PILOT_BASKET" ? suggestedRoute : active ?? suggestedRoute;
+  const currentTimingApproval = findCurrentControlledBatchTimingApproval(
+    timingDiagnostics,
+    route,
+  );
+  const pendingTimingProposal = findPendingControlledBatchTimingProposal(
+    timingDiagnostics,
+    route,
+  );
+  const basketTimingHeadrooms = timingDiagnostics?.pilotBasketHeadroom ?? [];
+  const timingHeadroom = route
+    ? basketTimingHeadrooms.find((review) =>
+      normalizedMarket(review.market) === normalizedMarket(route.market) &&
+      review.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
+      review.sellExchange.toLowerCase() === route.sellExchange.toLowerCase()
+    ) ?? timingDiagnostics?.controlledBatchHeadroom ?? null
+    : timingDiagnostics?.controlledBatchHeadroom ?? null;
+  const recent = diagnostics?.records[0] ?? null;
+  const attempts = recent?.attempts ?? [];
+  const candidateMatchesRoute = candidate !== null && (
+    active?.routeScope === "PILOT_BASKET"
+      ? isPilotBasketRoute(candidate)
+      : route !== null &&
+        normalizedMarket(candidate.market) === normalizedMarket(route.market) &&
+        candidate.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
+        candidate.sellExchange.toLowerCase() === route.sellExchange.toLowerCase()
+  );
+  const blockedChecks = candidate?.checks.filter((check) => check.state === "BLOCKED") ?? [];
+  const canArm = diagnostics?.runtimeGateEnabled === true &&
+    !active &&
+    diagnostics.pilotBasket !== null &&
+    !paperBotEnabled &&
+    acknowledged &&
+    !arming;
+  const activationPhrase = active
+    ? `ACTIVATE TINY-LIVE ACCOUNT LEASE ${active.id}`
+    : "";
+  const leasePhrase = activeAccountLease?.requiredRestorePhrase ?? activationPhrase;
+  const canActivateLease = active !== null &&
+    activeAccountLease === null &&
+    accountLease?.accountMode === "PAPER" &&
+    !paperBotEnabled &&
+    leaseConfirmation === activationPhrase &&
+    !activatingLease;
+  const canRestorePaper = activeAccountLease !== null &&
+    leaseConfirmation === activeAccountLease.requiredRestorePhrase &&
+    !restoringPaper;
+  const paperControlLocked = paperControlPending || (
+    !paperBotEnabled && (
+      active !== null ||
+      activeAccountLease !== null ||
+      accountLease?.accountMode !== "PAPER"
+    )
+  );
+  const status = active
+    ? diagnostics?.triggerInProgress
+      ? "TRIGGERING"
+      : "ARMED"
+    : diagnostics?.runtimeGateEnabled
+      ? "STANDBY"
+      : "LIVE GATE OFF";
+
+  return (
+    <article className={`overflow-hidden rounded-2xl border ${active ? "border-emerald-400/30 bg-emerald-400/[0.035] shadow-[0_0_34px_rgba(52,211,153,.08)]" : "border-border-default bg-panel"}`}>
+      <PanelHeader
+        icon={<Zap className="size-4" />}
+        eyebrow="V183 CONTROLLED PILOT BASKET"
+        title="Seven-coin inventory and controlled execution evidence"
+        right={(
+          <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${active ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : diagnostics?.runtimeGateEnabled ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-border-default bg-panel-light text-text-muted"}`}>
+            {loading ? "LOADING" : status}
+          </span>
+        )}
+      />
+
+      <div className="grid gap-px bg-border-default sm:grid-cols-2 xl:grid-cols-4">
+        <ActivityMetric
+          label="Route scope"
+          value="7-COIN BASKET"
+          detail={`${diagnostics?.pilotBasket.routes.length ?? 0} immutable report-driven directions`}
+          tone="positive"
+        />
+        <ActivityMetric
+          label="Hard capital cap"
+          value={`₹${formatInteger(active?.capitalPerLegInr ?? capitalPerLegInr)} / leg`}
+          detail="Two exact spot legs · active policy only"
+        />
+        <ActivityMetric
+          label="Authority lifetime"
+          value={active ? `until ${formatTime(active.expiresAt)}` : "3 hours"}
+          detail="Unused arm expires automatically"
+        />
+        <ActivityMetric
+          label="Attempts"
+          value={`${active?.attemptsUsed ?? attempts.length}/${active?.maximumAttempts ?? CONTROLLED_BATCH_ATTEMPTS}`}
+          detail="Ten sequential chances · first failed/exposed leg stops batch"
+          tone="warning"
+        />
+      </div>
+
+      {diagnostics?.pilotBasket ? (
+        <div className="border-t border-border-default bg-[#07111d] px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">SELL INVENTORY TARGETS</p>
+              <p className="mt-1 text-xs text-text-muted">Pre-positioning plan only · quote-side funding is re-proven for every attempt</p>
+            </div>
+            <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[9px] font-bold text-emerald-300">₹5,000 TOTAL</span>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {diagnostics.pilotBasket.inventoryTargets.map((target) => (
+              <div key={`${target.exchange}:${target.asset}`} className="flex items-center justify-between rounded-lg border border-white/7 bg-black/20 px-3 py-2">
+                <span className="font-mono text-[10px] font-bold text-text-primary">{target.exchange.toUpperCase()} · {target.asset}</span>
+                <span className="font-mono text-[10px] font-bold text-emerald-300">₹{formatInteger(target.targetNotionalInr)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 font-mono text-[9px] leading-4 text-amber-300">CoinSwitch, UnoCoin and ZebPay are hard-excluded. No transfer or withdrawal is automatic.</p>
+        </div>
+      ) : null}
+
+      <div className="grid gap-px border-t border-border-default bg-border-default sm:grid-cols-2 xl:grid-cols-4">
+        <ActivityMetric
+          label="Trading account mode"
+          value={accountLease?.accountMode ?? "UNKNOWN"}
+          detail={accountLease?.accountMode === "LIVE"
+            ? "Bounded route lease only · not general LIVE"
+            : "Safe default · no real order can pass account gate"}
+          tone={accountLease?.accountMode === "LIVE" ? "warning" : "positive"}
+        />
+        <ActivityMetric
+          label="Account-mode lease"
+          value={activeAccountLease?.state ?? "NOT ACTIVE"}
+          detail={activeAccountLease
+            ? `Auto PAPER restore by ${formatTime(activeAccountLease.expiresAt)}`
+            : active
+              ? "Separate exact account-mode confirmation required"
+              : "No route-bound lease exists"}
+          tone={activeAccountLease ? "warning" : "default"}
+        />
+        <ActivityMetric
+          label="Lease binding"
+          value={activeAccountLease ? activeAccountLease.market : "NO LEASE"}
+          detail={activeAccountLease
+            ? `${activeAccountLease.buyExchange.toUpperCase()} BUY → ${activeAccountLease.sellExchange.toUpperCase()} SELL`
+            : "Cannot be reused for another arm or route"}
+        />
+        <ActivityMetric
+          label="Lease safety"
+          value={accountLease?.lastReconciliationError ? "FAIL-CLOSED" : "HEALTHY"}
+          detail={accountLease?.lastReconciliationError ?? "Journal-first · no transfer · no withdrawal"}
+          tone={accountLease?.lastReconciliationError ? "negative" : "positive"}
+        />
+      </div>
+
+      <div className="grid gap-px border-t border-border-default bg-border-default lg:grid-cols-2">
+        <div className="bg-panel px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">PAPER AUTOMATION</p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">Separate PAPER execution toggle</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={paperBotEnabled}
+              disabled={paperControlLocked}
+              onClick={() => onPaperControlChange(!paperBotEnabled)}
+              className={`flex min-w-32 items-center justify-between gap-3 rounded-xl border px-3 py-2 transition disabled:cursor-not-allowed disabled:opacity-50 ${paperBotEnabled ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-300" : "border-slate-600 bg-slate-800/70 text-slate-300"}`}
+            >
+              <Power className="size-4" />
+              <span className="font-mono text-[10px] font-bold">PAPER {paperBotEnabled ? "ON" : "OFF"}</span>
+            </button>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-text-muted">
+            Turn PAPER OFF before arming Tiny-LIVE. After disarm or lease restoration, account mode returns to PAPER but simulated execution stays paused until you turn this control ON.
+          </p>
+          {paperBotEnabled && !active ? (
+            <p className="mt-2 font-mono text-[10px] text-amber-300">Pause PAPER first to unlock the Tiny-LIVE arm button.</p>
+          ) : null}
+        </div>
+
+        <div className="bg-panel px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[9px] font-bold tracking-[.16em] text-amber-300">TINY-LIVE ACCOUNT LEASE</p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">
+                {activeAccountLease ? "Restore PAPER mode" : active ? "Activate bounded basket lease" : "Arm the pilot basket first"}
+              </p>
+            </div>
+            <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${activeAccountLease ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-border-default bg-panel-light text-text-muted"}`}>
+              {activeAccountLease ? "LIVE LEASE ACTIVE" : "NO LIVE LEASE"}
+            </span>
+          </div>
+
+          {leasePhrase ? (
+            <>
+              <p className="mt-3 break-all font-mono text-[9px] leading-4 text-text-muted">TYPE EXACTLY: {leasePhrase}</p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="text"
+                  value={leaseConfirmation}
+                  onChange={(event) => onLeaseConfirmationChange(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label={activeAccountLease ? "Exact PAPER restore confirmation" : "Exact Tiny-LIVE lease activation confirmation"}
+                  className="min-w-0 flex-1 rounded-lg border border-border-default bg-panel-light px-3 py-2 font-mono text-[10px] text-text-primary outline-none transition focus:border-cyan-300/40"
+                />
+                <button
+                  type="button"
+                  onClick={activeAccountLease ? onRestorePaper : onActivateLease}
+                  disabled={activeAccountLease ? !canRestorePaper : !canActivateLease}
+                  className={`rounded-lg border px-4 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted ${activeAccountLease ? "border-cyan-400/30 bg-cyan-400/10 text-cyan-200" : "border-amber-400/30 bg-amber-400/10 text-amber-300"}`}
+                >
+                  {activeAccountLease
+                    ? restoringPaper ? "Restoring…" : "Restore PAPER"
+                    : activatingLease ? "Activating…" : "Activate Tiny-LIVE"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-xs leading-5 text-text-muted">This control appears only after a durable route-bound arm exists. It cannot activate general LIVE mode.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-border-default bg-panel px-5 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-3xl">
+            <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">ACTION-TIME TIMING REVIEW</p>
+            <p className="mt-1 text-sm font-semibold text-text-primary">
+              {currentTimingApproval
+                ? "Fresh continuous timing approval is ready"
+                : pendingTimingProposal
+                  ? "Review and approve the fresh timing proposal"
+                  : "Generate a fresh selected-route timing review"}
+            </p>
+            <p className="mt-2 text-xs leading-5 text-text-muted">
+              Every basket route keeps its own genuine timing evidence. Approval for one route never approves another route and cannot submit an order by itself.
+            </p>
+          </div>
+          <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${currentTimingApproval ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : pendingTimingProposal ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-red-400/25 bg-red-400/8 text-red-300"}`}>
+            {currentTimingApproval ? "APPROVED / CURRENT" : pendingTimingProposal ? "AWAITING APPROVAL" : "APPROVAL REQUIRED"}
+          </span>
+        </div>
+
+        {currentTimingApproval ? (
+          <div className="mt-4 grid gap-2 sm:grid-cols-4">
+            <MiniEvidence label="Route" value={`${currentTimingApproval.market} ${currentTimingApproval.buyExchange.toUpperCase()}→${currentTimingApproval.sellExchange.toUpperCase()}`} />
+            <MiniEvidence label="Maximum book age" value={`${currentTimingApproval.maximumBookAgeMs} ms`} />
+            <MiniEvidence label="Public samples" value={formatInteger(currentTimingApproval.publicSamples)} />
+            <MiniEvidence label="Approval expires" value={currentTimingApproval.expiresAt === null ? "NO EXPIRY" : formatTime(currentTimingApproval.expiresAt)} />
+          </div>
+        ) : pendingTimingProposal ? (
+          <div className="mt-4 rounded-xl border border-amber-400/20 bg-amber-400/[0.035] p-4">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <MiniEvidence label="Maximum book age" value={`${pendingTimingProposal.maximumBookAgeMs} ms`} />
+              <MiniEvidence label="Public samples" value={formatInteger(pendingTimingProposal.publicSamples)} />
+              <MiniEvidence label="Evidence age" value={timeAgo(pendingTimingProposal.evidenceGeneratedAt)} />
+            </div>
+            <p className="mt-3 break-all font-mono text-[9px] leading-4 text-text-muted">TYPE EXACTLY: {pendingTimingProposal.requiredApprovalPhrase}</p>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                type="text"
+                value={timingApprovalConfirmation}
+                onChange={(event) => onTimingApprovalConfirmationChange(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Exact Strategy One timing approval confirmation"
+                className="min-w-0 flex-1 rounded-lg border border-border-default bg-panel-light px-3 py-2 font-mono text-[10px] text-text-primary outline-none transition focus:border-cyan-300/40"
+              />
+              <button
+                type="button"
+                onClick={() => onApproveTiming(pendingTimingProposal.id, pendingTimingProposal.requiredApprovalPhrase)}
+                disabled={approvingTiming || timingApprovalConfirmation !== pendingTimingProposal.requiredApprovalPhrase}
+                className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-xs font-bold text-amber-300 transition hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
+              >
+                {approvingTiming ? "Approving…" : "Approve timing for 3 hours"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 rounded-xl border border-border-default bg-panel-light/40 p-4">
+            {basketTimingHeadrooms.length > 0 ? (
+              <div className="mb-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">ALL 11 PILOT ROUTES · INDEPENDENT TIMING</p>
+                  <p className="font-mono text-[9px] text-text-muted">{basketTimingHeadrooms.filter((review) => review.state === "READY").length}/11 timing-ready now</p>
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {basketTimingHeadrooms.map((review) => {
+                    const selected = route !== null &&
+                      normalizedMarket(review.market) === normalizedMarket(route.market) &&
+                      review.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
+                      review.sellExchange.toLowerCase() === route.sellExchange.toLowerCase();
+                    return (
+                      <div
+                        key={review.routeKey}
+                        className={`rounded-lg border px-3 py-2 ${selected ? "border-cyan-300/35 bg-cyan-300/[0.07]" : "border-white/7 bg-black/20"}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-[9px] font-bold text-text-primary">{review.market} · {review.buyExchange.toUpperCase()}→{review.sellExchange.toUpperCase()}</span>
+                          <span className={`font-mono text-[8px] font-bold ${review.state === "READY" ? "text-emerald-300" : "text-amber-300"}`}>{review.state === "READY" ? "TIMING READY" : "TIMING BLOCKED"}</span>
+                        </div>
+                        <p className="mt-1 font-mono text-[8px] text-text-muted">
+                          Trigger P99 {review.decisionToTinyLiveTriggerP99Ms === null ? "NO DATA" : `${review.decisionToTinyLiveTriggerP99Ms} ms`} · headroom {review.residualOperationalHeadroomMs === null ? "NO DATA" : `${review.residualOperationalHeadroomMs} ms`}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {timingHeadroom ? (
+              <div className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <MiniEvidence label="Decision → LIVE trigger P99" value={timingHeadroom.decisionToTinyLiveTriggerP99Ms === null ? "NO DATA" : `${timingHeadroom.decisionToTinyLiveTriggerP99Ms} ms`} />
+                <MiniEvidence label="Worst fresh-book P99" value={timingHeadroom.executionGradeWorstAgeP99Ms === null ? "NO DATA" : `${timingHeadroom.executionGradeWorstAgeP99Ms} ms`} />
+                <MiniEvidence label="Operational headroom" value={timingHeadroom.residualOperationalHeadroomMs === null ? "NO DATA" : `${timingHeadroom.residualOperationalHeadroomMs} ms`} />
+                <MiniEvidence label="Required headroom" value={`${timingHeadroom.requiredOperationalHeadroomMs} ms`} />
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="max-w-4xl text-xs leading-5 text-text-muted">
+                {paperBotEnabled
+                  ? "Turn PAPER OFF first. Then generate the current route timing proposal."
+                  : !route
+                    ? "Waiting for an audited Strategy #1 route with current evidence."
+                    : timingHeadroom?.state === "BLOCKED"
+                      ? timingHeadroom.blockers.join(" | ")
+                      : "Current genuine timing evidence has enough fail-closed headroom for operator review."}
+              </p>
+              <button
+                type="button"
+                onClick={onProposeTiming}
+                disabled={paperBotEnabled || !route || proposingTiming || timingHeadroom?.state !== "READY"}
+                className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-xs font-bold text-cyan-200 transition hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
+              >
+                {proposingTiming
+                  ? "Reviewing evidence…"
+                  : timingHeadroom?.state === "BLOCKED"
+                    ? "Waiting for timing headroom"
+                    : "Generate fresh timing review"}
+              </button>
+            </div>
+
+            {timingError ? (
+              <p className="mt-3 rounded-lg border border-red-400/25 bg-red-400/8 px-3 py-2 text-xs leading-5 text-red-300">
+                Timing review failed closed: {apiErrorMessage(timingError)}
+              </p>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-cyan-300/15 bg-cyan-300/[0.025] px-5 py-3 text-xs leading-5 text-text-muted">
+        <strong className="font-mono text-cyan-200">SEPARATE EVIDENCE:</strong>
+        <span className="ml-2">PAPER settlements remain in PaperTradeStore and Trade Intelligence. Tiny-LIVE attempts remain in the LIVE session, order, fill, settlement and pre-arm journals shown below. Their counts and P&amp;L are never merged.</span>
+      </div>
+
+      <div className="grid gap-4 px-5 py-4 lg:grid-cols-[1fr_auto] lg:items-center">
+        <div>
+          {active ? (
+            <>
+              <p className="font-mono text-[10px] font-bold text-emerald-300">
+                ARMED {active.routeScope === "PILOT_BASKET" ? "SEVEN-COIN PILOT BASKET" : `${active.market} · ${active.buyExchange.toUpperCase()} → ${active.sellExchange.toUpperCase()}`}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-text-muted">
+                The highest-net current allowlisted route is considered, but it must independently pass fresh permissions, clocks, route calibration, balances, minimum order, depth, fees, stress profit and final last-look. CoinDCX uses its audited bounded-GTC contract; Binance/Bybit remain FOK.
+              </p>
+            </>
+          ) : (
+            <label className="flex cursor-pointer items-start gap-3 text-xs leading-5 text-text-muted">
+              <input
+                type="checkbox"
+                checked={acknowledged}
+                onChange={(event) => onAcknowledgedChange(event.target.checked)}
+                className="mt-1 size-4 rounded border-border-default bg-panel-light accent-emerald-400"
+              />
+              <span>
+                I understand that arming submits no order now. During the next 3 hours, up to ten distinct fully-qualified opportunities from the immutable seven-coin basket can each submit one real ₹{formatInteger(diagnostics?.pilotBasket.capitalPerLegInr ?? capitalPerLegInr)}-per-leg attempt. Every slot gets fresh inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch.
+              </span>
+            </label>
+          )}
+
+          {!active && diagnostics?.runtimeGateEnabled === false ? (
+            <p className="mt-2 font-mono text-[10px] text-amber-300">
+              Locked safely: runtime is not in explicitly enabled Strategy #1 Tiny-LIVE mode.
+            </p>
+          ) : null}
+
+          {!active && diagnostics?.runtimeGateEnabled === true && paperBotEnabled ? (
+            <p className="mt-2 font-mono text-[10px] text-amber-300">
+              Arm locked: turn PAPER OFF, then tick the acknowledgment.
+            </p>
+          ) : !active && !paperBotEnabled && !acknowledged ? (
+            <p className="mt-2 font-mono text-[10px] text-amber-300">
+              Arm locked: tick the acknowledgment to enable the 10-attempt batch.
+            </p>
+          ) : null}
+
+          {diagnostics?.lastEvaluation ? (
+            <p className="mt-2 font-mono text-[9px] text-text-muted">
+              LAST {diagnostics.lastEvaluation.outcome} · {diagnostics.lastEvaluation.reason}
+            </p>
+          ) : recent && recent.state !== "ARMED" ? (
+            <p className="mt-2 font-mono text-[9px] text-text-muted">
+              LAST ARM {recent.state}{recent.executionStatus ? ` · ${recent.executionStatus}` : ""}
+            </p>
+          ) : null}
+        </div>
+
+        {active ? (
+          <button
+            type="button"
+            onClick={onDisarm}
+            disabled={disarming || diagnostics?.triggerInProgress}
+            className="rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-2.5 text-xs font-bold text-red-300 transition hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {disarming ? "Disarming…" : diagnostics?.triggerInProgress ? "Trigger in progress" : "Disarm batch"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onArm}
+            disabled={!canArm}
+            className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-xs font-bold text-emerald-300 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
+          >
+            {arming ? "Arming durably…" : "Arm 7-coin · 10 attempts / 3 hours"}
+          </button>
+        )}
+      </div>
+
+      <div className="border-t border-border-default px-5 py-4">
+        <div className="grid gap-3 lg:grid-cols-[1.15fr_.85fr]">
+          <div className="rounded-xl border border-cyan-300/15 bg-cyan-300/[0.035] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+            <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">LIVE AUDITED OPPORTUNITY</p>
+                <p className="mt-1 text-sm font-semibold text-text-primary">
+                  {candidateMatchesRoute && candidate ? `${candidate.market} · ${candidate.buyExchange.toUpperCase()} BUY → ${candidate.sellExchange.toUpperCase()} SELL` : "Waiting for an allowlisted basket route"}
+                </p>
+              </div>
+              <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${candidateMatchesRoute && candidate?.readyForOperatorPreflight ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-amber-400/30 bg-amber-400/10 text-amber-300"}`}>
+                {candidateMatchesRoute && candidate?.readyForOperatorPreflight ? "QUALIFIED NOW" : "WAITING / BLOCKED"}
+              </span>
+            </div>
+
+            {candidateMatchesRoute && candidate ? (
+              <>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <MiniEvidence label="Book age" value={`${candidate.ageMs} ms`} />
+                  <MiniEvidence label="Current net" value={`${candidate.currentNetProfitPercent.toFixed(4)}%`} />
+                  <MiniEvidence label="Stress net" value={candidate.stress?.postStressNetProfitPercent === null || candidate.stress?.postStressNetProfitPercent === undefined ? "NO DATA" : `${candidate.stress.postStressNetProfitPercent.toFixed(4)}%`} />
+                  <MiniEvidence label="Quantity" value={candidate.stress?.quantity ? formatNumber(candidate.stress.quantity) : "NO DATA"} />
+                </div>
+                <p className="mt-3 break-all font-mono text-[9px] text-text-muted">ID {candidate.opportunityId}</p>
+                {blockedChecks.length > 0 ? (
+                  <div className="mt-3 space-y-1">
+                    {blockedChecks.slice(0, 3).map((check) => (
+                      <p key={check.key} className="text-[10px] leading-4 text-amber-300">{check.key.replaceAll("_", " ")}: {check.reasons[0] ?? check.message}</p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[10px] text-emerald-300">All current preview checks passed. Final action-time checks still run before every order.</p>
+                )}
+              </>
+            ) : (
+              <p className="mt-3 text-xs leading-5 text-text-muted">No current qualified candidate on the immutable basket. This is normal between genuine cross-exchange spreads; no order is created from stale or unrelated evidence.</p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-border-default bg-panel-light/40 p-4">
+            <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">EXECUTION RESULTS</p>
+            {attempts.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {attempts.map((attempt) => (
+                  <div key={`${attempt.attemptNumber}-${attempt.opportunityId}`} className={`rounded-lg border p-3 ${attempt.success ? "border-emerald-400/20 bg-emerald-400/[0.04]" : "border-red-400/20 bg-red-400/[0.04]"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] font-bold text-text-primary">ATTEMPT {attempt.attemptNumber}{attempt.market ? ` · ${attempt.market}` : ""}</span>
+                      <span className={`font-mono text-[9px] font-bold ${attempt.success ? "text-emerald-300" : "text-red-300"}`}>{attempt.success ? "SUCCESS" : "FAILED SAFE"} · {attempt.executionStatus}</span>
+                    </div>
+                    <p className="mt-1 text-[10px] leading-4 text-text-muted">{attempt.reason}</p>
+                    <p className="mt-1 font-mono text-[9px] text-text-muted">{attempt.buyExchange && attempt.sellExchange ? `${attempt.buyExchange.toUpperCase()} BUY → ${attempt.sellExchange.toUpperCase()} SELL · ` : ""}BUY {attempt.buyStatus ?? "—"} · SELL {attempt.sellStatus ?? "—"} · matched {attempt.matchedFilledQuantity === null ? "—" : formatNumber(attempt.matchedFilledQuantity)} · {attempt.executionTimeMs === null ? "—" : `${attempt.executionTimeMs} ms`}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs leading-5 text-text-muted">No real attempt recorded for this batch yet. Success or fail, exchange-leg status, matched quantity, timing and reason will appear here.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {error ? (
+        <p className="border-t border-red-400/20 bg-red-400/7 px-5 py-3 text-xs text-red-300">
+          Ten-slot control failed closed: {apiErrorMessage(error)}
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+function StrategyOneTinyLiveOpportunityAuditPanel({
+  audit,
+  loading,
+  error,
+  onRefresh,
+}: {
+  audit: StrategyOneTinyLiveOpportunityAuditReport | null;
+  loading: boolean;
+  error: Error | null;
+  onRefresh: () => void;
+}) {
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const actionableNow = (audit?.currentActionTime.fullyPreflightableMatches ?? 0) > 0;
+  const currentRoute = actionableNow
+    ? audit?.routeRanking.find((route) =>
+        route.routeKey === audit.currentActionTime.selectedRouteKey) ?? null
+    : null;
+  const stateTone = actionableNow
+    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+    : "border-amber-400/30 bg-amber-400/10 text-amber-300";
+  const topBlockers = audit?.blockerRanking.slice(0, 4) ?? [];
+  const topRoutes = audit?.routeRanking.slice(0, 6) ?? [];
+
+  return (
+    <article className="overflow-hidden rounded-2xl border border-cyan-300/18 bg-panel">
+      <PanelHeader
+        icon={<Target className="size-4" />}
+        eyebrow="CURRENT ACTION-TIME EVIDENCE"
+        title="Tiny-LIVE gate right now"
+        right={(
+          <div className="flex items-center gap-2">
+            <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${stateTone}`}>
+              {loading ? "LOADING" : actionableNow ? "ACTIONABLE NOW" : "WAITING / BLOCKED"}
+            </span>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={loading}
+              aria-label="Refresh Tiny-LIVE opportunity audit"
+              className="grid size-8 place-items-center rounded-lg border border-border-default bg-panel-light text-text-muted transition hover:text-cyan-200 disabled:cursor-wait disabled:opacity-50"
+            >
+              <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
+            </button>
+          </div>
+        )}
+      />
+
+      {audit ? (
+        <>
+          <div className="grid gap-px bg-border-default sm:grid-cols-3">
+            <ActivityMetric
+              label="Current qualified routes"
+              value={`${formatInteger(audit.currentActionTime.fullyPreflightableMatches)} / ${PILOT_BASKET_ROUTE_KEYS.size}`}
+              detail="Across the full 7-coin / 11-direction basket"
+              tone={actionableNow ? "positive" : "warning"}
+            />
+            <ActivityMetric
+              label="Basket candidate now"
+              value={currentRoute ? currentRoute.market : "NO QUALIFIED ROUTE"}
+              detail={currentRoute
+                ? `${currentRoute.buyExchange.toUpperCase()} BUY → ${currentRoute.sellExchange.toUpperCase()} SELL`
+                : "Scanning every approved direction; COTI is not pinned"}
+              tone={currentRoute ? "positive" : "warning"}
+            />
+            <ActivityMetric
+              label="Current gate"
+              value={audit.currentActionTime.state.replaceAll("_", " ")}
+              detail={audit.currentActionTime.blockers[0] ?? "All current categories passed"}
+              tone={actionableNow ? "positive" : "warning"}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-border-default bg-[#07111d] px-5 py-3">
+            <span className="mr-1 font-mono text-[9px] font-bold tracking-[0.12em] text-cyan-200">7-COIN SCOPE</span>
+            {PILOT_BASKET_MARKETS.map((market) => (
+              <span
+                key={market}
+                className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${
+                  currentRoute?.market === market
+                    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                    : "border-border-default bg-panel-light text-text-muted"
+                }`}
+              >
+                {market.replace(/USDT$/u, "")}
+              </span>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-default bg-[#07111d] px-5 py-3">
+            <p className="text-xs text-text-muted">
+              Historical observations explain route quality; they are not attempts, orders, fills or profit.
+            </p>
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((value) => !value)}
+              className="rounded-lg border border-border-default bg-panel-light px-3 py-2 font-mono text-[9px] font-bold text-cyan-200 transition hover:border-cyan-300/30"
+            >
+              {historyOpen ? "Hide historical audit" : "Show historical audit"}
+            </button>
+          </div>
+
+          {historyOpen ? (
+            <>
+          <div className="grid gap-px bg-border-default sm:grid-cols-2 xl:grid-cols-5">
+            <ActivityMetric
+              label="Unique economics"
+              value={formatInteger(audit.observation.economicsGenerations)}
+              detail={`${formatAuditSpan(audit.observation.wallClockSpanMs)} audit window · ${
+                audit.observation.idleSinceLastObservationMs === null
+                  ? "no sample yet"
+                  : `${formatAuditSpan(audit.observation.idleSinceLastObservationMs)} since latest sample`
+              }`}
+            />
+            <ActivityMetric
+              label={`Discovery ≥${audit.thresholds.discoveryNetProfitPercent.toFixed(2)}%`}
+              value={formatInteger(audit.observation.profitBands.discovered)}
+              detail="below qualification band"
+            />
+            <ActivityMetric
+              label={`Intermediate band ≥${audit.thresholds.qualificationNetProfitPercent.toFixed(2)}%`}
+              value={formatInteger(audit.observation.profitBands.qualified)}
+              detail="empty when qualification and LIVE floors match"
+              tone="warning"
+            />
+            <ActivityMetric
+              label={`Current LIVE evidence ≥${audit.thresholds.liveNetProfitPercent.toFixed(2)}%`}
+              value={formatInteger(audit.observation.profitBands.liveEligible)}
+              detail={`same active gate ≥${audit.thresholds.activeTinyLiveNetProfitPercent.toFixed(2)}%`}
+              tone={audit.observation.profitBands.liveEligible > 0 ? "positive" : "warning"}
+            />
+            <ActivityMetric
+              label="Historical dispatch-ready observations"
+              value={formatInteger(audit.observation.dispatchReservedLiveEligibleGenerations)}
+              detail={`not attempts/orders · books ≤${formatInteger(audit.thresholds.dispatchReservedMaximumBookAgeMs)} ms`}
+              tone={audit.observation.dispatchReservedLiveEligibleGenerations > 0 ? "positive" : "warning"}
+            />
+          </div>
+
+          <div className="grid gap-px bg-border-default xl:grid-cols-[1.2fr_.8fr]">
+            <div className="min-w-0 bg-panel px-5 py-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[9px] font-bold tracking-[0.13em] text-cyan-200">STRATEGY #1 PILOT ROUTE RANKING</p>
+                  <p className="mt-1 text-xs text-text-muted">Unique post-orchestrator generations; repeated quote snapshots are ignored.</p>
+                </div>
+                <span className="font-mono text-[9px] text-text-muted">TOP {topRoutes.length}</span>
+              </div>
+              {topRoutes.length > 0 ? (
+                <div className="mt-4 overflow-x-auto">
+                  <div className="min-w-[760px]">
+                    <div className="grid grid-cols-[.35fr_1fr_1.35fr_.65fr_.65fr_.65fr_1fr] gap-3 border-b border-border-default pb-2 text-[8px] font-bold uppercase tracking-[0.1em] text-text-muted">
+                      <span>#</span><span>Market</span><span>Route</span><span>LIVE</span><span>Fresh LIVE</span><span>P95 net</span><span>Dominant blocker</span>
+                    </div>
+                    {topRoutes.map((route) => (
+                      <div key={route.routeKey} className="grid grid-cols-[.35fr_1fr_1.35fr_.65fr_.65fr_.65fr_1fr] items-center gap-3 border-b border-border-default/70 py-3 text-[10px] last:border-0">
+                        <span className="font-mono text-text-muted">{route.rank}</span>
+                        <div><p className="font-mono font-bold text-text-primary">{route.market}</p><p className={`mt-0.5 font-mono text-[8px] ${route.current ? "text-emerald-300" : "text-text-muted"}`}>{route.current ? "CURRENT" : timeAgo(route.lastObservedAt)}</p></div>
+                        <span className="font-semibold capitalize text-text-primary">{route.buyExchange} → {route.sellExchange}</span>
+                        <span className="font-mono font-bold text-cyan-200">{formatInteger(route.liveEligibleGenerations)}</span>
+                        <span className="font-mono font-bold text-emerald-300">{formatInteger(route.dispatchReservedLiveEligibleGenerations)}</span>
+                        <span className="font-mono text-text-primary">{route.p95NetProfitPercent === null ? "—" : `${route.p95NetProfitPercent.toFixed(3)}%`}</span>
+                        <span className="truncate font-mono text-[8px] text-amber-300" title={route.dominantBlocker ?? "No counted blocker"}>{route.dominantBlocker?.replaceAll("_", " ") ?? "NONE COUNTED"}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <EmptyState title="Collecting fresh economics" detail="This deployment starts a truthful economics cohort from new unique audited pilot-route quote generations; no historical profit sample is fabricated." />
+              )}
+            </div>
+
+            <div className="min-w-0 bg-panel px-5 py-5">
+              <p className="font-mono text-[9px] font-bold tracking-[0.13em] text-amber-200">COUNTED BLOCKERS</p>
+              <div className="mt-3 space-y-2">
+                {topBlockers.length > 0 ? topBlockers.map((blocker) => (
+                  <div key={blocker.code} className="rounded-lg border border-border-default bg-panel-light/40 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-mono text-[9px] font-bold text-text-primary">{blocker.rank}. {blocker.code.replaceAll("_", " ")}</p>
+                      <span className="rounded border border-amber-300/20 bg-amber-300/8 px-2 py-0.5 font-mono text-[9px] font-bold text-amber-200">{formatInteger(blocker.count)}</span>
+                    </div>
+                    <p className="mt-1.5 text-[10px] leading-4 text-text-muted">{blocker.detail}</p>
+                  </div>
+                )) : <p className="rounded-lg border border-border-default bg-panel-light/40 p-3 text-xs text-text-muted">No blocker count is available yet.</p>}
+              </div>
+            </div>
+          </div>
+            </>
+          ) : null}
+
+          <div className="border-t border-border-default px-5 py-4">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+              {audit.currentActionTime.categories.map((category) => (
+                <div key={category.category} className={`rounded-lg border p-3 ${auditCategoryTone(category.state)}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[8px] font-bold text-text-muted">{category.category.replaceAll("_", " ")}</span>
+                    <span className="font-mono text-[8px] font-bold">{category.state.replaceAll("_", " ")}</span>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-[9px] leading-4 text-text-muted">{category.reasons[0] ?? "No current candidate reached this check."}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 font-mono text-[9px] text-text-muted">
+              READ ONLY · policy unchanged · no capital reserved · no fund movement · no LIVE session · no order submission
+            </p>
+          </div>
+        </>
+      ) : (
+        <EmptyState title={error ? "Tiny-LIVE audit unavailable" : "Loading Tiny-LIVE audit"} detail={error?.message ?? "Waiting for the read-only audit endpoint."} />
+      )}
     </article>
   );
 }
@@ -640,7 +2718,7 @@ function StrategyOneActionTimePreflightPanel({
     <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
       <PanelHeader
         icon={<ShieldCheck className="size-4" />}
-        eyebrow="V92 ACTION-TIME PILOT GATE"
+        eyebrow="V115 ACTION-TIME PILOT GATE"
         title="Fresh opportunity → ₹100 Tiny-LIVE preflight"
         right={(
           <div className="flex items-center gap-2">
@@ -661,14 +2739,14 @@ function StrategyOneActionTimePreflightPanel({
       />
 
       <div className="border-b border-border-default px-5 py-3 text-xs leading-5 text-text-muted">
-        A route appears here only when a fresh EXECUTE opportunity matches durable credible history. Exact ₹100 sizing then reuses authenticated two-leg balances, exchange order rules, quantity normalization and post-stress depth/fee/slippage checks.
+        A route appears here only when a fresh EXECUTE opportunity matches durable credible history and preserves measured dispatch plus operational timing headroom inside 250 ms. Exact ₹100 sizing then reuses authenticated two-leg balances, exchange order rules, quantity normalization and post-stress depth/fee/slippage checks.
       </div>
 
       {preview ? (
         <>
           <div className="grid gap-px bg-border-default sm:grid-cols-2 xl:grid-cols-4">
-            <ActivityMetric label="Fresh EXECUTE now" value={formatInteger(preview.evidence.currentFreshExecuteOpportunities)} detail={`Maximum age ${formatInteger(preview.maximumOpportunityAgeMs)} ms`} />
-            <ActivityMetric label="Historical eligible routes" value={formatInteger(preview.evidence.historicalAdapterReadyRoutes)} detail="Credible + adapter-ready" />
+            <ActivityMetric label="Binance/Bybit EXECUTE now" value={formatInteger(preview.evidence.currentFreshExecuteOpportunities)} detail={`Dispatch-ready ≤${formatInteger(preview.maximumDispatchReservedBookAgeMs)} ms · absolute ceiling ${formatInteger(preview.maximumExecutionGradeBookAgeMs)} ms`} />
+            <ActivityMetric label="Audited historical routes" value={formatInteger(preview.evidence.historicalAdapterReadyRoutes)} detail={`${formatInteger(preview.evidence.excludedNonPilotHistoricalRoutes)} non-pilot excluded`} />
             <ActivityMetric label="Current matches" value={formatInteger(preview.evidence.matchedCurrentRoutes)} detail={`${preview.evidence.fullyPreflightableMatches} fully preflightable`} tone={preview.evidence.fullyPreflightableMatches > 0 ? "positive" : "warning"} />
             <ActivityMetric label="Pilot inventory" value={`₹${formatInteger(preview.requestedCapitalPerLegInr)} + ₹${formatInteger(preview.requestedCapitalPerLegInr)}`} detail={`₹${formatInteger(preview.minimumTwoLegInventoryInr)} minimum across both legs`} tone="warning" />
           </div>
@@ -690,8 +2768,9 @@ function StrategyOneActionTimePreflightPanel({
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-7 gap-y-2 text-right sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-x-7 gap-y-2 text-right sm:grid-cols-5">
                   <PlacementStat label="Historical settles" value={formatInteger(candidate.historical.uniqueSettlements)} />
+                  <PlacementStat label="Timing headroom" value={candidate.timing.residualOperationalHeadroomMs === null ? "NO DATA" : `${formatInteger(candidate.timing.residualOperationalHeadroomMs)} ms`} positive={candidate.timing.state === "READY"} />
                   <PlacementStat label="Funded size" value={candidate.funding.estimatedExecutableCapitalInr === null ? "NO SIZE" : `₹${formatNumber(candidate.funding.estimatedExecutableCapitalInr)}`} positive={candidate.funding.state === "FUNDED"} />
                   <PlacementStat label="Post-stress net" value={candidate.stress?.postStressNetProfitPercent === null || candidate.stress?.postStressNetProfitPercent === undefined ? "NO DATA" : `${candidate.stress.postStressNetProfitPercent >= 0 ? "+" : ""}${candidate.stress.postStressNetProfitPercent.toFixed(4)}%`} positive={candidate.stress?.status === "PASSED"} />
                   <PlacementStat label="Candidate" value={candidate.readyForOperatorPreflight ? "READY" : "BLOCKED"} positive={candidate.readyForOperatorPreflight} />
@@ -973,6 +3052,12 @@ function ActivityMetric({label, value, detail, tone = "default"}: {label: string
 
 function OpportunityConversionPanel({report}: {report: PersonalOpportunityConversion}) {
   const primary = report.primaryBottleneck;
+  const currentStages = report.stages.filter((stage) =>
+    stage.scope === "CURRENT_SCAN" ||
+    stage.scope === "CURRENT_STATE");
+  const evidenceStages = report.stages.filter((stage) =>
+    stage.scope === "RECENT_5_MIN" ||
+    stage.scope === "DURABLE_COHORT");
 
   return (
     <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
@@ -984,8 +3069,12 @@ function OpportunityConversionPanel({report}: {report: PersonalOpportunityConver
       />
 
       <div className="border-b border-border-default p-5">
-        <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-9">
-          {report.stages.map((stage, index) => (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="font-mono text-[9px] font-bold tracking-[0.12em] text-cyan-200">CURRENT SCAN / CURRENT STATE</p>
+          <p className="text-[10px] text-text-muted">Counts below belong to one live pipeline snapshot.</p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-7">
+          {currentStages.map((stage, index) => (
             <div key={stage.key} className="relative min-w-0">
               <div className={`h-full rounded-xl border px-3 py-3 ${conversionStageTone(stage.status)}`} title={stage.reason}>
                 <div className="flex items-start justify-between gap-2">
@@ -995,9 +3084,28 @@ function OpportunityConversionPanel({report}: {report: PersonalOpportunityConver
                 <p className="mt-2 min-h-8 text-[9px] font-semibold uppercase leading-4 tracking-[0.08em] text-text-muted">{stage.label}</p>
                 <p className="mt-1 font-mono text-[8px] text-text-muted">{stage.scope.replaceAll("_", " ")}</p>
               </div>
-              {index < report.stages.length - 1 ? <ArrowRight className="absolute -right-2.5 top-1/2 z-10 hidden size-3 -translate-y-1/2 text-slate-600 xl:block" /> : null}
+              {index < currentStages.length - 1 ? <ArrowRight className="absolute -right-2.5 top-1/2 z-10 hidden size-3 -translate-y-1/2 text-slate-600 xl:block" /> : null}
             </div>
           ))}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.035] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-mono text-[9px] font-bold tracking-[0.12em] text-amber-200">SEPARATE TIME WINDOWS · NOT THIS SCAN&apos;S CONVERSION</p>
+            <p className="text-[10px] text-text-muted">Recent attempts and lifetime tagged settlements can stay non-zero when current qualification is zero.</p>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {evidenceStages.map((stage) => (
+              <div key={stage.key} className={`rounded-xl border px-3 py-3 ${conversionStageTone(stage.status)}`} title={stage.reason}>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-mono text-xl font-bold text-text-primary">{formatInteger(stage.count)}</span>
+                  <span className="font-mono text-[8px] font-bold">{stage.status.replaceAll("_", " ")}</span>
+                </div>
+                <p className="mt-2 text-[9px] font-semibold uppercase tracking-[0.08em] text-text-muted">{stage.label}</p>
+                <p className="mt-1 font-mono text-[8px] text-text-muted">{stage.scope.replaceAll("_", " ")}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -1226,7 +3334,7 @@ function OpportunityRow({opportunity}: {opportunity: PersonalBotOpportunity}) {
 
 function ExecutionRow({execution}: {execution: PersonalBotExecution}) {
   return <div className="grid grid-cols-[1.1fr_1.35fr_1fr_.8fr_.8fr_1fr_.8fr_.8fr] items-center gap-4 border-b border-border-default px-5 py-3.5 text-xs last:border-b-0 hover:bg-panel-light/25">
-    <div className="flex items-center gap-2.5"><CoinMark symbol={execution.baseAsset}/><div><p className="font-mono font-bold text-text-primary">{execution.baseAsset}/{execution.quoteAsset}</p><p className="mt-0.5 text-[9px] text-text-muted">Cross-Exchange Arbitrage</p></div></div>
+    <div className="flex items-center gap-2.5"><CoinMark symbol={execution.baseAsset}/><div><p className="font-mono font-bold text-text-primary">{execution.baseAsset}/{execution.quoteAsset}</p><p className="mt-0.5 text-[9px] font-bold text-amber-200">PAPER SIMULATED</p></div></div>
     <div className="flex items-center gap-2"><span className="font-semibold capitalize text-text-primary">{execution.buyExchange}</span><ArrowRight className="size-3 text-brand"/><span className="font-semibold capitalize text-text-primary">{execution.sellExchange}</span></div>
     <span className="font-mono text-text-muted">{formatNumber(execution.quantity)}</span>
     <span className="font-mono text-text-primary">{formatNumber(execution.buyPrice)}</span>
@@ -1263,6 +3371,10 @@ function CompactStat({label, value, positive}: {label: string; value: string; po
   return <div><p className="text-[9px] uppercase tracking-[0.11em] text-text-muted">{label}</p><p className={`mt-1 truncate font-mono text-xs font-bold ${positive === undefined ? "text-text-primary" : positive ? "text-emerald-300" : "text-red-300"}`}>{value}</p></div>;
 }
 
+function CapitalTruthMetric({label, value, positive}: {label: string; value: string; positive?: boolean}) {
+  return <div className="bg-[#07111d] px-4 py-4"><CompactStat label={label} value={value} positive={positive} /></div>;
+}
+
 function LivePill({active, label}: {active: boolean; label: string}) {
   return <span className="flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/8 px-2.5 py-1 font-mono text-[10px] text-emerald-300"><span className={`size-1.5 rounded-full bg-emerald-400 ${active ? "animate-pulse" : ""}`}/>{label}</span>;
 }
@@ -1280,6 +3392,31 @@ function stateAppearance(state: PersonalStrategyOneBotState): {label: string; te
   if (state === "PAUSED") return {label: "PAUSED", text: "text-slate-300", surface: "border-slate-600 bg-slate-800/60"};
   if (state === "BLOCKED") return {label: "BLOCKED", text: "text-red-300", surface: "border-red-400/20 bg-red-400/8"};
   return {label: state.replaceAll("_", " "), text: "text-amber-300", surface: "border-amber-400/20 bg-amber-400/8"};
+}
+
+function capitalManagerStateTone(state: PersonalStrategyOneBotData["capitalManager"]["state"]): string {
+  if (state === "READY_FOR_PREFLIGHT") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-300";
+  if (state === "OPERATOR_ACTION_REQUIRED") return "border-amber-400/25 bg-amber-400/10 text-amber-300";
+  if (state === "EVIDENCE_INCOMPLETE") return "border-red-400/25 bg-red-400/10 text-red-300";
+  return "border-cyan-300/25 bg-cyan-300/8 text-cyan-200";
+}
+
+function fundingStateTone(state: "FUNDED" | "REDUCED" | "BLOCKED"): string {
+  if (state === "FUNDED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-300";
+  if (state === "REDUCED") return "border-amber-400/25 bg-amber-400/10 text-amber-300";
+  return "border-red-400/25 bg-red-400/10 text-red-300";
+}
+
+function capitalManagerBalanceTone(status: PersonalStrategyOneBotData["capitalManager"]["venues"][number]["status"]): string {
+  if (status === "SYNCHRONIZED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-300";
+  if (status === "FAILED" || status === "STALE") return "border-red-400/25 bg-red-400/10 text-red-300";
+  return "border-amber-400/25 bg-amber-400/10 text-amber-300";
+}
+
+function capitalManagerActionTone(state: PersonalStrategyOneBotData["capitalManager"]["actions"][number]["state"]): string {
+  if (state === "READY") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-300";
+  if (state === "ACTION_REQUIRED" || state === "WAITING") return "border-amber-400/25 bg-amber-400/10 text-amber-300";
+  return "border-red-400/25 bg-red-400/10 text-red-300";
 }
 
 function inventoryPlanStatusTone(status: PersonalStrategyOneBotData["inventoryPlan"]["recommendationStatus"]): string {
@@ -1303,8 +3440,222 @@ function pilotPreviewStateTone(status: StrategyOnePilotPreviewReport["state"] | 
   return "border-border-default bg-panel-light text-text-muted";
 }
 
+function isSupportedPreArmRoute(route: {
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+}): boolean {
+  const market = normalizedMarket(route.market);
+  const buy = route.buyExchange.trim().toLowerCase();
+  const sell = route.sellExchange.trim().toLowerCase();
+  const binanceBybitLane = buy !== sell &&
+    (buy === "binance" || buy === "bybit") &&
+    (sell === "binance" || sell === "bybit");
+
+  return market.endsWith("USDT") && market.length >= 7 &&
+    (binanceBybitLane || isPilotBasketRoute(route));
+}
+
+const PILOT_BASKET_ROUTE_KEYS = new Set([
+  "COTIUSDT:coindcx->binance",
+  "BBUSDT:coindcx->binance",
+  "BBUSDT:binance->coindcx",
+  "BBUSDT:bybit->coindcx",
+  "HEMIUSDT:coindcx->binance",
+  "HEMIUSDT:binance->coindcx",
+  "TREEUSDT:bybit->coindcx",
+  "NEXOUSDT:binance->coindcx",
+  "NEXOUSDT:bybit->coindcx",
+  "PYBOBOUSDT:coindcx->bybit",
+  "GPSUSDT:coindcx->bybit",
+]);
+
+const PILOT_BASKET_MARKETS = [
+  "COTIUSDT",
+  "BBUSDT",
+  "HEMIUSDT",
+  "TREEUSDT",
+  "NEXOUSDT",
+  "PYBOBOUSDT",
+  "GPSUSDT",
+] as const;
+
+function isPilotBasketRoute(route: {
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+}): boolean {
+  return PILOT_BASKET_ROUTE_KEYS.has(
+    `${normalizedMarket(route.market)}:${route.buyExchange.trim().toLowerCase()}->${route.sellExchange.trim().toLowerCase()}`,
+  );
+}
+
+function toPreArmRoute(route: {
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+} | null): StrategyOnePreArmRoute | null {
+  if (!route || !isSupportedPreArmRoute(route)) {
+    return null;
+  }
+
+  const buyExchange = route.buyExchange.trim().toLowerCase();
+  const sellExchange = route.sellExchange.trim().toLowerCase();
+
+  if (
+    (buyExchange !== "binance" && buyExchange !== "bybit" && buyExchange !== "coindcx") ||
+    (sellExchange !== "binance" && sellExchange !== "bybit" && sellExchange !== "coindcx")
+  ) {
+    return null;
+  }
+
+  return {
+    market: normalizedMarket(route.market),
+    buyExchange,
+    sellExchange,
+  };
+}
+
+function basketArmPhrase(capitalPerLegInr: number): string {
+  return `ARM PILOT-BASKET SEVEN-COIN INR${capitalPerLegInr} ATTEMPTS10 MINUTES180`;
+}
+
+function timingRouteKey(route: StrategyOnePreArmRoute): string {
+  return `${normalizedMarket(route.market)}:${route.buyExchange.toLowerCase()}->${route.sellExchange.toLowerCase()}`;
+}
+
+function findCurrentControlledBatchTimingApproval(
+  diagnostics: StrategyOneTimingCalibrationDiagnostics | null,
+  route: StrategyOnePreArmRoute | null,
+): StrategyOneTimingCalibrationRecord | null {
+  if (!diagnostics || !route) return null;
+
+  return diagnostics.records.find((record) =>
+    timingRecordMatchesRoute(record, route) &&
+    record.scope === "CONTINUOUS_TINY_LIVE" &&
+    record.status === "APPROVED" &&
+    record.expiresAt !== null &&
+    record.expiresAt >= diagnostics.generatedAt
+  ) ?? null;
+}
+
+function findPendingControlledBatchTimingProposal(
+  diagnostics: StrategyOneTimingCalibrationDiagnostics | null,
+  route: StrategyOnePreArmRoute | null,
+): StrategyOneTimingCalibrationRecord | null {
+  if (!diagnostics || !route) return null;
+  const maximumProposalAgeMs = 5 * 60 * 1_000;
+
+  return diagnostics.records.find((record) =>
+    timingRecordMatchesRoute(record, route) &&
+    (record.scope === "BOOTSTRAP_CONTROLLED_TWO_ATTEMPT_BATCH" ||
+      record.scope === "CONTINUOUS_TINY_LIVE") &&
+    record.status === "PROPOSED" &&
+    diagnostics.generatedAt - record.proposedAt <= maximumProposalAgeMs
+  ) ?? null;
+}
+
+function timingRecordMatchesRoute(
+  record: StrategyOneTimingCalibrationRecord,
+  route: StrategyOnePreArmRoute,
+): boolean {
+  return normalizedMarket(record.market) === normalizedMarket(route.market) &&
+    record.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
+    record.sellExchange.toLowerCase() === route.sellExchange.toLowerCase();
+}
+
+function apiErrorMessage(error: Error): string {
+  const responseData = (error as Error & {
+    response?: {data?: unknown};
+  }).response?.data;
+
+  if (
+    responseData &&
+    typeof responseData === "object" &&
+    "message" in responseData &&
+    typeof responseData.message === "string"
+  ) {
+    return responseData.message;
+  }
+
+  return error.message || "Unknown fail-closed error.";
+}
+
+function normalizedMarket(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
+}
+
+function MiniEvidence({label, value}: {label: string; value: string}) {
+  return (
+    <div className="rounded-lg border border-border-default bg-panel px-2.5 py-2">
+      <p className="font-mono text-[8px] uppercase tracking-[.12em] text-text-muted">{label}</p>
+      <p className="mt-1 font-mono text-[11px] font-bold text-text-primary">{value}</p>
+    </div>
+  );
+}
+
+function tinyLiveAuthorityStatus(
+  diagnostics: StrategyOneTinyLivePreArmDiagnostics | null,
+): {label: string; tone: string} {
+  if (!diagnostics) {
+    return {
+      label: "TINY-LIVE UNKNOWN",
+      tone: "border-slate-500/30 bg-slate-500/10 text-slate-300",
+    };
+  }
+  if (diagnostics.activeArm) {
+    return {
+      label: "TINY-LIVE ARMED",
+      tone: "border-red-400/35 bg-red-400/10 text-red-300",
+    };
+  }
+  if (diagnostics.runtimeGateEnabled) {
+    return {
+      label: "TINY-LIVE DISARMED",
+      tone: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
+    };
+  }
+  return {
+    label: "TINY-LIVE OFF",
+    tone: "border-slate-500/30 bg-slate-500/10 text-slate-300",
+  };
+}
+
+function auditCategoryTone(state: "PASS" | "BLOCKED" | "NOT_EVALUATED"): string {
+  if (state === "PASS") return "border-emerald-400/20 bg-emerald-400/7 text-emerald-300";
+  if (state === "BLOCKED") return "border-red-400/20 bg-red-400/7 text-red-300";
+  return "border-border-default bg-panel-light/40 text-slate-300";
+}
+
+function formatAuditSpan(spanMs: number): string {
+  if (spanMs < 60_000) return `${Math.floor(spanMs / 1_000)} sec`;
+  if (spanMs < 3_600_000) return `${Math.floor(spanMs / 60_000)} min`;
+  return `${(spanMs / 3_600_000).toFixed(1)} hr`;
+}
+
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-IN", {maximumFractionDigits: 6}).format(value);
+}
+
+function readRequestError(error: unknown): string {
+  if (!error) return "Unknown control error.";
+  if (typeof error === "string") return error;
+
+  const candidate = error as {
+    message?: unknown;
+    response?: {
+      data?: {
+        error?: unknown;
+        message?: unknown;
+        reason?: unknown;
+      };
+    };
+  };
+  const data = candidate.response?.data;
+  const serverMessage = data?.message ?? data?.error ?? data?.reason;
+  if (typeof serverMessage === "string" && serverMessage.trim()) return serverMessage;
+  if (typeof candidate.message === "string" && candidate.message.trim()) return candidate.message;
+  return "Unknown control error.";
 }
 
 function formatInteger(value: number): string {

@@ -114,7 +114,8 @@ export class BinanceExecutionAdapter
                     ? {}
                     : {
                         timeInForce:
-                          "GTC" as const,
+                          request.timeInForce ??
+                          "GTC",
                       }),
                 }
               : {}),
@@ -383,6 +384,36 @@ export class BinanceExecutionAdapter
     ) {
       throw new Error(
         "Binance post-only execution requires a limit order.",
+      );
+    }
+
+    if (
+      request.timeInForce !==
+        undefined &&
+      (
+        request.orderType !==
+          "limit" ||
+        request.postOnly ===
+          true
+      )
+    ) {
+      throw new Error(
+        "Binance time-in-force is supported only for non-post-only limit orders.",
+      );
+    }
+
+    if (
+      request.timeInForce !==
+        undefined &&
+      request.timeInForce !==
+        "GTC" &&
+      request.timeInForce !==
+        "IOC" &&
+      request.timeInForce !==
+        "FOK"
+    ) {
+      throw new Error(
+        "Binance time-in-force must be GTC, IOC, or FOK.",
       );
     }
 

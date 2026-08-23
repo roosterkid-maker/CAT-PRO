@@ -1,3 +1,7 @@
+import type {
+  StrategyOnePolicyReport,
+} from "../../trading/policy/StrategyOneExecutionPolicyService";
+
 export interface OperatorSettingsReport {
   generatedAt: number;
 
@@ -142,6 +146,9 @@ export interface OperatorSettingsReport {
     currency: "INR";
     liveOrderSubmissionFromSettingsAllowed: false;
   };
+
+  strategyOnePolicy:
+    StrategyOnePolicyReport;
 
   safetyInvariants: string[];
 }

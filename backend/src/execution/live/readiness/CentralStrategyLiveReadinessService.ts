@@ -99,7 +99,7 @@ interface LiveAdapterEvidence {
   readonly adapterRegistered: boolean;
   readonly verificationState: string;
   readonly readOnlyVerificationFresh: boolean;
-  readonly liveExecutionEnabled: false;
+  readonly liveExecutionEnabled: boolean;
   readonly adapterConnected: boolean;
   readonly capabilities: {
     readonly supportsPostOnly: boolean;

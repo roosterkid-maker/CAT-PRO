@@ -351,6 +351,29 @@ async function testOfficialSpotOrderContract():
     symbol:
       "BTCUSDT",
     side:
+      "Sell",
+    orderType:
+      "Limit",
+    quantity:
+      0.002,
+    price:
+      50_000,
+    timeInForce:
+      "FOK",
+  });
+
+  assertCondition(
+    postCalls[2]
+      ?.body
+      .timeInForce ===
+      "FOK",
+    "Bybit explicit FOK must survive the audited order API mapping without a GTC fallback.",
+  );
+
+  await api.createSpotOrder({
+    symbol:
+      "BTCUSDT",
+    side:
       "Buy",
     orderType:
       "Limit",
@@ -363,7 +386,7 @@ async function testOfficialSpotOrderContract():
   });
 
   assertCondition(
-    postCalls[2]
+    postCalls[3]
       ?.body
       .timeInForce ===
       "PostOnly",
@@ -402,14 +425,14 @@ async function testOfficialSpotOrderContract():
   );
 
   assertCondition(
-    postCalls[3]
+    postCalls[4]
       ?.path ===
       "/v5/order/cancel" &&
-      postCalls[3]
+      postCalls[4]
         ?.body
         .orderId ===
         "order-123" &&
-      postCalls[3]
+      postCalls[4]
         ?.body
         .orderFilter ===
         "Order",
@@ -438,7 +461,7 @@ async function testOfficialSpotOrderContract():
   assertCondition(
     invalidLimitBlocked &&
       postCalls.length ===
-        4,
+        5,
     "Invalid Bybit limit orders must fail before any signed request is attempted.",
   );
 }

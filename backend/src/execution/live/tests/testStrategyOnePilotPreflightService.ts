@@ -22,9 +22,17 @@ import type {
   TinyLivePreflightRequest,
 } from "../tiny-live/TinyLivePreflight";
 
+import type {
+  StrategyOneTimingHeadroomReview,
+} from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
+
 import {
   StrategyOnePilotPreflightService,
 } from "../tiny-live/StrategyOnePilotPreflightService";
+
+import type {
+  StrategyOneApiPermissionBoundaryReport,
+} from "../tiny-live/StrategyOneApiPermissionBoundaryService";
 
 const NOW =
   1_900_000_000_000;
@@ -47,6 +55,12 @@ function main(): void {
   let stress =
     passedStress();
 
+  let timing =
+    readyTiming();
+
+  let apiPermissionBoundary =
+    readyApiPermissionBoundary();
+
   let stressCalls =
     0;
 
@@ -57,17 +71,41 @@ function main(): void {
     TinyLivePreflightRequest | null =
     null;
 
+  let fundingCapitalInr =
+    0;
+
   const service =
     new StrategyOnePilotPreflightService({
+      getTinyLivePolicy:
+        () => ({
+          capitalPerLegInr:
+            500,
+          minimumNetProfitPercent:
+            0.5,
+          maximumPreviewOpportunityAgeMs:
+            10_000,
+        }),
       getOpportunities:
         () =>
           opportunities,
       getCapitalPlacement:
         () =>
           placement,
-      evaluateFunding:
+      getApiPermissionBoundary:
         () =>
-          funding,
+          apiPermissionBoundary,
+      evaluateFunding:
+        (
+          _opportunity,
+          requestedCapitalInr,
+        ) => {
+          fundingCapitalInr =
+            requestedCapitalInr;
+          return funding;
+        },
+      reviewTiming:
+        () =>
+          timing,
       evaluateStress:
         () => {
           stressCalls +=
@@ -111,7 +149,7 @@ function main(): void {
   );
   assert.equal(
     preview.selected?.routeKey,
-    "COTIUSDT|coindcx>binance",
+    "COTIUSDT|bybit>binance",
   );
   assert.equal(
     preview.selected?.checks.every(
@@ -123,11 +161,15 @@ function main(): void {
   );
   assert.equal(
     preview.requestedCapitalPerLegInr,
-    100,
+    500,
   );
   assert.equal(
     preview.minimumTwoLegInventoryInr,
-    200,
+    1_000,
+  );
+  assert.equal(
+    fundingCapitalInr,
+    500,
   );
   assert.equal(
     stressCalls,
@@ -136,6 +178,59 @@ function main(): void {
   assertSafety(
     preview.safety,
   );
+
+  funding =
+    oneLotRoundedFunding();
+  const lotRounded =
+    service.getPreview(
+      NOW,
+    );
+  assert.equal(
+    lotRounded.state,
+    "READY_FOR_OPERATOR_PREFLIGHT",
+    "A mandatory quantity round-down below one shared step must remain eligible.",
+  );
+  assert.equal(
+    lotRounded.selected?.funding.state,
+    "REDUCED",
+    "The funding report must truthfully retain its REDUCED state.",
+  );
+
+  funding =
+    balanceReducedFunding();
+  stressCalls =
+    0;
+  const balanceReduced =
+    service.getPreview(
+      NOW,
+    );
+  assert.equal(
+    balanceReduced.state,
+    "BLOCKED_CURRENT_EVIDENCE",
+    "A balance-capped pilot must remain blocked.",
+  );
+  assert.equal(
+    stressCalls,
+    0,
+    "Stress evaluation must not run for a balance-capped pilot.",
+  );
+
+  funding =
+    excessiveStepReductionFunding();
+  const excessiveStepReduction =
+    service.getPreview(
+      NOW,
+    );
+  assert.equal(
+    excessiveStepReduction.state,
+    "BLOCKED_CURRENT_EVIDENCE",
+    "A reduction of one full shared step or more must remain blocked.",
+  );
+
+  funding =
+    fundedRoute();
+  stressCalls =
+    1;
 
   assert.throws(
     () =>
@@ -187,7 +282,7 @@ function main(): void {
 
   assert.equal(
     capturedCoreRequest.requestedCapital,
-    100,
+    500,
   );
   assert.equal(
     capturedCoreRequest.balanceRequirements.length,
@@ -203,20 +298,52 @@ function main(): void {
     ),
     [
       [
-        "coindcx",
+        "bybit",
         "USDT",
-        100,
+        500,
       ],
       [
         "binance",
         "COTI",
-        10,
+        50,
       ],
     ],
   );
   assertSafety(
     run.safety,
   );
+
+  apiPermissionBoundary = {
+    ...readyApiPermissionBoundary(),
+    state:
+      "BLOCKED",
+    ready:
+      false,
+    blockers: [
+      "binance: API withdrawal permission is enabled and must be disabled.",
+    ],
+  };
+
+  const permissionBlocked =
+    service.getPreview(
+      NOW,
+    );
+
+  assert.equal(
+    permissionBlocked.state,
+    "BLOCKED_CURRENT_EVIDENCE",
+  );
+  assert.equal(
+    permissionBlocked.selected?.checks.find(
+      (item) =>
+        item.key ===
+        "API_KEY_PERMISSION_BOUNDARY",
+    )?.state,
+    "BLOCKED",
+  );
+
+  apiPermissionBoundary =
+    readyApiPermissionBoundary();
 
   funding =
     blockedFunding();
@@ -264,6 +391,61 @@ function main(): void {
 
   funding =
     fundedRoute();
+  timing = {
+    ...readyTiming(),
+    state: "BLOCKED",
+    residualOperationalHeadroomMs: -1,
+    blockers: [
+      "Execution-grade quote P99 leaves -1 ms operational headroom; at least 10 ms is required.",
+    ],
+  };
+
+  const timingBlocked =
+    service.getPreview(
+      NOW,
+    );
+
+  assert.equal(
+    timingBlocked.state,
+    "BLOCKED_CURRENT_EVIDENCE",
+  );
+  assert.equal(
+    timingBlocked.selected?.timing.state,
+    "BLOCKED",
+  );
+  assert.match(
+    timingBlocked.blockers[0] ?? "",
+    /PILOT_TIMING_HEADROOM/i,
+  );
+
+  timing =
+    readyTiming();
+  opportunities = [
+    opportunity(
+      NOW -
+        191,
+    ),
+  ];
+
+  const dispatchFreshnessBlocked =
+    service.getPreview(
+      NOW,
+    );
+
+  assert.equal(
+    dispatchFreshnessBlocked.state,
+    "BLOCKED_CURRENT_EVIDENCE",
+  );
+  assert.equal(
+    dispatchFreshnessBlocked.selected?.checks.find(
+      (item) =>
+        item.key ===
+        "CURRENT_DISPATCH_RESERVED_FRESHNESS",
+    )?.state,
+    "BLOCKED",
+    "A current book can be inside the absolute 250 ms ceiling but still lack dispatch reserve.",
+  );
+
   opportunities = [
     opportunity(
       NOW -
@@ -315,12 +497,150 @@ function main(): void {
     null,
   );
 
+  placement = placementReport();
+  const excluded = opportunity(NOW - 10);
+  opportunities = [{
+    ...excluded,
+    id: "excluded-non-pilot",
+    pair: {
+      ...excluded.pair,
+      market: "BTCUSDT",
+      buy: {
+        ...excluded.pair.buy,
+        exchange: "coindcx",
+        market: "BTCUSDT",
+      },
+      sell: {
+        ...excluded.pair.sell,
+        market: "BTCUSDT",
+      },
+    },
+  }];
+  const nonPilot = service.getPreview(NOW);
+  assert.equal(nonPilot.state, "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY");
+  assert.equal(nonPilot.evidence.currentFreshExecuteOpportunities, 0);
+  assert.equal(nonPilot.evidence.excludedNonPilotCurrentOpportunities, 1);
+  assert.equal(nonPilot.selected, null,
+    "A registered-but-unaudited CoinDCX route must never appear in the Strategy #1 LIVE pilot preview.");
+
   console.log(
     "Strategy #1 pilot preflight service test passed.",
   );
   console.log(
-    "Fresh current evidence, durable route lineage, exact ₹100 funding, stress checks and explicit core preflight remained fail-closed without fund movement, reservation, LIVE session or order submission.",
+    "Fresh current evidence, durable route lineage, active-policy funding, stress checks and explicit core preflight remained fail-closed without fund movement, reservation, LIVE session or order submission.",
   );
+}
+
+function readyTiming(): StrategyOneTimingHeadroomReview {
+  return {
+    schemaVersion: "115.0",
+    generatedAt: NOW,
+    routeKey: "COTIUSDT:bybit->binance",
+    market: "COTIUSDT",
+    buyExchange: "bybit",
+    sellExchange: "binance",
+    state: "READY",
+    absoluteBookAgeCeilingMs: 250,
+    dispatchSafetyMarginMs: 10,
+    requiredOperationalHeadroomMs: 10,
+    timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE",
+    decisionToTinyLiveTriggerP99Ms: 5,
+    downstreamPaperDecisionToExecutionStartP99Ms: 5,
+    decisionToExecutionStartP99Ms: 5,
+    dispatchBudgetMs: 15,
+    maximumBookAgeMs: 235,
+    executionGradeBuyAgeP99Ms: 100,
+    executionGradeSellAgeP99Ms: 110,
+    executionGradeWorstAgeP99Ms: 110,
+    residualOperationalHeadroomMs: 125,
+    blockers: [],
+    safety: {
+      reviewOnly: true,
+      thresholdRelaxationAllowed: false,
+      automaticProposalAllowed: false,
+      automaticApprovalAllowed: false,
+      liveOrderSubmissionAuthorized: false,
+    },
+  };
+}
+
+function readyApiPermissionBoundary(): StrategyOneApiPermissionBoundaryReport {
+  return {
+    version:
+      "118.2",
+    generatedAt:
+      NOW,
+    mode:
+      "READ_ONLY_SIGNED_API_PERMISSION_EVIDENCE",
+    state:
+      "READY",
+    ready:
+      true,
+    venues: [
+      permissionVenue(
+        "binance",
+        null,
+      ),
+      permissionVenue(
+        "bybit",
+        1,
+      ),
+    ],
+    blockers:
+      [],
+    safety: {
+      signedGetOnly:
+        true,
+      apiKeysExposed:
+        false,
+      exactBoundIpsExposed:
+        false,
+      permissionMutationAllowed:
+        false,
+      transferAllowed:
+        false,
+      withdrawalAllowed:
+        false,
+      orderSubmissionAllowed:
+        false,
+      orderSubmissionPerformed:
+        false,
+    },
+  };
+}
+
+function permissionVenue(
+  exchange: "binance" | "bybit",
+  boundIpCount: number | null,
+): StrategyOneApiPermissionBoundaryReport["venues"][number] {
+  return {
+    exchange,
+    state:
+      "READY",
+    checkedAt:
+      NOW,
+    ageMs:
+      0,
+    maximumAgeMs:
+      180_000,
+    readingEnabled:
+      true,
+    spotTradingEnabled:
+      true,
+    withdrawalsEnabled:
+      false,
+    internalTransferEnabled:
+      false,
+    ipRestricted:
+      true,
+    boundIpCount,
+    unexpectedPermissions:
+      [],
+    systemManagedPermissions:
+      [],
+    blockers:
+      [],
+  };
 }
 
 function opportunity(
@@ -335,7 +655,7 @@ function opportunity(
         "COTIUSDT",
       buy: {
         exchange:
-          "coindcx",
+          "bybit",
         market:
           "COTIUSDT",
         lastPrice:
@@ -439,7 +759,7 @@ function routeRank(): StrategyOneCapitalPlacementRouteRank {
     rank:
       2,
     routeKey:
-      "COTIUSDT|coindcx>binance",
+      "COTIUSDT|bybit>binance",
     market:
       "COTIUSDT",
     baseAsset:
@@ -447,7 +767,7 @@ function routeRank(): StrategyOneCapitalPlacementRouteRank {
     quoteAsset:
       "USDT",
     buyExchange:
-      "coindcx",
+      "bybit",
     sellExchange:
       "binance",
     uniqueSettlements:
@@ -519,9 +839,9 @@ function placementReport(): StrategyOneCapitalPlacementReport {
       state:
         "CANDIDATE_FOR_PREFLIGHT",
       requestedPerLegInr:
-        100,
+        500,
       minimumTwoLegInventoryInr:
-        200,
+        1_000,
       recommendedRoute:
         routeRank(),
       reasons:
@@ -563,11 +883,11 @@ function fundedRoute(): StrategyOneFundedRouteReport {
     opportunityId:
       "opportunity-current",
     routeKey:
-      "COTIUSDT|coindcx>binance",
+      "COTIUSDT|bybit>binance",
     market:
       "COTIUSDT",
     buyExchange:
-      "coindcx",
+      "bybit",
     sellExchange:
       "binance",
     baseAsset:
@@ -575,21 +895,21 @@ function fundedRoute(): StrategyOneFundedRouteReport {
     quoteAsset:
       "USDT",
     requestedCapitalInr:
-      100,
+      500,
     convertedQuoteCapital:
-      100,
+      500,
     capitalQuantity:
-      10,
+      50,
     depthQuantity:
       100,
     preFundingQuantity:
-      10,
+      50,
     balanceCappedQuantity:
-      10,
+      50,
     executableQuantity:
-      10,
+      50,
     estimatedExecutableCapitalInr:
-      100,
+      500,
     reductionPercent:
       0,
     state:
@@ -598,7 +918,7 @@ function fundedRoute(): StrategyOneFundedRouteReport {
       "AUTHENTICATED_LIVE_READINESS",
     buyFunding: {
       exchange:
-        "coindcx",
+        "bybit",
       asset:
         "USDT",
       synchronizationStatus:
@@ -606,7 +926,7 @@ function fundedRoute(): StrategyOneFundedRouteReport {
       availableBalance:
         1_000,
       requiredBalance:
-        100,
+        500,
       snapshotAgeMs:
         10,
       maximumSnapshotAgeMs:
@@ -624,7 +944,7 @@ function fundedRoute(): StrategyOneFundedRouteReport {
       availableBalance:
         100,
       requiredBalance:
-        10,
+        50,
       snapshotAgeMs:
         10,
       maximumSnapshotAgeMs:
@@ -676,6 +996,152 @@ function blockedFunding(): StrategyOneFundedRouteReport {
   };
 }
 
+function oneLotRoundedFunding(): StrategyOneFundedRouteReport {
+  const funded =
+    fundedRoute();
+  const capitalQuantity =
+    518.296;
+  const executableQuantity =
+    518;
+  const reductionQuantity =
+    capitalQuantity -
+      executableQuantity;
+
+  return {
+    ...funded,
+    capitalQuantity,
+    depthQuantity:
+      600,
+    preFundingQuantity:
+      capitalQuantity,
+    balanceCappedQuantity:
+      capitalQuantity,
+    executableQuantity,
+    estimatedExecutableCapitalInr:
+      500 *
+        (
+          executableQuantity /
+          capitalQuantity
+        ),
+    reductionPercent:
+      (
+        reductionQuantity /
+        capitalQuantity
+      ) *
+        100,
+    state:
+      "REDUCED",
+    quantityNormalization: {
+      version:
+        "81.0",
+      state:
+        "NORMALIZED",
+      rawQuantity:
+        capitalQuantity,
+      normalizedQuantity:
+        executableQuantity,
+      commonQuantityIncrement:
+        1,
+      reductionQuantity,
+      reductionPercent:
+        (
+          reductionQuantity /
+          capitalQuantity
+        ) *
+          100,
+      roundDownOnly:
+        true,
+      quantityNeverIncreased:
+        true,
+      incrementEvidenceComplete:
+        true,
+      paperOnlyFallbackUsed:
+        false,
+      liveOrderSafe:
+        true,
+      legs:
+        [],
+      blockers:
+        [],
+    },
+  };
+}
+
+function balanceReducedFunding(): StrategyOneFundedRouteReport {
+  const rounded =
+    oneLotRoundedFunding();
+  const balanceCappedQuantity =
+    500;
+
+  return {
+    ...rounded,
+    balanceCappedQuantity,
+    executableQuantity:
+      balanceCappedQuantity,
+    estimatedExecutableCapitalInr:
+      500 *
+        (
+          balanceCappedQuantity /
+          (rounded.capitalQuantity ?? 1)
+        ),
+    quantityNormalization: {
+      ...rounded.quantityNormalization!,
+      state:
+        "UNCHANGED",
+      rawQuantity:
+        balanceCappedQuantity,
+      normalizedQuantity:
+        balanceCappedQuantity,
+      reductionQuantity:
+        0,
+      reductionPercent:
+        0,
+    },
+  };
+}
+
+function excessiveStepReductionFunding(): StrategyOneFundedRouteReport {
+  const rounded =
+    oneLotRoundedFunding();
+  const executableQuantity =
+    516;
+  const capitalQuantity =
+    rounded.capitalQuantity ??
+      1;
+  const reductionQuantity =
+    capitalQuantity -
+      executableQuantity;
+
+  return {
+    ...rounded,
+    executableQuantity,
+    estimatedExecutableCapitalInr:
+      500 *
+        (
+          executableQuantity /
+          capitalQuantity
+        ),
+    reductionPercent:
+      (
+        reductionQuantity /
+        capitalQuantity
+      ) *
+        100,
+    quantityNormalization: {
+      ...rounded.quantityNormalization!,
+      normalizedQuantity:
+        executableQuantity,
+      reductionQuantity,
+      reductionPercent:
+        (
+          reductionQuantity /
+          capitalQuantity
+        ) *
+          100,
+    },
+  };
+}
+
 function passedStress(): StrategyOnePaperStressGateReport {
   return {
     status:
@@ -691,7 +1157,7 @@ function passedStress(): StrategyOnePaperStressGateReport {
     timestampSkewMs:
       0,
     quantity:
-      10,
+      50,
     buyFillPercent:
       100,
     sellFillPercent:
@@ -762,7 +1228,7 @@ function blockedCorePreflight(): TinyLivePreflightReport {
     market:
       "COTIUSDT",
     buyExchange:
-      "coindcx",
+      "bybit",
     sellExchange:
       "binance",
     gates:

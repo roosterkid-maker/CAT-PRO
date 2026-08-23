@@ -69,6 +69,30 @@ async function main():
         suppliedCredentials =
           providedCredentials;
 
+        if (
+          path ===
+          "/v5/user/query-api"
+        ) {
+          return {
+            readOnly:
+              0,
+            permissions: {
+              Spot: [
+                "SpotTrade",
+              ],
+              Wallet: [
+                "AccountTransfer",
+              ],
+              Derivatives: [
+                "DerivativesTrade",
+              ],
+            },
+            ips: [
+              "203.0.113.10",
+            ],
+          } as T;
+        }
+
         return {
           list: [
             {
@@ -134,6 +158,37 @@ async function main():
         ?.spotBorrow ===
         0.25,
     "Bybit wallet response must be normalized without inventing transferable balance.",
+  );
+
+  const apiKeyInformation =
+    await accountApi
+      .getApiKeyInformation(
+        credentials,
+      );
+
+  assertCondition(
+    String(
+      requestedPath,
+    ) ===
+      "/v5/user/query-api" &&
+    suppliedCredentials ===
+      credentials &&
+    !apiKeyInformation.readOnly &&
+    apiKeyInformation.spotTradingEnabled &&
+    !apiKeyInformation.withdrawalsEnabled &&
+    apiKeyInformation.internalTransferEnabled &&
+    apiKeyInformation.ipRestricted &&
+    apiKeyInformation.boundIpCount ===
+      1 &&
+    apiKeyInformation.unexpectedPermissions.join(
+      ",",
+    ) ===
+      "Wallet:AccountTransfer" &&
+    apiKeyInformation.systemManagedPermissions.join(
+      ",",
+    ) ===
+      "Derivatives:DerivativesTrade",
+    "Bybit API-key information must prove spot trade access, withdrawal denial, explicit IP binding, unexpected permissions and system-managed markers without exposing the IP.",
   );
 
   const originalApiKey =

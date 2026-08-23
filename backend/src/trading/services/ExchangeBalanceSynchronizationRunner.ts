@@ -28,6 +28,11 @@ export interface ExchangeBalanceSynchronizationRunnerStatus {
     ExchangeBalanceSynchronizationReport | null;
 
   lastError: string | null;
+
+  unresolvedExchanges:
+    ReturnType<
+      typeof exchangeBalanceSynchronizationService.getUnresolvedExchanges
+    >;
 }
 
 const DEFAULT_CONFIG:
@@ -177,6 +182,10 @@ export class ExchangeBalanceSynchronizationRunner {
 
       lastError:
         this.lastError,
+
+      unresolvedExchanges:
+        exchangeBalanceSynchronizationService
+          .getUnresolvedExchanges(),
     };
   }
 

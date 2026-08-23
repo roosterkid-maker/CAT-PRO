@@ -2,6 +2,38 @@ import {
   executionSimulator,
 } from "../../execution/services/ExecutionSimulator";
 
+import type {
+  ExecutionRequest,
+} from "../../execution/models/ExecutionRequest";
+
+import type {
+  ExecutionResult,
+} from "../../execution/models/ExecutionResult";
+
+import type {
+  ArbitrageOpportunity,
+} from "../../arbitrage/models/ArbitrageOpportunity";
+
+import {
+  opportunityService,
+} from "../../arbitrage/services/OpportunityService";
+
+import {
+  strategyOneFundedRouteService,
+} from "../../trading/execution/StrategyOneFundedRouteService";
+
+import type {
+  StrategyOneFundedRouteReport,
+} from "../../trading/execution/StrategyOneFundedRouteService";
+
+import {
+  strategyOnePaperStressGate,
+} from "../../trading/execution/AutomatedPaperTradingService";
+
+import type {
+  StrategyOnePaperStressGateReport,
+} from "../../trading/execution/AutomatedPaperTradingService";
+
 import {
   PROFIT_TIER_POLICY,
 } from "../../arbitrage/config/profitTiers";
@@ -23,6 +55,12 @@ import {
   opportunityMonitorService,
 } from "./OpportunityMonitorService";
 
+import {
+  assessStrategyOnePilotDispatchReservedFreshness,
+  isExactStrategyOnePilotRoute,
+  STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+} from "../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+
 const DEFAULT_CONFIG:
   CandidateQualificationConfig = {
   minimumConsecutiveObservations:
@@ -30,6 +68,22 @@ const DEFAULT_CONFIG:
 
   minimumPersistenceMs:
     5_000,
+
+  /*
+   * HFT PAPER V2 fast lane. A route must still pass exact full-depth,
+   * exchange-rule, fee, adverse-reserve and safety-buffer economics. Only the
+   * dwell requirement is shortened for a stronger post-stress edge backed by
+   * two genuinely different order-book generations.
+   */
+  fastLaneMinimumPostStressNetProfitPercent:
+    PROFIT_TIER_POLICY
+      .liveMinimumNetProfitPercent,
+
+  fastLaneMinimumConsecutiveDistinctBookObservations:
+    2,
+
+  fastLaneMinimumPersistenceMs:
+    0,
 
   minimumNetProfitPercent:
     PROFIT_TIER_POLICY
@@ -52,18 +106,16 @@ const DEFAULT_CONFIG:
     35,
 
   /*
-   * VERSION 17.4 BUILD 12
-   *
-   * Capital-aware liquidity validation.
-   *
-   * Initial validation capital intentionally
-   * stays tiny.
+   * Qualification validates the central Strategy #1 reference size, not an
+   * unlabelled market-quote amount. ₹500 also matches the exchange-executable
+   * pilot ceiling; the INR amount is converted to the route quote asset before
+   * any depth simulation.
    */
   capitalAwareLiquidityEnabled:
     true,
 
   capitalAwareLiquidityValidationCapital:
-    100,
+    500,
 
   capitalAwareLiquidityMinimumNetProfitPercent:
     PROFIT_TIER_POLICY
@@ -73,17 +125,88 @@ const DEFAULT_CONFIG:
     true,
 };
 
+export interface CandidateQualificationDependencies {
+  simulateExecution(
+    request:
+      ExecutionRequest,
+  ): ExecutionResult;
+
+  getOpportunityById(
+    opportunityId:
+      string,
+  ): ArbitrageOpportunity | null;
+
+  evaluateFundedRoute(input: {
+    opportunity:
+      ArbitrageOpportunity;
+    requestedCapitalInr:
+      number;
+    requestedQuoteCapital:
+      number;
+    requestedQuantity:
+      number;
+    fundingBoundary:
+      "ISOLATED_PAPER";
+    now:
+      number;
+  }): StrategyOneFundedRouteReport;
+
+  evaluateStress(input: {
+    opportunity:
+      ArbitrageOpportunity;
+    quantity:
+      number;
+    now:
+      number;
+  }): StrategyOnePaperStressGateReport;
+}
+
+const DEFAULT_DEPENDENCIES:
+  CandidateQualificationDependencies = {
+  simulateExecution:
+    (request) =>
+      executionSimulator.simulate(
+        request,
+      ),
+  getOpportunityById:
+    (opportunityId) =>
+      opportunityService.getOpportunityById(
+        opportunityId,
+      ),
+  evaluateFundedRoute:
+    (input) =>
+      strategyOneFundedRouteService.evaluate(
+        input,
+      ),
+  evaluateStress:
+    (input) =>
+      strategyOnePaperStressGate.evaluate(
+        input,
+      ),
+};
+
 export class CandidateQualificationService {
   private readonly config:
     CandidateQualificationConfig;
 
+  private readonly dependencies:
+    CandidateQualificationDependencies;
+
   constructor(
     config:
       Partial<CandidateQualificationConfig> = {},
+
+    dependencies:
+      Partial<CandidateQualificationDependencies> = {},
   ) {
     this.config = {
       ...DEFAULT_CONFIG,
       ...config,
+    };
+
+    this.dependencies = {
+      ...DEFAULT_DEPENDENCIES,
+      ...dependencies,
     };
 
     this.validateConfig();
@@ -109,19 +232,6 @@ export class CandidateQualificationService {
           : "Candidate is no longer active in the latest authoritative snapshot.",
       );
 
-    const consecutiveCheck =
-      this.createNumberCheck(
-        candidate
-          .consecutiveObservations,
-
-        this.config
-          .minimumConsecutiveObservations,
-
-        ">=",
-
-        `Candidate requires at least ${this.config.minimumConsecutiveObservations} consecutive observations.`,
-      );
-
     const persistenceMs =
       candidate.status ===
         "ACTIVE"
@@ -132,18 +242,6 @@ export class CandidateQualificationService {
               candidate.firstSeenAt,
           )
         : candidate.lifetimeMs;
-
-    const persistenceCheck =
-      this.createNumberCheck(
-        persistenceMs,
-
-        this.config
-          .minimumPersistenceMs,
-
-        ">=",
-
-        `Candidate must persist for at least ${this.config.minimumPersistenceMs} ms.`,
-      );
 
     const netProfitCheck =
       this.createNumberCheck(
@@ -160,22 +258,84 @@ export class CandidateQualificationService {
       );
 
     /*
-     * VERSION 17.4 BUILD 12
-     *
-     * Liquidity can now pass through either:
-     *
-     * 1. Existing legacy score >= 70
-     *
-     * OR
-     *
-     * 2. Exact tiny-capital full-depth execution
-     *    simulation.
-     *
-     * The legacy threshold is NOT reduced.
+     * The legacy liquidity score remains useful evidence, but may not bypass
+     * exact quote-capital depth, venue order rules and post-stress economics.
      */
     const liquidityAssessment =
       this.assessLiquidity(
         candidate,
+        now,
+      );
+
+    const postStressNetProfitPercent =
+      liquidityAssessment
+        .capitalAware
+        .postStressNetProfitPercent;
+
+    const fastLane =
+      liquidityAssessment
+        .capitalAware
+        .passed &&
+      postStressNetProfitPercent !==
+        null &&
+      postStressNetProfitPercent !==
+        undefined &&
+      Number.isFinite(
+        postStressNetProfitPercent,
+      ) &&
+      postStressNetProfitPercent +
+        1e-12 >=
+        this.config
+          .fastLaneMinimumPostStressNetProfitPercent;
+
+    const consecutiveEvidence =
+      fastLane
+        ? candidate
+            .consecutiveDistinctBookObservations ??
+          candidate
+            .consecutiveObservations
+        : candidate
+            .consecutiveObservations;
+
+    const requiredConsecutiveObservations =
+      fastLane
+        ? this.config
+            .fastLaneMinimumConsecutiveDistinctBookObservations
+        : this.config
+            .minimumConsecutiveObservations;
+
+    const requiredPersistenceMs =
+      fastLane
+        ? this.config
+            .fastLaneMinimumPersistenceMs
+        : this.config
+            .minimumPersistenceMs;
+
+    const laneLabel =
+      fastLane
+        ? "HFT PAPER fast lane"
+        : "standard PAPER lane";
+
+    const consecutiveCheck =
+      this.createNumberCheck(
+        consecutiveEvidence,
+
+        requiredConsecutiveObservations,
+
+        ">=",
+
+        `${laneLabel} requires at least ${requiredConsecutiveObservations} ${fastLane ? "distinct fresh book generations" : "consecutive observations"}.`,
+      );
+
+    const persistenceCheck =
+      this.createNumberCheck(
+        persistenceMs,
+
+        requiredPersistenceMs,
+
+        ">=",
+
+        `${laneLabel} requires at least ${requiredPersistenceMs} ms persistence.`,
       );
 
     const liquidityCheck:
@@ -203,17 +363,9 @@ export class CandidateQualificationService {
     };
 
     const freshnessCheck =
-      this.createNumberCheck(
-        candidate
-          .latest
-          .freshnessScore,
-
-        this.config
-          .minimumFreshnessScore,
-
-        ">=",
-
-        `Freshness score must be at least ${this.config.minimumFreshnessScore}.`,
+      this.createFreshnessCheck(
+        candidate,
+        now,
       );
 
     const profitDrawdownPercent =
@@ -418,6 +570,45 @@ export class CandidateQualificationService {
       );
   }
 
+  private createFreshnessCheck(
+    candidate: MonitoredOpportunityCandidate,
+    now: number,
+  ): CandidateQualificationCheck {
+    const scorePassed =
+      candidate.latest.freshnessScore >=
+      this.config.minimumFreshnessScore;
+
+    if (!isExactStrategyOnePilotRoute(candidate)) {
+      return this.createNumberCheck(
+        candidate.latest.freshnessScore,
+        this.config.minimumFreshnessScore,
+        ">=",
+        `Freshness score must be at least ${this.config.minimumFreshnessScore}.`,
+      );
+    }
+
+    const pilot = assessStrategyOnePilotDispatchReservedFreshness({
+      buyExchange: candidate.buyExchange,
+      sellExchange: candidate.sellExchange,
+      buyTimestamp: candidate.latest.buyQuoteTimestamp,
+      sellTimestamp: candidate.latest.sellQuoteTimestamp,
+      quotesAreFresh: candidate.latest.quotesAreFresh,
+      usedLastPriceFallback: candidate.latest.usedLastPriceFallback,
+      now,
+    });
+
+    return {
+      passed: scorePassed && pilot.passed,
+      currentValue:
+        `score=${candidate.latest.freshnessScore}; buyAge=${pilot.buyAgeMs}ms; sellAge=${pilot.sellAgeMs}ms; skew=${pilot.skewMs}ms`,
+      requiredValue:
+        `score>=${this.config.minimumFreshnessScore}; ages<=${STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS}ms; skew<=250ms; no fallback`,
+      reason: scorePassed && pilot.passed
+        ? "Binance/Bybit pilot quote generation satisfies the dispatch-reserved age boundary inside the absolute 250 ms ceiling."
+        : `Binance/Bybit pilot freshness failed: ${pilot.reasons.join(", ") || "FRESHNESS_SCORE"}.`,
+    };
+  }
+
   /**
    * Evaluate the current ACTIVE candidate set once for a single authoritative
    * snapshot. The automation hot path passes this immutable-by-contract batch
@@ -428,18 +619,25 @@ export class CandidateQualificationService {
     now =
       Date.now(),
   ): CandidateQualificationRecord[] {
-    return opportunityMonitorService
-      .getActiveCandidates()
-      .map(
+    const qualifications:
+      CandidateQualificationRecord[] =
+      [];
+
+    opportunityMonitorService
+      .forEachActiveCandidate(
         (
           candidate,
-        ) =>
-          this.evaluate(
-            candidate,
-            now,
-          ),
-      )
-      .sort(
+        ) => {
+          qualifications.push(
+            this.evaluate(
+              candidate,
+              now,
+            ),
+          );
+        },
+      );
+
+    return qualifications.sort(
         (
           first,
           second,
@@ -613,6 +811,9 @@ export class CandidateQualificationService {
   private assessLiquidity(
     candidate:
       MonitoredOpportunityCandidate,
+
+    now:
+      number,
   ): CandidateLiquidityQualificationAssessment {
     const legacyPassed =
       candidate
@@ -624,11 +825,13 @@ export class CandidateQualificationService {
     const capitalAware =
       this.assessCapitalAwareLiquidity(
         candidate,
+        now,
       );
 
     const passed =
-      legacyPassed ||
-      capitalAware.passed;
+      capitalAware.enabled
+        ? capitalAware.passed
+        : legacyPassed;
 
     return {
       legacyLiquidityScore:
@@ -651,10 +854,12 @@ export class CandidateQualificationService {
       passed,
 
       source:
-        legacyPassed
-          ? "LEGACY_SCORE"
-          : capitalAware.passed
-            ? "CAPITAL_AWARE_SIMULATION"
+        capitalAware.enabled &&
+        capitalAware.passed
+          ? "CAPITAL_AWARE_SIMULATION"
+          : !capitalAware.enabled &&
+              legacyPassed
+            ? "LEGACY_SCORE"
             : "NONE",
     };
   }
@@ -662,6 +867,9 @@ export class CandidateQualificationService {
   private assessCapitalAwareLiquidity(
     candidate:
       MonitoredOpportunityCandidate,
+
+    now:
+      number,
   ): CandidateCapitalAwareLiquidityAssessment {
     const base:
       CandidateCapitalAwareLiquidityAssessment = {
@@ -711,6 +919,27 @@ export class CandidateQualificationService {
         null,
 
       recommendation:
+        null,
+
+      opportunityResolved:
+        false,
+
+      marketRulesChecked:
+        false,
+
+      liveOrderSafe:
+        false,
+
+      fundedRouteState:
+        null,
+
+      stressStatus:
+        null,
+
+      postStressNetProfit:
+        null,
+
+      postStressNetProfitPercent:
         null,
 
       minimumRequiredNetProfitPercent:
@@ -801,8 +1030,8 @@ export class CandidateQualificationService {
         );
 
       const execution =
-        executionSimulator
-          .simulate({
+        this.dependencies
+          .simulateExecution({
             market:
               candidate.market,
 
@@ -900,12 +1129,117 @@ export class CandidateQualificationService {
         recommendation ===
           "EXECUTE";
 
+      const opportunity =
+        this.dependencies
+          .getOpportunityById(
+            candidate
+              .latestOpportunityId,
+          );
+
+      const opportunityMatchesCandidate =
+        opportunity !==
+          null &&
+        opportunity.pair.market
+          .trim()
+          .toUpperCase() ===
+          candidate.market
+            .trim()
+            .toUpperCase() &&
+        opportunity.pair.buy.exchange
+          .trim()
+          .toLowerCase() ===
+          candidate.buyExchange
+            .trim()
+            .toLowerCase() &&
+        opportunity.pair.sell.exchange
+          .trim()
+          .toLowerCase() ===
+          candidate.sellExchange
+            .trim()
+            .toLowerCase();
+
+      const funded =
+        opportunityMatchesCandidate &&
+        opportunity
+          ? this.dependencies
+              .evaluateFundedRoute({
+                opportunity,
+                requestedCapitalInr:
+                  this.config
+                    .capitalAwareLiquidityValidationCapital,
+                requestedQuoteCapital:
+                  simulationCapital,
+                requestedQuantity:
+                  simulationCapital /
+                  opportunity.buyPrice,
+                fundingBoundary:
+                  "ISOLATED_PAPER",
+                now,
+              })
+          : null;
+
+      const executableQuantity =
+        funded
+          ?.executableQuantity ??
+        null;
+
+      const marketRulesPass =
+        funded !==
+          null &&
+        funded.state !==
+          "BLOCKED" &&
+        executableQuantity !==
+          null &&
+        Number.isFinite(
+          executableQuantity,
+        ) &&
+        executableQuantity >
+          0;
+
+      const liveOrderSafe =
+        marketRulesPass &&
+        funded?.quantityNormalization
+          ?.liveOrderSafe ===
+          true;
+
+      const stress =
+        opportunity &&
+        marketRulesPass &&
+        executableQuantity !==
+          null
+          ? this.dependencies
+              .evaluateStress({
+                opportunity,
+                quantity:
+                  executableQuantity,
+                now,
+              })
+          : null;
+
+      const stressPass =
+        stress?.status ===
+          "PASSED" &&
+        stress.postStressNetProfit !==
+          null &&
+        stress.postStressNetProfit >
+          0 &&
+        stress.postStressNetProfitPercent !==
+          null &&
+        stress.postStressNetProfitPercent +
+          1e-12 >=
+          this.config
+            .capitalAwareLiquidityMinimumNetProfitPercent;
+
       const passed =
         fullyExecutable &&
         fillPercent >=
           100 &&
         profitPass &&
-        recommendationPass;
+        recommendationPass &&
+        opportunityMatchesCandidate &&
+        marketRulesPass &&
+        liveOrderSafe &&
+        stressPass;
 
       const failureReasons:
         string[] = [];
@@ -942,6 +1276,49 @@ export class CandidateQualificationService {
         );
       }
 
+      if (
+        !opportunityMatchesCandidate
+      ) {
+        failureReasons.push(
+          "Exact latest opportunity snapshot is unavailable or no longer matches the monitored route.",
+        );
+      }
+
+      if (
+        opportunityMatchesCandidate &&
+        !marketRulesPass
+      ) {
+        failureReasons.push(
+          `Exchange quantity/min-notional validation blocked the route${funded?.blockers.length ? `: ${funded.blockers.join("; ")}` : "."}`,
+        );
+      }
+
+      if (
+        marketRulesPass &&
+        !liveOrderSafe
+      ) {
+        failureReasons.push(
+          "Both exchange quantity increments are not complete enough to certify a real order-safe common quantity.",
+        );
+      }
+
+      if (
+        marketRulesPass &&
+        !stressPass
+      ) {
+        failureReasons.push(
+          `Exact post-stress economics failed${stress?.reasons.length ? `: ${stress.reasons.join("; ")}` : "."}`,
+        );
+      }
+
+      const conservativeNetProfit =
+        stress?.postStressNetProfit ??
+        netProfit;
+
+      const conservativeNetProfitPercent =
+        stress?.postStressNetProfitPercent ??
+        netProfitPercent;
+
       return {
         ...base,
 
@@ -976,13 +1353,13 @@ export class CandidateQualificationService {
 
         netProfit:
           this.round(
-            netProfit,
+            conservativeNetProfit,
             8,
           ),
 
         netProfitPercent:
           this.round(
-            netProfitPercent,
+            conservativeNetProfitPercent,
             8,
           ),
 
@@ -1002,6 +1379,45 @@ export class CandidateQualificationService {
           ),
 
         recommendation,
+
+        opportunityResolved:
+          opportunityMatchesCandidate,
+
+        marketRulesChecked:
+          funded !==
+          null,
+
+        liveOrderSafe,
+
+        fundedRouteState:
+          funded?.state ??
+          null,
+
+        stressStatus:
+          stress?.status ??
+          null,
+
+        postStressNetProfit:
+          stress?.postStressNetProfit ===
+            null ||
+          stress?.postStressNetProfit ===
+            undefined
+            ? null
+            : this.round(
+                stress.postStressNetProfit,
+                8,
+              ),
+
+        postStressNetProfitPercent:
+          stress?.postStressNetProfitPercent ===
+            null ||
+          stress?.postStressNetProfitPercent ===
+            undefined
+            ? null
+            : this.round(
+                stress.postStressNetProfitPercent,
+                8,
+              ),
 
         passed,
 
@@ -1045,7 +1461,7 @@ export class CandidateQualificationService {
       assessment.source ===
       "CAPITAL_AWARE_SIMULATION"
     ) {
-      return `Legacy liquidity score ${assessment.legacyLiquidityScore} is below ${assessment.legacyMinimumLiquidityScore}, but ₹${assessment.capitalAware.validationCapital} full-depth simulation is fully executable, profitable above ${assessment.capitalAware.minimumRequiredNetProfitPercent}%, and satisfies the execution recommendation gate.`;
+      return `₹${assessment.capitalAware.validationCapital} INR-sized validation passed full depth, both exchange order rules, real-order-safe quantity normalization and post-stress net >= ${assessment.capitalAware.minimumRequiredNetProfitPercent}%. Legacy liquidity score ${assessment.legacyLiquidityScore} remains diagnostic evidence.`;
     }
 
     const simulationReason =
@@ -1055,7 +1471,9 @@ export class CandidateQualificationService {
         ? ` Capital-aware result: ${assessment.capitalAware.failureReason}`
         : "";
 
-    return `Liquidity did not pass legacy score >= ${assessment.legacyMinimumLiquidityScore} and did not pass capital-aware execution validation.${simulationReason}`;
+    return assessment.capitalAware.enabled
+      ? `Candidate did not pass mandatory INR-sized executable-economics validation.${simulationReason}`
+      : `Capital-aware validation is explicitly disabled and legacy liquidity score did not pass >= ${assessment.legacyMinimumLiquidityScore}.${simulationReason}`;
   }
 
   private calculateProfitDrawdownPercent(
@@ -1272,8 +1690,8 @@ export class CandidateQualificationService {
 
         liquidityAssessment.source ===
           "CAPITAL_AWARE_SIMULATION"
-          ? `Liquidity qualified using ₹${liquidityAssessment.capitalAware.validationCapital} capital-aware full-depth execution simulation; legacy liquidity score alone did not pass.`
-          : "Liquidity qualified using the existing legacy liquidity score gate.",
+          ? `Qualification used ₹${liquidityAssessment.capitalAware.validationCapital} INR-sized full-depth, exchange-rule and post-stress execution evidence; the legacy score cannot bypass it.`
+          : "Capital-aware validation was explicitly disabled; qualification used the legacy liquidity score gate.",
 
         "Candidate is qualified for the next automation stage only.",
 
@@ -1368,6 +1786,53 @@ export class CandidateQualificationService {
     ) {
       throw new Error(
         "minimumPersistenceMs must be zero or greater.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        this.config
+          .fastLaneMinimumPostStressNetProfitPercent,
+      ) ||
+      this.config
+        .fastLaneMinimumPostStressNetProfitPercent <
+        this.config
+          .capitalAwareLiquidityMinimumNetProfitPercent
+    ) {
+      throw new Error(
+        "fastLaneMinimumPostStressNetProfitPercent must be finite and at least the capital-aware minimum.",
+      );
+    }
+
+    if (
+      !Number.isInteger(
+        this.config
+          .fastLaneMinimumConsecutiveDistinctBookObservations,
+      ) ||
+      this.config
+        .fastLaneMinimumConsecutiveDistinctBookObservations <
+        2
+    ) {
+      throw new Error(
+        "fastLaneMinimumConsecutiveDistinctBookObservations must be an integer of at least two.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        this.config
+          .fastLaneMinimumPersistenceMs,
+      ) ||
+      this.config
+        .fastLaneMinimumPersistenceMs <
+        0 ||
+      this.config
+        .fastLaneMinimumPersistenceMs >
+        this.config
+          .minimumPersistenceMs
+    ) {
+      throw new Error(
+        "fastLaneMinimumPersistenceMs must be non-negative and no greater than the standard persistence requirement.",
       );
     }
 

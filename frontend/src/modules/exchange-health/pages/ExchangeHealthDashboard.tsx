@@ -14,6 +14,10 @@ import {
   useExchangeHealthEvidenceSnapshot,
 } from "../hooks/useExchangeHealthEvidenceSnapshot";
 
+import {
+  useSynchronizeExchangeClocks,
+} from "../hooks/useSynchronizeExchangeClocks";
+
 import type {
   ExchangeHealthEvidenceSnapshot,
 } from "../types/ExchangeHealthSnapshot";
@@ -33,6 +37,7 @@ const fallbackTargetExchanges = [
   "unocoin",
   "coinswitch",
   "bybit",
+  "zebpay",
 ] as const;
 
 export default function ExchangeHealthDashboard() {
@@ -52,6 +57,9 @@ export default function ExchangeHealthDashboard() {
     refetch:
       refetchSnapshot,
   } = useExchangeHealthEvidenceSnapshot();
+
+  const synchronizeClockMutation =
+    useSynchronizeExchangeClocks();
 
   const systemHealthSource =
     snapshot?.sources.systemHealth;
@@ -135,18 +143,44 @@ export default function ExchangeHealthDashboard() {
   const observationReport =
     observationResponse?.data;
 
+  const fleetExchanges =
+    fleetReport
+      ? [
+          ...fleetReport.exchanges,
+          ...fleetReport.observationExchanges,
+        ]
+      : [];
+
   const targetExchanges =
-    fleetReport?.exchanges.map(
-      (exchange) =>
-        exchange.exchange,
-    ) ??
-    fallbackTargetExchanges;
+    fleetReport
+      ? fleetExchanges.map(
+          (exchange) =>
+            exchange.exchange,
+        )
+      : fallbackTargetExchanges;
 
   const loading =
     snapshotPending;
 
   const refreshing =
     snapshotFetching;
+
+  const synchronizeClock =
+    async () => {
+      try {
+        await synchronizeClockMutation.mutateAsync();
+        await refetchSnapshot();
+      } catch {
+        // Mutation failure is surfaced via state.
+      }
+    };
+
+  const resolveClockStatus = synchronizeClockMutation.error
+    ? synchronizeClockMutation.error instanceof Error
+      ? synchronizeClockMutation.error.message
+      : "Unable to synchronize exchange clocks right now."
+    : synchronizeClockMutation.isSuccess &&
+        "Clock synchronization command completed. Refreshing health evidence.";
 
   const refreshAll =
     async () => {
@@ -253,27 +287,63 @@ export default function ExchangeHealthDashboard() {
             </p>
           </div>
 
-          <button
-            type="button"
-            disabled={
-              refreshing
-            }
-            onClick={() =>
-              void refreshAll()
-            }
-            className="inline-flex items-center gap-2 rounded-md border border-border-default bg-panel-light px-3 py-2 text-xs font-semibold text-text-primary hover:border-brand/50 disabled:opacity-60"
-          >
-            <RefreshCw
-              className={`size-4 ${
-                refreshing
-                  ? "animate-spin"
-                  : ""
-              }`}
-            />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={
+                refreshing ||
+                synchronizeClockMutation.isPending
+              }
+              onClick={() =>
+                void synchronizeClock()
+              }
+              className="inline-flex items-center gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-xs font-semibold text-warning hover:border-warning disabled:opacity-60"
+            >
+              <Clock3
+                className={`size-4 ${
+                  synchronizeClockMutation.isPending
+                    ? "animate-spin"
+                    : ""
+                }`}
+              />
 
-            Refresh
-          </button>
+              Resolve Clock Alerts
+            </button>
+
+            <button
+              type="button"
+              disabled={
+                refreshing
+              }
+              onClick={() =>
+                void refreshAll()
+              }
+              className="inline-flex items-center gap-2 rounded-md border border-border-default bg-panel-light px-3 py-2 text-xs font-semibold text-text-primary hover:border-brand/50 disabled:opacity-60"
+            >
+              <RefreshCw
+                className={`size-4 ${
+                  refreshing
+                    ? "animate-spin"
+                    : ""
+                }`}
+              />
+
+              Refresh
+            </button>
+          </div>
         </div>
+
+        {resolveClockStatus ? (
+          <p
+            className={`mt-3 text-xs ${
+              synchronizeClockMutation.error
+                ? "text-danger"
+                : "text-success"
+            }`}
+          >
+            {resolveClockStatus}
+          </p>
+        ) : null}
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryMetric
@@ -420,6 +490,29 @@ export default function ExchangeHealthDashboard() {
                   exchangeName,
               );
 
+            const fleetCapability =
+              fleetExchanges.find(
+                (exchange) =>
+                  exchange.exchange ===
+                  exchangeName,
+              );
+
+            const paperExtension =
+              paperShadowReport?.paperExtensionExchanges?.find(
+                (exchange) =>
+                  exchange.exchange ===
+                  exchangeName,
+              );
+
+            const observationOnly =
+              fleetReport?.observationExchanges.some(
+                (exchange) =>
+                  exchange.exchange ===
+                  exchangeName,
+              ) ??
+              exchangeName ===
+                "zebpay";
+
             const clock =
               clockReport?.exchanges.find(
                 (
@@ -463,6 +556,7 @@ export default function ExchangeHealthDashboard() {
                 }
                 adapterRegistered={
                   execution?.adapterRegistered ??
+                  fleetCapability?.liveOrderAdapter.adapterRegistered ??
                   false
                 }
                 adapterConnected={
@@ -471,22 +565,30 @@ export default function ExchangeHealthDashboard() {
                 }
                 credentialsConfigured={
                   execution?.credentialsConfigured ??
+                  fleetCapability?.authenticatedRead.credentialsConfigured ??
                   false
                 }
                 authenticationVerified={
                   execution?.authenticationVerified ??
-                  false
+                  (
+                    fleetCapability?.authenticatedRead.verificationState ===
+                      "VERIFIED" &&
+                    fleetCapability.authenticatedRead.fresh
+                  )
                 }
                 exchangeApiReachable={
                   execution?.exchangeApiReachable ??
+                  fleetCapability?.authenticatedRead.fresh ??
                   false
                 }
                 verificationState={
                   execution?.verificationState ??
+                  fleetCapability?.authenticatedRead.verificationState ??
                   "NOT_CONFIGURED"
                 }
                 readOnlyVerificationFresh={
                   execution?.readOnlyVerificationFresh ??
+                  fleetCapability?.authenticatedRead.fresh ??
                   false
                 }
                 lastVerifiedAt={
@@ -503,7 +605,12 @@ export default function ExchangeHealthDashboard() {
                 }
                 verificationMethod={
                   execution?.verificationMethod ??
-                  null
+                  (
+                    fleetCapability?.authenticatedRead.verificationState ===
+                    "VERIFIED"
+                      ? "SIGNED_BALANCE_READ"
+                      : null
+                  )
                 }
                 lastVerificationError={
                   execution?.lastVerificationError ??
@@ -515,19 +622,29 @@ export default function ExchangeHealthDashboard() {
                 }
                 executionEvidenceAvailable={
                   execution?.executionEvidenceAvailable ??
-                  false
+                  paperExtension?.paperAvailability ===
+                    "AVAILABLE"
                 }
                 adapterKnown={
                   Boolean(
-                    execution,
+                    execution ||
+                    fleetCapability,
                   )
                 }
                 executionStatus={
                   execution?.status ??
-                  "NOT_REPORTED"
+                  (
+                    paperExtension?.paperAvailability ===
+                      "AVAILABLE"
+                      ? "PAPER_ELIGIBLE"
+                      : observationOnly
+                        ? "PAPER_BLOCKED"
+                        : "NOT_REPORTED"
+                  )
                 }
                 executionReasons={
                   execution?.reasons ??
+                  paperExtension?.blockers ??
                   []
                 }
                 clockMode={
@@ -553,6 +670,9 @@ export default function ExchangeHealthDashboard() {
                 clockReasons={
                   clock?.reasons ??
                   []
+                }
+                paperExtension={
+                  observationOnly
                 }
               />
             );
@@ -773,6 +893,8 @@ interface ExchangeCardProps {
 
   clockReasons:
     string[];
+
+  paperExtension: boolean;
 }
 
 function ExchangeCard({
@@ -805,6 +927,7 @@ function ExchangeCard({
   signedRequestAllowed,
   clockAgeMs,
   clockReasons,
+  paperExtension,
 }: ExchangeCardProps) {
   const executablePercent =
     quoteBookTargets > 0
@@ -898,13 +1021,19 @@ function ExchangeCard({
           <PlugZap className="size-4 text-brand" />
 
           <p className="text-xs font-semibold uppercase tracking-[0.15em] text-text-muted">
-            Execution Adapter
+            {paperExtension
+              ? "PAPER Extension / LIVE Boundary"
+              : "Execution Adapter"}
           </p>
         </div>
 
         <div className="mt-3 space-y-2">
           <DataRow
-            label="Registered"
+            label={
+              paperExtension
+                ? "LIVE Adapter Registered"
+                : "Registered"
+            }
             value={
               !adapterKnown
                 ? "NOT REPORTED"
@@ -937,7 +1066,11 @@ function ExchangeCard({
           />
 
           <DataRow
-            label="Execution API"
+            label={
+              paperExtension
+                ? "Authenticated Read API"
+                : "Execution API"
+            }
             value={
               !adapterKnown
                 ? "NOT REPORTED"
@@ -1052,7 +1185,11 @@ function ExchangeCard({
           />
 
           <DataRow
-            label="Execution Evidence"
+            label={
+              paperExtension
+                ? "PAPER Eligibility"
+                : "Execution Evidence"
+            }
             value={
               !adapterKnown
                 ? "NOT REPORTED"
@@ -1063,7 +1200,11 @@ function ExchangeCard({
           />
 
           <DataRow
-            label="Execution Health"
+            label={
+              paperExtension
+                ? "PAPER Status"
+                : "Execution Health"
+            }
             value={
               executionStatus
             }
@@ -1352,6 +1493,11 @@ function FleetCapabilityMatrix({
   report:
     ExchangeFleetCapabilityReport;
 }) {
+  const displayedExchanges = [
+    ...report.exchanges,
+    ...report.observationExchanges,
+  ];
+
   return (
     <section className="rounded-xl border border-border-default bg-panel p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -1361,7 +1507,7 @@ function FleetCapabilityMatrix({
           </p>
 
           <h2 className="mt-1 text-xl font-bold text-text-primary">
-            Five-Exchange Capability Truth
+            Five-Exchange Core + ZebPay PAPER Extension
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">
@@ -1377,7 +1523,7 @@ function FleetCapabilityMatrix({
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <SmallMetric
-          label="Target"
+          label="Core LIVE Target"
           value={`${report.targetExchangeCount}`}
         />
 
@@ -1417,7 +1563,7 @@ function FleetCapabilityMatrix({
             <span>LIVE Adapter</span>
           </div>
 
-          {report.exchanges.map(
+          {displayedExchanges.map(
             (exchange) => (
               <div
                 key={
@@ -1432,6 +1578,10 @@ function FleetCapabilityMatrix({
 
                   <p className="mt-1 font-mono text-[10px] text-text-muted">
                     {exchange.exchange}
+                    {exchange.exchange ===
+                    "zebpay"
+                      ? ` · PAPER ${report.observationSummary.executionEligible > 0 ? "ELIGIBLE" : "BLOCKED"}`
+                      : " · CORE"}
                   </p>
                 </div>
 
@@ -1505,6 +1655,15 @@ function PaperShadowReadinessMatrix({
   report:
     FiveExchangePaperShadowReadinessReport;
 }) {
+  const paperExtensionExchanges =
+    report.paperExtensionExchanges ??
+    [];
+
+  const displayedExchanges = [
+    ...report.exchanges,
+    ...paperExtensionExchanges,
+  ];
+
   return (
     <section className="rounded-xl border border-border-default bg-panel p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -1514,7 +1673,7 @@ function PaperShadowReadinessMatrix({
           </p>
 
           <h2 className="mt-1 text-xl font-bold text-text-primary">
-            Five-Exchange Paper / Shadow Readiness
+            Core Five + ZebPay PAPER / Shadow Readiness
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">
@@ -1536,7 +1695,7 @@ function PaperShadowReadinessMatrix({
         />
       </div>
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <SmallMetric
           label="Shadow Available"
           value={`${report.summary.shadowAvailableExchanges}/5`}
@@ -1560,6 +1719,16 @@ function PaperShadowReadinessMatrix({
             report.summary.totalPaperEligibleMarkets,
           )}
         />
+
+        <SmallMetric
+          label="ZebPay Shadow"
+          value={`${report.paperExtensionSummary?.shadowAvailableExchanges ?? 0}/1`}
+        />
+
+        <SmallMetric
+          label="ZebPay PAPER"
+          value={`${report.paperExtensionSummary?.paperAvailableExchanges ?? 0}/1`}
+        />
       </div>
 
       <div className="mt-5 overflow-x-auto">
@@ -1574,8 +1743,12 @@ function PaperShadowReadinessMatrix({
             <span>Paper</span>
           </div>
 
-          {report.exchanges.map(
+          {displayedExchanges.map(
             (exchange) => {
+              const paperExtension =
+                exchange.exchange ===
+                "zebpay";
+
               const feeSource =
                 Object.entries(
                   exchange.feeEvidenceSources,
@@ -1604,6 +1777,9 @@ function PaperShadowReadinessMatrix({
 
                       <p className="mt-1 font-mono text-[10px] text-text-muted">
                         {exchange.exchange}
+                        {paperExtension
+                          ? " · PAPER EXTENSION"
+                          : " · CORE"}
                       </p>
                     </div>
 

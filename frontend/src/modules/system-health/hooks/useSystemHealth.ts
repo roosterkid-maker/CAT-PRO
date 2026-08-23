@@ -11,8 +11,8 @@ export function useSystemHealth() {
       fetchSystemHealth(
         signal,
       ),
-    refetchInterval: 2_000,
-    staleTime: 1_000,
+    refetchInterval: 3_000,
+    staleTime: 2_000,
     retry: 2,
   });
 }

@@ -18,6 +18,10 @@ export interface BybitCreateSpotOrderRequest {
   quantity: number;
   price?: number;
   postOnly?: boolean;
+  timeInForce?:
+    | "GTC"
+    | "IOC"
+    | "FOK";
   clientOrderId?: string;
 }
 
@@ -163,7 +167,10 @@ export class BybitOrderApi {
                 "price",
               ),
             timeInForce:
-              request.postOnly === true ? "PostOnly" : "GTC",
+              request.postOnly === true
+                ? "PostOnly"
+                : request.timeInForce ??
+                  "GTC",
           }),
       ...(clientOrderId
         ? {

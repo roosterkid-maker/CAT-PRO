@@ -36,7 +36,7 @@ import {
 } from "@/modules/paper-trading/utils/PaperTradeMetrics";
 
 import {
-  usePersonalStrategyOneBot,
+  usePersonalStrategyOnePerformanceSummary,
 } from "@/modules/strategies/hooks/useStrategies";
 
 import {
@@ -92,6 +92,26 @@ function formatPercent(
 }
 
 export default function PaperTrading() {
+  const [
+    historyCursor,
+    setHistoryCursor,
+  ] =
+    useState<
+      string | null
+    >(
+      null,
+    );
+
+  const [
+    historyCursorStack,
+    setHistoryCursorStack,
+  ] =
+    useState<
+      (string | null)[]
+    >(
+      [],
+    );
+
   const {
     data:
       paperTradesResponse,
@@ -104,8 +124,13 @@ export default function PaperTrading() {
 
     error:
       paperTradesLoadError,
+
+    isFetching:
+      paperTradesFetching,
   } =
-    usePaperTrades();
+    usePaperTrades(
+      historyCursor,
+    );
 
   const {
     data:
@@ -120,7 +145,7 @@ export default function PaperTrading() {
     error:
       personalBotLoadError,
   } =
-    usePersonalStrategyOneBot();
+    usePersonalStrategyOnePerformanceSummary();
 
   const [
     selectedTrade,
@@ -162,11 +187,15 @@ export default function PaperTrading() {
   const rawStoreMetrics =
     useMemo(
       () =>
+        paperTradesResponse
+          ?.summary ??
         calculatePaperTradeMetrics(
           trades,
         ),
 
       [
+        paperTradesResponse
+          ?.summary,
         trades,
       ],
     );
@@ -246,6 +275,56 @@ export default function PaperTrading() {
     void {
     setDrawerOpen(
       false,
+    );
+  }
+
+  function handleNextHistoryPage():
+    void {
+    const nextCursor =
+      paperTradesResponse
+        ?.nextCursor ??
+      null;
+
+    if (
+      !nextCursor
+    ) {
+      return;
+    }
+
+    setHistoryCursorStack(
+      (
+        current,
+      ) => [
+        ...current,
+        historyCursor,
+      ],
+    );
+    setHistoryCursor(
+      nextCursor,
+    );
+  }
+
+  function handlePreviousHistoryPage():
+    void {
+    if (
+      historyCursorStack.length ===
+      0
+    ) {
+      return;
+    }
+
+    setHistoryCursor(
+      historyCursorStack[
+        historyCursorStack.length -
+        1
+      ] ??
+        null,
+    );
+    setHistoryCursorStack(
+      historyCursorStack.slice(
+        0,
+        -1,
+      ),
     );
   }
 
@@ -440,8 +519,8 @@ export default function PaperTrading() {
             </h2>
 
             <p className="mt-1 text-xs text-text-muted">
-              This table is historical
-              storage evidence. Records
+              Latest bounded history for
+              fast operator review. Records
               shown here are not
               automatically counted as
               credible Strategy #1
@@ -450,6 +529,18 @@ export default function PaperTrading() {
           </div>
 
           <div className="text-right text-xs text-text-muted">
+            <div>
+              Showing latest:{" "}
+              <span className="font-semibold text-text-primary">
+                {trades.length
+                  .toLocaleString()}
+              </span>
+              {paperTradesResponse
+                ?.truncated
+                ? ` of ${paperTradesResponse.count.toLocaleString()}`
+                : ""}
+            </div>
+
             <div>
               Stored records:{" "}
               <span className="font-semibold text-text-primary">
@@ -547,6 +638,55 @@ export default function PaperTrading() {
             )}
           </TableBody>
         </Table>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default bg-panel px-4 py-3 text-xs text-text-muted">
+        <span>
+          History page{" "}
+          <strong className="text-text-primary">
+            {(
+              historyCursorStack.length +
+              1
+            ).toLocaleString()}
+          </strong>
+          {paperTradesFetching
+            ? " · refreshing"
+            : ""}
+        </span>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={
+              handlePreviousHistoryPage
+            }
+            disabled={
+              historyCursorStack.length ===
+                0 ||
+              paperTradesFetching
+            }
+            className="rounded-md border border-border-default bg-panel-light px-3 py-2 font-semibold text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Newer
+          </button>
+
+          <button
+            type="button"
+            onClick={
+              handleNextHistoryPage
+            }
+            disabled={
+              !paperTradesResponse
+                ?.hasMore ||
+              !paperTradesResponse
+                .nextCursor ||
+              paperTradesFetching
+            }
+            className="rounded-md border border-brand/40 bg-brand/10 px-3 py-2 font-semibold text-brand disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Older
+          </button>
+        </div>
       </div>
 
       <PaperTradeDrawer

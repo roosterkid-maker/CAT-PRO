@@ -22,6 +22,9 @@ import {
   TriangularArbitrageStrategyController,
 } from "../triangular-arbitrage/TriangularArbitrageStrategyController";
 
+import {AclaCapitalLoopManager} from "../triangular-arbitrage/AclaCapitalLoopManager";
+import {AclaShadowLifecycleService} from "../triangular-arbitrage/AclaShadowLifecycleService";
+
 import {
   SpotPerpetualBasisStrategyController,
 } from "../spot-perpetual-basis-arbitrage/SpotPerpetualBasisStrategyController";
@@ -196,6 +199,18 @@ export const centralStrategyExecutionAdmissionService =
       enabled: strategyRuntimeOperatorConfiguration.centralPaper.enabled,
       allowedStrategies: strategyRuntimeOperatorConfiguration.centralPaper.allowedStrategies,
     }),
+  );
+
+export const aclaCapitalLoopManager =
+  new AclaCapitalLoopManager(
+    triangularArbitrageStrategyController.getConfiguration().capitalPool,
+  );
+
+export const aclaShadowLifecycleService =
+  new AclaShadowLifecycleService(
+    centralStrategyExecutionAdmissionService,
+    triangularArbitrageStrategyController,
+    aclaCapitalLoopManager,
   );
 
 export {

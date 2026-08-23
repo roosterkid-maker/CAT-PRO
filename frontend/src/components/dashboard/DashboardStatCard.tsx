@@ -16,7 +16,7 @@ export default function DashboardStatCard({
     value !== null;
 
   return (
-    <div className="rounded-xl border border-border-default bg-panel p-5 transition-all hover:border-brand/40 hover:shadow-lg">
+    <div className="dashboard-stat-card rounded-xl border border-border-default bg-panel p-5 transition-all hover:border-brand/40 hover:shadow-lg">
       <p className="text-sm text-text-muted">
         {title}
       </p>

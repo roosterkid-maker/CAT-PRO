@@ -18,6 +18,14 @@ import {
   capitalOptimizer,
 } from "../../optimizer/services/CapitalOptimizer";
 
+import {
+  exchangeCapabilityService,
+} from "../../execution/capabilities/services/ExchangeCapabilityService";
+
+import {
+  centralPaperCapitalValuationService,
+} from "../../strategies/services/CentralPaperCapitalValuationService";
+
 import type {
   CapitalSensitivityEconomicsReport,
   CapitalSensitivityPoint,
@@ -67,6 +75,9 @@ interface RouteSeed {
 
 export class CapitalSensitivityEconomicsAnalyzerService {
   getReport(): CapitalSensitivityEconomicsReport {
+    const generatedAt =
+      Date.now();
+
     const seeds =
       this.selectRoutes();
 
@@ -77,6 +88,7 @@ export class CapitalSensitivityEconomicsAnalyzerService {
         ) =>
           this.analyzeRoute(
             seed,
+            generatedAt,
           ),
       );
 
@@ -122,7 +134,7 @@ export class CapitalSensitivityEconomicsAnalyzerService {
       ).length;
 
     const observations = [
-      `CapitalOptimizer evaluates each selected route from ₹${MINIMUM_CAPITAL} to ₹${MAXIMUM_CAPITAL} in ₹${CAPITAL_STEP} increments using the existing full-depth ExecutionSimulator.`,
+      `CapitalOptimizer evaluates each selected route from ₹${MINIMUM_CAPITAL} to ₹${MAXIMUM_CAPITAL} in ₹${CAPITAL_STEP} INR increments, converting every candidate to the route quote asset before full-depth simulation.`,
 
       "Displayed sensitivity points are selected from the optimizer's existing candidate results; the analyzer does not run a second simulation path.",
 
@@ -135,13 +147,13 @@ export class CapitalSensitivityEconomicsAnalyzerService {
 
     return {
       generatedAt:
-        Date.now(),
+        generatedAt,
 
       version:
         "17.4",
 
       build:
-        "2",
+        "3",
 
       mode:
         "DIAGNOSTIC_ONLY",
@@ -153,6 +165,9 @@ export class CapitalSensitivityEconomicsAnalyzerService {
         false,
 
       configuration: {
+        accountCapitalCurrency:
+          "INR",
+
         minimumCapital:
           MINIMUM_CAPITAL,
 
@@ -384,12 +399,60 @@ export class CapitalSensitivityEconomicsAnalyzerService {
   private analyzeRoute(
     seed:
       RouteSeed,
+
+    now:
+      number,
   ): CapitalSensitivityRouteReport {
     const observations:
       string[] =
       [];
 
     try {
+      const quoteAsset =
+        this.resolveQuoteAsset(
+          seed,
+        );
+
+      if (!quoteAsset) {
+        throw new Error(
+          "A matching BUY/SELL quote asset is unavailable for INR capital conversion.",
+        );
+      }
+
+      const conversion =
+        centralPaperCapitalValuationService
+          .convertInrToAsset(
+            quoteAsset,
+            500,
+            `capital-sensitivity:${this.routeKey(seed)}:${now}`,
+            now,
+          );
+
+      const quoteCapitalPerInr =
+        conversion &&
+        Number.isFinite(
+          conversion.targetQuantity,
+        ) &&
+        conversion.targetQuantity >
+          0
+          ? conversion.targetQuantity /
+            500
+          : null;
+
+      if (
+        quoteCapitalPerInr ===
+          null ||
+        !Number.isFinite(
+          quoteCapitalPerInr,
+        ) ||
+        quoteCapitalPerInr <=
+          0
+      ) {
+        throw new Error(
+          `Fresh INR/${quoteAsset} capital-conversion evidence is unavailable.`,
+        );
+      }
+
       /*
        * ---------------------------------------------
        * EXISTING CAPITAL OPTIMIZER
@@ -422,6 +485,12 @@ export class CapitalSensitivityEconomicsAnalyzerService {
 
             capitalStep:
               CAPITAL_STEP,
+
+            executionCapitalMultiplier:
+              quoteCapitalPerInr,
+
+            executionCapitalCurrency:
+              quoteAsset,
           });
 
       const positiveNetProfitCandidates =
@@ -517,6 +586,14 @@ export class CapitalSensitivityEconomicsAnalyzerService {
         sellExchange:
           seed.sellExchange,
 
+        quoteAsset,
+
+        quoteCapitalPerInr:
+          this.round(
+            quoteCapitalPerInr,
+            12,
+          ),
+
         source:
           seed.source,
 
@@ -586,6 +663,14 @@ export class CapitalSensitivityEconomicsAnalyzerService {
 
         sellExchange:
           seed.sellExchange,
+
+        quoteAsset:
+          this.resolveQuoteAsset(
+            seed,
+          ),
+
+        quoteCapitalPerInr:
+          null,
 
         source:
           seed.source,
@@ -715,6 +800,12 @@ export class CapitalSensitivityEconomicsAnalyzerService {
         capital:
           candidate.capital,
 
+        executionCapital:
+          candidate.executionCapital,
+
+        executionCapitalCurrency:
+          candidate.executionCapitalCurrency,
+
         simulationSuccess:
           false,
 
@@ -785,6 +876,12 @@ export class CapitalSensitivityEconomicsAnalyzerService {
     return {
       capital:
         candidate.capital,
+
+      executionCapital:
+        candidate.executionCapital,
+
+      executionCapitalCurrency:
+        candidate.executionCapitalCurrency,
 
       simulationSuccess:
         true,
@@ -973,6 +1070,68 @@ export class CapitalSensitivityEconomicsAnalyzerService {
       `${route.buyExchange}|` +
       `${route.sellExchange}`
     );
+  }
+
+  private resolveQuoteAsset(
+    seed:
+      RouteSeed,
+  ): string | null {
+    const buy =
+      exchangeCapabilityService
+        .getCachedCapability(
+          seed.buyExchange,
+          seed.market,
+          "spot",
+        );
+
+    const sell =
+      exchangeCapabilityService
+        .getCachedCapability(
+          seed.sellExchange,
+          seed.market,
+          "spot",
+        );
+
+    const buyQuote =
+      buy?.quoteAsset
+        .trim()
+        .toUpperCase() ??
+      "";
+
+    const sellQuote =
+      sell?.quoteAsset
+        .trim()
+        .toUpperCase() ??
+      "";
+
+    if (
+      buyQuote &&
+      sellQuote &&
+      buyQuote ===
+        sellQuote
+    ) {
+      return buyQuote;
+    }
+
+    return null;
+  }
+
+  private round(
+    value:
+      number,
+
+    digits:
+      number,
+  ): number {
+    const factor =
+      10 **
+      digits;
+
+    return Math.round(
+      value *
+      factor,
+    ) /
+    factor;
   }
 }
 

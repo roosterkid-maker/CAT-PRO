@@ -72,3 +72,49 @@ export interface ExchangeClockSafetyResponse {
   data:
     ExchangeClockSafetyReport;
 }
+
+export interface ExchangeClockSynchronizationRunnerStatus {
+  version: "95.0";
+
+  running: boolean;
+
+  synchronizationInProgress: boolean;
+
+  refreshIntervalMs: number;
+
+  maximumEvidenceAgeMs: number;
+
+  refreshMarginMs: number;
+
+  attempts: number;
+
+  skippedOverlaps: number;
+
+  lastStartedAt:
+    number | null;
+
+  lastCompletedAt:
+    number | null;
+
+  lastSuccessfulAt:
+    number | null;
+
+  lastFailedAt:
+    number | null;
+
+  lastAllServerClocksHealthy:
+    boolean | null;
+
+  lastError:
+    string | null;
+}
+
+export interface ExchangeClockSynchronizationResponse {
+  success: boolean;
+
+  data:
+    ExchangeClockSafetyReport & {
+      synchronization:
+        ExchangeClockSynchronizationRunnerStatus;
+    };
+}

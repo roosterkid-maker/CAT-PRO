@@ -1,4 +1,5 @@
 import {
+  startTransition,
   useCallback,
   useEffect,
 } from "react";
@@ -52,10 +53,14 @@ function App() {
         nextPage:
           AppPage,
       ) => {
-        void navigate(
-          APP_PAGE_PATHS[
-            nextPage
-          ],
+        startTransition(
+          () => {
+            void navigate(
+              APP_PAGE_PATHS[
+                nextPage
+              ],
+            );
+          },
         );
       },
       [

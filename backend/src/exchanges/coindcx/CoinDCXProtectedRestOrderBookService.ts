@@ -31,7 +31,20 @@ import type {
 export interface CoinDCXProtectedRestOrderBookFetcher {
   fetch(
     pair: string,
+    options?: {
+      readonly timeoutMs?: number;
+    },
   ): Promise<unknown>;
+}
+
+export interface CoinDCXActionTimeOrderBookRefreshReport {
+  readonly exchange: "coindcx";
+  readonly market: string;
+  readonly accepted: boolean;
+  readonly requestedAt: number;
+  readonly receivedAt: number | null;
+  readonly roundTripMs: number;
+  readonly error: string | null;
 }
 
 export interface CoinDCXProtectedRestOrderBookStore {
@@ -221,6 +234,9 @@ implements CoinDCXProtectedRestOrderBookFetcher {
   async fetch(
     pair:
       string,
+    options: {
+      readonly timeoutMs?: number;
+    } = {},
   ): Promise<unknown> {
     const response =
       await axios.get(
@@ -231,6 +247,7 @@ implements CoinDCXProtectedRestOrderBookFetcher {
           },
 
           timeout:
+            options.timeoutMs ??
             5_000,
 
           validateStatus:
@@ -380,6 +397,12 @@ export class CoinDCXProtectedRestOrderBookService {
     new Map<
       string,
       CoinDCXProtectedTargetDiagnostics
+    >();
+
+  private readonly exactRefreshes =
+    new Map<
+      string,
+      Promise<CoinDCXActionTimeOrderBookRefreshReport>
     >();
 
   private timer:
@@ -596,6 +619,170 @@ export class CoinDCXProtectedRestOrderBookService {
       supplied;
 
     this.rebuildActiveTargets();
+  }
+
+  /**
+   * Exact, coalesced public-read refresh for an already audited action route.
+   * It does not change the protected target set and exposes no credential,
+   * order, transfer or withdrawal capability.
+   */
+  async refreshExactMarket(
+    marketValue:
+      string,
+    timeoutMs:
+      number,
+  ): Promise<CoinDCXActionTimeOrderBookRefreshReport> {
+    const market =
+      marketValue
+        .trim()
+        .toUpperCase();
+
+    const requestedAt =
+      Date.now();
+
+    if (
+      !Number.isSafeInteger(
+        timeoutMs,
+      ) ||
+      timeoutMs <
+        50 ||
+      timeoutMs >
+        1_000
+    ) {
+      return {
+        exchange:
+          "coindcx",
+        market,
+        accepted:
+          false,
+        requestedAt,
+        receivedAt:
+          null,
+        roundTripMs:
+          0,
+        error:
+          "CoinDCX action-time order-book timeout must be 50-1000 ms.",
+      };
+    }
+
+    const existing =
+      this.exactRefreshes
+        .get(
+          market,
+        );
+
+    if (
+      existing
+    ) {
+      return existing;
+    }
+
+    const metadata =
+      marketRegistry
+        .get(
+          market,
+        ) ??
+      marketRegistry
+        .getAll()
+        .find(
+          (item) =>
+            normalizeMarketIdentity(
+              item.symbol,
+            ) ===
+            normalizeMarketIdentity(
+              market,
+            ),
+        );
+
+    if (
+      !metadata
+    ) {
+      return {
+        exchange:
+          "coindcx",
+        market,
+        accepted:
+          false,
+        requestedAt,
+        receivedAt:
+          null,
+        roundTripMs:
+          0,
+        error:
+          "CoinDCX action-time order-book market is not registered.",
+      };
+    }
+
+    /*
+     * CoinDCX currently exposes some USDT symbols with punctuation (for
+     * example COTI-USDT) while ticker/opportunity identity is COTIUSDT.
+     * Pair metadata is authoritative for the public REST request, but the
+     * caller's already-audited normalized market identity must be retained
+     * when publishing the refreshed book back into CAT PRO.
+     */
+    const target = {
+      market,
+      pair:
+        metadata.pair,
+      purpose:
+        "STRATEGY_ONE_DISCOVERY" as const,
+    };
+
+    let operation:
+      Promise<CoinDCXActionTimeOrderBookRefreshReport>;
+
+    operation =
+      this.refreshTarget(
+        target,
+        requestedAt,
+        timeoutMs,
+      )
+        .then(
+          (
+            result,
+          ) => ({
+            exchange:
+              "coindcx" as const,
+            market,
+            accepted:
+              result.accepted,
+            requestedAt,
+            receivedAt:
+              result.receivedAt,
+            roundTripMs:
+              Math.max(
+                0,
+                (result.receivedAt ?? Date.now()) -
+                  requestedAt,
+              ),
+            error:
+              result.error,
+          }),
+        )
+        .finally(
+          () => {
+            if (
+              this.exactRefreshes
+                .get(
+                  market,
+                ) ===
+              operation
+            ) {
+              this.exactRefreshes
+                .delete(
+                  market,
+                );
+            }
+          },
+        );
+
+    this.exactRefreshes
+      .set(
+        market,
+        operation,
+      );
+
+    return operation;
   }
 
   async refresh(
@@ -1228,6 +1415,9 @@ export class CoinDCXProtectedRestOrderBookService {
 
     now:
       number,
+
+    timeoutMs?:
+      number,
   ): Promise<{
     readonly market:
       string;
@@ -1237,6 +1427,9 @@ export class CoinDCXProtectedRestOrderBookService {
 
     readonly error:
       string | null;
+
+    readonly receivedAt:
+      number | null;
   }> {
     this.ensureDiagnostics([
       target,
@@ -1260,6 +1453,9 @@ export class CoinDCXProtectedRestOrderBookService {
 
         error:
           "Protected target diagnostics are unavailable.",
+
+        receivedAt:
+          null,
       };
     }
 
@@ -1277,6 +1473,9 @@ export class CoinDCXProtectedRestOrderBookService {
         await this.fetcher
           .fetch(
             target.pair,
+            {
+              timeoutMs,
+            },
           );
 
       const receivedAt =
@@ -1381,6 +1580,8 @@ export class CoinDCXProtectedRestOrderBookService {
 
         error:
           null,
+
+        receivedAt,
       };
     } catch (
       error:
@@ -1409,6 +1610,9 @@ export class CoinDCXProtectedRestOrderBookService {
 
         error:
           message,
+
+        receivedAt:
+          null,
       };
     }
   }
@@ -1577,6 +1781,19 @@ export class CoinDCXProtectedRestOrderBookService {
         },
       );
   }
+}
+
+function normalizeMarketIdentity(
+  value:
+    string,
+): string {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(
+      /[^A-Z0-9]/gu,
+      "",
+    );
 }
 
 export const coinDCXProtectedRestOrderBookService =

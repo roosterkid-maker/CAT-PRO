@@ -9,7 +9,8 @@ export type SpotPerpetualBasisPaperClosureState =
 
 export interface SpotPerpetualBasisRouteSummary {
   routeId: string;
-  exchange: string;
+  spotExchange: string;
+  perpetualExchange: string;
   market: string;
   status: "QUALIFIED" | "BLOCKED";
   blockers: string[];
@@ -17,11 +18,18 @@ export interface SpotPerpetualBasisRouteSummary {
   spotBuyVwap: number;
   perpetualSellVwap: number;
   grossBasisPercent: number;
+  entryFeeQuote: number;
+  exitFeeReserveQuote: number;
   totalFeeQuote: number;
   totalFeePercent: number;
   fundingRate: number;
   expectedFundingQuote: number;
   expectedFundingPercent: number;
+  fundingQualificationCreditQuote: number;
+  positiveFundingExcludedFromQualification: boolean;
+  slippageBufferQuote: number;
+  spotSlippageBufferPercent: number;
+  perpetualSlippageBufferPercent: number;
   safetyBufferQuote: number;
   safetyBufferPercent: number;
   expectedNetQuote: number;
@@ -46,7 +54,7 @@ export interface SpotPerpetualBasisVenueEvidence {
 }
 
 export interface SpotPerpetualBasisPaperClosureReport {
-  version: "69.0";
+  version: "176.0";
   generatedAt: number;
   strategyId: "spot-perpetual-basis-arbitrage";
   mode: "SPOT_PERPETUAL_BASIS_PAPER_CLOSURE_OBSERVABILITY";
@@ -66,6 +74,9 @@ export interface SpotPerpetualBasisPaperClosureReport {
     netPositiveRoutes: number;
     qualifiedRoutes: number;
     minimumExpectedNetPercent: number;
+    closeAtOrBelowAbsoluteBasisPercent: number;
+    nextOpeningDelayMs: number;
+    perpetualLeverage: 1;
     bestRoute: SpotPerpetualBasisRouteSummary | null;
     dominantBlockers: Array<{code: string; count: number}>;
   };
@@ -77,6 +88,13 @@ export interface SpotPerpetualBasisPaperClosureReport {
     feeConfiguredVenues: number;
     paperEvidenceReadyVenues: number;
     venues: SpotPerpetualBasisVenueEvidence[];
+  };
+  topology: {
+    spotVenues: 6;
+    perpetualVenues: 5;
+    totalVenueCombinationsPerSharedMarket: 30;
+    intraExchangeCombinationsPerSharedMarket: 5;
+    crossExchangeCombinationsPerSharedMarket: 25;
   };
   lineage: {
     admissionsObserved: number;

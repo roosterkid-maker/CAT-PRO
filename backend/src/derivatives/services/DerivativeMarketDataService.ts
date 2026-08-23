@@ -11,10 +11,17 @@ import {
 import {
   BybitLinearPerpetualPublicProvider,
 } from "../providers/BybitLinearPerpetualPublicProvider";
+import {CoinDCXFuturesPublicProvider} from "../providers/CoinDCXFuturesPublicProvider";
+import {CoinSwitchFuturesPublicProvider} from "../providers/CoinSwitchFuturesPublicProvider";
+import {ZebPayFuturesPublicProvider} from "../providers/ZebPayFuturesPublicProvider";
 
 import type {
   DerivativePublicProvider,
 } from "../providers/DerivativePublicProvider";
+
+import {
+  derivativeFeeEvidenceService,
+} from "./DerivativeFeeEvidenceService";
 
 export interface DerivativeMarketDataServiceConfiguration {
   readonly refreshIntervalMs: number;
@@ -47,6 +54,9 @@ export class DerivativeMarketDataService {
     providers: readonly DerivativePublicProvider[] = [
       new BinanceUsdMPerpetualPublicProvider(),
       new BybitLinearPerpetualPublicProvider(),
+      new CoinDCXFuturesPublicProvider(),
+      new CoinSwitchFuturesPublicProvider(),
+      new ZebPayFuturesPublicProvider(),
     ],
     configuration: Partial<DerivativeMarketDataServiceConfiguration> = {},
   ) {
@@ -134,6 +144,15 @@ export class DerivativeMarketDataService {
           });
           for (const market of receivedMarkets) {
             this.markets.set(this.key(market.exchange, market.market), immutableClone(market));
+            if (market.fees) {
+              derivativeFeeEvidenceService.observePublicInstrumentRules({
+                exchange: market.exchange,
+                market: market.market,
+                makerPercent: market.fees.makerPercent,
+                takerPercent: market.fees.takerPercent,
+                observedAt: completedAt,
+              });
+            }
           }
 
           this.statuses.set(provider.exchange, {

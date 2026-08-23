@@ -519,6 +519,52 @@ export class StrategyReadModelService {
     });
   }
 
+  /**
+   * Lightweight controller-owned diagnostics for fleet/readiness summaries.
+   *
+   * This deliberately skips attribution and performance history aggregation,
+   * lifecycle snapshots, intent history and every other detailed read-model
+   * section. Fleet endpoints call it for all eight strategies, so routing
+   * those requests through getById() would repeatedly scan the complete PAPER
+   * ledger and can monopolize the Node.js event loop.
+   */
+  getBlockerDiagnosticsById(
+    strategyId:
+      string,
+
+    now =
+      Date.now(),
+  ): StrategyBlockerDiagnostics | null {
+    const controller =
+      this.registry.get(
+        strategyId,
+      );
+
+    if (!controller) {
+      return null;
+    }
+
+    const runtime =
+      controller.getRuntimeSnapshot(
+        now,
+      );
+
+    const configuration =
+      controller.getConfiguration?.() ??
+      null;
+
+    return buildStrategyBlockerDiagnostics(
+      runtime,
+      {
+        configuration,
+        strategy:
+          controller.getDiagnosticEvidence?.() ??
+          null,
+      },
+      now,
+    );
+  }
+
   getById(
     strategyId:
       string,

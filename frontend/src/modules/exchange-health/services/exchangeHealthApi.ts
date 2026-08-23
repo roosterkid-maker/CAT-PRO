@@ -4,6 +4,7 @@ import {
 
 import type {
   ExchangeClockSafetyResponse,
+  ExchangeClockSynchronizationResponse,
 } from "../types/ExchangeClock";
 
 import type {
@@ -21,6 +22,21 @@ export async function fetchExchangeClockSafety(
   const response =
     await api.get<ExchangeClockSafetyResponse>(
       "/api/execution/clock",
+      {
+        signal,
+      },
+    );
+
+  return response.data;
+}
+
+export async function synchronizeExchangeClocks(
+  signal?: AbortSignal,
+): Promise<ExchangeClockSynchronizationResponse> {
+  const response =
+    await api.post<ExchangeClockSynchronizationResponse>(
+      "/api/execution/clock/synchronize",
+      undefined,
       {
         signal,
       },

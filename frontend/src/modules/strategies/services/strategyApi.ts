@@ -50,6 +50,7 @@ import type {
 import type {
   PersonalBotControlResponse,
   PersonalStrategyOneBotResponse,
+  PersonalStrategyOnePerformanceSummaryResponse,
 } from "../types/PersonalStrategyOneBot";
 
 export async function fetchPersonalStrategyOneBot():
@@ -57,6 +58,15 @@ Promise<PersonalStrategyOneBotResponse> {
   const response = await api.get<PersonalStrategyOneBotResponse>(
     "/api/strategies/personal-bot",
   );
+  return response.data;
+}
+
+export async function fetchPersonalStrategyOnePerformanceSummary():
+Promise<PersonalStrategyOnePerformanceSummaryResponse> {
+  const response = await api.get<PersonalStrategyOnePerformanceSummaryResponse>(
+    "/api/strategies/personal-bot/performance-summary",
+  );
+
   return response.data;
 }
 

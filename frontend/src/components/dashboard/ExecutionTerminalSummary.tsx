@@ -78,7 +78,7 @@ export default function ExecutionTerminalSummary({
         : "Awaiting production-safety evidence";
 
   return (
-    <div className="mb-6">
+    <div className="dashboard-execution-summary mb-6">
       <div className="mb-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-muted">
           Execution Terminal

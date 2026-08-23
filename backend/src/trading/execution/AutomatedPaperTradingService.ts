@@ -100,6 +100,12 @@ import {
   freshnessIntegrityService,
 } from "../../freshness/services/FreshnessIntegrityService";
 
+import {
+  isExactStrategyOnePilotRoute,
+  STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
+} from "../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+
 import type {
   OrderBook,
 } from "../../orderbook/models/OrderBook";
@@ -453,6 +459,12 @@ export class StrategyOnePaperStressGate {
           )
         : null;
 
+    const exactPilotRoute =
+      isExactStrategyOnePilotRoute({
+        buyExchange,
+        sellExchange,
+      });
+
     if (buyBook) {
       this.validateBookFreshness(
         "BUY",
@@ -460,6 +472,7 @@ export class StrategyOnePaperStressGate {
         buyBook.timestamp,
         now,
         reasons,
+        exactPilotRoute,
       );
     }
 
@@ -470,6 +483,7 @@ export class StrategyOnePaperStressGate {
         sellBook.timestamp,
         now,
         reasons,
+        exactPilotRoute,
       );
     }
 
@@ -477,11 +491,14 @@ export class StrategyOnePaperStressGate {
       timestampSkewMs !==
         null &&
       timestampSkewMs >
-        this.dependencies
-          .getMaximumPairSkewMs(
-            buyExchange,
-            sellExchange,
-          )
+        (
+          exactPilotRoute
+            ? Math.min(
+                STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
+                this.dependencies.getMaximumPairSkewMs(buyExchange, sellExchange),
+              )
+            : this.dependencies.getMaximumPairSkewMs(buyExchange, sellExchange)
+        )
     ) {
       reasons.push(
         `Final PAPER books are not synchronized; timestamp skew is ${timestampSkewMs} ms.`,
@@ -857,16 +874,22 @@ export class StrategyOnePaperStressGate {
       number,
     reasons:
       string[],
+    exactPilotRoute:
+      boolean,
   ): void {
     const ageMs =
       now -
       timestamp;
 
-    const maximumAgeMs =
-      this.dependencies
-        .getMaximumQuoteAgeMs(
-          exchange,
-        );
+    const configuredMaximumAgeMs =
+      this.dependencies.getMaximumQuoteAgeMs(exchange);
+
+    const maximumAgeMs = exactPilotRoute
+      ? Math.min(
+          STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+          configuredMaximumAgeMs,
+        )
+      : configuredMaximumAgeMs;
 
     if (
       !Number.isFinite(

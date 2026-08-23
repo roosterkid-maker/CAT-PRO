@@ -16,9 +16,57 @@ async function main(): Promise<void> {
     await testJournalBeforeIoAndRestartReconciliation(join(directory, "complete.jsonl"));
     await testUnknownSubmissionNeverRetries(join(directory, "uncertain.jsonl"));
     await testDisabledGatewayPerformsNoIo(join(directory, "disabled.jsonl"));
+    await testPrivateFillIdentityBeforeIo(join(directory, "private-fill-identity.jsonl"));
+    await testTimingObserverCannotChangeOutcome(join(directory, "timing-failure.jsonl"));
     console.log("CENTRAL LIVE ORDER EXECUTION GATEWAY TEST PASSED.");
     console.log("Journal-before-I/O, exact request hashing, restart reconciliation, authoritative fill-fee binding, and no automatic retry after unknown submission passed using fixtures; no external order occurred.");
   } finally { rmSync(directory, {recursive: true, force: true}); }
+}
+
+async function testTimingObserverCannotChangeOutcome(file: string): Promise<void> {
+  const request: LiveExecutionRequest = {exchange: "binance", product: "SPOT", market: "ETHUSDT", side: "buy",
+    orderType: "limit", quantity: 0.01, price: 3_000, clientOrderId: "timing-failure-isolation",
+    cancelOnTimeout: false};
+  const adapter = createAdapter({async execute(input) {
+    return {...result(input), status: "OPEN", filledQuantity: 0, remainingQuantity: input.quantity,
+      averageFillPrice: 0, feeAmount: 0};
+  }});
+  const gateway = new CentralLiveOrderExecutionGateway({enabled: true}, createRuntime(adapter),
+    {async inspect() { return feeEvidence(); }}, file, null, {
+      observeGatewayResult() { throw new Error("Fixture timing observer failed."); },
+      recordObserverFailure() { throw new Error("Fixture timing failure counter failed."); },
+    });
+  const response = await gateway.executeOrReconcile({request,
+    idempotencyKey: "dispatch:timing:failure-isolation", allowNewSubmission: true, now});
+  assert.equal(response.state, "OPEN");
+  assert.equal(response.record?.result?.status, "OPEN");
+  assert.equal(response.record?.lastError, null);
+}
+
+async function testPrivateFillIdentityBeforeIo(file: string): Promise<void> {
+  const sequence: string[] = [];
+  let durableClientOrderId: string | null = null;
+  const request: LiveExecutionRequest = {exchange: "binance", product: "SPOT", market: "BTCUSDT", side: "buy",
+    orderType: "limit", quantity: 0.001, price: 50_000, postOnly: true, cancelOnTimeout: false};
+  const adapter = createAdapter({async execute(input) {
+    sequence.push("exchange-io"); assert.equal(sequence[0], "private-binding");
+    durableClientOrderId = input.clientOrderId ?? null;
+    return {...result(input), status: "OPEN", filledQuantity: 0, remainingQuantity: input.quantity,
+      averageFillPrice: 0, feeAmount: 0};
+  }});
+  const ownership = {registerBeforeIo(input: {readonly request: LiveExecutionRequest}) {
+    sequence.push("private-binding"); assert.ok(input.request.clientOrderId); durableClientOrderId = input.request.clientOrderId ?? null;
+  }, attachExchangeOrderId(input: {readonly exchangeOrderId: string}) {
+    sequence.push("exchange-id-attached"); assert.equal(input.exchangeOrderId, "12345");
+  }};
+  const gateway = new CentralLiveOrderExecutionGateway({enabled: true}, createRuntime(adapter),
+    {async inspect() { return feeEvidence(); }}, file, ownership);
+  const response = await gateway.executeOrReconcile({request, idempotencyKey: "dispatch:spot:private-fill:binance",
+    allowNewSubmission: true, now});
+  assert.equal(response.state, "OPEN");
+  assert.deepEqual(sequence, ["private-binding", "exchange-io", "exchange-id-attached"]);
+  assert.match(durableClientOrderId ?? "", /^cat-[a-f0-9]{28}$/u);
+  assert.equal(response.record?.request.clientOrderId, durableClientOrderId);
 }
 
 async function testJournalBeforeIoAndRestartReconciliation(file: string): Promise<void> {

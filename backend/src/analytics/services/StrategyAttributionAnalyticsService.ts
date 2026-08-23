@@ -24,8 +24,8 @@ import type {
 } from "../../trading/models/PaperTrade";
 
 import {
-  paperTradingService,
-} from "../../trading/services/PaperTradingService";
+  paperTradeStore,
+} from "../../trading/services/PaperTradeStore";
 
 import {
   shadowLearningEvidenceArchiveService,
@@ -44,35 +44,125 @@ export interface StrategyAttributionAnalyticsSources {
 
   paperTrades():
     readonly PaperTrade[];
+
+  getRevision?():
+    string | number;
+
+  archivedShadowRevision?():
+    string | number;
+
+  runtimeShadowRevision?():
+    string | number;
+
+  paperRevision?():
+    string | number;
 }
 
 export class StrategyAttributionAnalyticsService {
   private readonly sources:
     StrategyAttributionAnalyticsSources;
 
+  /*
+   * StrategyReadModelService requests coverage and performance with the same
+   * authoritative timestamp. Both views consume the same immutable source
+   * population, so retain that exact-timestamp snapshot instead of reading,
+   * cloning and de-duplicating the complete PAPER/SHADOW history twice in one
+   * HTTP request. A different timestamp always forces a fresh read.
+   */
+  private sourceSnapshot: {
+    readonly generatedAt: number;
+    readonly revision: string | number | null;
+    readonly shadowOutcomes: readonly ShadowTradeOutcomeRecord[];
+    readonly paperTrades: readonly PaperTrade[];
+  } | null = null;
+
+  private archivedShadowSnapshot: {
+    readonly revision: string | number;
+    readonly records: readonly ShadowTradeOutcomeRecord[];
+  } | null = null;
+
+  private runtimeShadowSnapshot: {
+    readonly revision: string | number;
+    readonly records: readonly ShadowTradeOutcomeRecord[];
+  } | null = null;
+
+  private paperTradeSnapshot: {
+    readonly revision: string | number;
+    readonly records: readonly PaperTrade[];
+  } | null = null;
+
   constructor(
     sources:
       Partial<StrategyAttributionAnalyticsSources> = {},
   ) {
+    const usesDefaultArchivedShadow =
+      sources.archivedShadowOutcomes === undefined;
+    const usesDefaultRuntimeShadow =
+      sources.runtimeShadowOutcomes === undefined;
+    const usesDefaultPaperTrades =
+      sources.paperTrades === undefined;
+    const usesDefaultEvidenceSources =
+      usesDefaultArchivedShadow &&
+      usesDefaultRuntimeShadow &&
+      usesDefaultPaperTrades;
+
     this.sources = {
       archivedShadowOutcomes:
         sources.archivedShadowOutcomes ??
         (() =>
           shadowLearningEvidenceArchiveService
-            .getOutcomeRecords()),
+            .getAnalyticsOutcomeRecords()),
 
       runtimeShadowOutcomes:
         sources.runtimeShadowOutcomes ??
         (() =>
           shadowTradeOutcomeTrackerService
-            .getDiagnostics()
-            .records),
+            .getAnalyticsRecords()),
 
       paperTrades:
         sources.paperTrades ??
         (() =>
-          paperTradingService
-            .getTrades()),
+          paperTradeStore
+            .getAllForReadOnlyAggregation()),
+
+      getRevision:
+        sources.getRevision ??
+        (
+          usesDefaultEvidenceSources
+            ? () => [
+                shadowLearningEvidenceArchiveService.getRevision(),
+                shadowTradeOutcomeTrackerService.getRevision(),
+                paperTradeStore.getRevision(),
+              ].join(":")
+            : undefined
+        ),
+
+      archivedShadowRevision:
+        sources.archivedShadowRevision ??
+        (
+          usesDefaultArchivedShadow
+            ? () =>
+                shadowLearningEvidenceArchiveService.getRevision()
+            : undefined
+        ),
+
+      runtimeShadowRevision:
+        sources.runtimeShadowRevision ??
+        (
+          usesDefaultRuntimeShadow
+            ? () =>
+                shadowTradeOutcomeTrackerService.getRevision()
+            : undefined
+        ),
+
+      paperRevision:
+        sources.paperRevision ??
+        (
+          usesDefaultPaperTrades
+            ? () =>
+                paperTradeStore.getRevision()
+            : undefined
+        ),
     };
   }
 
@@ -80,12 +170,14 @@ export class StrategyAttributionAnalyticsService {
     strategyId: StrategyId,
     now = Date.now(),
   ): StrategyAttributionEvidenceSummary {
-    const shadowOutcomes =
-      this.getShadowOutcomes();
+    const sourceSnapshot =
+      this.getSourceSnapshot(
+        now,
+      );
 
     const paperTrades =
-      this.sources
-        .paperTrades()
+      sourceSnapshot
+        .paperTrades
         .map(
           (trade) =>
             trade.strategyAttribution,
@@ -100,7 +192,8 @@ export class StrategyAttributionAnalyticsService {
       shadowOutcomes:
         this.buildCoverage(
           strategyId,
-          shadowOutcomes
+          sourceSnapshot
+            .shadowOutcomes
             .map(
               (record) =>
                 record.strategyAttribution,
@@ -119,8 +212,14 @@ export class StrategyAttributionAnalyticsService {
     strategyId: StrategyId,
     now = Date.now(),
   ): StrategyPerformanceAnalytics {
+    const sourceSnapshot =
+      this.getSourceSnapshot(
+        now,
+      );
+
     const shadowRecords =
-      this.getShadowOutcomes()
+      sourceSnapshot
+        .shadowOutcomes
         .filter(
           (record) =>
             this.isAttributedTo(
@@ -130,8 +229,8 @@ export class StrategyAttributionAnalyticsService {
         );
 
     const paperTrades =
-      this.sources
-        .paperTrades()
+      sourceSnapshot
+        .paperTrades
         .filter(
           (trade) =>
             this.isAttributedTo(
@@ -178,6 +277,43 @@ export class StrategyAttributionAnalyticsService {
     });
   }
 
+  private getSourceSnapshot(
+    now: number,
+  ): {
+    readonly generatedAt: number;
+    readonly revision: string | number | null;
+    readonly shadowOutcomes: readonly ShadowTradeOutcomeRecord[];
+    readonly paperTrades: readonly PaperTrade[];
+  } {
+    const revision =
+      this.sources
+        .getRevision?.() ??
+      null;
+
+    if (
+      this.sourceSnapshot !== null &&
+      (
+        revision !== null
+          ? this.sourceSnapshot.revision === revision
+          : this.sourceSnapshot.generatedAt === now
+      )
+    ) {
+      return this.sourceSnapshot;
+    }
+
+    this.sourceSnapshot = {
+      generatedAt:
+        now,
+      revision,
+      shadowOutcomes:
+        this.getShadowOutcomes(),
+      paperTrades:
+        this.getPaperTrades(),
+    };
+
+    return this.sourceSnapshot;
+  }
+
   private getShadowOutcomes():
     ShadowTradeOutcomeRecord[] {
     const records =
@@ -188,8 +324,7 @@ export class StrategyAttributionAnalyticsService {
 
     for (
       const record
-      of this.sources
-        .archivedShadowOutcomes()
+      of this.getArchivedShadowOutcomes()
     ) {
       records.set(
         record.id,
@@ -202,8 +337,7 @@ export class StrategyAttributionAnalyticsService {
     // Runtime evidence is authoritative for the same record ID.
     for (
       const record
-      of this.sources
-        .runtimeShadowOutcomes()
+      of this.getRuntimeShadowOutcomes()
     ) {
       records.set(
         record.id,
@@ -216,6 +350,84 @@ export class StrategyAttributionAnalyticsService {
     return [
       ...records.values(),
     ];
+  }
+
+  private getArchivedShadowOutcomes():
+    readonly ShadowTradeOutcomeRecord[] {
+    const revision =
+      this.sources.archivedShadowRevision?.() ??
+      null;
+
+    if (
+      revision !== null &&
+      this.archivedShadowSnapshot?.revision === revision
+    ) {
+      return this.archivedShadowSnapshot.records;
+    }
+
+    const records =
+      this.sources.archivedShadowOutcomes();
+
+    if (revision !== null) {
+      this.archivedShadowSnapshot = {
+        revision,
+        records,
+      };
+    }
+
+    return records;
+  }
+
+  private getRuntimeShadowOutcomes():
+    readonly ShadowTradeOutcomeRecord[] {
+    const revision =
+      this.sources.runtimeShadowRevision?.() ??
+      null;
+
+    if (
+      revision !== null &&
+      this.runtimeShadowSnapshot?.revision === revision
+    ) {
+      return this.runtimeShadowSnapshot.records;
+    }
+
+    const records =
+      this.sources.runtimeShadowOutcomes();
+
+    if (revision !== null) {
+      this.runtimeShadowSnapshot = {
+        revision,
+        records,
+      };
+    }
+
+    return records;
+  }
+
+  private getPaperTrades():
+    readonly PaperTrade[] {
+    const revision =
+      this.sources.paperRevision?.() ??
+      null;
+
+    if (
+      revision !== null &&
+      this.paperTradeSnapshot?.revision === revision
+    ) {
+      return this.paperTradeSnapshot.records;
+    }
+
+    const records =
+      this.sources.paperTrades();
+
+    if (revision !== null) {
+      this.paperTradeSnapshot = {
+        revision,
+        records,
+      };
+    }
+
+    return records;
   }
 
   private isAttributedTo(

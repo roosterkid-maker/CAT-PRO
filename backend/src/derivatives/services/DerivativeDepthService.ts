@@ -4,6 +4,8 @@ import type {
   DerivativeDepthSnapshot,
   DerivativeDepthVenueResult,
 } from "../models/DerivativeDepthEvidence";
+import {CoinSwitchReadOnlyHttpClient} from "../../exchanges/coinswitch/api/CoinSwitchReadOnlyHttpClient";
+import {DERIVATIVE_CANDIDATE_MARKETS} from "../providers/DerivativeProviderUtilities";
 
 export interface DerivativeDepthFetcher {
   readonly exchange: string;
@@ -18,11 +20,7 @@ export interface DerivativeDepthServiceConfiguration {
   readonly retentionMs: number;
 }
 
-const DEFAULT_MARKETS = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "SOLUSDT",
-] as const;
+const DEFAULT_MARKETS = DERIVATIVE_CANDIDATE_MARKETS;
 
 const DEFAULT_CONFIGURATION: DerivativeDepthServiceConfiguration = {
   markets: DEFAULT_MARKETS,
@@ -129,6 +127,62 @@ class BybitDerivativeDepthFetcher implements DerivativeDepthFetcher {
   }
 }
 
+class CoinDCXDerivativeDepthFetcher implements DerivativeDepthFetcher {
+  readonly exchange = "coindcx";
+  async fetch(markets: readonly string[], now = Date.now()): Promise<DerivativeDepthVenueResult> {
+    const books = await Promise.all(markets.map(async (market) => {
+      const base = market.endsWith("USDT") ? market.slice(0, -4) : "";
+      if (!base) throw new Error(`CoinDCX derivative market ${market} is unsupported.`);
+      const pair = `B-${base}_USDT`;
+      const response = await fetch(
+        `https://public.coindcx.com/market_data/v3/orderbook/${encodeURIComponent(pair)}-futures/50`,
+        {signal: AbortSignal.timeout(10_000)},
+      );
+      if (!response.ok) throw new Error(`CoinDCX futures depth ${market} failed with HTTP ${response.status}.`);
+      const payload = await response.json() as {bids?: unknown; asks?: unknown; timestamp?: unknown; ts?: unknown};
+      return normalizeBook(this.exchange, market, payload.bids, payload.asks,
+        positiveTimestamp(payload.timestamp) ?? positiveTimestamp(payload.ts) ?? now, Date.now());
+    }));
+    return {exchange: this.exchange, generatedAt: now, books};
+  }
+}
+
+class CoinSwitchDerivativeDepthFetcher implements DerivativeDepthFetcher {
+  readonly exchange = "coinswitch";
+  constructor(private readonly client = new CoinSwitchReadOnlyHttpClient()) {}
+  async fetch(markets: readonly string[], now = Date.now()): Promise<DerivativeDepthVenueResult> {
+    const books = await Promise.all(markets.map(async (market) => {
+      const payload = await this.client.getSigned<unknown>("/trade/api/v2/futures/order_book", {
+        exchange: "EXCHANGE_2", symbol: market, l2Orderbook: "true",
+      });
+      const body = recordData(payload);
+      if (!body) throw new Error(`CoinSwitch futures depth ${market} returned no data.`);
+      return normalizeBook(this.exchange, market, body.bids ?? body.buy, body.asks ?? body.sell,
+        positiveTimestamp(body.timestamp) ?? positiveTimestamp(body.ts) ?? now, Date.now());
+    }));
+    return {exchange: this.exchange, generatedAt: now, books};
+  }
+}
+
+class ZebPayDerivativeDepthFetcher implements DerivativeDepthFetcher {
+  readonly exchange = "zebpay";
+  async fetch(markets: readonly string[], now = Date.now()): Promise<DerivativeDepthVenueResult> {
+    const books = await Promise.all(markets.map(async (market) => {
+      const response = await fetch(
+        `https://futuresbe.zebpay.com/api/v1/market/orderBook?symbol=${encodeURIComponent(market)}`,
+        {signal: AbortSignal.timeout(10_000)},
+      );
+      if (!response.ok) throw new Error(`ZebPay futures depth ${market} failed with HTTP ${response.status}.`);
+      const payload = await response.json() as unknown;
+      const body = recordData(payload);
+      if (!body) throw new Error(`ZebPay futures depth ${market} returned no data.`);
+      return normalizeBook(this.exchange, market, body.bids ?? body.buy, body.asks ?? body.sell,
+        positiveTimestamp(body.timestamp) ?? positiveTimestamp(body.ts) ?? now, Date.now());
+    }));
+    return {exchange: this.exchange, generatedAt: now, books};
+  }
+}
+
 export class DerivativeDepthService {
   private readonly fetchers: readonly DerivativeDepthFetcher[];
   private readonly configuration: DerivativeDepthServiceConfiguration;
@@ -141,6 +195,9 @@ export class DerivativeDepthService {
     fetchers: readonly DerivativeDepthFetcher[] = [
       new BinanceDerivativeDepthFetcher(),
       new BybitDerivativeDepthFetcher(),
+      new CoinDCXDerivativeDepthFetcher(),
+      new CoinSwitchDerivativeDepthFetcher(),
+      new ZebPayDerivativeDepthFetcher(),
     ],
     configuration: Partial<DerivativeDepthServiceConfiguration> = {},
   ) {
@@ -151,8 +208,8 @@ export class DerivativeDepthService {
       markets: normalizeMarkets(configuration.markets ?? DEFAULT_MARKETS),
     };
 
-    if (this.configuration.markets.length === 0 || this.configuration.markets.length > 10) {
-      throw new Error("Derivative depth requires between one and ten bounded markets.");
+    if (this.configuration.markets.length === 0 || this.configuration.markets.length > 20) {
+      throw new Error("Derivative depth requires between one and twenty bounded markets.");
     }
 
     for (const value of [
@@ -370,11 +427,12 @@ function normalizeBook(
 }
 
 function normalizeLevels(raw: unknown, descending: boolean): Array<{price: number; quantity: number}> {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-
-  return raw
+  const levels: unknown[] = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object"
+      ? Object.entries(raw as Record<string, unknown>)
+      : [];
+  return levels
     .map((level) => {
       if (!Array.isArray(level) || level.length < 2) {
         return null;
@@ -387,6 +445,15 @@ function normalizeLevels(raw: unknown, descending: boolean): Array<{price: numbe
     })
     .filter((level): level is {price: number; quantity: number} => level !== null)
     .sort((first, second) => descending ? second.price - first.price : first.price - second.price);
+}
+
+function recordData(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.data && typeof record.data === "object" && !Array.isArray(record.data)) {
+    return record.data as Record<string, unknown>;
+  }
+  return record;
 }
 
 function normalizeMarkets(markets: readonly string[]): string[] {

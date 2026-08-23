@@ -7,7 +7,10 @@ import {
 
 import {
   paperTradeStore,
+  type PaperTradePage,
+  type PaperTradePageCursor,
   type PaperTradeStoreDiagnostics,
+  type PaperTradeStoreSummary,
   type PaperTradeStore,
 } from "./PaperTradeStore";
 
@@ -256,6 +259,28 @@ export class PaperTradingService {
 
   getTrades(): PaperTrade[] {
     return this.store.getAll();
+  }
+
+  getRecentTrades(
+    limit: number,
+  ): PaperTrade[] {
+    return this.store.getRecent(
+      limit,
+    );
+  }
+
+  getTradePage(
+    limit: number,
+    cursor: PaperTradePageCursor | null = null,
+  ): PaperTradePage {
+    return this.store.getPage(
+      limit,
+      cursor,
+    );
+  }
+
+  getTradeSummary(): PaperTradeStoreSummary {
+    return this.store.getSummary();
   }
 
   getTradeRevision(): number {

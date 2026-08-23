@@ -23,14 +23,15 @@ async function main(): Promise<void> {
       first.record(pair, {timestamp: now + index, leftMid: 100 + index, rightMid: 50 + index}, now + index);
     }
     first.record(pair, {timestamp: now + 100, leftMid: 999, rightMid: 999}, now + 4);
-    assert.equal(first.getHistory(pair.pairId, 10).length, 3);
-    assert.equal(first.getHistory(pair.pairId, 10)[0]?.leftMid, 101);
+    const deterministicCutoff = now + 4;
+    assert.equal(first.getHistory(pair.pairId, 10, deterministicCutoff).length, 3);
+    assert.equal(first.getHistory(pair.pairId, 10, deterministicCutoff)[0]?.leftMid, 101);
     assert.equal(first.getDiagnostics().safety.samplesBounded, true);
     assert.equal(first.getDiagnostics().safety.featureVersionPinned, true);
     assert.equal(first.getDiagnostics().safety.backtestResultAvailable, false);
 
     const restored = new StatisticalHistoricalDataService(file, configuration, new SilentSource());
-    const restoredHistory = restored.getHistory(pair.pairId, 10);
+    const restoredHistory = restored.getHistory(pair.pairId, 10, deterministicCutoff);
     assert.equal(restoredHistory.length, 3);
     assert.equal(restoredHistory[2]?.leftMid, 103);
     assert.equal(restored.getDiagnostics().restoreStatus, "AVAILABLE");

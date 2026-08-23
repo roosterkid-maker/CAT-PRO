@@ -270,8 +270,8 @@ export class PerpetualPerpetualArbitrageEconomicsEngine {
       return this.blocked(first, second, blockers, dislocation);
     }
 
-    const longFill = vwapCalculator.calculate([...longDepth.asks], quantity);
-    const shortFill = vwapCalculator.calculate([...shortDepth.bids], quantity);
+    const longFill = vwapCalculator.calculate(longDepth.asks, quantity);
+    const shortFill = vwapCalculator.calculate(shortDepth.bids, quantity);
     if (longFill.partialFill || shortFill.partialFill || longFill.filledQuantity < quantity ||
         shortFill.filledQuantity < quantity || !validPositive(longFill.averagePrice) ||
         !validPositive(shortFill.averagePrice)) {

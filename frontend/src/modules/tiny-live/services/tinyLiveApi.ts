@@ -11,6 +11,12 @@ import type {
   TinyLiveReadinessClosureResponse,
   StrategyOnePilotPreflightRunResponse,
   StrategyOnePilotPreviewResponse,
+  StrategyOneTinyLivePreArmDiagnosticsResponse,
+  StrategyOneTinyLivePreArmRecordResponse,
+  StrategyOneTinyLiveAccountModeLeaseRecordResponse,
+  StrategyOneTinyLiveOpportunityAuditResponse,
+  StrategyOneTimingCalibrationDiagnosticsResponse,
+  StrategyOneTimingCalibrationRecordResponse,
 } from "../types/TinyLivePreflight";
 
 export async function fetchTinyLiveCapability(): Promise<TinyLiveCapabilityResponse> {
@@ -110,6 +116,107 @@ export async function runStrategyOnePilotPreflight(
               409,
       },
     );
+
+  return response.data;
+}
+
+export async function fetchStrategyOneTinyLivePreArm(): Promise<StrategyOneTinyLivePreArmDiagnosticsResponse> {
+  const response = await api.get<StrategyOneTinyLivePreArmDiagnosticsResponse>(
+    "/api/execution/tiny-live/strategy-one-pre-arm",
+  );
+
+  return response.data;
+}
+
+export async function fetchStrategyOneTinyLiveOpportunityAudit(): Promise<StrategyOneTinyLiveOpportunityAuditResponse> {
+  const response = await api.get<StrategyOneTinyLiveOpportunityAuditResponse>(
+    "/api/execution/tiny-live/strategy-one-opportunity-audit",
+  );
+
+  return response.data;
+}
+
+export async function fetchStrategyOneTimingCalibrations(): Promise<StrategyOneTimingCalibrationDiagnosticsResponse> {
+  const response = await api.get<StrategyOneTimingCalibrationDiagnosticsResponse>(
+    "/api/operator-settings/strategy-one-timing-calibration",
+  );
+
+  return response.data;
+}
+
+export async function proposeStrategyOneTimingCalibration(input: {
+  routeKey: string;
+  bootstrapAttempts: 2;
+}): Promise<StrategyOneTimingCalibrationRecordResponse> {
+  const response = await api.post<StrategyOneTimingCalibrationRecordResponse>(
+    "/api/operator-settings/strategy-one-timing-calibration/propose",
+    input,
+  );
+
+  return response.data;
+}
+
+export async function approveStrategyOneTimingCalibration(input: {
+  id: string;
+  confirmation: string;
+}): Promise<StrategyOneTimingCalibrationRecordResponse> {
+  const response = await api.put<StrategyOneTimingCalibrationRecordResponse>(
+    `/api/operator-settings/strategy-one-timing-calibration/${encodeURIComponent(input.id)}/approve`,
+    {confirmation: input.confirmation},
+  );
+
+  return response.data;
+}
+
+export async function armStrategyOneTinyLive(input: {
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+  confirmation: string;
+  durationMinutes: number;
+  maximumAttempts: 1 | 2 | 10;
+  pilotBasketId?: "strategy-one-seven-coin-inventory-v1";
+}): Promise<StrategyOneTinyLivePreArmRecordResponse> {
+  const response = await api.post<StrategyOneTinyLivePreArmRecordResponse>(
+    "/api/execution/tiny-live/strategy-one-pre-arm",
+    input,
+  );
+
+  return response.data;
+}
+
+export async function disarmStrategyOneTinyLive(input: {
+  preArmId: string;
+  confirmation: string;
+}): Promise<StrategyOneTinyLivePreArmRecordResponse> {
+  const response = await api.post<StrategyOneTinyLivePreArmRecordResponse>(
+    `/api/execution/tiny-live/strategy-one-pre-arm/${encodeURIComponent(input.preArmId)}/disarm`,
+    {confirmation: input.confirmation},
+  );
+
+  return response.data;
+}
+
+export async function activateStrategyOneTinyLiveAccountLease(input: {
+  preArmId: string;
+  confirmation: string;
+}): Promise<StrategyOneTinyLiveAccountModeLeaseRecordResponse> {
+  const response = await api.post<StrategyOneTinyLiveAccountModeLeaseRecordResponse>(
+    `/api/execution/tiny-live/strategy-one-account-mode-lease/${encodeURIComponent(input.preArmId)}/activate`,
+    {confirmation: input.confirmation},
+  );
+
+  return response.data;
+}
+
+export async function restoreStrategyOnePaperAccountMode(input: {
+  leaseId: string;
+  confirmation: string;
+}): Promise<StrategyOneTinyLiveAccountModeLeaseRecordResponse> {
+  const response = await api.post<StrategyOneTinyLiveAccountModeLeaseRecordResponse>(
+    `/api/execution/tiny-live/strategy-one-account-mode-lease/${encodeURIComponent(input.leaseId)}/restore`,
+    {confirmation: input.confirmation},
+  );
 
   return response.data;
 }

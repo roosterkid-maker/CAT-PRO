@@ -8,9 +8,18 @@ import type {
   DynamicOpportunityDiscoverySnapshotListener,
 } from "../../discovery/services/DynamicOpportunityDiscoveryRunnerService";
 
+import type {ExecutableQuote} from "../../core/models/ExecutableQuote";
+
+import type {
+  MarketCacheExecutableUpdate,
+  MarketCacheExecutableUpdateListener,
+} from "../../services/cache.service";
+
 import type {
   ExchangeMarketCapability,
 } from "../../execution/capabilities/models/ExchangeCapability";
+
+import type {OrderBook} from "../../orderbook/models/OrderBook";
 
 import {
   TriangularArbitrageSimulationEngine,
@@ -24,8 +33,10 @@ import {
 class TestDiscoverySource implements TriangularArbitrageDiscoverySource {
   private listener: DynamicOpportunityDiscoverySnapshotListener | null = null;
 
+  private latest: DynamicOpportunityDiscoverySnapshot | null = null;
+
   getLatestSnapshot(): DynamicOpportunityDiscoverySnapshot | null {
-    return null;
+    return this.latest === null ? null : structuredClone(this.latest);
   }
 
   subscribe(listener: DynamicOpportunityDiscoverySnapshotListener): () => void {
@@ -38,7 +49,30 @@ class TestDiscoverySource implements TriangularArbitrageDiscoverySource {
   }
 
   emit(snapshot: DynamicOpportunityDiscoverySnapshot): void {
+    this.latest = structuredClone(snapshot);
     this.listener?.(structuredClone(snapshot));
+  }
+}
+
+class TestMarketEventSource {
+  private listener: MarketCacheExecutableUpdateListener | null = null;
+
+  constructor(private readonly quotes: ReadonlyMap<string, ExecutableQuote>) {}
+
+  get(exchange: string, market: string): ExecutableQuote | undefined {
+    const value = this.quotes.get(`${exchange}:${market}`);
+    return value ? structuredClone(value) : undefined;
+  }
+
+  subscribeToExecutableUpdates(listener: MarketCacheExecutableUpdateListener): () => void {
+    this.listener = listener;
+    return () => {
+      if (this.listener === listener) this.listener = null;
+    };
+  }
+
+  emit(update: MarketCacheExecutableUpdate): void {
+    this.listener?.({...update});
   }
 }
 
@@ -161,12 +195,17 @@ function snapshot(now: number): DynamicOpportunityDiscoverySnapshot {
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const now = Date.now();
   const capabilities = new Map([
     ["BTCUSDT", capability("BTCUSDT", "BTC", "USDT", now)],
     ["ETHUSDT", capability("ETHUSDT", "ETH", "USDT", now)],
     ["ETHBTC", capability("ETHBTC", "ETH", "BTC", now)],
+  ]);
+  const books = new Map<string, OrderBook>([
+    ["BTCUSDT", {exchange: "binance", market: "BTCUSDT", bids: [{price: 100, quantity: 10}], asks: [{price: 101, quantity: 10}], timestamp: now}],
+    ["ETHUSDT", {exchange: "binance", market: "ETHUSDT", bids: [{price: 9.9, quantity: 100}], asks: [{price: 10, quantity: 100}], timestamp: now}],
+    ["ETHBTC", {exchange: "binance", market: "ETHBTC", bids: [{price: 0.105, quantity: 100}], asks: [{price: 0.106, quantity: 100}], timestamp: now}],
   ]);
 
   const engine = new TriangularArbitrageSimulationEngine({
@@ -181,18 +220,39 @@ function main(): void {
     }),
     getCapability: (_exchange, market) =>
       structuredClone(capabilities.get(market) ?? null),
+    getOrderBook: (_exchange, market) => structuredClone(books.get(market) ?? null),
   });
 
   const source = new TestDiscoverySource();
+  const executableQuotes = new Map<string, ExecutableQuote>([
+    ["binance:BTCUSDT", {exchange: "binance", market: "BTCUSDT", lastPrice: 100,
+      bestBidPrice: 100, bestBidQty: 10, bestAskPrice: 101, bestAskQty: 10,
+      spread: 1, timestamp: now, source: "bookTicker", executable: true}],
+    ["binance:ETHUSDT", {exchange: "binance", market: "ETHUSDT", lastPrice: 10,
+      bestBidPrice: 9.9, bestBidQty: 100, bestAskPrice: 10, bestAskQty: 100,
+      spread: 0.1, timestamp: now, source: "bookTicker", executable: true}],
+    ["binance:ETHBTC", {exchange: "binance", market: "ETHBTC", lastPrice: 0.105,
+      bestBidPrice: 0.105, bestBidQty: 100, bestAskPrice: 0.106, bestAskQty: 100,
+      spread: 0.001, timestamp: now, source: "bookTicker", executable: true}],
+  ]);
+  const marketEvents = new TestMarketEventSource(executableQuotes);
   const controller = new TriangularArbitrageStrategyController(
     {
       enabled: true,
       minimumNetProfitPercent: 0.2,
       maximumInitialInputQuantity: 20,
       signalTtlMs: 5_000,
+      maximumOrderBookAgeMs: 5_000,
+      maximumOpportunityAgeMs: 5_000,
+      allowedStartingAssets: ["BTC"],
+      startAssetInrValues: {BTC: 1_000},
+      capitalPool: {totalAllocationInr: 10_000, activeCycleCapitalInr: 8_500,
+        recoveryReserveInr: 1_000, feeTdsDustReserveInr: 500},
     },
     source,
     engine,
+    marketEvents,
+    30,
   );
 
   controller.start();
@@ -263,6 +323,17 @@ function main(): void {
   );
   assert.equal(controller.getSignals(now + 4).length, 0);
 
+  source.emit(snapshot(now + 5));
+  for (let index = 0; index < 100; index += 1) {
+    marketEvents.emit({exchange: "binance", market: "BTCUSDT", timestamp: now + 5 + index, kind: "UPSERT"});
+  }
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const performance = controller.getPerformanceSnapshot();
+  assert.equal(performance.affectedRouteWakeups, 100);
+  assert.equal(performance.affectedRefreshRuns, 1);
+  assert.equal(performance.coalescedMarketUpdates, 99);
+  assert.equal(performance.affectedRefreshIntervalMs, 30);
+
   capabilities.delete("ETHBTC");
   const blocked = engine.evaluate(
     snapshot(now + 10),
@@ -286,4 +357,7 @@ function main(): void {
   console.log("Three-leg evidence was simulated; no PAPER, LIVE, capital or order action occurred.");
 }
 
-main();
+void main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -43,6 +43,18 @@ export interface BinanceAccount {
     BinanceBalance[];
 }
 
+export interface BinanceApiRestrictions {
+  ipRestricted: boolean;
+
+  readingEnabled: boolean;
+
+  spotAndMarginTradingEnabled: boolean;
+
+  withdrawalsEnabled: boolean;
+
+  internalTransferEnabled: boolean;
+}
+
 
 interface BinanceAccountResponse {
   makerCommission?: unknown;
@@ -66,7 +78,58 @@ interface BinanceAccountResponse {
   balances?: unknown;
 }
 
+interface BinanceApiRestrictionsResponse {
+  ipRestrict?: unknown;
+
+  enableReading?: unknown;
+
+  enableSpotAndMarginTrading?: unknown;
+
+  enableWithdrawals?: unknown;
+
+  enableInternalTransfer?: unknown;
+}
+
 export class BinanceAccountApi {
+  async getApiRestrictions(
+    credentials?:
+      BinanceCredentials,
+  ): Promise<BinanceApiRestrictions> {
+    await binanceHttpClient
+      .synchronizeServerTime();
+
+    const response =
+      await binanceHttpClient.getSigned<
+        BinanceApiRestrictionsResponse
+      >(
+        BINANCE.REST.API_RESTRICTIONS,
+        {},
+        credentials,
+      );
+
+    return {
+      ipRestricted:
+        response.ipRestrict ===
+        true,
+
+      readingEnabled:
+        response.enableReading ===
+        true,
+
+      spotAndMarginTradingEnabled:
+        response.enableSpotAndMarginTrading ===
+        true,
+
+      withdrawalsEnabled:
+        response.enableWithdrawals ===
+        true,
+
+      internalTransferEnabled:
+        response.enableInternalTransfer ===
+        true,
+    };
+  }
+
   async getAccount(
     credentials?:
       BinanceCredentials,

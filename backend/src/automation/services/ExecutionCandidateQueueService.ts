@@ -24,6 +24,10 @@ import {
   compareCandidateExecutionPriority,
 } from "./ExecutionCandidateRanking";
 
+import {
+  PROFIT_TIER_POLICY,
+} from "../../arbitrage/config/profitTiers";
+
 const DEFAULT_CONFIG:
   ExecutionCandidateQueueConfig = {
   /*
@@ -215,44 +219,11 @@ export class ExecutionCandidateQueueService {
         (
           first,
           second,
-        ) => {
-          const executionPriority =
-            compareCandidateExecutionPriority(
-              first.qualification,
-              second.qualification,
-            );
-
-          if (
-            executionPriority !==
-            0
-          ) {
-            return executionPriority;
-          }
-
-          if (
-            first.priorityScore !==
-            second.priorityScore
-          ) {
-            return (
-              second.priorityScore -
-              first.priorityScore
-            );
-          }
-
-          if (
-            first.enqueuedAt !==
-            second.enqueuedAt
-          ) {
-            return (
-              first.enqueuedAt -
-              second.enqueuedAt
-            );
-          }
-
-          return first.id.localeCompare(
-            second.id,
-          );
-        },
+        ) =>
+          this.compareReadyItems(
+            first,
+            second,
+          ),
       )
       .map(
         (
@@ -264,13 +235,102 @@ export class ExecutionCandidateQueueService {
       );
   }
 
-  getNextReady():
-    ExecutionCandidateQueueItem | null {
-    const ready =
-      this.getReadyItems();
+  getNextReady(
+    allowedCandidateKeys?:
+      ReadonlySet<string>,
 
-    return ready[0] ??
+    now =
+      Date.now(),
+  ):
+    ExecutionCandidateQueueItem | null {
+    this.expireStale(
+      now,
+    );
+
+    let next:
+      ExecutionCandidateQueueItem | null =
       null;
+
+    for (
+      const item
+      of this.items.values()
+    ) {
+      if (
+        item.status !==
+          "READY" ||
+        (
+          allowedCandidateKeys &&
+          !allowedCandidateKeys.has(
+            item.candidateKey,
+          )
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        !next ||
+        this.compareReadyItems(
+          item,
+          next,
+        ) <
+          0
+      ) {
+        next =
+          item;
+      }
+    }
+
+    return next
+      ? structuredClone(
+          next,
+        )
+      : null;
+  }
+
+  private compareReadyItems(
+    first:
+      ExecutionCandidateQueueItem,
+
+    second:
+      ExecutionCandidateQueueItem,
+  ): number {
+    const executionPriority =
+      compareCandidateExecutionPriority(
+        first.qualification,
+        second.qualification,
+      );
+
+    if (
+      executionPriority !==
+      0
+    ) {
+      return executionPriority;
+    }
+
+    if (
+      first.priorityScore !==
+      second.priorityScore
+    ) {
+      return (
+        second.priorityScore -
+        first.priorityScore
+      );
+    }
+
+    if (
+      first.enqueuedAt !==
+      second.enqueuedAt
+    ) {
+      return (
+        first.enqueuedAt -
+        second.enqueuedAt
+      );
+    }
+
+    return first.id.localeCompare(
+      second.id,
+    );
   }
 
   getItem(
@@ -837,7 +897,7 @@ export class ExecutionCandidateQueueService {
       );
 
     /*
-     * 0.50% net profit or above receives
+     * The current qualification floor or above receives
      * maximum profit component.
      */
     const profitComponent =
@@ -846,7 +906,8 @@ export class ExecutionCandidateQueueService {
           candidate
             .latest
             .netProfitPercent /
-          0.5
+          PROFIT_TIER_POLICY
+            .qualificationMinimumNetProfitPercent
         ) *
           100,
       );

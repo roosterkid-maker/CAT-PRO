@@ -62,6 +62,14 @@ export interface ShadowPerformanceAnalytics {
     remaining: number;
   };
 
+  thresholds: {
+    successRatePercent: number;
+    executableRatePercent: number;
+    profitableSampleRatePercent: number;
+    dataAvailabilityRatePercent: number;
+    profitRetentionPercent: number;
+  };
+
   summary: {
     trackedDispatches: number;
 

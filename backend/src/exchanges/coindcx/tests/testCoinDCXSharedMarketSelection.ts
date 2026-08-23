@@ -7,6 +7,7 @@ import {
 } from "../CoinDCXOrderBookAdapter";
 
 import {
+  rankAdaptiveExecutableCoverageMarkets,
   rankPriceAlignedSharedMarkets,
   selectRotatingDiscoveryWindow,
 } from "../../core/PriceAlignedMarketRanking";
@@ -123,6 +124,45 @@ function ticker(
   };
 }
 
+function executableBook(
+  exchange: string,
+  marketName: string,
+  bidPrice: number,
+  askPrice: number,
+  timestamp:
+    number,
+  quantity =
+    10,
+): ExecutableQuote {
+  return {
+    exchange,
+    market:
+      marketName,
+    lastPrice:
+      (
+        bidPrice +
+        askPrice
+      ) /
+      2,
+    bestBidPrice:
+      bidPrice,
+    bestBidQty:
+      quantity,
+    bestAskPrice:
+      askPrice,
+    bestAskQty:
+      quantity,
+    spread:
+      askPrice -
+      bidPrice,
+    timestamp,
+    source:
+      "orderBook",
+    executable:
+      true,
+  };
+}
+
 function main(): void {
   const restTicker =
     normalizeCoinDCXPublicTicker(
@@ -181,6 +221,9 @@ function main(): void {
           "BTCUSDT",
         ),
         market(
+          "COTIUSDT",
+        ),
+        market(
           "ETHUSDT",
         ),
         market(
@@ -236,8 +279,8 @@ function main(): void {
     symbols.join(
       ",",
     ) ===
-      "BTCUSDT,BTCINR,XRPUSDT,ETHUSDT,SOLUSDT",
-    "CoinDCX base selection must prioritize price-aligned UnoCoin markets, including INR routes, before the wider executable USDT universe.",
+      "BTCUSDT,COTIUSDT,BTCINR,XRPUSDT,ETHUSDT,SOLUSDT",
+    "CoinDCX base selection must retain the audited COTI pilot lane, then prioritize price-aligned UnoCoin markets including INR routes before the wider executable USDT universe.",
   );
 
   const aligned =
@@ -375,6 +418,163 @@ function main(): void {
         .join(",") ===
         "BCHINR",
     "Strategy #1 must retain a stable fast lane while rotating one scarce public-book slot through the next strongest markets.",
+  );
+
+  const adaptiveNow =
+    1_700_000_000_000;
+
+  const adaptiveRanking =
+    rankAdaptiveExecutableCoverageMarkets(
+      [
+        executableBook(
+          "binance",
+          "FEEPOSUSDT",
+          99.99,
+          100,
+          adaptiveNow,
+        ),
+        executableBook(
+          "coindcx",
+          "GROSSUSDT",
+          99.99,
+          100,
+          adaptiveNow,
+        ),
+        executableBook(
+          "binance",
+          "STALEUSDT",
+          99.99,
+          100,
+          adaptiveNow -
+            20_000,
+        ),
+      ],
+      {
+        targetExchange:
+          "coinswitch",
+        targetDiscoveryQuotes: [
+          ticker(
+            "coinswitch",
+            "FEEPOS_USDT",
+            100.4,
+          ),
+          ticker(
+            "coinswitch",
+            "GROSS_USDT",
+            100.5,
+          ),
+          ticker(
+            "coinswitch",
+            "STALE_USDT",
+            101,
+          ),
+        ],
+        now:
+          adaptiveNow,
+        maximumExecutableAgeMs:
+          10_000,
+        resolveTakerFeePercent:
+          (exchange) =>
+            exchange ===
+              "coindcx"
+              ? 0.59
+              : 0.1,
+      },
+    );
+
+  assertCondition(
+    adaptiveRanking
+      .map(
+        (candidate) =>
+          candidate.canonicalMarket,
+      )
+      .join(",") ===
+      "FEEPOSUSDT,GROSSUSDT" &&
+      adaptiveRanking[0]
+        ?.feeAdjustedEdgePercent !==
+        null &&
+      (
+        adaptiveRanking[0]
+          ?.feeAdjustedEdgePercent ??
+        0
+      ) >
+        0 &&
+      adaptiveRanking[0]
+        ?.targetExecutable ===
+        false,
+    "Adaptive coverage must prefer fee-positive discovery over a larger fee-negative raw spread, exclude stale executable peers and keep ticker evidence non-executable.",
+  );
+
+  const provenTargetRanking =
+    rankAdaptiveExecutableCoverageMarkets(
+      [
+        executableBook(
+          "coinswitch",
+          "PROVENUSDT",
+          100.7,
+          100.8,
+          adaptiveNow,
+        ),
+        executableBook(
+          "binance",
+          "PROVENUSDT",
+          99.9,
+          100,
+          adaptiveNow,
+        ),
+      ],
+      {
+        targetExchange:
+          "coinswitch",
+        now:
+          adaptiveNow,
+        resolveTakerFeePercent:
+          () =>
+            0.1,
+      },
+    );
+
+  assertCondition(
+    provenTargetRanking.length ===
+      1 &&
+      provenTargetRanking[0]
+        ?.targetExecutable ===
+        true &&
+      (
+        provenTargetRanking[0]
+          ?.executableNotional ??
+        0
+      ) >
+        0,
+    "A fresh quantity-bearing target book must be marked as proven executable coverage with bounded route-notional evidence.",
+  );
+
+  const boundedPoolWindow =
+    selectRotatingDiscoveryWindow(
+      [
+        "AUSDT",
+        "BUSDT",
+        "CUSDT",
+        "DUSDT",
+        "EUSDT",
+        "FUSDT",
+      ],
+      4,
+      0,
+      1,
+      2,
+    );
+
+  assertCondition(
+    boundedPoolWindow
+      .stableMarkets
+      .join(",") ===
+        "AUSDT,BUSDT,CUSDT" &&
+      boundedPoolWindow
+        .explorationMarkets
+        .join(",") ===
+        "DUSDT",
+    "Exploration pool size must be relative to the stable window so large active subscription limits still retain bounded rotation.",
   );
 
   const audit =

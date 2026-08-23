@@ -8,6 +8,9 @@ import express from "express";
 import analyticsRoutes
   from "./analytics/routes/analyticsRoutes";
 
+import agentSakhondraRoutes
+  from "./agents/sakhondra/agentSakhondraRoutes";
+
   import executionClockRoutes
   from "./execution/live/routes/executionClockRoutes";
 
@@ -113,6 +116,14 @@ import {
 } from "./execution/live/time/ExchangeClockSynchronizationRunner";
 
 import {
+  strategyOneApiPermissionBoundaryService,
+} from "./execution/live/tiny-live/StrategyOneApiPermissionBoundaryService";
+
+import {
+  strategyOneTinyLiveAccountModeLeaseService,
+} from "./execution/live/tiny-live/StrategyOneTinyLiveAccountModeLeaseService";
+
+import {
   productionAlertHistoryService,
 } from "./execution/live/alerts/ProductionAlertHistoryService";
 
@@ -189,6 +200,14 @@ import {
 } from "./exchanges/unocoin/UnoCoinAuthenticatedReadVerificationService";
 
 import {
+  zebPayAuthenticatedReadVerificationService,
+} from "./exchanges/zebpay/ZebPayAuthenticatedReadVerificationService";
+
+import {
+  liveExecutionService,
+} from "./execution/live/LiveExecutionService";
+
+import {
   tradeMonitorRunner,
 } from "./trading/services/TradeMonitorRunner";
 
@@ -201,6 +220,7 @@ import strategyRoutes
   from "./strategies/routes/strategyRoutes";
 
 import {
+  aclaShadowLifecycleService,
   centralStrategyExecutionAdmissionService,
   strategyAttributionService,
   strategyOrchestrator,
@@ -269,8 +289,42 @@ import {
   websocketManager,
 } from "./websocket/manager";
 
+import {
+  authenticatedPrivateFillStreamService,
+} from "./execution/live/fills/AuthenticatedPrivateFillStreamService";
+
+import {
+  coinDCXAuthenticatedPrivateFillStreamService,
+} from "./execution/live/fills/CoinDCXAuthenticatedPrivateFillStreamService";
+
+import {
+  strategyOneExecutionTimingEvidenceService,
+} from "./arbitrage/execution/StrategyOneExecutionTimingEvidenceService";
+
+import {
+  strategyOnePilotEquivalentPaperEvidenceService,
+} from "./arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+
+import {
+  authenticatedPrivateFillEventOwner,
+} from "./execution/live/fills/AuthenticatedPrivateFillEventOwner";
+
+import {
+  centralLiveOrderExecutionGateway,
+} from "./execution/live/central/CentralLiveOrderExecutionGateway";
+
 const app =
   express();
+
+authenticatedPrivateFillEventOwner
+  .setTimingObserver(
+    strategyOneExecutionTimingEvidenceService,
+  );
+
+centralLiveOrderExecutionGateway
+  .setTimingEvidence(
+    strategyOneExecutionTimingEvidenceService,
+  );
 
 strategyReadModelService
   .setAttributionEvidenceSource(
@@ -450,6 +504,11 @@ app.use(
 );
 
 app.use(
+  "/api/agent-sakhondra",
+  agentSakhondraRoutes,
+);
+
+app.use(
   "/api/capital",
   capitalRoutes,
 );
@@ -595,6 +654,18 @@ const server =
     app,
   );
 
+/*
+ * ZebPay has a PAPER-extension market/rule/fee lane. Register authenticated
+ * read readiness without registering a LIVE order adapter or execution route.
+ */
+liveExecutionService
+  .registerReadOnlyReadinessProvider(
+    "zebpay",
+    () =>
+      zebPayAuthenticatedReadVerificationService
+        .getReadiness(),
+  );
+
 initializeSocket(
   server,
 );
@@ -612,6 +683,13 @@ server.listen(
     try {
       await application
         .initialize();
+
+      /*
+       * V151: reconcile the journal-first account-mode lease before any
+       * opportunity producer or execution worker is allowed to start.
+       */
+      strategyOneTinyLiveAccountModeLeaseService
+        .start();
 
       strategyAttributionService
         .start();
@@ -635,6 +713,9 @@ server.listen(
         .start();
 
       centralStrategyExecutionAdmissionService
+        .start();
+
+      aclaShadowLifecycleService
         .start();
 
       centralPaperIntakeService
@@ -689,6 +770,24 @@ server.listen(
         .start();
 
       try {
+        await zebPayAuthenticatedReadVerificationService
+          .verify();
+      } catch (
+        error:
+          unknown
+      ) {
+        console.error(
+          "[ZebPay Authenticated Read] Verification failed; ZebPay remains observation-only and execution-blocked:",
+          error instanceof Error
+            ? error.message
+            : error,
+        );
+      }
+
+      zebPayAuthenticatedReadVerificationService
+        .start();
+
+      try {
         await coinSwitchFeeSynchronizationService
           .synchronize();
       } catch (
@@ -739,6 +838,9 @@ server.listen(
       await exchangeClockSynchronizationRunner
         .start();
 
+      strategyOneApiPermissionBoundaryService
+        .start();
+
       /*
        * V95 startup ordering invariant:
        * persisted production-alert monitoring must
@@ -768,8 +870,14 @@ server.listen(
         marketCacheOrderBookReconciliationService
   .start();
 
-staleOrderBookEvictionService
+      staleOrderBookEvictionService
   .start();
+
+      strategyOneExecutionTimingEvidenceService
+        .start();
+
+      strategyOnePilotEquivalentPaperEvidenceService
+        .start();
 
       /*
        * Version 15.0
@@ -795,6 +903,12 @@ staleOrderBookEvictionService
             );
           },
         );
+
+      authenticatedPrivateFillStreamService
+        .start();
+
+      coinDCXAuthenticatedPrivateFillStreamService
+        .start();
     } catch (
       error:
         unknown
@@ -816,11 +930,22 @@ const shutdown =
       `[Shutdown] Received ${signal}.`,
     );
 
+    strategyOneTinyLiveAccountModeLeaseService
+      .stop(
+        true,
+      );
+
     /*
      * Stop producers/automation before network
      * connections and process termination.
      */
     automationSchedulerService
+      .stop();
+
+    strategyOneExecutionTimingEvidenceService
+      .stop();
+
+    strategyOnePilotEquivalentPaperEvidenceService
       .stop();
 
     centralPaperExecutionWorkerService
@@ -836,6 +961,9 @@ const shutdown =
       .stop();
 
     centralPaperIntakeService
+      .stop();
+
+    aclaShadowLifecycleService
       .stop();
 
     centralStrategyExecutionAdmissionService
@@ -871,6 +999,9 @@ const shutdown =
     unoCoinAuthenticatedReadVerificationService
       .stop();
 
+    zebPayAuthenticatedReadVerificationService
+      .stop();
+
     coinSwitchFeeSynchronizationService
       .stop();
 
@@ -902,6 +1033,9 @@ marketCacheOrderBookReconciliationService
     exchangeClockSynchronizationRunner
       .stop();
 
+    strategyOneApiPermissionBoundaryService
+      .stop();
+
     productionAlertHistoryService
       .stop();
 
@@ -912,6 +1046,12 @@ marketCacheOrderBookReconciliationService
       .stop();
 
     try {
+      authenticatedPrivateFillStreamService
+        .stop();
+
+      coinDCXAuthenticatedPrivateFillStreamService
+        .stop();
+
       await websocketManager
         .stop();
     } catch (

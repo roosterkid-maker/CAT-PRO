@@ -59,6 +59,64 @@ type BybitSocketMessage =
   | BybitPublicTradeMessage
   | BybitSubscriptionResponse;
 
+export interface BybitActionTimeOrderBookRefreshReport {
+  readonly exchange: "bybit";
+  readonly market: string;
+  readonly accepted: boolean;
+  readonly requestedAt: number;
+  readonly receivedAt: number | null;
+  readonly roundTripMs: number;
+  readonly error: string | null;
+}
+
+export interface BybitPublicOrderBookSnapshotFetcher {
+  fetch(
+    market: string,
+    timeoutMs: number,
+  ): Promise<unknown>;
+}
+
+interface BybitRestOrderBookResponse {
+  readonly retCode?: unknown;
+  readonly retMsg?: unknown;
+  readonly result?: {
+    readonly s?: unknown;
+    readonly b?: unknown;
+    readonly a?: unknown;
+    readonly u?: unknown;
+    readonly seq?: unknown;
+  };
+}
+
+const DEFAULT_PUBLIC_ORDER_BOOK_SNAPSHOT_FETCHER:
+  BybitPublicOrderBookSnapshotFetcher = {
+  async fetch(
+    market,
+    timeoutMs,
+  ): Promise<unknown> {
+    const response = await fetch(
+      buildBybitActionTimeOrderBookUrl(market),
+      {signal: AbortSignal.timeout(timeoutMs)},
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Bybit public order-book refresh failed with HTTP ${response.status}.`,
+      );
+    }
+
+    return response.json();
+  },
+};
+
+export function buildBybitActionTimeOrderBookUrl(market: string): URL {
+  const url = new URL("https://api.bybit.com/v5/market/orderbook");
+  url.searchParams.set("category", "spot");
+  url.searchParams.set("symbol", market);
+  url.searchParams.set("limit", String(BybitAdapter.ORDER_BOOK_DEPTH));
+  return url;
+}
+
 interface LocalBybitOrderBook {
   bids:
     Map<number, number>;
@@ -169,7 +227,7 @@ export class BybitAdapter
    * simulation
    * last-look
    */
-  private static readonly ORDER_BOOK_DEPTH =
+  static readonly ORDER_BOOK_DEPTH =
     50;
 
   /*
@@ -249,6 +307,12 @@ export class BybitAdapter
 
   private readonly url =
     BYBIT.SOCKET.URL;
+
+  constructor(
+    private readonly publicOrderBookSnapshotFetcher:
+      BybitPublicOrderBookSnapshotFetcher =
+      DEFAULT_PUBLIC_ORDER_BOOK_SNAPSHOT_FETCHER,
+  ) {}
 
   async connect():
     Promise<void> {
@@ -717,6 +781,80 @@ export class BybitAdapter
   ): void {
     this.tickerCallback =
       callback;
+  }
+
+  /**
+   * Bounded public-read refresh used only after an otherwise-qualified
+   * Strategy #1 Bybit route is blocked by stale books. The response is
+   * validated and published through the same OrderBookService/MarketCache
+   * path as websocket depth; this method grants no order authority.
+   */
+  async refreshOrderBookSnapshot(
+    marketValue: string,
+    timeoutMs = 190,
+  ): Promise<BybitActionTimeOrderBookRefreshReport> {
+    const market = marketValue.trim().toUpperCase();
+    const requestedAt = Date.now();
+
+    if (!/^[A-Z0-9]{6,24}$/u.test(market)) {
+      return {
+        exchange: "bybit",
+        market,
+        accepted: false,
+        requestedAt,
+        receivedAt: null,
+        roundTripMs: 0,
+        error: "Bybit action-time order-book market is invalid.",
+      };
+    }
+
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 50 || timeoutMs > 1_000) {
+      return {
+        exchange: "bybit",
+        market,
+        accepted: false,
+        requestedAt,
+        receivedAt: null,
+        roundTripMs: 0,
+        error: "Bybit action-time order-book timeout must be 50-1000 ms.",
+      };
+    }
+
+    try {
+      const payload = await this.publicOrderBookSnapshotFetcher.fetch(
+        market,
+        timeoutMs,
+      ) as BybitRestOrderBookResponse;
+      const receivedAt = Date.now();
+      const accepted = this.applyRestOrderBookSnapshot(
+        market,
+        payload,
+        receivedAt,
+      );
+
+      return {
+        exchange: "bybit",
+        market,
+        accepted: accepted.accepted,
+        requestedAt,
+        receivedAt: accepted.accepted ? receivedAt : null,
+        roundTripMs: Math.max(0, receivedAt - requestedAt),
+        error: accepted.accepted ? null : accepted.reason,
+      };
+    } catch (error: unknown) {
+      const completedAt = Date.now();
+      return {
+        exchange: "bybit",
+        market,
+        accepted: false,
+        requestedAt,
+        receivedAt: null,
+        roundTripMs: Math.max(0, completedAt - requestedAt),
+        error: error instanceof Error
+          ? error.message
+          : "Unknown Bybit action-time order-book refresh failure.",
+      };
+    }
   }
 
   getDiagnostics():
@@ -1328,6 +1466,80 @@ export class BybitAdapter
         `[${this.name}] Full order book: ${market} | bids=${bids.length} | asks=${asks.length} | bid=${bestBidPrice} | ask=${bestAskPrice} | cached=${orderBookService.size()} | published=${diagnostics.booksPublished}`,
       );
     }
+  }
+
+  private applyRestOrderBookSnapshot(
+    market: string,
+    payload: BybitRestOrderBookResponse,
+    receivedAt: number,
+  ): {readonly accepted: boolean; readonly reason: string | null} {
+    if (
+      payload?.retCode !== 0 ||
+      !payload.result ||
+      payload.result.s !== market ||
+      !Array.isArray(payload.result.b) ||
+      !Array.isArray(payload.result.a)
+    ) {
+      return {
+        accepted: false,
+        reason: typeof payload?.retMsg === "string" && payload.retMsg.trim()
+          ? `Bybit order-book refresh was rejected: ${payload.retMsg.trim()}.`
+          : "Bybit order-book refresh returned an invalid payload.",
+      };
+    }
+
+    const localBook: LocalBybitOrderBook = {
+      bids: new Map<number, number>(),
+      asks: new Map<number, number>(),
+      lastUpdateId: Number.isFinite(Number(payload.result.u))
+        ? Number(payload.result.u)
+        : null,
+      lastSequence: Number.isFinite(Number(payload.result.seq))
+        ? Number(payload.result.seq)
+        : null,
+      timestamp: receivedAt,
+    };
+
+    this.applyLevels(
+      localBook.bids,
+      payload.result.b as BybitOrderBookLevel[],
+    );
+    this.applyLevels(
+      localBook.asks,
+      payload.result.a as BybitOrderBookLevel[],
+    );
+
+    const bids = this.mapToLevels(localBook.bids, "bid");
+    const asks = this.mapToLevels(localBook.asks, "ask");
+    const bestBid = bids[0];
+    const bestAsk = asks[0];
+
+    if (!bestBid || !bestAsk) {
+      return {
+        accepted: false,
+        reason: "Bybit order-book refresh has no valid two-sided depth.",
+      };
+    }
+
+    if (bestAsk.price < bestBid.price) {
+      return {
+        accepted: false,
+        reason: "Bybit order-book refresh is crossed.",
+      };
+    }
+
+    this.localBooks.set(market, localBook);
+    this.publishBook(market, localBook);
+
+    const published = marketCache.get("bybit", market);
+    if (!published?.executable || published.timestamp !== receivedAt) {
+      return {
+        accepted: false,
+        reason: "Bybit order-book refresh was not published as executable depth.",
+      };
+    }
+
+    return {accepted: true, reason: null};
   }
 
   private applyLevels(

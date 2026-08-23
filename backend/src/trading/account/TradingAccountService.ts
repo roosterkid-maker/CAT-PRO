@@ -95,14 +95,17 @@ export class TradingAccountService {
     string | null =
     null;
 
-  constructor() {
+  constructor(
+    private readonly ledger =
+      tradingAccountLedgerService,
+  ) {
     this.account =
-      tradingAccountLedgerService
-        .getRestoredAccount() ??
-      structuredClone(
+      this.normalizeAccount(
+        this.ledger
+          .getRestoredAccount() ??
         defaultTradingAccount,
+        0,
       );
-
   }
 
   getAccount():
@@ -121,8 +124,11 @@ export class TradingAccountService {
     this.commitAccountMutation(
       "UPDATE_ACCOUNT",
 
-      structuredClone(
+      this.normalizeAccount(
         account,
+        this.account
+          .paperTdsReceivable ??
+          0,
       ),
     );
   }
@@ -562,7 +568,7 @@ export class TradingAccountService {
 
     if (
       normalizedTransactionId &&
-      tradingAccountLedgerService
+      this.ledger
         .hasAppliedTransaction(
           normalizedTransactionId,
         )
@@ -627,7 +633,7 @@ export class TradingAccountService {
 
     if (
       normalizedTransactionId &&
-      tradingAccountLedgerService
+      this.ledger
         .hasAppliedTransaction(
           normalizedTransactionId,
         )
@@ -710,7 +716,7 @@ export class TradingAccountService {
      */
     if (
       transactionId &&
-      tradingAccountLedgerService
+      this.ledger
         .hasAppliedTransaction(
           transactionId,
         )
@@ -770,6 +776,261 @@ export class TradingAccountService {
     );
   }
 
+  /**
+   * Narrow, journal-first mode transition owned exclusively by a bounded
+   * Strategy #1 Tiny-LIVE account lease. It cannot change capital, limits,
+   * balances or emergency-stop state, and it refuses to cross modes while an
+   * account position is open.
+   */
+  transitionModeForTinyLiveLease(
+    mode:
+      "PAPER" | "LIVE",
+    leaseIdValue:
+      string,
+  ): TradingAccount {
+    const leaseId =
+      leaseIdValue
+        .trim();
+
+    if (
+      !/^tiny-live-account-lease-[a-f0-9]{32}$/u.test(
+        leaseId,
+      )
+    ) {
+      throw new Error(
+        "A valid bounded Tiny-LIVE account lease ID is required.",
+      );
+    }
+
+    if (
+      this.account.mode ===
+        mode
+    ) {
+      return this.getAccount();
+    }
+
+    const expectedCurrentMode =
+      mode ===
+        "LIVE"
+        ? "PAPER"
+        : "LIVE";
+
+    if (
+      this.account.mode !==
+        expectedCurrentMode
+    ) {
+      throw new Error(
+        `Tiny-LIVE account lease cannot transition ${this.account.mode} to ${mode}.`,
+      );
+    }
+
+    if (
+      this.account.openTrades !==
+        0
+    ) {
+      throw new Error(
+        "Tiny-LIVE account mode cannot change while account positions are open.",
+      );
+    }
+
+    const next =
+      structuredClone(
+        this.account,
+      );
+
+    next.mode =
+      mode;
+
+    this.commitAccountMutation(
+      "UPDATE_ACCOUNT",
+      next,
+      {
+        transactionId:
+          `${leaseId}:${mode}`,
+      },
+    );
+
+    return this.getAccount();
+  }
+
+  /**
+   * Atomically books economic PAPER P&L and its recoverable TDS cash lock
+   * under the same restart-safe settlement transaction.
+   *
+   * TDS remains part of economic equity as a receivable, but cannot be
+   * reused as available trading cash until a future independently verified
+   * tax-credit/refund workflow exists.
+   */
+  recordPaperSettlementEconomics(
+    netProfit:
+      number,
+
+    tdsWithheld:
+      number,
+  ): void {
+    this.ensureCurrentDailyMetrics();
+
+    if (
+      !Number.isFinite(
+        netProfit,
+      )
+    ) {
+      throw new Error(
+        "PAPER settlement net profit must be finite.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        tdsWithheld,
+      ) ||
+      tdsWithheld <
+        0
+    ) {
+      throw new Error(
+        "PAPER settlement TDS must be a non-negative finite number.",
+      );
+    }
+
+    const transactionId =
+      this.activeAccountingTransactionId;
+
+    if (
+      transactionId &&
+      this.ledger
+        .hasAppliedTransaction(
+          transactionId,
+        )
+    ) {
+      return;
+    }
+
+    const next =
+      structuredClone(
+        this.account,
+      );
+
+    if (
+      netProfit >=
+      0
+    ) {
+      next.todayProfit +=
+        netProfit;
+    } else {
+      next.todayLoss +=
+        Math.abs(
+          netProfit,
+        );
+    }
+
+    next.currentCapital +=
+      netProfit;
+
+    next.paperTdsReceivable =
+      (
+        next.paperTdsReceivable ??
+        0
+      ) +
+      tdsWithheld;
+
+    next.availableCapital +=
+      netProfit -
+      tdsWithheld;
+
+    next.currentCapital =
+      Math.max(
+        0,
+        next.currentCapital,
+      );
+
+    next.availableCapital =
+      Math.max(
+        0,
+        Math.min(
+          next.currentCapital,
+          next.availableCapital,
+        ),
+      );
+
+    this.commitAccountMutation(
+      "RECORD_SETTLEMENT_ECONOMICS",
+      next,
+      {
+        amount:
+          netProfit,
+        tdsWithheld,
+        transactionId,
+      },
+    );
+  }
+
+  /**
+   * One-way migration for settlements persisted before the account ledger
+   * carried TDS receivables. It only adds a missing lock; it never invents
+   * a refund or releases capital.
+   */
+  reconcilePaperTdsReceivable(
+    totalWithheld:
+      number,
+  ): TradingAccount {
+    if (
+      !Number.isFinite(
+        totalWithheld,
+      ) ||
+      totalWithheld <
+        0
+    ) {
+      throw new Error(
+        "PAPER TDS reconciliation total must be a non-negative finite number.",
+      );
+    }
+
+    const current =
+      this.account
+        .paperTdsReceivable ??
+      0;
+
+    if (
+      totalWithheld <=
+      current +
+        1e-9
+    ) {
+      return this.getAccount();
+    }
+
+    const additionalLock =
+      totalWithheld -
+      current;
+
+    const next =
+      structuredClone(
+        this.account,
+      );
+
+    next.paperTdsReceivable =
+      totalWithheld;
+
+    next.availableCapital =
+      Math.max(
+        0,
+        next.availableCapital -
+          additionalLock,
+      );
+
+    this.commitAccountMutation(
+      "RECONCILE_PAPER_TDS",
+      next,
+      {
+        amount:
+          0,
+        tdsWithheld:
+          additionalLock,
+      },
+    );
+
+    return this.getAccount();
+  }
+
   /*
    * VERSION 18 BUILD 7
    *
@@ -825,7 +1086,7 @@ export class TradingAccountService {
     transactionId:
       string,
   ): boolean {
-    return tradingAccountLedgerService
+    return this.ledger
       .hasAppliedTransaction(
         transactionId,
       );
@@ -1015,6 +1276,9 @@ export class TradingAccountService {
     next.availableCapital =
       next.initialCapital;
 
+    next.paperTdsReceivable =
+      0;
+
     next.todayProfit =
       0;
 
@@ -1027,7 +1291,7 @@ export class TradingAccountService {
     next.tradesToday =
       0;
 
-    tradingAccountLedgerService
+    this.ledger
       .replaceHistoryWithAccount(
         next,
         now,
@@ -1106,6 +1370,9 @@ export class TradingAccountService {
 
       transactionId?:
         string | null;
+
+      tdsWithheld?:
+        number | null;
     } = {},
   ): void {
     const before =
@@ -1119,7 +1386,7 @@ export class TradingAccountService {
      * New in-memory state becomes visible only
      * after durable ledger append succeeds.
      */
-    tradingAccountLedgerService
+    this.ledger
       .recordMutation(
         operation,
         before,
@@ -1131,6 +1398,42 @@ export class TradingAccountService {
       structuredClone(
         next,
       );
+  }
+
+  private normalizeAccount(
+    account:
+      TradingAccount,
+
+    missingTdsReceivable:
+      number,
+  ): TradingAccount {
+    const supplied =
+      account.paperTdsReceivable;
+
+    if (
+      supplied !==
+        undefined &&
+      (
+        !Number.isFinite(
+          supplied,
+        ) ||
+        supplied <
+          0
+      )
+    ) {
+      throw new Error(
+        "PAPER TDS receivable must be a non-negative finite number.",
+      );
+    }
+
+    return {
+      ...structuredClone(
+        account,
+      ),
+      paperTdsReceivable:
+        supplied ??
+        missingTdsReceivable,
+    };
   }
 
   private normalizeBalanceSnapshot(

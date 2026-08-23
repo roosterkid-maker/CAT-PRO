@@ -601,6 +601,8 @@ function createEvidence(
       null,
     reason:
       null,
+    inventoryHolds:
+      [],
     ...reservationOverrides,
   };
 

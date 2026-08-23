@@ -78,6 +78,68 @@ export class CoinDCXExecutionAdapter
         );
       }
 
+      if (
+        request.timeInForce !==
+          undefined &&
+        request.timeInForce !==
+          "GTC"
+      ) {
+        throw new Error(
+          "CoinDCX SPOT supports only the audited GTC time-in-force mapping.",
+        );
+      }
+
+      if (
+        request.timeInForce ===
+          "GTC" &&
+        (
+          request.orderType !==
+            "limit" ||
+          !request.clientOrderId
+            ?.trim() ||
+          !Number.isFinite(
+            request.price,
+          ) ||
+          (
+            request.price ??
+            0
+          ) <=
+            0 ||
+          request.cancelOnTimeout !==
+            true ||
+          !Number.isSafeInteger(
+            request.timeoutMs,
+          ) ||
+          (
+            request.timeoutMs ??
+            0
+          ) <=
+            0 ||
+          (
+            request.timeoutMs ??
+            0
+          ) >
+            10_000 ||
+          !Number.isSafeInteger(
+            request.pollingIntervalMs,
+          ) ||
+          (
+            request.pollingIntervalMs ??
+            0
+          ) <=
+            0 ||
+          (
+            request.pollingIntervalMs ??
+            0
+          ) >
+            1_000
+        )
+      ) {
+        throw new Error(
+          "CoinDCX audited GTC execution requires a priced limit order, durable client ID, explicit bounded timeout (<=10000 ms), <=1000 ms polling and cancel-on-timeout.",
+        );
+      }
+
       const credentials =
         coinDCXCredentialsProvider
           .getCredentials();

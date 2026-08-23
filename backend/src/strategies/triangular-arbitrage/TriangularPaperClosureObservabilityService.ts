@@ -44,6 +44,9 @@ export interface TriangularPaperClosureObservabilityPort {
   getAdmissions(now: number): readonly TriangularAdmissionEvidence[];
   getIntake(now: number): readonly TriangularIntakeEvidence[];
   getQueue(now: number): readonly TriangularQueueEvidence[];
+  getAclaCapital?(now: number): unknown;
+  getAclaLifecycle?(now: number): unknown;
+  getAclaPerformance?(): unknown;
 }
 
 export class TriangularPaperClosureObservabilityService {
@@ -185,6 +188,29 @@ export class TriangularPaperClosureObservabilityService {
         intermediateWalletBalanceRequired: false,
         previousLegFeeAdjustedProceedsRequired: true,
       },
+      acla: {
+        strategyName: configuration.strategyName,
+        rolloutStage: "SHADOW" as const,
+        configuration: {
+          fastScreenMinimumGrossProfitPercent: configuration.fastScreenMinimumGrossProfitPercent,
+          minimumNetProfitPercent: configuration.minimumNetProfitPercent,
+          minimumAbsoluteNetProfitInr: configuration.minimumAbsoluteNetProfitInr,
+          maximumOrderBookAgeMs: configuration.maximumOrderBookAgeMs,
+          maximumOpportunityAgeMs: configuration.maximumOpportunityAgeMs,
+          maximumBookTimestampSkewMs: configuration.maximumBookTimestampSkewMs,
+          slippageReservePercent: configuration.slippageReservePercent,
+          adverseMoveReservePercent: configuration.adverseMoveReservePercent,
+          safetyBufferPercent: configuration.safetyBufferPercent,
+          tdsCapitalLockPercent: configuration.tdsCapitalLockPercent,
+          routeCooldownMs: configuration.routeCooldownMs,
+          maximumCyclesPerHour: configuration.maximumCyclesPerHour,
+          allowedExchanges: configuration.allowedExchanges,
+          allowedStartingAssets: configuration.allowedStartingAssets,
+        },
+        capital: this.port.getAclaCapital?.(now) ?? null,
+        lifecycle: this.port.getAclaLifecycle?.(now) ?? null,
+        performance: this.port.getAclaPerformance?.() ?? null,
+      },
       safety: {
         readOnlyAggregation: true,
         genuineMarketPathsOnly: true,
@@ -236,6 +262,15 @@ function pathSummary(path: TriangularArbitragePathSimulation) {
     feeDragPercent: path.feeDragPercent,
     quantizationDragPercent: path.quantizationDragPercent,
     netProfitPercent: path.netProfitPercent,
+    expectedNetProfitQuantity: path.expectedNetProfitQuantity,
+    expectedNetProfitPercent: path.expectedNetProfitPercent,
+    stressNetProfitQuantity: path.stressNetProfitQuantity,
+    stressNetProfitPercent: path.stressNetProfitPercent,
+    absoluteNetProfitInr: path.absoluteNetProfitInr,
+    startAssetInrValue: path.startAssetInrValue,
+    tdsCapitalLockInr: path.tdsCapitalLockInr,
+    reserveDragPercent: path.reserveDragPercent,
+    maximumBookSkewMs: path.maximumBookSkewMs,
     initialSizingLimitQuantity: path.initialSizingLimitQuantity,
     initialInputQuantity: path.initialInputQuantity,
     retainedStartQuantity: path.retainedStartQuantity,
@@ -251,7 +286,16 @@ function pathSummary(path: TriangularArbitragePathSimulation) {
       inputQuantity: leg.inputQuantity,
       tradedInputQuantity: leg.tradedInputQuantity,
       feePercent: leg.feePercent,
+      feeAmount: leg.feeAmount,
+      feeAsset: leg.feeAsset,
       outputAfterFee: leg.outputAfterFee,
+      averageFillPrice: leg.averageFillPrice,
+      topOfBookPrice: leg.topOfBookPrice,
+      depthSlippagePercent: leg.depthSlippagePercent,
+      roundingDustInputQuantity: leg.roundingDustInputQuantity,
+      consumedDepthLevels: leg.consumedDepthLevels,
+      orderBookAgeMs: leg.orderBookAgeMs,
+      executionPolicy: leg.executionPolicy,
     })),
   };
 }

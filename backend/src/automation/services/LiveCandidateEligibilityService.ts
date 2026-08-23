@@ -1356,7 +1356,7 @@ export class LiveCandidateEligibilityService {
 
     return (
       opportunityService
-        .getOpportunities()
+        .getLastOpportunities()
         .find(
           (
             opportunity,

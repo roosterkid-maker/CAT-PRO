@@ -22,6 +22,10 @@ import {
   TradingAccountLedgerService,
 } from "../TradingAccountLedgerService";
 
+import {
+  TradingAccountService,
+} from "../TradingAccountService";
+
 function main(): void {
   assert.equal(
     toPaperAccountingDateKey(
@@ -196,6 +200,24 @@ function main(): void {
       },
     );
 
+    const cachedFirstAttempts =
+      restarted
+        .getDailyCapitalReservationAttempts();
+
+    assert.equal(
+      cachedFirstAttempts.length,
+      1,
+      "Daily reservation index must expose the first appended attempt.",
+    );
+
+    assert.equal(
+      Object.isFrozen(
+        cachedFirstAttempts,
+      ),
+      true,
+      "Cached daily reservation evidence must remain immutable.",
+    );
+
     const secondReservation =
       structuredClone(
         firstReservation,
@@ -243,6 +265,194 @@ function main(): void {
         .capitalReleaseStatus,
       "STILL_RESERVED",
       "A later same-amount reservation must remain open until its own release.",
+    );
+
+    const tdsLedgerPath =
+      join(
+        directory,
+        "tds-account-ledger.jsonl",
+      );
+
+    const tdsLedger =
+      new TradingAccountLedgerService(
+        tdsLedgerPath,
+      );
+
+    const tdsAccount =
+      new TradingAccountService(
+        tdsLedger,
+      );
+
+    tdsAccount
+      .runWithAccountingTransaction(
+        "paper-settlement-tds-1",
+        () =>
+          tdsAccount
+            .recordPaperSettlementEconomics(
+              100,
+              10,
+            ),
+      );
+
+    const afterSettlement =
+      tdsAccount.getAccount();
+
+    assert.equal(
+      afterSettlement.currentCapital,
+      100_100,
+      "Recoverable TDS must not reduce economic PAPER equity.",
+    );
+
+    assert.equal(
+      afterSettlement.availableCapital,
+      100_090,
+      "Withheld TDS must remain unavailable for another PAPER trade.",
+    );
+
+    assert.equal(
+      afterSettlement.paperTdsReceivable,
+      10,
+      "Withheld TDS must be carried as a separate receivable.",
+    );
+
+    tdsAccount
+      .runWithAccountingTransaction(
+        "paper-settlement-tds-1",
+        () =>
+          tdsAccount
+            .recordPaperSettlementEconomics(
+              100,
+              10,
+            ),
+      );
+
+    assert.deepEqual(
+      tdsAccount.getAccount(),
+      afterSettlement,
+      "A replayed settlement must not duplicate P&L or TDS.",
+    );
+
+    const reconciled =
+      tdsAccount
+        .reconcilePaperTdsReceivable(
+          25,
+        );
+
+    assert.equal(
+      reconciled.currentCapital,
+      100_100,
+    );
+
+    assert.equal(
+      reconciled.availableCapital,
+      100_075,
+    );
+
+    assert.equal(
+      reconciled.paperTdsReceivable,
+      25,
+    );
+
+    const noAutomaticRefund =
+      tdsAccount
+        .reconcilePaperTdsReceivable(
+          5,
+        );
+
+    assert.equal(
+      noAutomaticRefund.paperTdsReceivable,
+      25,
+      "A lower history total must never auto-credit or fabricate a TDS refund.",
+    );
+
+    assert.equal(
+      noAutomaticRefund.availableCapital,
+      100_075,
+    );
+
+    const restartedTdsAccount =
+      new TradingAccountService(
+        new TradingAccountLedgerService(
+          tdsLedgerPath,
+        ),
+      );
+
+    assert.equal(
+      restartedTdsAccount
+        .getAccount()
+        .paperTdsReceivable,
+      25,
+      "TDS cash locks must survive a process restart.",
+    );
+
+    const resetTdsAccount =
+      restartedTdsAccount
+        .resetPaperTradingData();
+
+    assert.equal(
+      resetTdsAccount.paperTdsReceivable,
+      0,
+      "An explicit PAPER data reset must clear the PAPER-only receivable.",
+    );
+
+    const leaseLedgerPath =
+      join(
+        directory,
+        "tiny-live-lease-account-ledger.jsonl",
+      );
+    const leaseAccount =
+      new TradingAccountService(
+        new TradingAccountLedgerService(
+          leaseLedgerPath,
+        ),
+      );
+    const leaseId =
+      "tiny-live-account-lease-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    assert.throws(
+      () =>
+        leaseAccount
+          .transitionModeForTinyLiveLease(
+            "LIVE",
+            "invalid-lease",
+          ),
+      /valid bounded Tiny-LIVE account lease ID/iu,
+    );
+
+    assert.equal(
+      leaseAccount
+        .transitionModeForTinyLiveLease(
+          "LIVE",
+          leaseId,
+        )
+        .mode,
+      "LIVE",
+      "Only the precise lease-owned transition may move PAPER to LIVE.",
+    );
+
+    const restartedLeaseAccount =
+      new TradingAccountService(
+        new TradingAccountLedgerService(
+          leaseLedgerPath,
+        ),
+      );
+
+    assert.equal(
+      restartedLeaseAccount
+        .getAccount()
+        .mode,
+      "LIVE",
+      "The journal-first bounded mode transition must survive restart.",
+    );
+    assert.equal(
+      restartedLeaseAccount
+        .transitionModeForTinyLiveLease(
+          "PAPER",
+          leaseId,
+        )
+        .mode,
+      "PAPER",
+      "The same bounded lease must be able to restore PAPER durably.",
     );
 
     console.log(

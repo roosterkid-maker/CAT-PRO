@@ -177,7 +177,7 @@ export function NotificationSettingsCard() {
             />
           }
           title="Notification sound"
-          description="Play a short sound when a toast appears."
+          description="Play a short futuristic chime when a toast appears."
           checked={
             soundEnabled
           }

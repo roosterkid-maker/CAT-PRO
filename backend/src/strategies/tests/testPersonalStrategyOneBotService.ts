@@ -5,6 +5,8 @@ import type {TradingAccount} from "../../trading/account/TradingAccount";
 import type {TradingAccountCapitalReservationAttempt} from "../../trading/account/TradingAccountLedgerService";
 import type {DailyExecutionReservationSessionEvidence} from "../../execution/live/coordinator/LiveExecutionSessionEvidenceService";
 import type {PaperTrade} from "../../trading/models/PaperTrade";
+import type {ExchangeBalanceDashboardReport} from "../../portfolio/services/ExchangeBalancePortfolioService";
+import type {NormalizedInventorySnapshot} from "../../rebalancing/models/NormalizedInventorySnapshot";
 import type {
   StrategyOneFundedRouteReport,
   StrategyOneFundingBoundary,
@@ -22,6 +24,8 @@ function main(): void {
   let acceptance = createAcceptance("PASSED");
   let trades: PaperTrade[] = [];
   let fundingBlocked = false;
+  let balanceStale = false;
+  let fundingEvaluations = 0;
   const accountReservationAttempts: TradingAccountCapitalReservationAttempt[] = [
     {attemptId: "linked-completed", attemptNumber: 97, reservedAt: NOW - 2_000, amount: 100,
       accountMode: "PAPER", releasedAt: NOW - 1_000, capitalReleaseStatus: "RELEASE_CONFIRMED"},
@@ -55,14 +59,24 @@ function main(): void {
       paperReservations: 0, failedDryRunReservations: 1, failedPaperReservations: 0}),
     getDailyAccountReservationAttempts: () => accountReservationAttempts,
     getDailyReservationSessions: () => reservationSessions,
-    evaluateFunding: (opportunity, requestedCapitalInr, now, fundingBoundary) =>
-      createFunding(
+    getExchangeBalanceReport: (now) => createExchangeBalanceReport(now, balanceStale),
+    getNormalizedInventory: (now) => createNormalizedInventory(now, balanceStale),
+    getRebalancingSafetyContext: (_now, currentAccount) => ({
+      executionRecoveryPending: false,
+      settlementReconciliationPending: false,
+      emergencyStopActive: currentAccount.emergencyStop,
+    }),
+    evaluateFunding: (opportunity, requestedCapitalInr, now, fundingBoundary) => {
+      fundingEvaluations += 1;
+
+      return createFunding(
         opportunity,
         requestedCapitalInr,
         now,
         fundingBoundary,
         fundingBlocked && fundingBoundary === "AUTHENTICATED_LIVE_READINESS",
-      ),
+      );
+    },
   });
 
   const limited = service.getReport(NOW);
@@ -97,6 +111,33 @@ function main(): void {
   assert.equal(ready.safety.liveExecutionAllowed, false);
   assert.equal(ready.control.effectivePaperExecutionEnabled, true);
   assert.equal(ready.performance.storedExecutions, 0);
+
+  const fundingEvaluationsBeforeSummary =
+    fundingEvaluations;
+  const performanceSummary =
+    service.getPerformanceSummary(
+      NOW +
+        3,
+    );
+
+  assert.equal(
+    performanceSummary.version,
+    "148.0",
+  );
+  assert.deepEqual(
+    performanceSummary.performance,
+    ready.performance,
+    "The compact endpoint must preserve the full BOT performance truth exactly.",
+  );
+  assert.equal(
+    fundingEvaluations,
+    fundingEvaluationsBeforeSummary,
+    "Reading compact performance must not run current funding, depth or balance evaluation.",
+  );
+  assert.equal(
+    performanceSummary.safety.orderSubmissionAllowed,
+    false,
+  );
   assert.equal(ready.conversion.profile, "PERSONAL_SELF_USE");
   assert.equal(ready.conversion.safety.liveExecutionAllowed, false);
   assert.equal(ready.hotPath.codeSideOnly, true);
@@ -125,6 +166,69 @@ function main(): void {
   assert.equal(ready.inventoryPlan.safety.advisoryOnly, true);
   assert.equal(ready.inventoryPlan.safety.transferInitiated, false);
   assert.equal(ready.inventoryPlan.safety.withdrawalInitiated, false);
+  assert.equal(ready.capitalPlacement.totalRoutes, ready.capitalPlacement.routes.length);
+  assert.equal(ready.capitalManager.version, "158.0");
+  assert.equal(ready.capitalManager.mode, "ADVISORY_ONLY");
+  assert.equal(ready.capitalManager.state, "READY_FOR_PREFLIGHT");
+  assert.equal(ready.capitalManager.pilotPolicy.recommendedStartingBankrollInr, 3_000);
+  assert.equal(ready.capitalManager.pilotPolicy.maximumInitialExchangeExposureInr, 2_000);
+  assert.equal(ready.capitalManager.pilotPolicy.offExchangeReserveInr, 1_000);
+  assert.equal(ready.capitalManager.pilotPolicy.offExchangeReserveEvidence, "NOT_OBSERVED_BY_BOT");
+  assert.equal(ready.capitalManager.evidence.freshExchanges, 5);
+  assert.equal(ready.capitalManager.evidence.nativeAssetUnitsNeverSummed, true);
+  assert.equal(ready.capitalManager.capitalTruth.valuationState, "INR_SUBTOTAL_ONLY");
+  assert.equal(ready.capitalManager.capitalTruth.verifiedInrSubtotal.totalInr, 1_000);
+  assert.equal(ready.capitalManager.capitalTruth.allAssetPortfolioValueInr, null);
+  assert.equal(ready.capitalManager.capitalTruth.positiveUnvaluedAssetCount, 1);
+  assert.deepEqual(
+    ready.capitalManager.capitalTruth.nativeAssetTotals.map((asset) => asset.asset),
+    ["INR", "USDT"],
+  );
+  assert.equal(ready.capitalManager.capitalTruth.paper.accountingEquityInr, 10_100);
+  assert.equal(ready.capitalManager.capitalTruth.paper.includedInLiveBalanceTotals, false);
+  assert.equal(ready.capitalManager.profitTruth.safelyWithdrawableProfitInr, null);
+  assert.equal(ready.capitalManager.profitTruth.paperProfitNeverWithdrawable, true);
+  assert.equal(ready.capitalManager.allocation.staticEqualAllocationUsed, false);
+  assert.equal(ready.capitalManager.allocation.status, "TARGETS_AVAILABLE");
+  assert.equal(ready.capitalManager.allocation.targets.length, 2);
+  assert.equal(ready.capitalManager.allocation.targetOperatingCycles, 1);
+  assert.equal(ready.capitalManager.actions.at(-1)?.kind, "RUN_READ_ONLY_PREFLIGHT");
+  assert.equal(ready.capitalManager.safety.paperCapitalIsolated, true);
+  assert.equal(ready.capitalManager.safety.paperExecutionAffected, false);
+  assert.equal(ready.capitalManager.safety.automaticFundMovementAllowed, false);
+  assert.equal(ready.capitalManager.safety.transferInitiated, false);
+  assert.equal(ready.capitalManager.safety.withdrawalInitiated, false);
+  assert.equal(ready.capitalManager.safety.balanceMutated, false);
+  assert.equal(ready.capitalManager.safety.liveExecutionAllowed, false);
+  assert.equal(ready.capitalManager.safety.orderSubmissionAllowed, false);
+  assert.equal(ready.capitalManager.safety.bankWithdrawalAllowed, false);
+  assert.equal(ready.capitalManager.safety.transferAuthorityMode, "ADVISORY_ONLY");
+  assert.equal(ready.capitalManager.rebalancing.phase, "PHASE_A_B_ADVISORY");
+  assert.equal(ready.capitalManager.rebalancing.allocation.state, "READY");
+  assert.equal(ready.capitalManager.rebalancing.policyBasis.staticEqualAllocationUsed, false);
+  assert.equal(ready.capitalManager.rebalancing.policyBasis.currentRouteBoostApplied, true);
+  assert.equal(
+    new Set(
+      ready.capitalManager.rebalancing.allocation.policy.targets.map(
+        (target) => target.targetPercent,
+      ),
+    ).size > 1,
+    true,
+  );
+  assert.equal(ready.capitalManager.rebalancing.safety.transferSubmissionAllowed, false);
+  assert.equal(ready.capitalManager.rebalancing.safety.withdrawalSubmissionAllowed, false);
+  assert.equal(ready.capitalManager.rebalancing.phases.phaseCManualTransfers, "LOCKED_NOT_IMPLEMENTED");
+
+  balanceStale = true;
+  const staleCapitalEvidence = service.getReport(NOW + 3_001);
+  assert.equal(staleCapitalEvidence.capitalManager.state, "EVIDENCE_INCOMPLETE");
+  assert.equal(staleCapitalEvidence.capitalManager.capitalTruth.valuationState, "NO_FRESH_BALANCE_EVIDENCE");
+  assert.equal(staleCapitalEvidence.capitalManager.capitalTruth.verifiedInrSubtotal.totalInr, null);
+  assert.equal(staleCapitalEvidence.capitalManager.capitalTruth.allAssetPortfolioValueInr, null);
+  assert.equal(staleCapitalEvidence.capitalManager.capitalTruth.missingValuesNeverTreatedAsZero, true);
+  assert.equal(staleCapitalEvidence.capitalManager.safety.automaticFundMovementAllowed, false);
+  assert.equal(staleCapitalEvidence.capitalManager.rebalancing.allocation.state, "BLOCKED_EVIDENCE");
+  balanceStale = false;
 
   fundingBlocked = true;
   const inventoryRequired = service.getReport(NOW + 4);
@@ -139,6 +243,12 @@ function main(): void {
   assert.equal(inventoryRequired.inventoryPlan.recommendedRoute?.requirements[1].deficitAmount, 1);
   assert.equal(inventoryRequired.inventoryPlan.safety.balanceMutated, false);
   assert.equal(inventoryRequired.inventoryPlan.safety.orderSubmissionAllowed, false);
+  assert.equal(inventoryRequired.capitalManager.state, "OPERATOR_ACTION_REQUIRED");
+  assert.equal(
+    inventoryRequired.capitalManager.actions.filter((action) => action.kind === "PREPOSITION_ASSET").length,
+    2,
+  );
+  assert.ok(inventoryRequired.capitalManager.actions.every((action) => !action.automaticExecutionAllowed));
   fundingBlocked = false;
 
   trades = [
@@ -276,6 +386,12 @@ function main(): void {
   assert.equal(crediblePerformance.profitValidation.overall.trades, 1);
   assert.equal(crediblePerformance.profitValidation.overall.netPnl, 1.8);
   assert.equal(crediblePerformance.profitValidation.safety.liveExecutionAllowed, false);
+  assert.equal(crediblePerformance.capitalManager.profitTruth.credibleSettlements, 1);
+  assert.equal(crediblePerformance.capitalManager.profitTruth.grossTradingProfitInr, 2);
+  assert.equal(crediblePerformance.capitalManager.profitTruth.tradingFeesInr, 0.2);
+  assert.equal(crediblePerformance.capitalManager.profitTruth.economicNetPnlInr, 1.8);
+  assert.equal(crediblePerformance.capitalManager.profitTruth.deployableCashPnlInr, 1.8);
+  assert.equal(crediblePerformance.capitalManager.profitTruth.safelyWithdrawableProfitInr, null);
 
   acceptance = createAcceptance("COLLECTING");
   assert.equal(service.getReport(NOW + 6).state, "COLLECTING_PAPER_SOAK");
@@ -492,7 +608,8 @@ function createAcceptance(soakStatus: StrategyOnePaperRuntimeAcceptanceReport["s
 function createPaperController(): AutomatedPaperExecutionControllerDiagnostics {
   return {generatedAt: NOW, mode: "PAPER", automaticEvaluationEnabled: true, paperExecutionArmed: true,
     paperExecutionAllowed: true, liveExecutionAllowed: false,
-    confirmationVariable: "AUTOMATED_PAPER_TRADING_CONFIRMATION",
+    armingAuthority: "PERSISTED_DASHBOARD_CONTROL",
+    confirmationVariable: null,
     config: {maximumCapitalPerTrade: 1_000, minimumNetProfitPercent: 0.1, maximumSnapshotAgeMs: 5_000,
       routeCooldownMs: 1_000, maximumHistory: 100}, runningCycle: false, totalCycles: 10,
     blockedReadiness: 0, blockedNotArmed: 0, accountBlocked: 0, noCandidate: 4, executionAttempts: 6,
@@ -508,8 +625,160 @@ function createOrchestrator(): UnifiedAutomatedExecutionDiagnostics {
       status: "NO_OWNED_CANDIDATE", strategyId: "cross-exchange-arbitrage", readyCandidates: 0,
       ownedCandidates: 0, routeLocksAcquired: 0, ownershipRejections: [], duplicateRejections: [],
       shadow: null, paper: null, liveExecutionAllowed: false, liveOrderSubmissionAllowed: false,
-      exchangeOrdersSubmitted: 0, reasons: ["Waiting for a qualified candidate."]},
+    exchangeOrdersSubmitted: 0, reasons: ["Waiting for a qualified candidate."]},
     liveExecutionAllowed: false, liveOrderSubmissionAllowed: false};
+}
+
+function createExchangeBalanceReport(now: number, stale = false): ExchangeBalanceDashboardReport {
+  const definitions = [
+    {exchange: "coindcx" as const, displayName: "CoinDCX", assets: [
+      {asset: "INR", availableBalance: 1_000, lockedBalance: 0, totalBalance: 1_000},
+    ]},
+    {exchange: "binance" as const, displayName: "Binance", assets: [
+      {asset: "USDT", availableBalance: 100, lockedBalance: 5, totalBalance: 105},
+    ]},
+    {exchange: "bybit" as const, displayName: "Bybit", assets: []},
+    {exchange: "unocoin" as const, displayName: "UnoCoin", assets: []},
+    {exchange: "coinswitch" as const, displayName: "CoinSwitch", assets: []},
+  ];
+  return {
+    generatedAt: now,
+    synchronizationInProgress: false,
+    maximumFreshAgeMs: 30_000,
+    totals: {
+      exchanges: definitions.length,
+      synchronized: stale ? 0 : definitions.length,
+      stale: stale ? definitions.length : 0,
+      failed: 0,
+      notConfigured: 0,
+      pending: 0,
+      positiveAssets: 2,
+    },
+    exchanges: definitions.map((definition) => ({
+      exchange: definition.exchange,
+      displayName: definition.displayName,
+      status: stale ? "STALE" as const : "SYNCHRONIZED" as const,
+      lastAttemptedAt: now,
+      lastSynchronizedAt: stale ? now - 60_000 : now,
+      balanceAgeMs: stale ? 60_000 : 0,
+      synchronizedAssetCount: definition.assets.length,
+      positiveAssetCount: definition.assets.length,
+      zeroAssetCount: 0,
+      retainedAfterFailure: false,
+      reasons: [],
+      assets: definition.assets,
+    })),
+  };
+}
+
+function createNormalizedInventory(
+  now: number,
+  stale = false,
+): NormalizedInventorySnapshot {
+  const capitals = new Map([
+    ["binance", 20],
+    ["bybit", 8],
+    ["coindcx", 10],
+    ["coinswitch", 5],
+    ["unocoin", 7],
+  ]);
+  const exchanges = [...capitals.entries()].map(([exchange, capital]) => ({
+    exchange,
+    displayName: exchange,
+    balanceStatus: stale ? "STALE" as const : "SYNCHRONIZED" as const,
+    lastSynchronizedAt: stale ? now - 60_000 : now,
+    balanceAgeMs: stale ? 60_000 : 0,
+    balanceUsableForDecision: !stale,
+    assets: [],
+    totals: {
+      positiveAssets: 1,
+      currentValuations: stale ? 0 : 1,
+      staleValuations: stale ? 1 : 0,
+      unavailableValuations: 0,
+      knownAvailableValueUsdt: capital,
+      knownAvailableAfterReservationsValueUsdt: capital,
+      knownLockedValueUsdt: 0,
+      knownTotalValueUsdt: capital,
+      decisionUsableValueUsdt: stale ? 0 : capital,
+      authoritativeAvailableValueUsdt: stale ? null : capital,
+      authoritativeAvailableAfterReservationsValueUsdt: stale ? null : capital,
+      authoritativeLockedValueUsdt: stale ? null : 0,
+      authoritativeTotalValueUsdt: stale ? null : capital,
+      directUsdtAvailable: capital,
+      directUsdtAvailableAfterReservations: capital,
+      directUsdtLocked: 0,
+      directUsdtTotal: capital,
+    },
+  }));
+
+  return {
+    version: "121.0",
+    generatedAt: now,
+    state: stale ? "PARTIAL_EVIDENCE" : "READY_FOR_REBALANCING_ANALYSIS",
+    valuationAsset: "USDT",
+    maximumBalanceAgeMs: 30_000,
+    exchanges,
+    totals: {
+      exchanges: 5,
+      synchronizedExchanges: stale ? 0 : 5,
+      positiveAssets: 5,
+      currentValuations: stale ? 0 : 5,
+      staleValuations: stale ? 5 : 0,
+      unavailableValuations: 0,
+      knownAvailableValueUsdt: 50,
+      knownAvailableAfterReservationsValueUsdt: 50,
+      knownLockedValueUsdt: 0,
+      knownTotalValueUsdt: 50,
+      decisionUsableValueUsdt: stale ? 0 : 50,
+      authoritativeAvailableCapitalUsdt: stale ? null : 50,
+      authoritativeLockedCapitalUsdt: stale ? null : 0,
+      authoritativeTotalCapitalUsdt: stale ? null : 50,
+      directUsdtAvailable: 50,
+      directUsdtAvailableAfterReservations: 50,
+      directUsdtLocked: 0,
+      directUsdtTotal: 50,
+    },
+    accountingCapital: {
+      mode: "PAPER",
+      unit: "ACCOUNTING_UNIT",
+      initial: 10_000,
+      current: 10_100,
+      available: 10_100,
+      reserved: 0,
+      includedInWalletValuation: false,
+    },
+    reservations: {
+      scope: "GLOBAL_AND_EXCHANGE_ASSET",
+      accountingUnit: "ACCOUNTING_UNIT",
+      activeReservations: 0,
+      activeReservedCapital: 0,
+      activeInventoryReservations: 0,
+      unscopedActiveReservations: 0,
+      activeInventoryHolds: [],
+      perExchangeAssetReservationSupported: true,
+      appliedToWalletInventory: true,
+    },
+    transfers: {
+      state: "NO_TRANSFER_LEDGER",
+      pendingTransferCapitalUsdt: null,
+      inTransitCapitalUsdt: null,
+      includedInAvailableCapital: false,
+    },
+    blockers: stale ? ["Fixture balance evidence is stale."] : [],
+    limitations: ["Fixture has no transfer ledger."],
+    safety: {
+      readOnly: true,
+      balanceMutationAllowed: false,
+      paperAccountingMutationAllowed: false,
+      liveOrderSubmissionAllowed: false,
+      internalTransferSubmissionAllowed: false,
+      externalTransferSubmissionAllowed: false,
+      withdrawalSubmissionAllowed: false,
+      missingValuationsTreatedAsZero: false,
+      nativeAssetUnitsSummedAcrossAssets: false,
+      accountingCapitalMixedWithWalletValuation: false,
+    },
+  };
 }
 
 try { main(); } catch (error: unknown) {

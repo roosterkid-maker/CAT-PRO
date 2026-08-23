@@ -370,6 +370,10 @@ export type StrategyOnePilotPreviewState =
 
 export interface StrategyOnePilotCheck {
   key:
+    | "AUDITED_LIVE_VENUE_CONTRACT"
+    | "API_KEY_PERMISSION_BOUNDARY"
+    | "PILOT_TIMING_HEADROOM"
+    | "CURRENT_DISPATCH_RESERVED_FRESHNESS"
     | "CURRENT_LIVE_PROFIT_THRESHOLD"
     | "HISTORICAL_ROUTE_EVIDENCE"
     | "FRESH_TWO_LEG_FUNDING_AND_RULES"
@@ -418,6 +422,36 @@ export interface StrategyOnePilotCandidate {
   currentNetProfitPerBaseUnit: number;
   currentScore: number;
   historical: PersonalBotCapitalPlacementRouteRank;
+  timing: {
+    schemaVersion: "115.0";
+    generatedAt: number;
+    routeKey: string;
+    market: string;
+    buyExchange: string;
+    sellExchange: string;
+    state: "READY" | "BLOCKED";
+    absoluteBookAgeCeilingMs: 250;
+    dispatchSafetyMarginMs: number;
+    requiredOperationalHeadroomMs: number;
+    timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE";
+    decisionToTinyLiveTriggerP99Ms: number | null;
+    downstreamPaperDecisionToExecutionStartP99Ms: number | null;
+    decisionToExecutionStartP99Ms: number | null;
+    dispatchBudgetMs: number | null;
+    maximumBookAgeMs: number | null;
+    executionGradeBuyAgeP99Ms: number | null;
+    executionGradeSellAgeP99Ms: number | null;
+    executionGradeWorstAgeP99Ms: number | null;
+    residualOperationalHeadroomMs: number | null;
+    blockers: string[];
+    safety: {
+      reviewOnly: true;
+      thresholdRelaxationAllowed: false;
+      automaticProposalAllowed: false;
+      automaticApprovalAllowed: false;
+      liveOrderSubmissionAuthorized: false;
+    };
+  };
   funding: PersonalBotFundedRoute;
   stress: StrategyOnePilotStress | null;
   checks: StrategyOnePilotCheck[];
@@ -440,17 +474,22 @@ export interface StrategyOnePilotSafety {
 }
 
 export interface StrategyOnePilotPreviewReport {
-  version: "92.0";
+  version: "115.0";
   generatedAt: number;
   mode: "STRATEGY_ONE_ACTION_TIME_PREFLIGHT_PREVIEW";
   state: StrategyOnePilotPreviewState;
-  requestedCapitalPerLegInr: 100;
-  minimumTwoLegInventoryInr: 200;
+  requestedCapitalPerLegInr: number;
+  minimumTwoLegInventoryInr: number;
   minimumCurrentNetProfitPercent: number;
   maximumOpportunityAgeMs: number;
+  maximumExecutionGradeBookAgeMs: 250;
+  maximumDispatchReservedBookAgeMs: 190;
+  maximumExecutionGradeBookSkewMs: 250;
   evidence: {
     currentFreshExecuteOpportunities: number;
     historicalAdapterReadyRoutes: number;
+    excludedNonPilotCurrentOpportunities: number;
+    excludedNonPilotHistoricalRoutes: number;
     matchedCurrentRoutes: number;
     fullyPreflightableMatches: number;
   };
@@ -462,7 +501,7 @@ export interface StrategyOnePilotPreviewReport {
 }
 
 export interface StrategyOnePilotPreflightRunReport {
-  version: "92.0";
+  version: "115.0";
   generatedAt: number;
   mode: "STRATEGY_ONE_ACTION_TIME_PREFLIGHT";
   decision:
@@ -485,4 +524,375 @@ export interface StrategyOnePilotPreviewResponse {
 export interface StrategyOnePilotPreflightRunResponse {
   success: boolean;
   data: StrategyOnePilotPreflightRunReport;
+}
+
+export type StrategyOneTinyLivePreArmState =
+  | "ARMED"
+  | "CLAIMED"
+  | "COMPLETED"
+  | "FAILED_SAFE"
+  | "DISARMED"
+  | "EXPIRED";
+
+export interface StrategyOneTinyLivePreArmAttempt {
+  attemptNumber: number;
+  opportunityId: string;
+  authorityId: string | null;
+  claimedAt: number;
+  completedAt: number;
+  executionStatus: string;
+  success: boolean;
+  requestedQuantity: number | null;
+  matchedFilledQuantity: number | null;
+  unmatchedBuyQuantity: number | null;
+  unmatchedSellQuantity: number | null;
+  executionTimeMs: number | null;
+  buyStatus: string | null;
+  sellStatus: string | null;
+  reason: string;
+  recoveryRequired: boolean;
+  possibleExposure: boolean;
+  market?: string;
+  buyExchange?: string;
+  sellExchange?: string;
+}
+
+export interface StrategyOneTinyLiveBasketPolicy {
+  schemaVersion: "183.0";
+  id: "strategy-one-seven-coin-inventory-v1";
+  label: string;
+  markets: string[];
+  venues: Array<"binance" | "coindcx" | "bybit">;
+  routes: Array<{
+    market: string;
+    buyExchange: "binance" | "coindcx" | "bybit";
+    sellExchange: "binance" | "coindcx" | "bybit";
+  }>;
+  inventoryTargets: Array<{
+    exchange: "binance" | "coindcx" | "bybit";
+    asset: string;
+    targetNotionalInr: number;
+  }>;
+  capitalPerLegInr: 500;
+  maximumAttempts: 10;
+  durationMinutes: 180;
+  stopOnFirstNonCleanResult: true;
+  routeSelection: string;
+  excludedVenues: string[];
+  automaticTransfersAllowed: false;
+  withdrawalsAllowed: false;
+  liveOrderSubmissionAuthorized: false;
+}
+
+export interface StrategyOneTinyLivePreArmRecord {
+  schemaVersion: "125.0" | "150.0" | "182.0" | "183.0";
+  id: string;
+  state: StrategyOneTinyLivePreArmState;
+  market: string;
+  buyExchange: "binance" | "bybit" | "coindcx";
+  sellExchange: "binance" | "bybit" | "coindcx";
+  capitalPerLegInr: number;
+  requiredArmPhrase: string;
+  armedAt: number;
+  expiresAt: number;
+  claimedAt: number | null;
+  opportunityId: string | null;
+  authorityId: string | null;
+  completedAt: number | null;
+  executionStatus: string | null;
+  failureReason: string | null;
+  automaticRetryAllowed: false;
+  automaticFundMovementAllowed: false;
+  maximumAttempts: 1 | 2 | 10;
+  attemptsUsed?: number;
+  attempts?: StrategyOneTinyLivePreArmAttempt[];
+  nextAttemptNotBefore?: number | null;
+  routeScope?: "EXACT_ROUTE" | "PILOT_BASKET";
+  pilotBasketId?: "strategy-one-seven-coin-inventory-v1";
+}
+
+export type StrategyOneTinyLiveAccountModeLeaseState =
+  | "ACTIVATING"
+  | "ACTIVE"
+  | "RESTORING"
+  | "RESTORED"
+  | "ACTIVATION_FAILED"
+  | "RESTORE_FAILED";
+
+export interface StrategyOneTinyLiveAccountModeLeaseRecord {
+  schemaVersion: "151.0" | "182.1" | "183.1";
+  id: string;
+  state: StrategyOneTinyLiveAccountModeLeaseState;
+  preArmId: string;
+  market: string;
+  buyExchange: "binance" | "bybit" | "coindcx";
+  sellExchange: "binance" | "bybit" | "coindcx";
+  capitalPerLegInr: number;
+  maximumAttempts: 1 | 2 | 10;
+  priorAccountMode: "PAPER";
+  leasedAccountMode: "LIVE";
+  timingCalibrationId: string;
+  requiredActivationPhrase: string;
+  requiredRestorePhrase: string;
+  requestedAt: number;
+  activatedAt: number | null;
+  expiresAt: number;
+  completedAt: number | null;
+  reason: string | null;
+  automaticOrderAuthorityAllowed: false;
+  automaticTransferAllowed: false;
+  withdrawalAllowed: false;
+  routeScope?: "EXACT_ROUTE" | "PILOT_BASKET";
+  pilotBasketId?: "strategy-one-seven-coin-inventory-v1";
+}
+
+export interface StrategyOneTinyLiveAccountModeLeaseDiagnostics {
+  schemaVersion: "151.0";
+  generatedAt: number;
+  accountMode: "PAPER" | "LIVE";
+  activeLease: StrategyOneTinyLiveAccountModeLeaseRecord | null;
+  activeArmState: StrategyOneTinyLivePreArmState | null;
+  lastReconciliationError: string | null;
+  records: StrategyOneTinyLiveAccountModeLeaseRecord[];
+  persistence: unknown;
+  safety: {
+    exactPreArmBinding: true;
+    exactConfirmationRequired: true;
+    journalBeforeModeMutation: true;
+    automaticPaperRestore: true;
+    claimedAttemptModeFlipAllowed: false;
+    automaticOrderAuthorityAllowed: false;
+    automaticTransferAllowed: false;
+    withdrawalAllowed: false;
+  };
+}
+
+export interface StrategyOneTinyLivePreArmDiagnostics {
+  schemaVersion: "125.0";
+  generatedAt: number;
+  runtimeGateEnabled: boolean;
+  activeArm: StrategyOneTinyLivePreArmRecord | null;
+  triggerInProgress: boolean;
+  lastEvaluation: {
+    evaluatedAt: number;
+    opportunityId: string;
+    outcome: "BLOCKED" | "CLAIMED" | "COMPLETED" | "FAILED_SAFE";
+    reason: string;
+  } | null;
+  records: StrategyOneTinyLivePreArmRecord[];
+  accountModeLease: StrategyOneTinyLiveAccountModeLeaseDiagnostics;
+  pilotBasket: StrategyOneTinyLiveBasketPolicy;
+  limits: {
+    minimumDurationMinutes: number;
+    defaultDurationMinutes: number;
+    maximumDurationMinutes: number;
+    maximumBatchDurationMinutes: number;
+    maximumCapitalPerLegInr: 500;
+    maximumAttemptsPerArm: 10;
+  };
+  safety: {
+    exactRouteBound: true;
+    freshActionTimePreflightRequired: true;
+    durableClaimBeforeOrderAuthority: true;
+    existingCoordinatorOnly: true;
+    automaticRetryAllowed: false;
+    automaticFundMovementAllowed: false;
+    withdrawalAllowed: false;
+  };
+}
+
+export interface StrategyOneTinyLivePreArmDiagnosticsResponse {
+  success: true;
+  data: StrategyOneTinyLivePreArmDiagnostics;
+}
+
+export interface StrategyOneTinyLivePreArmRecordResponse {
+  success: true;
+  data: StrategyOneTinyLivePreArmRecord;
+}
+
+export interface StrategyOneTinyLiveAccountModeLeaseRecordResponse {
+  success: true;
+  data: StrategyOneTinyLiveAccountModeLeaseRecord;
+}
+
+export type StrategyOneTimingCalibrationScope =
+  | "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT"
+  | "BOOTSTRAP_CONTROLLED_TWO_ATTEMPT_BATCH"
+  | "CONTINUOUS_TINY_LIVE";
+
+export interface StrategyOneTimingCalibrationRecord {
+  schemaVersion: "110.0";
+  id: string;
+  routeKey: string;
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+  status: "PROPOSED" | "APPROVED" | "REVOKED";
+  scope: StrategyOneTimingCalibrationScope;
+  maximumBookAgeMs: number;
+  evidenceHash: string;
+  evidenceGeneratedAt: number;
+  publicSamples: number;
+  privateFillSamplesBuy: number;
+  privateFillSamplesSell: number;
+  proposedAt: number;
+  approvedAt: number | null;
+  expiresAt: number | null;
+  revokedAt: number | null;
+  requiredApprovalPhrase: string;
+  automaticActivationAllowed: false;
+  liveOrderSubmissionAuthorized: false;
+}
+
+export interface StrategyOneTimingHeadroomReview {
+  schemaVersion: "115.0";
+  generatedAt: number;
+  routeKey: string;
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+  state: "READY" | "BLOCKED";
+  absoluteBookAgeCeilingMs: 250;
+  dispatchSafetyMarginMs: number;
+  requiredOperationalHeadroomMs: number;
+  timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE";
+  decisionToTinyLiveTriggerP99Ms: number | null;
+  downstreamPaperDecisionToExecutionStartP99Ms: number | null;
+  decisionToExecutionStartP99Ms: number | null;
+  dispatchBudgetMs: number | null;
+  maximumBookAgeMs: number | null;
+  executionGradeBuyAgeP99Ms: number | null;
+  executionGradeSellAgeP99Ms: number | null;
+  executionGradeWorstAgeP99Ms: number | null;
+  residualOperationalHeadroomMs: number | null;
+  blockers: readonly string[];
+  safety: {
+    reviewOnly: true;
+    thresholdRelaxationAllowed: false;
+    automaticProposalAllowed: false;
+    automaticApprovalAllowed: false;
+    liveOrderSubmissionAuthorized: false;
+  };
+}
+
+export interface StrategyOneTimingCalibrationDiagnostics {
+  schemaVersion: "110.0";
+  generatedAt: number;
+  records: StrategyOneTimingCalibrationRecord[];
+  controlledBatchHeadroom: StrategyOneTimingHeadroomReview;
+  pilotBasketHeadroom: StrategyOneTimingHeadroomReview[];
+  summary: {
+    proposed: number;
+    approvedAndCurrent: number;
+    expired: number;
+    revoked: number;
+  };
+  persistence: unknown;
+  safety: {
+    automaticActivationAllowed: false;
+    exactApprovalPhraseRequired: true;
+    maximumApprovalDurationMs: number;
+    bootstrapCalibrationLimitedToFirstAttempt: true;
+    liveOrderSubmissionAuthorized: false;
+  };
+}
+
+export interface StrategyOneTimingCalibrationDiagnosticsResponse {
+  success: true;
+  data: StrategyOneTimingCalibrationDiagnostics;
+}
+
+export interface StrategyOneTimingCalibrationRecordResponse {
+  success: true;
+  data: StrategyOneTimingCalibrationRecord;
+}
+
+export type StrategyOneTinyLiveAuditCategory =
+  | "PROFIT"
+  | "FRESHNESS_TIMING"
+  | "INVENTORY_RULES"
+  | "FEES_DEPTH_STRESS"
+  | "VENUE_PERMISSION"
+  | "HISTORICAL_EVIDENCE";
+
+export interface StrategyOneTinyLiveOpportunityAuditReport {
+  schemaVersion: "126.1";
+  generatedAt: number;
+  mode: "READ_ONLY_BINANCE_BYBIT_TINY_LIVE_OPPORTUNITY_AUDIT";
+  state: "COLLECTING" | "READY_FOR_POLICY_REVIEW";
+  thresholds: {
+    discoveryNetProfitPercent: number;
+    qualificationNetProfitPercent: number;
+    activeTinyLiveNetProfitPercent: number;
+    liveNetProfitPercent: number;
+    dispatchReservedMaximumBookAgeMs: number;
+    minimumPolicyReviewSpanMs: number;
+  };
+  observation: {
+    firstObservedAt: number | null;
+    lastObservedAt: number | null;
+    spanMs: number;
+    wallClockSpanMs: number;
+    eventSpanMs: number;
+    idleSinceLastObservationMs: number | null;
+    economicsGenerations: number;
+    profitBands: {
+      discovered: number;
+      qualified: number;
+      liveEligible: number;
+    };
+    dispatchReservedLiveEligibleGenerations: number;
+  };
+  blockerRanking: Array<{
+    rank: number;
+    code: string;
+    count: number;
+    detail: string;
+  }>;
+  routeRanking: Array<{
+    rank: number;
+    routeKey: string;
+    market: string;
+    buyExchange: "binance" | "bybit" | "coindcx";
+    sellExchange: "binance" | "bybit" | "coindcx";
+    current: boolean;
+    lastObservedAt: number;
+    timingReady: boolean;
+    economicsGenerations: number;
+    liveEligibleGenerations: number;
+    qualifiedGenerations: number;
+    discoveredGenerations: number;
+    dispatchReservedLiveEligibleGenerations: number;
+    latestNetProfitPercent: number | null;
+    bestNetProfitPercent: number | null;
+    p95NetProfitPercent: number | null;
+    p50EstimatedFeeImpactPercent: number | null;
+    dominantBlocker: string | null;
+  }>;
+  currentActionTime: {
+    state: StrategyOnePilotPreviewState;
+    selectedRouteKey: string | null;
+    fullyPreflightableMatches: number;
+    categories: Array<{
+      category: StrategyOneTinyLiveAuditCategory;
+      state: "PASS" | "BLOCKED" | "NOT_EVALUATED";
+      reasons: string[];
+    }>;
+    blockers: string[];
+  };
+  safety: {
+    readOnly: true;
+    policyMutationAllowed: false;
+    automaticFundMovementAllowed: false;
+    capitalReserved: false;
+    liveSessionCreated: false;
+    orderSubmissionAllowed: false;
+    orderSubmissionPerformed: false;
+  };
+}
+
+export interface StrategyOneTinyLiveOpportunityAuditResponse {
+  success: true;
+  data: StrategyOneTinyLiveOpportunityAuditReport;
 }

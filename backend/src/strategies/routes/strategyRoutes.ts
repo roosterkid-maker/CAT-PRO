@@ -3,6 +3,8 @@ import {
 } from "express";
 
 import {
+  aclaCapitalLoopManager,
+  aclaShadowLifecycleService,
   centralStrategyExecutionAdmissionService,
   centralPaperExecutionQueueService,
   crossExchangeMarketMakingStrategyController,
@@ -105,8 +107,25 @@ import {
 } from "../services/PersonalStrategyOneBotService";
 
 import {
+  strategyOneTradeFlowReportService,
+} from "../services/StrategyOneTradeFlowReportService";
+
+import {
+  strategyOneTradeIntelligenceService,
+  type TradeIntelligenceWindowId,
+} from "../services/StrategyOneTradeIntelligenceService";
+
+import {
   personalBotRuntimeControlService,
 } from "../services/PersonalBotRuntimeControlService";
+
+import {
+  strategyOneTinyLivePreArmService,
+} from "../../execution/live/tiny-live/StrategyOneTinyLivePreArmService";
+
+import {
+  strategyOneTinyLiveAccountModeLeaseService,
+} from "../../execution/live/tiny-live/StrategyOneTinyLiveAccountModeLeaseService";
 
 import {
   TriangularPaperClosureObservabilityService,
@@ -170,6 +189,9 @@ export function createStrategyRoutes(
     getAdmissions: (now) => centralStrategyExecutionAdmissionService.getDiagnostics(now).recent,
     getIntake: (now) => centralPaperIntakeService.getDiagnostics(now).recent,
     getQueue: (now) => centralPaperExecutionQueueService.getDiagnostics(now).recent,
+    getAclaCapital: (now) => aclaCapitalLoopManager.getReport(now),
+    getAclaLifecycle: (now) => aclaShadowLifecycleService.getReport(now),
+    getAclaPerformance: () => triangularArbitrageStrategyController.getPerformanceSnapshot(),
   });
 
   const spotPerpetualBasisPaperClosure =
@@ -459,10 +481,94 @@ export function createStrategyRoutes(
   );
 
   router.get(
+    "/personal-bot/performance-summary",
+    (_request, response) => {
+      response.setHeader("Cache-Control", "no-store");
+      response.json({
+        success: true,
+        data: personalStrategyOneBotService.getPerformanceSummary(),
+      });
+    },
+  );
+
+  router.get(
     "/personal-bot",
     (_request, response) => {
       response.setHeader("Cache-Control", "no-store");
       response.json({success: true, data: personalStrategyOneBotService.getReport()});
+    },
+  );
+
+  router.get(
+    "/strategy-one/trade-flow",
+    (
+      _request,
+      response,
+    ) => {
+      response.setHeader(
+        "Cache-Control",
+        "no-store",
+      );
+
+      response.json({
+        success:
+          true,
+        data:
+          strategyOneTradeFlowReportService
+            .getReport(),
+      });
+    },
+  );
+
+  router.get(
+    "/strategy-one/trade-intelligence",
+    (
+      request,
+      response,
+    ) => {
+      response.setHeader(
+        "Cache-Control",
+        "private, max-age=15, stale-while-revalidate=15",
+      );
+
+      if (
+        request.query.mode !== undefined &&
+        request.query.mode !== "PAPER"
+      ) {
+        return response.status(422).json({
+          success: false,
+          message:
+            "LIVE Trade Intelligence evidence is unavailable. PAPER and LIVE evidence are never mixed.",
+        });
+      }
+
+      try {
+        const window =
+          typeof request.query.window === "string"
+            ? request.query.window as TradeIntelligenceWindowId
+            : undefined;
+        const startAt =
+          parseOptionalTimestamp(request.query.startAt);
+        const endAt =
+          parseOptionalTimestamp(request.query.endAt);
+
+        return response.json({
+          success: true,
+          data: strategyOneTradeIntelligenceService.getReport({
+            window,
+            startAt,
+            endAt,
+          }),
+        });
+      } catch (error: unknown) {
+        return response.status(400).json({
+          success: false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Trade Intelligence request is invalid.",
+        });
+      }
     },
   );
 
@@ -476,6 +582,24 @@ export function createStrategyRoutes(
           success: false,
           message: "Personal bot control requires a boolean enabled value.",
         });
+      }
+
+      if (request.body.enabled) {
+        const account = tradingAccountService.getAccount();
+        const tinyLive = strategyOneTinyLivePreArmService.getDiagnostics();
+        const accountModeLease =
+          strategyOneTinyLiveAccountModeLeaseService.getDiagnostics();
+
+        if (
+          account.mode !== "PAPER" ||
+          tinyLive.activeArm !== null ||
+          accountModeLease.activeLease !== null
+        ) {
+          return response.status(409).json({
+            success: false,
+            message: "PAPER automation can start only in PAPER account mode with no active Tiny-LIVE arm or lease.",
+          });
+        }
       }
 
       try {
@@ -552,6 +676,30 @@ export function createStrategyRoutes(
   );
 
   return router;
+}
+
+function parseOptionalTimestamp(
+  value: unknown,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    throw new Error(
+      "Trade Intelligence timestamps must be positive epoch-millisecond integers.",
+    );
+  }
+
+  const timestamp = Number(value);
+
+  if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
+    throw new Error(
+      "Trade Intelligence timestamps must be positive epoch-millisecond integers.",
+    );
+  }
+
+  return timestamp;
 }
 
 export default createStrategyRoutes();

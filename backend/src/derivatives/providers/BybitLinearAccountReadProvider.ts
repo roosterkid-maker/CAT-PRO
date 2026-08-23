@@ -66,8 +66,8 @@ implements DerivativeAccountReadProvider {
       new Set(markets.map(symbol).filter(Boolean)),
     ).sort();
 
-    if (normalizedMarkets.length === 0 || normalizedMarkets.length > 10) {
-      throw new Error("Derivative account read requires one to ten bounded markets.");
+    if (normalizedMarkets.length === 0 || normalizedMarkets.length > 20) {
+      throw new Error("Derivative account read requires one to twenty bounded markets.");
     }
 
     const credentials = this.credentialsSource.getCredentials();

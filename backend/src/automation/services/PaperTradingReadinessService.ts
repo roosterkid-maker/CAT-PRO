@@ -102,6 +102,9 @@ export interface PaperTradingReadinessConfig {
 
   minimumCrossExchangeVenues:
     number;
+
+  reportCacheTtlMs:
+    number;
 }
 
 const DEFAULT_CONFIG:
@@ -111,6 +114,9 @@ const DEFAULT_CONFIG:
 
   minimumCrossExchangeVenues:
     2,
+
+  reportCacheTtlMs:
+    2_000,
 };
 
 export class PaperTradingReadinessService {
@@ -119,6 +125,27 @@ export class PaperTradingReadinessService {
 
   private readonly config:
     PaperTradingReadinessConfig;
+
+  private cachedReport:
+    PaperTradingReadinessReport | null =
+    null;
+
+  private cachedAt:
+    number | null =
+    null;
+
+  private inFlightReport:
+    Promise<PaperTradingReadinessReport> | null =
+    null;
+
+  private cacheHits =
+    0;
+
+  private cacheMisses =
+    0;
+
+  private coalescedReads =
+    0;
 
   constructor(
     dependencies:
@@ -206,11 +233,153 @@ export class PaperTradingReadinessService {
         "minimumCrossExchangeVenues must be a safe integer from 2 through 5.",
       );
     }
+
+    if (
+      !Number.isSafeInteger(
+        this.config
+          .reportCacheTtlMs,
+      ) ||
+      this.config
+        .reportCacheTtlMs <
+        0 ||
+      this.config
+        .reportCacheTtlMs >
+        5_000
+    ) {
+      throw new Error(
+        "reportCacheTtlMs must be a safe integer from 0 through 5000.",
+      );
+    }
   }
 
   async getReport(
     now =
       Date.now(),
+  ): Promise<PaperTradingReadinessReport> {
+    if (
+      !Number.isSafeInteger(
+        now,
+      ) ||
+      now <=
+        0
+    ) {
+      throw new Error(
+        "PAPER readiness timestamp must be a positive safe integer.",
+      );
+    }
+
+    if (
+      this.cachedReport !==
+        null &&
+      this.cachedAt !==
+        null &&
+      now >=
+        this.cachedAt &&
+      now -
+        this.cachedAt <
+        this.config
+          .reportCacheTtlMs
+    ) {
+      this.cacheHits +=
+        1;
+
+      return structuredClone({
+        ...this.cachedReport,
+        generatedAt:
+          now,
+      });
+    }
+
+    if (
+      this.inFlightReport !==
+      null
+    ) {
+      this.coalescedReads +=
+        1;
+
+      const report =
+        await this.inFlightReport;
+
+      return structuredClone({
+        ...report,
+        generatedAt:
+          now,
+      });
+    }
+
+    this.cacheMisses +=
+      1;
+    this.inFlightReport =
+      this.buildReport(
+        now,
+      );
+
+    try {
+      const report =
+        await this.inFlightReport;
+
+      this.cachedReport =
+        structuredClone(
+          report,
+        );
+      this.cachedAt =
+        now;
+
+      return structuredClone(
+        report,
+      );
+    } finally {
+      this.inFlightReport =
+        null;
+    }
+  }
+
+  invalidateCache(): void {
+    this.cachedReport =
+      null;
+    this.cachedAt =
+      null;
+  }
+
+  getCacheDiagnostics(): {
+    readonly ttlMs: number;
+    readonly cached: boolean;
+    readonly cachedAt: number | null;
+    readonly inFlight: boolean;
+    readonly hits: number;
+    readonly misses: number;
+    readonly coalescedReads: number;
+    readonly executionAdmissionUsesCache: false;
+    readonly liveAuthorizationUsesCache: false;
+  } {
+    return {
+      ttlMs:
+        this.config
+          .reportCacheTtlMs,
+      cached:
+        this.cachedReport !==
+        null,
+      cachedAt:
+        this.cachedAt,
+      inFlight:
+        this.inFlightReport !==
+        null,
+      hits:
+        this.cacheHits,
+      misses:
+        this.cacheMisses,
+      coalescedReads:
+        this.coalescedReads,
+      executionAdmissionUsesCache:
+        false,
+      liveAuthorizationUsesCache:
+        false,
+    };
+  }
+
+  private async buildReport(
+    now:
+      number,
   ): Promise<PaperTradingReadinessReport> {
     const scheduler =
       this.dependencies
@@ -462,6 +631,26 @@ export class PaperTradingReadinessService {
         shadowReadinessLevel:
           performance.readiness
             .level,
+        shadowQuality: {
+          successRatePercent:
+            performance.summary
+              .successRatePercent,
+          successRateTargetPercent:
+            performance.thresholds
+              .successRatePercent,
+          dataAvailabilityRatePercent:
+            performance.summary
+              .dataAvailabilityRatePercent,
+          dataAvailabilityTargetPercent:
+            performance.thresholds
+              .dataAvailabilityRatePercent,
+          profitRetentionPercent:
+            performance.profitability
+              .averageProfitRetentionPercent,
+          profitRetentionTargetPercent:
+            performance.thresholds
+              .profitRetentionPercent,
+        },
         paperExecutionArmed:
           paperController
             .paperExecutionArmed,

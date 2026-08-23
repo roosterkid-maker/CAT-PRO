@@ -17,7 +17,14 @@ export interface DerivativeMarketEvidence {
   readonly fundingRate: number;
   readonly nextFundingTime: number;
   readonly fundingIntervalMinutes: number;
+  /** Missing funding is explicit and fail-closed; zero is never fabricated. */
+  readonly fundingEvidence?: "EXCHANGE_REPORTED" | "UNAVAILABLE";
   readonly openInterest: number | null;
+  readonly fees?: {
+    readonly makerPercent: number;
+    readonly takerPercent: number;
+    readonly source: "PUBLIC_INSTRUMENT_RULES";
+  };
   readonly rules: {
     readonly priceStep: number;
     readonly quantityStep: number;

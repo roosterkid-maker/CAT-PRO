@@ -71,6 +71,19 @@ class MarketCache {
       Map<string, ExecutableQuote>
     >();
 
+  /*
+   * V115 hot-path admission index. Most five-exchange executable updates
+   * belong to a market currently present on only one venue and therefore
+   * cannot create a cross-exchange opportunity. Keep an O(1) market -> venue
+   * index so the event-driven scanner can suppress that noise without ever
+   * suppressing the second venue that makes a route possible.
+   */
+  private readonly executableMarketsByMarket =
+    new Map<
+      string,
+      Map<string, ExecutableQuote>
+    >();
+
   private readonly executableUpdateListeners =
     new Set<
       MarketCacheExecutableUpdateListener
@@ -306,6 +319,45 @@ class MarketCache {
   }
 
   /**
+   * Read-only traversal for the Strategy #1 scanner. Reuses the cache's
+   * existing market index instead of flattening and regrouping every quote.
+   */
+  executableMarketEntries():
+    IterableIterator<
+      [
+        string,
+        ReadonlyMap<
+          string,
+          ExecutableQuote
+        >,
+      ]
+    > {
+    return this.executableMarketsByMarket
+      .entries();
+  }
+
+  getExecutableExchangeCountForMarket(
+    market:
+      string,
+  ): number {
+    const normalizedMarket =
+      market
+        .trim()
+        .toUpperCase();
+
+    if (!normalizedMarket) {
+      return 0;
+    }
+
+    return this.executableMarketsByMarket
+      .get(
+        normalizedMarket,
+      )
+      ?.size ??
+      0;
+  }
+
+  /**
    * Subscribe to genuine executable-book mutations. Ticker-only traffic is
    * deliberately excluded so downstream hot paths are not awakened by data
    * that cannot create, alter, or invalidate an executable opportunity.
@@ -471,6 +523,7 @@ class MarketCache {
       this.removeIndexedQuote(
         key,
         previousQuote.exchange,
+        previousQuote.market,
       );
     }
 
@@ -510,6 +563,7 @@ class MarketCache {
     this.marketsByExchange.clear();
     this.executableMarkets.clear();
     this.executableMarketsByExchange.clear();
+    this.executableMarketsByMarket.clear();
 
     if (
       hadExecutableQuotes
@@ -615,6 +669,26 @@ class MarketCache {
         quote,
       );
 
+      let executableMarketExchanges =
+        this.executableMarketsByMarket.get(
+          quote.market,
+        );
+
+      if (!executableMarketExchanges) {
+        executableMarketExchanges =
+          new Map();
+
+        this.executableMarketsByMarket.set(
+          quote.market,
+          executableMarketExchanges,
+        );
+      }
+
+      executableMarketExchanges.set(
+        quote.exchange,
+        quote,
+      );
+
       return;
     }
 
@@ -639,6 +713,11 @@ class MarketCache {
         exchange,
       );
     }
+
+    this.removeExecutableMarketIndex(
+      quote.market,
+      quote.exchange,
+    );
   }
 
   private removeIndexedQuote(
@@ -646,6 +725,9 @@ class MarketCache {
       string,
 
     exchange:
+      string,
+
+    market:
       string,
   ): void {
     const exchangeMarkets =
@@ -685,6 +767,37 @@ class MarketCache {
     ) {
       this.executableMarketsByExchange.delete(
         exchange,
+      );
+    }
+
+    this.removeExecutableMarketIndex(
+      market,
+      exchange,
+    );
+  }
+
+  private removeExecutableMarketIndex(
+    market:
+      string,
+
+    exchange:
+      string,
+  ): void {
+    const executableMarketExchanges =
+      this.executableMarketsByMarket.get(
+        market,
+      );
+
+    executableMarketExchanges?.delete(
+      exchange,
+    );
+
+    if (
+      executableMarketExchanges?.size ===
+      0
+    ) {
+      this.executableMarketsByMarket.delete(
+        market,
       );
     }
   }

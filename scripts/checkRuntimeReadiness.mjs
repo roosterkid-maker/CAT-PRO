@@ -45,22 +45,117 @@ function readBaseUrl() {
     process.env
       .CAT_PRO_RUNTIME_URL
       ?.trim() ||
-    "http://127.0.0.1:8080";
+    null;
 
-  const parsed =
-    new URL(value);
+  if (value) {
+    const parsed =
+      new URL(value);
 
-  if (
-    parsed.username ||
-    parsed.password
-  ) {
-    throw new Error(
-      "CAT_PRO_RUNTIME_URL must not contain credentials.",
-    );
+    if (
+      parsed.username ||
+      parsed.password
+    ) {
+      throw new Error(
+        "CAT_PRO_RUNTIME_URL must not contain credentials.",
+      );
+    }
+
+    return parsed;
   }
 
-  return parsed;
+  return null;
 }
+
+async function probeBaseUrlCandidates() {
+  const candidates = [
+    "http://127.0.0.1:8080",
+    "http://127.0.0.1:5000",
+    "http://127.0.0.1:5001",
+    "http://127.0.0.1:8081",
+    process.env.CAT_PRO_RUNTIME_URL?.trim()
+      ? new URL(process.env.CAT_PRO_RUNTIME_URL.trim())
+          .toString()
+          .replace(/\/$/, "")
+      : null,
+  ].filter(
+    (
+      value,
+      index,
+      all,
+    ) =>
+      value !== null &&
+      value.length > 0 &&
+      all.indexOf(value) === index,
+  );
+
+  const errors = [];
+
+  for (const candidate of candidates) {
+    try {
+      const response =
+        await fetch(
+          `${candidate}/api/automation/`,
+          {
+            method:
+              "GET",
+            headers: {
+              accept:
+                "application/json",
+            },
+            signal:
+              AbortSignal.timeout(
+                3_000,
+              ),
+          },
+        );
+
+      if (
+        response.status ===
+          200
+      ) {
+        const parsed =
+          new URL(candidate);
+
+        if (
+          parsed.username ||
+          parsed.password
+        ) {
+          throw new Error(
+            `${candidate}: credentials in URL are not supported.`,
+          );
+        }
+
+        return parsed;
+      }
+    } catch (error) {
+      errors.push(
+        `${candidate}: ${
+          error instanceof Error
+            ? error.message
+            : "unreadable runtime"
+        }`,
+      );
+    }
+  }
+
+  throw new Error(
+    `Unable to detect backend runtime from common local candidates. ${errors.join(
+      "; ",
+    )}`,
+  );
+}
+
+const baseUrlPromise =
+  (async () => {
+    const explicit =
+      readBaseUrl();
+
+    if (explicit) {
+      return explicit;
+    }
+
+    return probeBaseUrlCandidates();
+  })();
 
 async function readData(
   baseUrl,
@@ -122,7 +217,7 @@ async function main() {
   const stage =
     readStage();
   const baseUrl =
-    readBaseUrl();
+    await baseUrlPromise;
 
   const [
     scheduler,

@@ -11,6 +11,7 @@ const INDIA_SPOT_EXCHANGES =
     "coindcx",
     "coinswitch",
     "unocoin",
+    "zebpay",
   ]);
 
 export interface PaperVdaTaxWithholdingInput {

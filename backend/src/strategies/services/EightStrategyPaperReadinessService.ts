@@ -1160,12 +1160,16 @@ function uniqueBy<T>(values: readonly T[], key: (value: T) => string): T[] {
 class DefaultEightStrategyPaperReadinessPort implements EightStrategyPaperReadinessPort {
   getStrategies(now: number): readonly StrategyEvidence[] {
     return strategyReadModelService.getAll(now).strategies.map((item) => {
-      const detail = strategyReadModelService.getById(item.metadata.id, now);
+      const blockerDiagnostics =
+        strategyReadModelService.getBlockerDiagnosticsById(
+          item.metadata.id,
+          now,
+        );
       return {strategyId: item.metadata.id, strategyNumber: item.metadata.strategyNumber,
         displayName: item.metadata.displayName, running: item.runtime.running,
         currentSignals: item.runtime.currentSignalCount, totalSignalsObserved: item.runtime.totalSignalsObserved,
         lastSignalObservedAt: item.runtime.lastSignalObservedAt, lastError: item.runtime.lastError,
-        signalBlockers: detail?.blockerDiagnostics.blockers.slice(0, 5).map((blocker) => blocker.code) ?? []};
+        signalBlockers: blockerDiagnostics?.blockers.slice(0, 5).map((blocker) => blocker.code) ?? []};
     });
   }
   getCentralPaper(now: number) { return centralPaperLifecycleReadModelService.getSnapshot(now); }

@@ -8,6 +8,10 @@ import {
   CoinDCXProtectedRestOrderBookService,
 } from "../CoinDCXProtectedRestOrderBookService";
 
+import {
+  marketRegistry,
+} from "../registry";
+
 async function main(): Promise<void> {
   const stored: OrderBook[] = [];
   const service = new CoinDCXProtectedRestOrderBookService(
@@ -50,8 +54,55 @@ async function main(): Promise<void> {
   assert.equal(service.getDiagnostics().books.length, 2);
   assert.equal(service.getDiagnostics().safety.orderSubmissionAllowed, false);
 
+  marketRegistry.clear();
+  marketRegistry.register({
+    symbol: "COTI-USDT",
+    pair: "KC-COTI_USDT",
+    baseCurrency: "COTI",
+    quoteCurrency: "USDT",
+    minimumQuantity: 1,
+    maximumQuantity: null,
+    minimumPrice: 0.000001,
+    maximumPrice: null,
+    minimumNotional: 0.1,
+    pricePrecision: 6,
+    quantityPrecision: 2,
+    quantityStep: 0.01,
+    orderTypes: ["limit_order"],
+  });
+
+  const exactBooks: OrderBook[] = [];
+  const exactService = new CoinDCXProtectedRestOrderBookService(
+    {
+      fetch: async (pair) => {
+        assert.equal(pair, "KC-COTI_USDT");
+        return {
+          bids: {"0.00982": "1000"},
+          asks: {"0.00983": "1000"},
+        };
+      },
+    },
+    {
+      replace: (book) => {
+        exactBooks.push(structuredClone(book));
+        return {accepted: true, reason: "OK"};
+      },
+    },
+    {refreshIntervalMs: 60_000},
+  );
+
+  const exactResult = await exactService.refreshExactMarket(
+    "COTIUSDT",
+    190,
+  );
+
+  assert.equal(exactResult.accepted, true);
+  assert.equal(exactResult.market, "COTIUSDT");
+  assert.equal(exactBooks[0]?.market, "COTIUSDT");
+  marketRegistry.clear();
+
   console.log("COINDCX PROTECTED REST ORDER-BOOK TEST PASSED.");
-  console.log("Bounded public USDT/INR valuation and BTC/USDT hedge-anchor depth were normalized without authentication, balance mutation, or orders.");
+  console.log("Bounded public USDT/INR valuation, BTC/USDT hedge-anchor depth and punctuation-safe exact COTI identity were normalized without authentication, balance mutation, or orders.");
 }
 
 void main().catch((error: unknown) => {

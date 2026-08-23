@@ -39,6 +39,14 @@ import {
 } from "../../exchanges/unocoin/api/UnoCoinCredentialsProvider";
 
 import {
+  zebPayAccountApi,
+} from "../../exchanges/zebpay/api/ZebPayAccountApi";
+
+import {
+  zebPayCredentialsProvider,
+} from "../../exchanges/zebpay/api/ZebPayCredentialsProvider";
+
+import {
   executionAdapterVerificationService,
 } from "../../execution/live/verification/ExecutionAdapterVerificationService";
 
@@ -52,7 +60,8 @@ export type SupportedBalanceExchange =
   | "bybit"
   | "coindcx"
   | "coinswitch"
-  | "unocoin";
+  | "unocoin"
+  | "zebpay";
 
 export type ExchangeBalanceSynchronizationStatus =
   | "SYNCHRONIZED"
@@ -89,7 +98,48 @@ export interface ExchangeBalanceSynchronizationReport {
     ExchangeBalanceSynchronizationResult[];
 }
 
+export type ExchangeBalanceSynchronizer = (
+  exchange:
+    SupportedBalanceExchange,
+) => Promise<
+  ExchangeBalanceSynchronizationResult
+>;
+
+export interface ExchangeBalanceSynchronizationServiceOptions {
+  maximumExchangeDurationMs?:
+    number;
+
+  synchronizer?:
+    ExchangeBalanceSynchronizer;
+}
+
+const BALANCE_EXCHANGES = [
+  "binance",
+  "bybit",
+  "coindcx",
+  "coinswitch",
+  "unocoin",
+  "zebpay",
+] as const satisfies readonly SupportedBalanceExchange[];
+
+const DEFAULT_MAXIMUM_EXCHANGE_DURATION_MS =
+  12_000;
+
 export class ExchangeBalanceSynchronizationService {
+  private readonly maximumExchangeDurationMs:
+    number;
+
+  private readonly injectedSynchronizer:
+    ExchangeBalanceSynchronizer | null;
+
+  private readonly unresolvedSynchronizations =
+    new Map<
+      SupportedBalanceExchange,
+      Promise<
+        ExchangeBalanceSynchronizationResult
+      >
+    >();
+
   private synchronizationPromise:
     Promise<ExchangeBalanceSynchronizationReport> | null =
     null;
@@ -97,6 +147,31 @@ export class ExchangeBalanceSynchronizationService {
   private lastReport:
     ExchangeBalanceSynchronizationReport | null =
     null;
+
+  constructor(
+    options:
+      ExchangeBalanceSynchronizationServiceOptions = {},
+  ) {
+    this.maximumExchangeDurationMs =
+      options.maximumExchangeDurationMs ??
+      DEFAULT_MAXIMUM_EXCHANGE_DURATION_MS;
+
+    this.injectedSynchronizer =
+      options.synchronizer ??
+      null;
+
+    if (
+      !Number.isSafeInteger(
+        this.maximumExchangeDurationMs,
+      ) ||
+      this.maximumExchangeDurationMs <
+        1
+    ) {
+      throw new Error(
+        "Maximum exchange balance synchronization duration must be a positive safe integer.",
+      );
+    }
+  }
 
   synchronizeAll():
     Promise<ExchangeBalanceSynchronizationReport> {
@@ -120,6 +195,26 @@ export class ExchangeBalanceSynchronizationService {
     exchange:
       SupportedBalanceExchange,
   ): Promise<ExchangeBalanceSynchronizationResult> {
+    return this.synchronizeExchangeBounded(
+      exchange,
+    );
+  }
+
+  getUnresolvedExchanges():
+    readonly SupportedBalanceExchange[] {
+    return BALANCE_EXCHANGES.filter(
+      (exchange) =>
+        this.unresolvedSynchronizations
+          .has(
+            exchange,
+          ),
+    );
+  }
+
+  private async synchronizeExchangeUnbounded(
+    exchange:
+      SupportedBalanceExchange,
+  ): Promise<ExchangeBalanceSynchronizationResult> {
     switch (exchange) {
       case "binance":
         return this.synchronizeBinance();
@@ -135,6 +230,9 @@ export class ExchangeBalanceSynchronizationService {
 
       case "unocoin":
         return this.synchronizeUnoCoin();
+
+      case "zebpay":
+        return this.synchronizeZebPay();
 
       default:
         return this.assertNever(
@@ -166,13 +264,14 @@ export class ExchangeBalanceSynchronizationService {
       Date.now();
 
     const results =
-      await Promise.all([
-        this.synchronizeBinance(),
-        this.synchronizeBybit(),
-        this.synchronizeCoinDCX(),
-        this.synchronizeCoinSwitch(),
-        this.synchronizeUnoCoin(),
-      ]);
+      await Promise.all(
+        BALANCE_EXCHANGES.map(
+          (exchange) =>
+            this.synchronizeExchange(
+              exchange,
+            ),
+        ),
+      );
 
     const completedAt =
       Date.now();
@@ -224,6 +323,173 @@ export class ExchangeBalanceSynchronizationService {
       );
 
     return report;
+  }
+
+  private synchronizeExchangeBounded(
+    exchange:
+      SupportedBalanceExchange,
+  ): Promise<ExchangeBalanceSynchronizationResult> {
+    if (
+      this.unresolvedSynchronizations
+        .has(
+          exchange,
+        )
+    ) {
+      return Promise.resolve(
+        this.createIsolationFailure(
+          exchange,
+          `${this.displayName(exchange)} balance synchronization request is still unresolved; a duplicate authenticated read was not started.`,
+        ),
+      );
+    }
+
+    let synchronization:
+      Promise<
+        ExchangeBalanceSynchronizationResult
+      >;
+
+    try {
+      synchronization =
+        this.injectedSynchronizer
+          ? this.injectedSynchronizer(
+              exchange,
+            )
+          : this.synchronizeExchangeUnbounded(
+              exchange,
+            );
+    } catch (
+      error: unknown
+    ) {
+      return Promise.resolve(
+        this.createIsolationFailure(
+          exchange,
+          this.getErrorMessage(
+            error,
+            `${this.displayName(exchange)} balance synchronization failed before the authenticated read started.`,
+          ),
+        ),
+      );
+    }
+
+    this.unresolvedSynchronizations
+      .set(
+        exchange,
+        synchronization,
+      );
+
+    const release =
+      () => {
+        if (
+          this.unresolvedSynchronizations
+            .get(
+              exchange,
+            ) ===
+          synchronization
+        ) {
+          this.unresolvedSynchronizations
+            .delete(
+              exchange,
+            );
+        }
+      };
+
+    void synchronization.then(
+      release,
+      release,
+    );
+
+    return new Promise(
+      (resolve) => {
+        const timeout =
+          setTimeout(
+            () => {
+              resolve(
+                this.createIsolationFailure(
+                  exchange,
+                  `${this.displayName(exchange)} balance synchronization exceeded ${this.maximumExchangeDurationMs} ms; last-known balances remain retained.`,
+                ),
+              );
+            },
+            this.maximumExchangeDurationMs,
+          );
+
+        synchronization.then(
+          (result) => {
+            clearTimeout(
+              timeout,
+            );
+
+            resolve(
+              result,
+            );
+          },
+          (error: unknown) => {
+            clearTimeout(
+              timeout,
+            );
+
+            resolve(
+              this.createIsolationFailure(
+                exchange,
+                this.getErrorMessage(
+                  error,
+                  `${this.displayName(exchange)} balance synchronization failed unexpectedly.`,
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  private createIsolationFailure(
+    exchange:
+      SupportedBalanceExchange,
+    reason: string,
+  ): ExchangeBalanceSynchronizationResult {
+    return {
+      exchange,
+      status:
+        "FAILED",
+      synchronizedAt:
+        null,
+      synchronizedBalances:
+        0,
+      reasons: [
+        reason,
+      ],
+    };
+  }
+
+  private displayName(
+    exchange:
+      SupportedBalanceExchange,
+  ): string {
+    switch (exchange) {
+      case "binance":
+        return "Binance";
+
+      case "bybit":
+        return "Bybit";
+
+      case "coindcx":
+        return "CoinDCX";
+
+      case "coinswitch":
+        return "CoinSwitch";
+
+      case "unocoin":
+        return "UnoCoin";
+
+      case "zebpay":
+        return "ZebPay";
+
+      default:
+        return this.assertNever(
+          exchange,
+        );
+    }
   }
 
   private async synchronizeBinance():
@@ -896,6 +1162,115 @@ export class ExchangeBalanceSynchronizationService {
           this.getErrorMessage(
             error,
             "UnoCoin wallet balance synchronization failed.",
+          ),
+        ],
+      };
+    }
+  }
+
+  private async synchronizeZebPay():
+    Promise<ExchangeBalanceSynchronizationResult> {
+    const exchange:
+      SupportedBalanceExchange =
+      "zebpay";
+
+    if (
+      !zebPayCredentialsProvider
+        .isConfigured()
+    ) {
+      executionAdapterVerificationService
+        .recordNotConfigured(
+          exchange,
+        );
+      tradingAccountService
+        .removeExchangeBalances(
+          exchange,
+        );
+
+      return {
+        exchange,
+        status:
+          "NOT_CONFIGURED",
+        synchronizedAt:
+          null,
+        synchronizedBalances:
+          0,
+        reasons: [
+          "ZebPay API credentials are not configured.",
+        ],
+      };
+    }
+
+    try {
+      const balances =
+        await zebPayAccountApi
+          .getBalances(
+            zebPayCredentialsProvider
+              .getCredentials(),
+          );
+      const synchronizedAt =
+        Date.now();
+
+      executionAdapterVerificationService
+        .recordSuccess(
+          exchange,
+          "SIGNED_BALANCE_READ",
+          synchronizedAt,
+        );
+
+      const snapshots:
+        ExchangeBalanceSnapshot[] =
+        balances.map(
+          (balance) => ({
+            exchange,
+            asset:
+              balance.asset,
+            availableBalance:
+              balance.availableBalance,
+            lockedBalance:
+              balance.lockedBalance,
+            totalBalance:
+              balance.totalBalance,
+            synchronizedAt,
+          }),
+        );
+
+      this.replaceExchangeBalances(
+        exchange,
+        snapshots,
+      );
+
+      return {
+        exchange,
+        status:
+          "SYNCHRONIZED",
+        synchronizedAt,
+        synchronizedBalances:
+          snapshots.length,
+        reasons: [
+          `Synchronized ${snapshots.length} ZebPay wallet balances in native asset units.`,
+        ],
+      };
+    } catch (error: unknown) {
+      executionAdapterVerificationService
+        .recordFailure(
+          exchange,
+          "SIGNED_BALANCE_READ",
+          error,
+        );
+
+      return {
+        exchange,
+        status:
+          "FAILED",
+        synchronizedAt:
+          null,
+        synchronizedBalances:
+          0,
+        reasons: [
+          this.getErrorMessage(
+            error,
+            "ZebPay wallet balance synchronization failed.",
           ),
         ],
       };

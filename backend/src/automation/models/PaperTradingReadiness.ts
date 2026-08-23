@@ -78,6 +78,15 @@ export interface PaperTradingReadinessReport {
 
     shadowReadinessLevel: string;
 
+    shadowQuality: {
+      successRatePercent: number;
+      successRateTargetPercent: number;
+      dataAvailabilityRatePercent: number;
+      dataAvailabilityTargetPercent: number;
+      profitRetentionPercent: number;
+      profitRetentionTargetPercent: number;
+    };
+
     paperExecutionArmed: boolean;
 
     controllerPaperExecutionAllowed: boolean;

@@ -355,8 +355,8 @@ export class FundingRateArbitrageEconomicsEngine {
       return this.blocked(first, second, blockers, differential);
     }
 
-    const longFill = vwapCalculator.calculate([...longDepth.asks], quantity);
-    const shortFill = vwapCalculator.calculate([...shortDepth.bids], quantity);
+    const longFill = vwapCalculator.calculate(longDepth.asks, quantity);
+    const shortFill = vwapCalculator.calculate(shortDepth.bids, quantity);
     if (
       longFill.partialFill || shortFill.partialFill ||
       longFill.filledQuantity < quantity || shortFill.filledQuantity < quantity ||

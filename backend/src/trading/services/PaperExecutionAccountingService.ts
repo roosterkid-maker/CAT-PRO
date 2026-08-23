@@ -37,6 +37,8 @@ export interface PaperExecutionAccountingReceipt {
 
   accountProfitApplied: boolean;
 
+  accountTdsWithheld: number;
+
   replaySafe: true;
 
   liveOrderSubmissionAllowed: false;
@@ -68,6 +70,16 @@ export interface PaperExecutionAccountingDiagnostics {
   replayedExecutions: number;
 
   replayFailures: number;
+
+  paperTdsReceivable: number;
+
+  historicalTdsReconciliation: {
+    totalPersistedWithholding: number;
+
+    accountReceivable: number;
+
+    missingLockApplied: number;
+  } | null;
 
   duplicatePnlProtectionActive: true;
 
@@ -117,6 +129,10 @@ export class PaperExecutionAccountingService {
   private replayFailures =
     0;
 
+  private historicalTdsReconciliation:
+    PaperExecutionAccountingDiagnostics["historicalTdsReconciliation"] =
+    null;
+
   constructor(
     private readonly journal:
       PaperExecutionJournalService =
@@ -142,6 +158,8 @@ export class PaperExecutionAccountingService {
     ) {
       this.startupReplay =
         this.replayPending();
+
+      this.reconcileHistoricalTds();
     }
   }
 
@@ -276,6 +294,19 @@ export class PaperExecutionAccountingService {
       replayFailures:
         this.replayFailures,
 
+      paperTdsReceivable:
+        this.account
+          .getAccount()
+          .paperTdsReceivable ??
+        0,
+
+      historicalTdsReconciliation:
+        this.historicalTdsReconciliation
+          ? structuredClone(
+              this.historicalTdsReconciliation,
+            )
+          : null,
+
       duplicatePnlProtectionActive:
         true,
 
@@ -349,9 +380,13 @@ export class PaperExecutionAccountingService {
 
           () =>
             this.account
-              .recordProfit(
+              .recordPaperSettlementEconomics(
                 record.result
                   .netProfit,
+
+                record.result
+                  .tdsWithheld ??
+                  0,
               ),
         );
     }
@@ -381,11 +416,70 @@ export class PaperExecutionAccountingService {
 
       accountProfitApplied,
 
+      accountTdsWithheld:
+        accountProfitApplied
+          ? record.result
+              .tdsWithheld ??
+            0
+          : 0,
+
       replaySafe:
         true,
 
       liveOrderSubmissionAllowed:
         false,
+    };
+  }
+
+  private reconcileHistoricalTds():
+    void {
+    const totalPersistedWithholding =
+      this.paperTrades
+        .getTrades()
+        .reduce(
+          (
+            total,
+            trade,
+          ) =>
+            total +
+            (
+              trade.status ===
+                "closed" &&
+              trade.actualProfit !==
+                null
+                ? trade.tdsWithheld ??
+                  0
+                : 0
+            ),
+          0,
+        );
+
+    const before =
+      this.account
+        .getAccount()
+        .paperTdsReceivable ??
+      0;
+
+    const reconciled =
+      this.account
+        .reconcilePaperTdsReceivable(
+          totalPersistedWithholding,
+        );
+
+    const accountReceivable =
+      reconciled
+        .paperTdsReceivable ??
+      0;
+
+    this.historicalTdsReconciliation = {
+      totalPersistedWithholding,
+      accountReceivable,
+      missingLockApplied:
+        Math.max(
+          0,
+          accountReceivable -
+            before,
+        ),
     };
   }
 }

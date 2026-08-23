@@ -60,13 +60,22 @@ export class DynamicOpportunityDiscoveryRunnerService {
   }
 
   refresh(now = Date.now()): DynamicOpportunityDiscoverySnapshot {
-    const snapshot = this.service.getSnapshot(now);
+    /*
+     * Discovery snapshots can contain thousands of books and paths. They are
+     * already a read-only contract, so clone and freeze exactly once before
+     * publishing. Re-cloning the same large graph for every listener and
+     * getLatestSnapshot() call created synchronous event-loop stalls that
+     * delayed the latency-critical Strategy #1 market-update path.
+     */
+    const snapshot = immutableClone(
+      this.service.getSnapshot(now),
+    );
 
-    this.latestSnapshot = immutableClone(snapshot);
+    this.latestSnapshot = snapshot;
 
     for (const listener of this.listeners) {
       try {
-        listener(immutableClone(snapshot));
+        listener(snapshot);
       } catch (error: unknown) {
         console.error(
           "[DynamicOpportunityDiscoveryRunner] Snapshot listener failed:",
@@ -75,13 +84,11 @@ export class DynamicOpportunityDiscoveryRunnerService {
       }
     }
 
-    return immutableClone(snapshot);
+    return snapshot;
   }
 
   getLatestSnapshot(): DynamicOpportunityDiscoverySnapshot | null {
-    return this.latestSnapshot
-      ? immutableClone(this.latestSnapshot)
-      : null;
+    return this.latestSnapshot;
   }
 
   subscribe(

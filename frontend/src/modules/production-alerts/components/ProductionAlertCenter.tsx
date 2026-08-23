@@ -16,6 +16,7 @@ import {
   useAcknowledgeProductionAlert,
   useProductionAlertHistory,
   useProductionAlerts,
+  useResolveInactiveProductionAlerts,
   useResolveProductionAlert,
 } from "../hooks/useProductionAlerts";
 
@@ -42,6 +43,9 @@ export default function ProductionAlertCenter() {
 
   const resolveMutation =
     useResolveProductionAlert();
+
+  const resolveInactiveMutation =
+    useResolveInactiveProductionAlerts();
 
   const [
     filter,
@@ -205,15 +209,23 @@ export default function ProductionAlertCenter() {
 
   const refreshAll =
     async () => {
-      await Promise.all([
+    await Promise.all([
         currentQuery.refetch(),
         historyQuery.refetch(),
       ]);
     };
 
+  const resolveAllInactiveCritical = () =>
+    resolveInactiveMutation.mutate({
+      resolutionNote:
+        "Resolved after manual verification: condition is inactive in current evidence set.",
+      onlyCritical: true,
+    });
+
   const mutationError =
     acknowledgeMutation.error ??
-    resolveMutation.error;
+    resolveMutation.error ??
+    resolveInactiveMutation.error;
 
   return (
     <div className="space-y-6">
@@ -386,6 +398,29 @@ export default function ProductionAlertCenter() {
                   : "OPEN"
               }
             />
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-text-muted">
+              {readyForResolution.length} inactive blocking CRITICAL alert(s) currently eligible for explicit bulk resolution.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                resolveAllInactiveCritical();
+              }}
+              disabled={
+                resolveInactiveMutation.isPending ||
+                readyForResolution.length ===
+                0
+              }
+              className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs font-semibold text-warning disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resolveInactiveMutation.isPending
+                ? "Resolving..."
+                : "Resolve all inactive CRITICAL alerts"}
+            </button>
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-3">

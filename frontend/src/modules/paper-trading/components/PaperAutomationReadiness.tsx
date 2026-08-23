@@ -223,6 +223,26 @@ export function PaperAutomationReadiness() {
             />
           </div>
 
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <QualityMetric
+              label="Shadow success"
+              value={summary.shadowQuality.successRatePercent}
+              target={summary.shadowQuality.successRateTargetPercent}
+            />
+
+            <QualityMetric
+              label="Data availability"
+              value={summary.shadowQuality.dataAvailabilityRatePercent}
+              target={summary.shadowQuality.dataAvailabilityTargetPercent}
+            />
+
+            <QualityMetric
+              label="Profit retention"
+              value={summary.shadowQuality.profitRetentionPercent}
+              target={summary.shadowQuality.profitRetentionTargetPercent}
+            />
+          </div>
+
           <div className="mt-4 rounded-lg border border-border-default bg-panel-light p-4">
             <div className="flex items-center justify-between gap-4 text-xs">
               <span className="font-semibold text-text-primary">
@@ -343,6 +363,58 @@ export function PaperAutomationReadiness() {
       </div>
     </section>
   );
+}
+
+function QualityMetric({
+  label,
+  value,
+  target,
+}: {
+  label: string;
+  value: number;
+  target: number;
+}) {
+  const passed = value >= target;
+  const boundedProgress = target > 0
+    ? Math.max(0, Math.min(100, value / target * 100))
+    : 0;
+
+  return (
+    <div className={`rounded-lg border p-3 ${
+      passed
+        ? "border-success/25 bg-success/10"
+        : "border-warning/25 bg-warning/10"
+    }`}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.13em] text-text-muted">
+          {label}
+        </p>
+
+        <span className={`font-mono text-[10px] font-bold ${passed ? "text-success" : "text-warning"}`}>
+          {passed ? "PASS" : "BELOW TARGET"}
+        </span>
+      </div>
+
+      <p className="mt-2 font-mono text-sm font-bold text-text-primary">
+        {formatPercent(value)}
+        <span className="ml-1.5 text-xs font-normal text-text-muted">
+          / {formatPercent(target)}
+        </span>
+      </p>
+
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-background">
+        <div
+          className={`h-full rounded-full ${passed ? "bg-success" : "bg-warning"}`}
+          style={{width: `${boundedProgress}%`}}
+        />
+      </div>
+    </div>
+  );
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  return `${value.toFixed(2)}%`;
 }
 
 function ReadinessMetric({

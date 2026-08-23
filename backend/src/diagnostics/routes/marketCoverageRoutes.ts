@@ -18,6 +18,10 @@ import {
   marketCache,
 } from "../../services/cache.service";
 
+import {
+  websocketManager,
+} from "../../websocket/manager";
+
 const router =
   Router();
 
@@ -73,6 +77,10 @@ router.get(
           ...report,
 
           strategyOneCoverageFunnel,
+
+          zebPayObservation:
+            websocketManager
+              .getZebPayObservationDiagnostics(),
 
           strategyOnePairDiscovery: {
             route:

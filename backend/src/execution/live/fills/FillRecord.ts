@@ -2,6 +2,10 @@ import type {
   LiveExecutionStatus,
 } from "../models/LiveExecutionResult";
 
+import type {
+  ExecutionPolicyIdentity,
+} from "../../../trading/models/ExecutionPlan";
+
 export interface FillSlice {
   id: string;
 
@@ -34,6 +38,9 @@ export interface OrderFillSummary {
   orderLifecycleId: string;
 
   sessionId: string;
+
+  policyIdentity?:
+    ExecutionPolicyIdentity;
 
   leg:
     | "BUY"

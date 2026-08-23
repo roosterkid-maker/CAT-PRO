@@ -19,6 +19,14 @@ import {
 } from "../exchanges/unocoin/UnoCoinAdapter";
 
 import {
+  ZebPayObservationAdapter,
+} from "../exchanges/zebpay/ZebPayObservationAdapter";
+
+import {
+  canonicalizeZebPayMarket,
+} from "../exchanges/zebpay/normalize";
+
+import {
   CoinDCXOrderBookAdapter,
 } from "../exchanges/coindcx/CoinDCXOrderBookAdapter";
 
@@ -47,9 +55,18 @@ import {
 } from "../exchanges/core/ExchangeManager";
 
 import {
+  rankAdaptiveExecutableCoverageMarkets,
   rankPriceAlignedSharedMarkets,
   selectRotatingDiscoveryWindow,
 } from "../exchanges/core/PriceAlignedMarketRanking";
+
+import {
+  getExchangeFeeEvidence,
+} from "../arbitrage/config/fees";
+
+import {
+  exchangeCapabilityService,
+} from "../execution/capabilities/services/ExchangeCapabilityService";
 
 import {
   UNOCOIN,
@@ -97,6 +114,9 @@ export interface DynamicCoverageRecoveryMetrics {
   coinSwitchRefreshes:
     number;
 
+  zebPayRefreshes:
+    number;
+
   coinDCXRefreshes:
     number;
 
@@ -112,10 +132,16 @@ export interface DynamicCoverageRecoveryMetrics {
   lastCoinSwitchCandidateCount:
     number;
 
+  lastZebPayCandidateCount:
+    number;
+
   lastUnoCoinCandidateCount:
     number;
 
   lastCoinSwitchSubscribedMarkets:
+    number;
+
+  lastZebPaySubscribedMarkets:
     number;
 
   lastCoinDCXSubscribedMarkets:
@@ -210,11 +236,17 @@ class WebSocketManager {
   private lastUnoCoinCandidateSignature =
     "";
 
+  private lastZebPayCandidateSignature =
+    "";
+
   private unoCoinCoinDCXPriorityMarkets:
     readonly string[] =
     [];
 
   private unoCoinExplorationCursor =
+    0;
+
+  private coinSwitchExplorationCursor =
     0;
 
   private readonly coinDCXOrderBook =
@@ -225,6 +257,10 @@ class WebSocketManager {
 
   private readonly coinSwitchMarketData =
     new CoinSwitchAdapter();
+
+  /* V162: discovery remains broad; only bounded shared markets get depth. */
+  private readonly zebPayObservation =
+    new ZebPayObservationAdapter();
 
   private readonly coinDCXDemandSubscriptions =
     new CoinDCXDemandSubscriptionService(
@@ -279,6 +315,9 @@ class WebSocketManager {
     coinSwitchRefreshes:
       0,
 
+    zebPayRefreshes:
+      0,
+
     coinDCXRefreshes:
       0,
 
@@ -294,10 +333,16 @@ class WebSocketManager {
     lastCoinSwitchCandidateCount:
       0,
 
+    lastZebPayCandidateCount:
+      0,
+
     lastUnoCoinCandidateCount:
       0,
 
     lastCoinSwitchSubscribedMarkets:
+      0,
+
+    lastZebPaySubscribedMarkets:
       0,
 
     lastCoinDCXSubscribedMarkets:
@@ -357,8 +402,32 @@ class WebSocketManager {
         this.coinSwitchMarketData,
       );
 
+      exchangeManager.register(
+        this.zebPayObservation,
+      );
+
       await exchangeManager
         .connectAll();
+
+      try {
+        await exchangeCapabilityService
+          .synchronizeExchange(
+            "zebpay",
+            {
+              product:
+                "spot",
+              forceRefresh:
+                true,
+            },
+          );
+      } catch (error: unknown) {
+        console.error(
+          "[ZebPay Rules] Initial capability synchronization failed; ZebPay PAPER routes remain fail-closed:",
+          error instanceof Error
+            ? error.message
+            : error,
+        );
+      }
 
       console.log(
         `[Manager] Waiting ${WebSocketManager.ORDER_BOOK_WARMUP_MS}ms for cross-exchange market discovery...`,
@@ -380,6 +449,10 @@ class WebSocketManager {
       );
 
       await this.subscribeCoinSwitchSharedMarkets(
+        true,
+      );
+
+      await this.subscribeZebPaySharedMarkets(
         true,
       );
 
@@ -511,8 +584,17 @@ class WebSocketManager {
       this.lastUnoCoinCandidateSignature =
         "";
 
+      this.lastZebPayCandidateSignature =
+        "";
+
       this.unoCoinCoinDCXPriorityMarkets =
         [];
+
+      this.unoCoinExplorationCursor =
+        0;
+
+      this.coinSwitchExplorationCursor =
+        0;
 
       this.dynamicCoverageRefreshInProgress =
         false;
@@ -569,6 +651,12 @@ class WebSocketManager {
     return {
       ...this.dynamicCoverageMetrics,
     };
+  }
+
+  /** V162 read-only operational proof for the staged ZebPay PAPER lane. */
+  getZebPayObservationDiagnostics() {
+    return this.zebPayObservation
+      .getDiagnostics();
   }
 
   private async bootstrapCoinDCXMarkets():
@@ -828,21 +916,9 @@ class WebSocketManager {
       sharedMarketCandidates.length;
 
     const requestedMarkets =
-      this.uniqueMarketsInOrder([
-        ...this.coinSwitchMarketData
-          .getPriorityMarkets(),
-
-        /*
-         * Preserve a fresh full-depth stream before considering replacements.
-         * Previously a transient change in another exchange's executable set
-         * reordered the top-N list every 15 seconds, causing unnecessary
-         * CoinSwitch leave/join churn and short coverage gaps.
-         */
-        ...this.coinSwitchMarketData
-          .getFreshSubscribedMarkets(),
-
-        ...sharedMarketCandidates,
-      ]);
+      this.buildCoinSwitchAdaptiveWindow(
+        sharedMarketCandidates,
+      );
 
     const signature =
       this.buildMarketSignature(
@@ -887,6 +963,155 @@ class WebSocketManager {
     );
 
     return true;
+  }
+
+  /*
+   * V162 / V163 ZebPay extension lane. Discovery prices rank candidates,
+   * while the adapter itself requires genuine quantity-bearing public depth.
+   */
+  private async subscribeZebPaySharedMarkets(
+    force: boolean,
+  ): Promise<boolean> {
+    if (
+      !this.zebPayObservation
+        .isConnected()
+    ) {
+      return false;
+    }
+
+    const availableMarkets =
+      new Set(
+        this.zebPayObservation
+          .getAvailableMarkets(),
+      );
+
+    /*
+     * Rank globally, then consume ZebPay's bounded slots only with markets
+     * the venue actually exposes. Capping before this intersection allowed
+     * unsupported peer symbols to crowd genuine ZebPay INR books out.
+     */
+    const candidates =
+      this.buildExecutableCrossExchangeCandidates(
+        this.zebPayObservation
+          .name,
+      ).filter(
+        (market) =>
+          availableMarkets.has(
+            canonicalizeZebPayMarket(
+              market,
+            ),
+          ),
+      ).slice(
+        0,
+        this.zebPayObservation
+          .getMaximumSubscribedMarkets(),
+      );
+
+    this.dynamicCoverageMetrics
+      .lastZebPayCandidateCount =
+      candidates.length;
+
+    const signature =
+      this.buildMarketSignature(
+        candidates,
+      );
+
+    if (
+      !force &&
+      signature ===
+        this.lastZebPayCandidateSignature
+    ) {
+      this.dynamicCoverageMetrics
+        .skippedCycles +=
+        1;
+      return false;
+    }
+
+    await this.zebPayObservation
+      .subscribe(
+        candidates,
+      );
+
+    this.lastZebPayCandidateSignature =
+      signature;
+    this.dynamicCoverageMetrics
+      .zebPayRefreshes +=
+      1;
+    this.dynamicCoverageMetrics
+      .lastZebPaySubscribedMarkets =
+      this.zebPayObservation
+        .getDiagnostics()
+        .requestedMarkets;
+
+    return true;
+  }
+
+  /**
+   * Keep the strongest evidence continuously subscribed while rotating only
+   * four scarce slots through the next-best candidates. The target adapter
+   * still validates availability and requires genuine full-depth snapshots;
+   * this method changes subscription order only.
+   */
+  private buildCoinSwitchAdaptiveWindow(
+    adaptiveCandidates:
+      readonly string[],
+  ): string[] {
+    const activeLimit =
+      this.coinSwitchMarketData
+        .getMaximumSubscribedMarkets();
+
+    const explorationSlots =
+      Math.min(
+        4,
+        Math.max(
+          1,
+          activeLimit -
+            1,
+        ),
+      );
+
+    const rankedMarkets =
+      this.uniqueMarketsInOrder([
+        ...this.coinSwitchMarketData
+          .getPriorityMarkets(),
+
+        ...adaptiveCandidates,
+
+        /*
+         * A fresh existing stream remains a fallback candidate. It is not
+         * permanently pinned ahead of stronger fee-aware evidence, because
+         * that old behaviour prevented coverage from adapting at all.
+         */
+        ...this.coinSwitchMarketData
+          .getFreshSubscribedMarkets(),
+      ]);
+
+    const discoveryWindow =
+      selectRotatingDiscoveryWindow(
+        rankedMarkets,
+        activeLimit,
+        this.coinSwitchExplorationCursor,
+        explorationSlots,
+        48,
+      );
+
+    this.coinSwitchExplorationCursor =
+      discoveryWindow.nextCursor;
+
+    const requestedMarkets =
+      discoveryWindow
+        .prioritizedMarkets
+        .slice(
+          0,
+          activeLimit +
+            64,
+        );
+
+    console.log(
+      `[CoinSwitch Coverage] stable=${discoveryWindow.stableMarkets.length} | rotating=${discoveryWindow.explorationMarkets.join(",") || "NONE"} | ranked=${rankedMarkets.length}`,
+    );
+
+    return requestedMarkets;
   }
 
   /*
@@ -1020,6 +1245,10 @@ class WebSocketManager {
         false,
       );
 
+      await this.subscribeZebPaySharedMarkets(
+        false,
+      );
+
       if (
         await this.coinDCXOrderBook
           .refreshSharedMarketSubscriptions()
@@ -1052,6 +1281,12 @@ class WebSocketManager {
           .subscribedMarkets;
 
       this.dynamicCoverageMetrics
+        .lastZebPaySubscribedMarkets =
+        this.zebPayObservation
+          .getDiagnostics()
+          .requestedMarkets;
+
+      this.dynamicCoverageMetrics
         .lastCoinDCXSubscribedMarkets =
         this.coinDCXOrderBook
           .getDiagnostics()
@@ -1081,78 +1316,44 @@ class WebSocketManager {
         .trim()
         .toLowerCase();
 
-    const supportByMarket =
-      new Map<
-        string,
-        Set<string>
-      >();
-
-    for (
-      const quote
-      of marketCache.getExecutable()
-    ) {
-      const exchange =
-        quote.exchange
-          .trim()
-          .toLowerCase();
-
-      if (
-        exchange ===
-        normalizedTargetExchange
-      ) {
-        continue;
-      }
-
-      const market =
-        quote.market
-          .trim()
-          .toUpperCase();
-
-      if (!market) {
-        continue;
-      }
-
-      const exchanges =
-        supportByMarket.get(
-          market,
-        ) ??
-        new Set<string>();
-
-      exchanges.add(
-        exchange,
-      );
-
-      supportByMarket.set(
-        market,
-        exchanges,
-      );
-    }
-
     /*
-     * Spend bounded subscription capacity on the markets with the strongest
-     * current cross-exchange support. Alphabetical truncation previously
-     * crowded out highly pairable markets even though their genuine depth was
-     * already available elsewhere.
+     * Spend bounded subscription capacity on current fee-aware edge,
+     * quantity-bearing route notional and cross-exchange support. Indicative
+     * target tickers are discovery-only and never enter MarketCache as
+     * executable evidence through this path.
      */
-    const executableCandidates = [
-      ...supportByMarket.entries(),
-    ]
-      .sort(
-        (
-          first,
-          second,
-        ) =>
-          second[1].size -
-            first[1].size ||
-          first[0].localeCompare(
-            second[0],
-          ),
-      )
-      .map(
-        ([
-          market,
-        ]) =>
-          market,
+    const executableCandidates =
+      rankAdaptiveExecutableCoverageMarkets(
+        marketCache.getExecutable(),
+        {
+          targetExchange:
+            normalizedTargetExchange,
+
+          targetDiscoveryQuotes:
+            marketCache.getByExchange(
+              normalizedTargetExchange,
+            ),
+
+          maximumExecutableAgeMs:
+            10_000,
+
+          maximumDiscoveryAgeMs:
+            120_000,
+
+          resolveTakerFeePercent:
+            (
+              exchange,
+              market,
+            ) =>
+              getExchangeFeeEvidence(
+                exchange,
+                market,
+              )?.takerPercent ??
+              null,
+        },
+      ).map(
+        (candidate) =>
+          candidate.market,
       );
 
     if (

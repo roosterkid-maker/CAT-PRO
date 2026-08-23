@@ -244,6 +244,51 @@ async function main():
       "UnoCoin verification must perform one GET and no order, withdrawal, or state-changing request.",
     );
 
+    const hangingClient =
+      new UnoCoinReadOnlyHttpClient({
+        fetchImplementation:
+          () =>
+            new Promise<Response>(
+              () =>
+                undefined,
+            ),
+        requestTimeoutMs:
+          20,
+      });
+
+    const timeoutStartedAt =
+      Date.now();
+
+    let timeoutMessage =
+      "";
+
+    try {
+      await hangingClient
+        .verifyAccountStatus({
+          apiToken:
+            syntheticToken,
+        });
+    } catch (
+      error: unknown
+    ) {
+      timeoutMessage =
+        error instanceof Error
+          ? error.message
+          : String(
+              error,
+            );
+    }
+
+    assertCondition(
+      timeoutMessage.includes(
+        "exceeded 20 ms",
+      ) &&
+        Date.now() -
+          timeoutStartedAt <
+          500,
+      "A fetch implementation that ignores AbortSignal must still settle at the authenticated-read hard deadline.",
+    );
+
     console.log(
       "UNOCOIN AUTHENTICATED READ VERIFICATION TEST PASSED.",
     );

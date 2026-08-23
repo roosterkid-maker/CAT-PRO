@@ -261,6 +261,12 @@ export default function OperatorSettingsDashboard() {
         <PaperDataResetCard />
       </section>
 
+      <StrategyOnePolicyCard
+        policy={
+          report.strategyOnePolicy
+        }
+      />
+
       <section className="grid gap-4 xl:grid-cols-2">
         <SettingsCard
           icon={
@@ -375,8 +381,12 @@ export default function OperatorSettingsDashboard() {
           icon={
             <SlidersHorizontal className="size-5 text-brand" />
           }
-          title="Opportunity & Execution Policy"
+          title="Discovery & Legacy Defaults"
         >
+          <p className="mb-4 rounded-lg border border-warning/25 bg-warning/5 px-3 py-2 text-xs leading-5 text-text-muted">
+            Visibility and legacy defaults only. These values do not authorize a LIVE order; the versioned Strategy #1 policy above owns execution lineage.
+          </p>
+
           <SettingsGrid
             items={[
               [
@@ -875,6 +885,172 @@ export default function OperatorSettingsDashboard() {
         </div>
       </section>
     </PageShell>
+  );
+}
+
+function StrategyOnePolicyCard({
+  policy,
+}: {
+  policy:
+    OperatorSettingsReport["strategyOnePolicy"];
+}) {
+  const active =
+    policy.active;
+
+  const values =
+    active.values;
+
+  const shortHash =
+    active.policyHash.slice(
+      0,
+      12,
+    );
+
+  const stages = [
+    {
+      name: "01 · Discovery",
+      state: "OBSERVE",
+      rows: [
+        `Spread ≥ ${percent(values.discovery.minimumSpreadPercent)}`,
+        `Visible net ≥ ${percent(values.discovery.minimumNetProfitPercent)}`,
+        `Reference ${money(values.discovery.referenceCapitalInr)}`,
+        `Quote age ≤ ${ms(values.discovery.maximumQuoteAgeMs)}`,
+      ],
+    },
+    {
+      name: "02 · Qualification",
+      state: "PERSIST",
+      rows: [
+        `Net ≥ ${percent(values.qualification.minimumNetProfitPercent)}`,
+        `${values.qualification.minimumConsecutiveObservations} observations / ${ms(values.qualification.minimumPersistenceMs)}`,
+        `Liquidity score ≥ ${values.qualification.minimumLiquidityScore}`,
+        `Freshness score ≥ ${values.qualification.minimumFreshnessScore}`,
+      ],
+    },
+    {
+      name: "03 · PAPER",
+      state: "EXECUTE",
+      rows: [
+        `Net ≥ ${percent(values.paper.minimumNetProfitPercent)}`,
+        `Snapshot ≤ ${ms(values.paper.maximumSnapshotAgeMs)}`,
+        `Max ${money(values.paper.maximumCapitalPerTradeInr)} / trade`,
+        "100% two-leg depth required",
+      ],
+    },
+    {
+      name: "04 · Tiny-LIVE",
+      state: "PREFLIGHT ONLY",
+      rows: [
+        `${money(values.tinyLive.capitalPerLegInr)} / leg · one trade`,
+        `Net ≥ ${percent(values.tinyLive.minimumNetProfitPercent)}`,
+        "Parallel + pre-funded required",
+        "Order-time quote TTL not calibrated",
+      ],
+    },
+  ];
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-cyan-400/30 bg-panel">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-default bg-cyan-400/5 px-5 py-4">
+        <div className="flex items-start gap-3">
+          <span className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 p-2 text-cyan-300">
+            <SlidersHorizontal className="size-5" />
+          </span>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
+              V102 Strategy #1 Policy Lineage
+            </p>
+
+            <h2 className="mt-1 text-lg font-bold text-text-primary">
+              {active.label}
+            </h2>
+
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-text-muted">
+              {active.rationale}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] font-bold">
+          <span className="rounded-full border border-success/30 bg-success/10 px-3 py-1 text-success">
+            ACTIVE · REV {active.revision}
+          </span>
+
+          <span className="rounded-full border border-danger/30 bg-danger/10 px-3 py-1 text-danger">
+            LIVE ORDERS OFF
+          </span>
+
+          <span className="rounded-full border border-border-default bg-panel-light px-3 py-1 text-text-muted">
+            SHA {shortHash}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
+        {stages.map(
+          (
+            stage,
+          ) => (
+            <div
+              key={stage.name}
+              className="rounded-lg border border-border-default bg-panel-light p-4"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-brand">
+                  {stage.name}
+                </p>
+
+                <span className="font-mono text-[9px] font-bold text-text-muted">
+                  {stage.state}
+                </span>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {stage.rows.map(
+                  (
+                    row,
+                  ) => (
+                    <p
+                      key={row}
+                      className="font-mono text-[11px] text-text-primary"
+                    >
+                      {row}
+                    </p>
+                  ),
+                )}
+              </div>
+            </div>
+          ),
+        )}
+      </div>
+
+      <div className="grid gap-3 border-t border-border-default px-5 py-4 lg:grid-cols-[1fr_1fr]">
+        <div className={`rounded-lg border px-4 py-3 text-xs ${
+          policy.activationGuard.clear
+            ? "border-success/25 bg-success/5 text-success"
+            : "border-warning/25 bg-warning/5 text-warning"
+        }`}>
+          <p className="font-bold">
+            Atomic policy switch: {policy.activationGuard.clear ? "GUARD CLEAR" : "BLOCKED"}
+          </p>
+
+          <p className="mt-1 leading-5 text-text-muted">
+            Bot paused + zero open positions, sessions, locks, orders and recovery incidents are mandatory before a different registered policy can activate.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-danger/25 bg-danger/5 px-4 py-3 text-xs">
+          <p className="font-bold text-danger">
+            Last-look LIVE gate: NOT READY
+          </p>
+
+          <p className="mt-1 leading-5 text-text-muted">
+            Millisecond order-time quote TTL, audited IOC/FOK behavior, websocket fill confirmation and bounded residual recovery remain fail-closed for the next execution-risk build.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 

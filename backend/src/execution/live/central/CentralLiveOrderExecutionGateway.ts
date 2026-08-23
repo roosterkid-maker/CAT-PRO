@@ -1,6 +1,8 @@
 import {createHash} from "node:crypto";
 import {resolve} from "node:path";
 import {JsonlSnapshotStore} from "../../../core/persistence/JsonlSnapshotStore";
+import {binanceCredentialsProvider} from "../../../exchanges/binance/api/BinanceCredentialsProvider";
+import {bybitCredentialsProvider} from "../../../exchanges/bybit/api/BybitCredentialsProvider";
 import {liveExecutionService, type LiveExecutionExchangeStatus, type LiveExecutionService} from "../LiveExecutionService";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
 import type {LiveExecutionResult} from "../models/LiveExecutionResult";
@@ -9,6 +11,7 @@ import {
   type OrderFillFeeEvidence,
   type OrderFillFeeEvidenceService,
 } from "../evidence/OrderFillFeeEvidenceService";
+import {authenticatedPrivateFillEventOwner} from "../fills/AuthenticatedPrivateFillEventOwner";
 
 export type CentralLiveOrderGatewayState =
   | "PREPARED"
@@ -46,6 +49,19 @@ interface RuntimePort {
   getExchangeStatus(exchange: string): LiveExecutionExchangeStatus;
 }
 
+export interface CentralPrivateFillOwnershipPort {
+  registerBeforeIo(input: {readonly lifecycleOrderId: string; readonly request: LiveExecutionRequest;
+    readonly registeredAt: number}): void;
+  attachExchangeOrderId(input: {readonly lifecycleOrderId: string; readonly exchangeOrderId: string;
+    readonly capturedAt: number}): void;
+}
+
+export interface CentralLiveOrderTimingPort {
+  observeGatewayResult(input: {readonly venue: string; readonly market: string; readonly dispatchedAt: number;
+    readonly resultAt: number}): void;
+  recordObserverFailure(): void;
+}
+
 const DEFAULT_FILE = resolve(process.cwd(), "logs", "live", "central-order-gateway.jsonl");
 
 /**
@@ -57,10 +73,14 @@ export class CentralLiveOrderExecutionGateway {
   private readonly maximumRecords: number;
   private readonly store: JsonlSnapshotStore<Snapshot>;
   private readonly records = new Map<string, CentralLiveOrderGatewayRecord>();
+  private timingEvidence: CentralLiveOrderTimingPort | null;
 
   constructor(configuration: CentralLiveOrderGatewayConfiguration = {}, private readonly runtime: RuntimePort = liveExecutionService,
     private readonly fees: Pick<OrderFillFeeEvidenceService, "inspect"> = orderFillFeeEvidenceService,
-    private readonly filePath = DEFAULT_FILE) {
+    private readonly filePath = DEFAULT_FILE,
+    private readonly privateFillOwnership: CentralPrivateFillOwnershipPort | null = null,
+    timingEvidence: CentralLiveOrderTimingPort | null = null) {
+    this.timingEvidence = timingEvidence;
     this.enabled = configuration.enabled ?? false; this.maximumRecords = configuration.maximumRecords ?? 2_000;
     if (!Number.isSafeInteger(this.maximumRecords) || this.maximumRecords <= 0) throw new Error("Central LIVE order gateway capacity must be positive.");
     this.store = new JsonlSnapshotStore({filePath, isPayload: isSnapshot});
@@ -68,10 +88,14 @@ export class CentralLiveOrderExecutionGateway {
     if (latest) for (const record of latest.records) this.records.set(record.idempotencyKey, freeze(clone(record)));
   }
 
+  setTimingEvidence(timingEvidence: CentralLiveOrderTimingPort | null): void {
+    this.timingEvidence = timingEvidence;
+  }
+
   async executeOrReconcile(input: {readonly request: LiveExecutionRequest; readonly idempotencyKey: string;
     readonly allowNewSubmission: boolean; readonly now?: number}): Promise<CentralLiveOrderGatewayResponse> {
     const now = input.now ?? Date.now(); validateTime(now); const key = requireKey(input.idempotencyKey);
-    const hash = requestHash(input.request); const existing = this.records.get(key);
+    const request = this.withDurableClientOrderId(input.request, key); const hash = requestHash(request); const existing = this.records.get(key);
     if (existing) {
       if (existing.requestHash !== hash) throw new Error("Central LIVE order idempotency key request hash changed.");
       if (existing.state === "PREPARED" || existing.state === "SUBMISSION_UNCERTAIN") return this.response("UNCERTAIN_SUBMISSION", existing,
@@ -80,19 +104,40 @@ export class CentralLiveOrderExecutionGateway {
     }
     if (!this.enabled) return this.response("BLOCKED", null, ["Central LIVE order gateway compile-time gate is disabled."]);
     if (!input.allowNewSubmission) return this.response("BLOCKED", null, ["Fresh action authority does not allow a new exchange submission."]);
-    this.validateReadiness(input.request);
+    this.validateReadiness(request);
     if (this.records.size >= this.maximumRecords) throw new Error("Central LIVE order gateway capacity is exhausted.");
     const prepared = freeze({version: "76.0" as const, id: `central-live-order:${createHash("sha256").update(key).digest("hex")}`,
-      idempotencyKey: key, requestHash: hash, request: clone(input.request), state: "PREPARED" as const,
+      idempotencyKey: key, requestHash: hash, request: clone(request), state: "PREPARED" as const,
       preparedAt: now, updatedAt: now, result: null, feeEvidence: null, cancelRequestedAt: null,
       orderSubmissionPerformed: false, lastError: null});
+    this.privateFillOwnership?.registerBeforeIo({lifecycleOrderId: prepared.id, request, registeredAt: now});
     this.set(prepared); this.persist(now);
     try {
-      const result = await this.runtime.getAdapter(input.request.exchange).execute(input.request);
-      this.validateResult(result, input.request, null);
+      const result = await this.runtime.getAdapter(request.exchange).execute(request);
+      this.validateResult(result, request, null);
+      if (this.timingEvidence) {
+        try {
+          this.timingEvidence.observeGatewayResult({venue: request.exchange, market: request.market,
+            dispatchedAt: result.startedAt, resultAt: result.completedAt});
+        } catch {
+          try { this.timingEvidence.recordObserverFailure(); } catch { /* Evidence cannot change an exchange outcome. */ }
+        }
+      }
       const recorded = freeze({...clone(prepared), state: "ORDER_RECORDED" as const, updatedAt: Math.max(now, result.completedAt),
         result: clone(result), orderSubmissionPerformed: result.orderId !== null || result.status !== "FAILED"});
       this.set(recorded); this.persist(recorded.updatedAt);
+      if (this.privateFillOwnership && result.orderId && isPrivateFillSpotRequest(request)) {
+        try {
+          this.privateFillOwnership.attachExchangeOrderId({lifecycleOrderId: prepared.id,
+            exchangeOrderId: result.orderId, capturedAt: recorded.updatedAt});
+        } catch (error: unknown) {
+          const incomplete = freeze({...clone(recorded), state: "EVIDENCE_INCOMPLETE" as const,
+            lastError: message(error), updatedAt: recorded.updatedAt});
+          this.set(incomplete); this.persist(incomplete.updatedAt);
+          return this.response("EVIDENCE_INCOMPLETE", incomplete,
+            ["Exchange acknowledged the order, but durable private fill identity attachment failed.", incomplete.lastError as string]);
+        }
+      }
       return this.enrich(recorded, recorded.updatedAt);
     } catch (error: unknown) {
       const uncertain = freeze({...clone(prepared), state: "SUBMISSION_UNCERTAIN" as const, updatedAt: Date.now(),
@@ -203,6 +248,11 @@ export class CentralLiveOrderExecutionGateway {
     if (request.reduceOnly && !status.capabilities.supportsReduceOnly) throw new Error("Reduce-only capability is unavailable.");
   }
 
+  private withDurableClientOrderId(request: LiveExecutionRequest, key: string): LiveExecutionRequest {
+    if (!isPrivateFillSpotRequest(request) || request.clientOrderId?.trim()) return request;
+    return freeze({...clone(request), clientOrderId: `cat-${createHash("sha256").update(key).digest("hex").slice(0, 28)}`});
+  }
+
   private validateResult(result: LiveExecutionResult, request: LiveExecutionRequest, previous: LiveExecutionResult | null): void {
     if (normalize(result.exchange) !== normalize(request.exchange) || normalizeMarket(result.market) !== normalizeMarket(request.market) ||
       result.side !== request.side || !Number.isFinite(result.filledQuantity) || result.filledQuantity < 0 ||
@@ -242,8 +292,37 @@ function validateTime(value: number): void { if (!Number.isSafeInteger(value) ||
 function normalize(value: string): string { return value.trim().toLowerCase(); }
 function normalizeMarket(value: string): string { return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, ""); }
 function terminal(value: LiveExecutionResult["status"]): boolean { return value === "FILLED" || value === "CANCELLED" || value === "REJECTED" || value === "FAILED"; }
+function isPrivateFillSpotRequest(request: LiveExecutionRequest): boolean { const exchange = normalize(request.exchange);
+  return (request.product ?? "SPOT") === "SPOT" && (exchange === "binance" || exchange === "bybit"); }
 function message(error: unknown): string { return error instanceof Error ? error.message : "Unknown central LIVE order gateway failure."; }
 function clone<T>(value: T): T { return structuredClone(value); }
 function freeze<T>(value: T): T { if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value; for (const nested of Object.values(value)) freeze(nested); return Object.freeze(value); }
 
-export const centralLiveOrderExecutionGateway = new CentralLiveOrderExecutionGateway({enabled: false});
+class DefaultCentralPrivateFillOwnership implements CentralPrivateFillOwnershipPort {
+  registerBeforeIo(input: {readonly lifecycleOrderId: string; readonly request: LiveExecutionRequest;
+    readonly registeredAt: number}): void {
+    if (!isPrivateFillSpotRequest(input.request)) return;
+    const exchange = normalize(input.request.exchange) as "binance" | "bybit";
+    const apiKey = exchange === "binance" ? binanceCredentialsProvider.getCredentials().apiKey
+      : bybitCredentialsProvider.getCredentials().apiKey;
+    authenticatedPrivateFillEventOwner.registerOrder({lifecycleOrderId: input.lifecycleOrderId, venue: exchange,
+      accountFingerprint: createHash("sha256").update(apiKey.trim()).digest("hex"), market: input.request.market,
+      side: input.request.side, requestedQuantity: input.request.quantity,
+      clientOrderId: input.request.clientOrderId as string, exchangeOrderId: null, registeredAt: input.registeredAt});
+  }
+  attachExchangeOrderId(input: {readonly lifecycleOrderId: string; readonly exchangeOrderId: string;
+    readonly capturedAt: number}): void {
+    authenticatedPrivateFillEventOwner.attachExchangeOrderId(input.lifecycleOrderId, input.exchangeOrderId, input.capturedAt);
+  }
+}
+
+const STRATEGY_ONE_LIVE_GATEWAY_ENABLED =
+  process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
+  process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
+  process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
+    "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
+  process.env.STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION?.trim() ===
+  "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME";
+
+export const centralLiveOrderExecutionGateway = new CentralLiveOrderExecutionGateway({enabled: STRATEGY_ONE_LIVE_GATEWAY_ENABLED}, liveExecutionService,
+  orderFillFeeEvidenceService, DEFAULT_FILE, new DefaultCentralPrivateFillOwnership());

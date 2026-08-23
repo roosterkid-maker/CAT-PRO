@@ -17,7 +17,8 @@ const group = {id: "basis-group", state: "OPEN", positions, openedAt: now - 1_00
 const source: CentralPaperExitMarketSource = {inspect: (position) => ({levels: [{price: position.product === "SPOT" ? 100 : 100.04, quantity: 2}],
   observedAt: now - 100, sourceTimestamp: now + 100, feePercent: 0.1, feeEvidenceId: `fee:${position.id}`, feeEvidenceSource: "STATIC_CONFIG"})};
 const policy: Extract<CentralStrategySettlementPolicy, {kind: "BASIS_CONVERGENCE"}> = {kind: "BASIS_CONVERGENCE", lifecycleOwner: "CENTRAL_SHARED_ORCHESTRATOR",
-  entryBasisPercent: 2, closeAtOrBelowAbsoluteBasisPercent: 0.5, fundingTimestamps: [now + 10_000], requiresFundingEvidence: true,
+  entryBasisPercent: 2, closeAtOrBelowAbsoluteBasisPercent: 0.5, nextOpeningDelayMs: 120_000, perpetualLeverage: 1,
+  fundingTimestamps: [now + 10_000], requiresFundingEvidence: true,
   forcedTimeExitAllowed: false};
 
 function main(): void {

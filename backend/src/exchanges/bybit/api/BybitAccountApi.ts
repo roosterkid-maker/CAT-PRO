@@ -18,12 +18,47 @@ export interface BybitWalletCoinBalance {
   spotBorrow: number;
 }
 
+export interface BybitApiKeyInformation {
+  readOnly: boolean;
+
+  spotTradingEnabled: boolean;
+
+  withdrawalsEnabled: boolean;
+
+  internalTransferEnabled: boolean;
+
+  ipRestricted: boolean;
+
+  boundIpCount: number;
+
+  /**
+   * Non-empty API permissions outside the exact Strategy #1 pilot allowlist.
+   * Values contain permission names only; keys, secrets and bound IPs are never
+   * included.
+   */
+  unexpectedPermissions: readonly string[];
+
+  /**
+   * Bybit-managed permission markers that are reported for Unified accounts
+   * but are not independently selectable API capabilities.
+   */
+  systemManagedPermissions: readonly string[];
+}
+
 interface BybitWalletBalanceResult {
   list?: unknown;
 }
 
 interface BybitTransferableAmountResult {
   availableWithdrawalMap?: unknown;
+}
+
+interface BybitApiKeyInformationResult {
+  readOnly?: unknown;
+
+  permissions?: unknown;
+
+  ips?: unknown;
 }
 
 interface BybitSignedReadClient {
@@ -45,6 +80,164 @@ export class BybitAccountApi {
       BybitSignedReadClient =
       bybitPrivateHttpClient,
   ) {}
+
+  async getApiKeyInformation(
+    credentials?:
+      BybitCredentials,
+  ): Promise<BybitApiKeyInformation> {
+    const result =
+      await this.client
+        .getSigned<
+          BybitApiKeyInformationResult
+        >(
+          "/v5/user/query-api",
+          {},
+          credentials,
+        );
+
+    if (
+      result.readOnly !==
+        0 &&
+      result.readOnly !==
+        1
+    ) {
+      throw new Error(
+        "Invalid Bybit API-key information readOnly value.",
+      );
+    }
+
+    if (
+      !this.isRecord(
+        result.permissions,
+      )
+    ) {
+      throw new Error(
+        "Invalid Bybit API-key information permissions.",
+      );
+    }
+
+    if (
+      !Array.isArray(
+        result.ips,
+      )
+    ) {
+      throw new Error(
+        "Invalid Bybit API-key information IP bindings.",
+      );
+    }
+
+    const permissions =
+      this.normalizePermissions(
+        result.permissions,
+      );
+
+    const spotPermissions =
+      permissions.get(
+        "Spot",
+      ) ?? [];
+
+    const walletPermissions =
+      permissions.get(
+        "Wallet",
+      ) ?? [];
+
+    const unexpectedPermissions =
+      Array.from(
+        permissions.entries(),
+      ).flatMap(
+        ([category, values]) =>
+          values
+            .filter(
+              (permission) =>
+                !(
+                  category ===
+                    "Spot" &&
+                  permission ===
+                    "SpotTrade"
+                ) &&
+                !(
+                  category ===
+                    "Derivatives" &&
+                  permission ===
+                    "DerivativesTrade"
+                ),
+            )
+            .map(
+              (permission) =>
+                `${category}:${permission}`,
+            ),
+      ).sort();
+
+    const systemManagedPermissions =
+      permissions.get(
+        "Derivatives",
+      )?.filter(
+        (permission) =>
+          permission ===
+            "DerivativesTrade",
+      ).map(
+        (permission) =>
+          `Derivatives:${permission}`,
+      ) ?? [];
+
+    const boundIps =
+      result.ips
+        .map(
+          (value) =>
+            typeof value ===
+              "string"
+              ? value.trim()
+              : "",
+        )
+        .filter(
+          Boolean,
+        );
+
+    return {
+      readOnly:
+        result.readOnly ===
+        1,
+
+      spotTradingEnabled:
+        spotPermissions.includes(
+          "SpotTrade",
+        ),
+
+      withdrawalsEnabled:
+        walletPermissions.includes(
+          "Withdraw",
+        ),
+
+      internalTransferEnabled:
+        walletPermissions.some(
+          (permission) =>
+            permission ===
+              "AccountTransfer" ||
+            permission ===
+              "SubMemberTransfer" ||
+            permission ===
+              "SubMemberTransferList",
+        ),
+
+      ipRestricted:
+        boundIps.length >
+          0 &&
+        !boundIps.includes(
+          "*",
+        ),
+
+      boundIpCount:
+        boundIps.filter(
+          (value) =>
+          value !==
+            "*",
+        ).length,
+
+      unexpectedPermissions,
+
+      systemManagedPermissions,
+    };
+  }
 
   async getUnifiedWalletBalances(
     credentials?:
@@ -260,6 +453,75 @@ export class BybitAccountApi {
           true,
         ),
     };
+  }
+
+  private normalizePermissionList(
+    value: unknown,
+    field: string,
+  ): string[] {
+    if (!Array.isArray(value)) {
+      throw new Error(
+        `Invalid Bybit ${field} permission list.`,
+      );
+    }
+
+    return value.map(
+      (permission) => {
+        if (
+          typeof permission !==
+            "string" ||
+          !permission.trim()
+        ) {
+          throw new Error(
+            `Invalid Bybit ${field} permission value.`,
+          );
+        }
+
+        return permission.trim();
+      },
+    );
+  }
+
+  private normalizePermissions(
+    value: Record<
+      string,
+      unknown
+    >,
+  ): ReadonlyMap<
+    string,
+    readonly string[]
+  > {
+    const normalized =
+      new Map<
+        string,
+        readonly string[]
+      >();
+
+    for (
+      const [rawCategory, rawPermissions]
+      of Object.entries(
+        value,
+      )
+    ) {
+      const category =
+        rawCategory.trim();
+
+      if (!category) {
+        throw new Error(
+          "Invalid Bybit permission category.",
+        );
+      }
+
+      normalized.set(
+        category,
+        this.normalizePermissionList(
+          rawPermissions,
+          category,
+        ),
+      );
+    }
+
+    return normalized;
   }
 
   private toNonNegativeNumber(

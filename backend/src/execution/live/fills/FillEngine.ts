@@ -585,6 +585,9 @@ export class FillEngine {
       sessionId:
         order.sessionId,
 
+      policyIdentity:
+        order.policyIdentity,
+
       leg:
         order.leg,
 

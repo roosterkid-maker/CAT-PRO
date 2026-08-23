@@ -15,15 +15,12 @@ const DEFAULT_CAPITAL_STEP = 500;
 const MAXIMUM_RANKED_OPPORTUNITIES = 25;
 
 export class OpportunityRankingService {
-  rank(): RankingResult {
-    const sourceOpportunities =
-      opportunityService.getOpportunities();
-
-    console.log(
-      "[Ranking Debug] Source opportunities:",
-      sourceOpportunities.length,
-    );
-
+  rank(
+    sourceOpportunities:
+      readonly ArbitrageOpportunity[] =
+      opportunityService
+        .getLastOpportunities(),
+  ): RankingResult {
     const executableOpportunities =
       sourceOpportunities.filter(
         (opportunity) =>
@@ -32,11 +29,6 @@ export class OpportunityRankingService {
           ),
       );
 
-    console.log(
-      "[Ranking Debug] Opportunities with both order books:",
-      executableOpportunities.length,
-    );
-
     const selectedOpportunities =
       executableOpportunities.slice(
         0,
@@ -44,9 +36,6 @@ export class OpportunityRankingService {
       );
 
     const ranked: OpportunityScore[] = [];
-
-    let failedOptimizations = 0;
-    let zeroScoreCandidates = 0;
 
     for (
       const opportunity
@@ -58,12 +47,10 @@ export class OpportunityRankingService {
         );
 
       if (!evaluation) {
-        failedOptimizations += 1;
         continue;
       }
 
       if (evaluation.score <= 0) {
-        zeroScoreCandidates += 1;
         continue;
       }
 
@@ -73,26 +60,6 @@ export class OpportunityRankingService {
     ranked.sort(
       (first, second) =>
         second.score - first.score,
-    );
-
-    console.log(
-      "[Ranking Debug] Selected:",
-      selectedOpportunities.length,
-    );
-
-    console.log(
-      "[Ranking Debug] Failed optimizations:",
-      failedOptimizations,
-    );
-
-    console.log(
-      "[Ranking Debug] Zero-score candidates:",
-      zeroScoreCandidates,
-    );
-
-    console.log(
-      "[Ranking Debug] Ranked opportunities:",
-      ranked.length,
     );
 
     return {

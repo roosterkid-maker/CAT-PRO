@@ -3,7 +3,7 @@ import type { VWAPResult } from "../models/VWAPResult";
 
 export class VWAPCalculator {
   calculate(
-    levels: OrderBookLevel[],
+    levels: readonly OrderBookLevel[],
     requestedQuantity: number,
   ): VWAPResult {
     if (

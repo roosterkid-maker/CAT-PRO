@@ -21,10 +21,10 @@ export function useExchangeHealthEvidenceSnapshot() {
       ),
 
     refetchInterval:
-      5_000,
+      15_000,
 
     staleTime:
-      3_000,
+      10_000,
 
     retry: 2,
   });

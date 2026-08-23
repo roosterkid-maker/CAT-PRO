@@ -21,6 +21,7 @@ import {
 import {
   CAT_PRO_TARGET_EXCHANGES,
   exchangeFleetRegistry,
+  type CatProFleetExchange,
   type CatProTargetExchange,
 } from "../core/ExchangeFleetRegistry";
 
@@ -28,9 +29,11 @@ export type PaperShadowAvailability =
   | "AVAILABLE"
   | "BLOCKED";
 
-export interface PaperShadowExchangeReadiness {
+export interface PaperShadowExchangeReadiness<
+  TExchange extends CatProFleetExchange = CatProTargetExchange,
+> {
   exchange:
-    CatProTargetExchange;
+    TExchange;
 
   displayName: string;
 
@@ -115,6 +118,21 @@ export interface FiveExchangePaperShadowReadinessReport {
   exchanges:
     PaperShadowExchangeReadiness[];
 
+  paperExtensionExchangeCount?: 1;
+
+  paperExtensionExchanges?:
+    PaperShadowExchangeReadiness<"zebpay">[];
+
+  paperExtensionSummary?: {
+    shadowAvailableExchanges: number;
+
+    paperAvailableExchanges: number;
+
+    totalShadowEligibleMarkets: number;
+
+    totalPaperEligibleMarkets: number;
+  };
+
   blockers:
     string[];
 
@@ -194,6 +212,76 @@ export class FiveExchangePaperShadowReadinessService {
             fleetExchange.displayName,
             fleetExchange.marketData
               .connected,
+            synchronization.capabilities,
+            synchronization.error,
+          );
+        },
+      );
+
+    const paperExtensionCapabilities =
+      await Promise.all(
+        ["zebpay" as const]
+          .map(
+            async (
+              exchange,
+            ) => {
+              try {
+                return {
+                  exchange,
+                  capabilities:
+                    await exchangeCapabilityService
+                      .synchronizeExchange(
+                        exchange,
+                        {
+                          product:
+                            "spot",
+                          forceRefresh:
+                            false,
+                        },
+                      ),
+                  error:
+                    null,
+                } as const;
+              } catch (
+                error:
+                  unknown
+              ) {
+                return {
+                  exchange,
+                  capabilities:
+                    [] as readonly ExchangeMarketCapability[],
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "Capability synchronization failed.",
+                } as const;
+              }
+            },
+          ),
+      );
+
+    const paperExtensionExchanges =
+      paperExtensionCapabilities.map(
+        (
+          synchronization,
+        ) => {
+          const fleetExchange =
+            fleet.observationExchanges.find(
+              (exchange) =>
+                exchange.exchange ===
+                synchronization.exchange,
+            );
+
+          if (!fleetExchange) {
+            throw new Error(
+              `Fleet definition is missing PAPER extension exchange ${synchronization.exchange}.`,
+            );
+          }
+
+          return this.analyzeExchange(
+            synchronization.exchange,
+            fleetExchange.displayName,
+            fleetExchange.marketData.connected,
             synchronization.capabilities,
             synchronization.error,
           );
@@ -282,6 +370,49 @@ export class FiveExchangePaperShadowReadinessService {
 
       exchanges,
 
+      paperExtensionExchangeCount:
+        1,
+
+      paperExtensionExchanges,
+
+      paperExtensionSummary: {
+        shadowAvailableExchanges:
+          paperExtensionExchanges.filter(
+            (exchange) =>
+              exchange.shadowAvailability ===
+              "AVAILABLE",
+          ).length,
+
+        paperAvailableExchanges:
+          paperExtensionExchanges.filter(
+            (exchange) =>
+              exchange.paperAvailability ===
+              "AVAILABLE",
+          ).length,
+
+        totalShadowEligibleMarkets:
+          paperExtensionExchanges.reduce(
+            (
+              total,
+              exchange,
+            ) =>
+              total +
+              exchange.shadowEligibleMarkets,
+            0,
+          ),
+
+        totalPaperEligibleMarkets:
+          paperExtensionExchanges.reduce(
+            (
+              total,
+              exchange,
+            ) =>
+              total +
+              exchange.paperEligibleMarkets,
+            0,
+          ),
+      },
+
       blockers,
 
       notes: [
@@ -295,14 +426,18 @@ export class FiveExchangePaperShadowReadinessService {
 
         "Paper/shadow diagnostics do not require or infer real balances and never submit an order.",
 
+        "ZebPay is reported as a separate PAPER extension and does not change the authoritative five-exchange LIVE readiness denominator.",
+
         "LIVE trading and LIVE order submission remain disabled.",
       ],
     };
   }
 
-  private analyzeExchange(
+  private analyzeExchange<
+    TExchange extends CatProFleetExchange,
+  >(
     exchange:
-      CatProTargetExchange,
+      TExchange,
     displayName: string,
     marketDataConnected:
       boolean,
@@ -310,7 +445,7 @@ export class FiveExchangePaperShadowReadinessService {
       readonly ExchangeMarketCapability[],
     synchronizationError:
       string | null,
-  ): PaperShadowExchangeReadiness {
+  ): PaperShadowExchangeReadiness<TExchange> {
     const executableMarkets =
       new Set(
         marketCache

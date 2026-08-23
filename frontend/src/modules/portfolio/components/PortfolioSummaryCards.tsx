@@ -41,7 +41,7 @@ function MetricCard({
       : "text-text-primary";
 
   return (
-    <div className="rounded-xl border border-border-default bg-panel p-5 transition-transform hover:-translate-y-0.5">
+    <div className="dashboard-portfolio-metric rounded-xl border border-border-default bg-panel p-5 transition-transform hover:-translate-y-0.5">
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-muted">
         {title}
       </p>

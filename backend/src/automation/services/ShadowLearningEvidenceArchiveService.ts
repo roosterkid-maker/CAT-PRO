@@ -180,6 +180,16 @@ export class ShadowLearningEvidenceArchiveService {
   private captureCount =
     0;
 
+  /*
+   * Attribution analytics consume only outcome identity, attribution, terminal
+   * status and aggregate profitability. Automation snapshots may be captured
+   * much more frequently than those fields change, so expose a content
+   * revision instead of the capture counter. This prevents read-only UI
+   * refreshes from cloning the complete archived sample history unnecessarily.
+   */
+  private outcomeAnalyticsRevision =
+    0;
+
   private lastCapturedAt:
     number | null =
     null;
@@ -419,11 +429,32 @@ export class ShadowLearningEvidenceArchiveService {
         (
           record,
         ) => {
-          this.outcomeRecords.set(
-            record.id,
+          const normalized =
             this.normalizeOutcomeRecord(
               record,
-            ),
+            );
+          const existing =
+            this.outcomeRecords.get(
+              record.id,
+            );
+
+          if (
+            existing === undefined ||
+            (
+              normalized.status !== "TRACKING" &&
+              !this.hasSameOutcomeAnalytics(
+                existing,
+                normalized,
+              )
+            )
+          ) {
+            this.outcomeAnalyticsRevision +=
+              1;
+          }
+
+          this.outcomeRecords.set(
+            record.id,
+            normalized,
           );
         },
       );
@@ -479,6 +510,28 @@ export class ShadowLearningEvidenceArchiveService {
             record,
           ),
       );
+  }
+
+  /**
+   * Attribution/performance analytics never inspect per-tick sample arrays.
+   * Return the exact aggregate evidence without cloning that heavy payload.
+   */
+  getAnalyticsOutcomeRecords():
+    ShadowTradeOutcomeRecord[] {
+    return Array.from(
+      this.outcomeRecords.values(),
+      (record) => ({
+        ...record,
+        strategyAttribution:
+          normalizeStrategyAttribution(
+            record.strategyAttribution,
+          ),
+        predicted: {
+          ...record.predicted,
+        },
+        samples: [],
+      }),
+    );
   }
 
   getDiagnostics():
@@ -1267,6 +1320,36 @@ export class ShadowLearningEvidenceArchiveService {
       Array.isArray(
         candidate.outcomeRecords,
       )
+    );
+  }
+
+  getRevision(): number {
+    return this.outcomeAnalyticsRevision;
+  }
+
+  private hasSameOutcomeAnalytics(
+    first: ShadowTradeOutcomeRecord,
+    second: ShadowTradeOutcomeRecord,
+  ): boolean {
+    const firstAttribution =
+      normalizeStrategyAttribution(
+        first.strategyAttribution,
+      );
+    const secondAttribution =
+      normalizeStrategyAttribution(
+        second.strategyAttribution,
+      );
+
+    return (
+      first.status === second.status &&
+      first.predicted.expectedTotalNetProfit ===
+        second.predicted.expectedTotalNetProfit &&
+      first.averageObservedNetProfit ===
+        second.averageObservedNetProfit &&
+      firstAttribution.attributionStatus ===
+        secondAttribution.attributionStatus &&
+      firstAttribution.strategyId ===
+        secondAttribution.strategyId
     );
   }
 

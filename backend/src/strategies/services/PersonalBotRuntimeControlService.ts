@@ -24,6 +24,18 @@ export interface PersonalBotRuntimeControl {
   readonly orderSubmissionAllowed: false;
 }
 
+export interface PersonalBotPaperRuntimeArmInput {
+  readonly control: PersonalBotRuntimeControl;
+
+  readonly account: {
+    readonly enabled: boolean;
+
+    readonly mode: "PAPER" | "TESTNET" | "LIVE";
+
+    readonly emergencyStop: boolean;
+  };
+}
+
 const DEFAULT_CONTROL_FILE =
   resolve(
     process.cwd(),
@@ -61,7 +73,7 @@ export class PersonalBotRuntimeControlService {
     this.control =
       records.at(-1) ??
       createControl(
-        true,
+        false,
         now,
         "DEFAULT",
       );
@@ -125,6 +137,25 @@ export class PersonalBotRuntimeControlService {
 
     return this.getControl();
   }
+}
+
+/**
+ * The persisted dashboard control is the operator's authoritative PAPER arm.
+ * A default value is never sufficient: the operator must have explicitly
+ * changed the control through the dashboard, and the durable trading account
+ * must still be in its fail-closed PAPER state.
+ */
+export function isPersonalBotPaperRuntimeArmed(
+  input:
+    PersonalBotPaperRuntimeArmInput,
+): boolean {
+  return (
+    input.control.enabled &&
+    input.control.source === "DASHBOARD" &&
+    input.account.enabled &&
+    input.account.mode === "PAPER" &&
+    !input.account.emergencyStop
+  );
 }
 
 function createControl(

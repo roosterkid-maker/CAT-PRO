@@ -58,6 +58,18 @@ async function main(): Promise<void> {
   assert.equal(postCalls[1]?.parameters.type, "LIMIT");
   assert.equal(postCalls[1]?.parameters.timeInForce, "GTC");
 
+  await api.createOrder({
+    symbol: "BTCUSDT",
+    side: "SELL",
+    type: "LIMIT",
+    quantity: 0.001,
+    price: 50_100,
+    timeInForce: "FOK",
+  });
+
+  assert.equal(postCalls[2]?.parameters.type, "LIMIT");
+  assert.equal(postCalls[2]?.parameters.timeInForce, "FOK");
+
   await assert.rejects(
     api.createOrder({
       symbol: "BTCUSDT",
@@ -70,8 +82,8 @@ async function main(): Promise<void> {
     /LIMIT_MAKER is maker-only/u,
   );
 
-  assert.equal(postCalls.length, 2);
-  assert.equal(synchronizations, 2);
+  assert.equal(postCalls.length, 3);
+  assert.equal(synchronizations, 3);
   console.log("BINANCE POST-ONLY ORDER CONTRACT TEST PASSED.");
   console.log("LIMIT_MAKER used maker-only semantics without timeInForce; invalid combinations failed before signed I/O and no external request occurred.");
 }

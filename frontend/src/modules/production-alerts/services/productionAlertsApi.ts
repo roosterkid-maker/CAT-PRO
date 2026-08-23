@@ -4,6 +4,8 @@ import {
 
 import type {
   ProductionAlertHistoryResponse,
+  ProductionAlertBulkResolveRequest,
+  ProductionAlertBulkResolveResponse,
   ProductionAlertMutationResponse,
   ProductionAlertResponse,
 } from "../types/ProductionAlerts";
@@ -69,6 +71,19 @@ export async function resolveProductionAlert(
       {
         resolutionNote,
       },
+    );
+
+  return response.data;
+}
+
+export async function resolveInactiveProductionAlerts(
+  requestBody:
+    ProductionAlertBulkResolveRequest,
+): Promise<ProductionAlertBulkResolveResponse> {
+  const response =
+    await api.post<ProductionAlertBulkResolveResponse>(
+      "/api/execution/alerts/history/resolve-inactive",
+      requestBody,
     );
 
   return response.data;

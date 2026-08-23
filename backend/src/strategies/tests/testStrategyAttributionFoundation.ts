@@ -334,7 +334,11 @@ async function main(): Promise<void> {
   );
 
   const qualificationService =
-    new CandidateQualificationService();
+    new CandidateQualificationService({
+      /* Market rules/depth are outside this attribution-isolation fixture. */
+      capitalAwareLiquidityEnabled:
+        false,
+    });
   const attributedQualification =
     qualificationService.evaluate(
       attributedCandidate,
@@ -348,6 +352,12 @@ async function main(): Promise<void> {
   const legacyAttributionQualification =
     qualificationService.evaluate(
       sameCandidateWithoutAttribution,
+      baseTime,
+    );
+
+  const legacyCandidateQualification =
+    qualificationService.evaluate(
+      legacyCandidate,
       baseTime,
     );
 
@@ -412,7 +422,13 @@ async function main(): Promise<void> {
     latestSignalId,
   );
 
-  executionCandidateQueueService.synchronize(baseTime);
+  executionCandidateQueueService.synchronize(
+    baseTime,
+    [
+      attributedQualification,
+      legacyCandidateQualification,
+    ],
+  );
   const readyItems =
     executionCandidateQueueService.getReadyItems(baseTime);
   const attributedQueueItem = readyItems.find(
@@ -619,6 +635,24 @@ async function main(): Promise<void> {
     "Attribution must not change Paper simulation economics.",
   );
 
+  const attributedPaperTradesBefore =
+    paperTradingService
+      .getTrades()
+      .filter(
+        (trade) => {
+          const attribution =
+            normalizeStrategyAttribution(
+              trade.strategyAttribution,
+            );
+
+          return (
+            attribution.attributionStatus === "ATTRIBUTED" &&
+            attribution.strategyId === "cross-exchange-arbitrage"
+          );
+        },
+      )
+      .length;
+
   const paperTrade =
     paperTradingService.recordCompletedExecution(
       attributedPaperResult,
@@ -701,7 +735,7 @@ async function main(): Promise<void> {
     attributionSummary
       .paperTrades
       .attributedToStrategy,
-    1,
+    attributedPaperTradesBefore + 1,
   );
   assert.equal(
     "netProfit" in attributionSummary,
@@ -709,10 +743,172 @@ async function main(): Promise<void> {
     "V20.1 must not invent strategy P&L.",
   );
 
+  let archivedSourceReads = 0;
+  let runtimeSourceReads = 0;
+  let paperSourceReads = 0;
+  const sharedSnapshotAnalytics =
+    new StrategyAttributionAnalyticsService({
+      archivedShadowOutcomes: () => {
+        archivedSourceReads += 1;
+        return [];
+      },
+      runtimeShadowOutcomes: () => {
+        runtimeSourceReads += 1;
+        return [];
+      },
+      paperTrades: () => {
+        paperSourceReads += 1;
+        return [];
+      },
+    });
+  sharedSnapshotAnalytics.getSummary(
+    "cross-exchange-arbitrage",
+    baseTime,
+  );
+  sharedSnapshotAnalytics.getPerformance(
+    "cross-exchange-arbitrage",
+    baseTime,
+  );
+  assert.deepEqual(
+    {
+      archivedSourceReads,
+      runtimeSourceReads,
+      paperSourceReads,
+    },
+    {
+      archivedSourceReads: 1,
+      runtimeSourceReads: 1,
+      paperSourceReads: 1,
+    },
+    "Coverage and performance for one read-model timestamp must share one immutable evidence snapshot.",
+  );
+  sharedSnapshotAnalytics.getSummary(
+    "cross-exchange-arbitrage",
+    baseTime + 1,
+  );
+  assert.deepEqual(
+    {
+      archivedSourceReads,
+      runtimeSourceReads,
+      paperSourceReads,
+    },
+    {
+      archivedSourceReads: 2,
+      runtimeSourceReads: 2,
+      paperSourceReads: 2,
+    },
+    "A new read-model timestamp must obtain fresh evidence.",
+  );
+
+  let evidenceRevision = 1;
+  let revisionCachedReads = 0;
+  const revisionCachedAnalytics =
+    new StrategyAttributionAnalyticsService({
+      archivedShadowOutcomes: () => {
+        revisionCachedReads += 1;
+        return [];
+      },
+      runtimeShadowOutcomes: () => [],
+      paperTrades: () => [],
+      getRevision: () => evidenceRevision,
+    });
+  revisionCachedAnalytics.getSummary(
+    "cross-exchange-arbitrage",
+    baseTime,
+  );
+  revisionCachedAnalytics.getPerformance(
+    "cross-exchange-arbitrage",
+    baseTime + 1,
+  );
+  assert.equal(
+    revisionCachedReads,
+    1,
+    "An unchanged evidence revision must reuse the immutable source population across HTTP timestamps.",
+  );
+  evidenceRevision += 1;
+  revisionCachedAnalytics.getSummary(
+    "cross-exchange-arbitrage",
+    baseTime + 2,
+  );
+  assert.equal(
+    revisionCachedReads,
+    2,
+    "A changed evidence revision must invalidate attribution analytics immediately.",
+  );
+
+  let componentRevision = 1;
+  let archivedComponentReads = 0;
+  let runtimeComponentReads = 0;
+  let paperComponentReads = 0;
+  const componentCachedAnalytics =
+    new StrategyAttributionAnalyticsService({
+      archivedShadowOutcomes: () => {
+        archivedComponentReads += 1;
+        return [];
+      },
+      runtimeShadowOutcomes: () => {
+        runtimeComponentReads += 1;
+        return [];
+      },
+      paperTrades: () => {
+        paperComponentReads += 1;
+        return [];
+      },
+      getRevision: () => componentRevision,
+      archivedShadowRevision: () => 1,
+      runtimeShadowRevision: () => componentRevision,
+      paperRevision: () => 1,
+    });
+  componentCachedAnalytics.getSummary(
+    "cross-exchange-arbitrage",
+    baseTime,
+  );
+  componentRevision += 1;
+  componentCachedAnalytics.getSummary(
+    "cross-exchange-arbitrage",
+    baseTime + 1,
+  );
+  assert.deepEqual(
+    {
+      archivedComponentReads,
+      runtimeComponentReads,
+      paperComponentReads,
+    },
+    {
+      archivedComponentReads: 1,
+      runtimeComponentReads: 2,
+      paperComponentReads: 1,
+    },
+    "A runtime-only revision must not re-read unchanged archived SHADOW or PAPER ledgers.",
+  );
+
   const readModel = new StrategyReadModelService(
     registry,
     orchestrator,
     attributionAnalytics,
+  );
+  const lightweightReadModel = new StrategyReadModelService(
+    registry,
+    orchestrator,
+    {
+      getSummary: () => {
+        throw new Error(
+          "Lightweight blocker diagnostics must not read attribution history.",
+        );
+      },
+      getPerformance: () => {
+        throw new Error(
+          "Lightweight blocker diagnostics must not aggregate performance history.",
+        );
+      },
+    },
+  );
+  assert.ok(
+    lightweightReadModel.getBlockerDiagnosticsById(
+      "cross-exchange-arbitrage",
+      baseTime,
+    ),
+    "Fleet readiness must obtain controller blockers without the full attribution/PAPER-history read model.",
   );
   const safetyBeforeApi = getSafetyState();
   const strategyReadModel =
@@ -745,7 +941,7 @@ async function main(): Promise<void> {
       .attribution
       .attributedPaperTrades
       .count,
-    1,
+    attributedPaperTradesBefore + 1,
   );
   assert.deepEqual(
     getSafetyState(),

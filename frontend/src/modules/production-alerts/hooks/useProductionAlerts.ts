@@ -8,6 +8,7 @@ import {
   acknowledgeProductionAlert,
   fetchProductionAlertHistory,
   fetchProductionAlerts,
+  resolveInactiveProductionAlerts,
   resolveProductionAlert,
 } from "../services/productionAlertsApi";
 
@@ -106,6 +107,38 @@ export function useResolveProductionAlert() {
       resolveProductionAlert(
         key,
         resolutionNote,
+      ),
+
+    onSuccess:
+      async () => {
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey:
+              currentKey,
+          }),
+
+          queryClient.invalidateQueries({
+            queryKey:
+              historyKey,
+          }),
+        ]);
+      },
+  });
+}
+
+export function useResolveInactiveProductionAlerts() {
+  const queryClient =
+    useQueryClient();
+
+  return useMutation({
+    mutationFn: (
+      request: {
+        resolutionNote: string;
+        onlyCritical?: boolean;
+      },
+    ) =>
+      resolveInactiveProductionAlerts(
+        request,
       ),
 
     onSuccess:

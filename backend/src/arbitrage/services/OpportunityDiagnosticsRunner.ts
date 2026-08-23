@@ -5,6 +5,7 @@ import {
 
 import {
   marketCache,
+  type MarketCacheExecutableUpdate,
 } from "../../services/cache.service";
 
 export interface OpportunityDiagnosticsRunnerConfig {
@@ -33,6 +34,8 @@ export interface OpportunityDiagnosticsRunnerStatus {
   eventTriggeredEvaluations: number;
 
   coalescedExecutableUpdates: number;
+
+  singleVenueUpdatesSuppressed: number;
 
   lastTrigger:
     | "STARTUP"
@@ -167,6 +170,9 @@ export class OpportunityDiagnosticsRunner {
   private coalescedExecutableUpdates =
     0;
 
+  private singleVenueUpdatesSuppressed =
+    0;
+
   private lastTrigger:
     OpportunityEvaluationTrigger | null =
     null;
@@ -260,8 +266,10 @@ export class OpportunityDiagnosticsRunner {
       this.unsubscribeFromExecutableUpdates =
         marketCache
           .subscribeToExecutableUpdates(
-            () => {
-              this.handleExecutableUpdate();
+            (update) => {
+              this.handleExecutableUpdate(
+                update,
+              );
             },
           );
     }
@@ -374,6 +382,9 @@ export class OpportunityDiagnosticsRunner {
       coalescedExecutableUpdates:
         this.coalescedExecutableUpdates,
 
+      singleVenueUpdatesSuppressed:
+        this.singleVenueUpdatesSuppressed,
+
       lastTrigger:
         this.lastTrigger,
 
@@ -439,7 +450,10 @@ export class OpportunityDiagnosticsRunner {
     );
   }
 
-  private handleExecutableUpdate():
+  private handleExecutableUpdate(
+    update:
+      MarketCacheExecutableUpdate,
+  ):
     void {
     if (
       !this.running
@@ -449,6 +463,21 @@ export class OpportunityDiagnosticsRunner {
 
     this.executableUpdatesReceived +=
       1;
+
+    if (
+      !shouldScheduleOpportunityEvaluation(
+        update,
+        marketCache
+          .getExecutableExchangeCountForMarket(
+            update.market,
+          ),
+      )
+    ) {
+      this.singleVenueUpdatesSuppressed +=
+        1;
+
+      return;
+    }
 
     const receivedAt =
       Date.now();
@@ -963,6 +992,34 @@ export class OpportunityDiagnosticsRunner {
 
     return "Unknown opportunity diagnostics evaluation error.";
   }
+}
+
+/**
+ * V115 scanner admission rule. Destructive cache mutations must always wake
+ * the scanner so an existing opportunity is removed. An UPSERT only needs a
+ * scan once the authoritative cache contains at least two distinct venues for
+ * that market; the second venue's own UPSERT is therefore never suppressed.
+ */
+export function shouldScheduleOpportunityEvaluation(
+  update:
+    MarketCacheExecutableUpdate,
+  executableExchangeCount:
+    number,
+): boolean {
+  if (
+    update.kind !==
+      "UPSERT"
+  ) {
+    return true;
+  }
+
+  return (
+    Number.isSafeInteger(
+      executableExchangeCount,
+    ) &&
+    executableExchangeCount >=
+      2
+  );
 }
 
 export const opportunityDiagnosticsRunner =

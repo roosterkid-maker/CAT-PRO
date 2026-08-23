@@ -560,6 +560,15 @@ export class CoinSwitchExecutionAdapter
     }
 
     if (
+      request.timeInForce !==
+      undefined
+    ) {
+      throw new Error(
+        "CoinSwitch spot time-in-force is unsupported by the audited adapter contract.",
+      );
+    }
+
+    if (
       !Number.isFinite(
         request.quantity,
       ) ||

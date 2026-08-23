@@ -186,7 +186,8 @@ function routeIdentity(signal: StrategySignal): {family: CentralStrategyRouteFam
       return {family: "SPOT_TRIANGULAR", ownershipKey: key("SPOT_TRI", signal.evidence.exchange,
         ...signal.evidence.legs.map((leg) => leg.market).sort())};
     case "SPOT_PERPETUAL_BASIS_SHADOW_OPPORTUNITY":
-      return {family: "SPOT_PERPETUAL", ownershipKey: key("SPOT_PERP", signal.evidence.exchange, signal.evidence.market)};
+      return {family: "SPOT_PERPETUAL", ownershipKey: key("SPOT_PERP", signal.evidence.market,
+        signal.evidence.spotExchange, signal.evidence.perpetualExchange)};
     case "FUNDING_RATE_ARBITRAGE_SHADOW_OPPORTUNITY":
       return {family: "PERPETUAL_TWO_VENUE", ownershipKey: key("PERP", signal.evidence.market,
         ...[signal.evidence.longExchange, signal.evidence.shortExchange].sort())};

@@ -246,7 +246,7 @@ async function main():
   const fixtureApi =
     new FixtureUnoCoinPublicApi();
 
-  const now =
+  let now =
     1_700_000_100_000;
 
   marketCache.clear();
@@ -377,8 +377,49 @@ async function main():
         1 &&
       afterTransientFailure
         .activeQuarantinedMarkets ===
-        0,
+        0 &&
+      afterTransientFailure
+        .transportFailureBatches ===
+        1 &&
+      afterTransientFailure
+        .adaptiveMarketLimit ===
+        1 &&
+      afterTransientFailure
+        .adaptiveConcurrentBookReads ===
+        1 &&
+      afterTransientFailure
+        .orderBookBackoffUntil ===
+        now +
+          5_000,
     "One transient UnoCoin transport failure must retain the last fresh executable book and must not quarantine the market.",
+  );
+
+  now +=
+    5_001;
+
+  await adapter.subscribe([
+    "BTC_USDT",
+  ]);
+
+  const afterAdaptiveRecovery =
+    adapter.getDiagnostics();
+
+  assertCondition(
+    afterAdaptiveRecovery
+      .consecutiveTransportFailureBatches ===
+      0 &&
+      afterAdaptiveRecovery
+        .consecutiveHealthyBatches ===
+        1 &&
+      afterAdaptiveRecovery
+        .orderBookBackoffUntil ===
+        null &&
+      marketCache.get(
+        "unocoin",
+        "BTCUSDT",
+      )?.executable ===
+        true,
+    "UnoCoin must resume genuine public-book reads after its bounded adaptive backoff expires.",
   );
 
   const capabilityProvider =

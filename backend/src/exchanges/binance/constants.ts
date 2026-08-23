@@ -16,6 +16,18 @@ export const BINANCE = {
       process.env.BINANCE_PUBLIC_REST_BASE_URL?.trim() ??
       "https://data-api.binance.vision",
 
+    /*
+     * The catalog/activity host is deliberately isolated from signed account
+     * reads, but it is materially slower from the Mumbai runtime. The exact
+     * action-time depth rescue has its own official Binance endpoint so it can
+     * meet the existing 190 ms fail-closed deadline without changing that
+     * deadline or moving any authenticated/order traffic.
+     */
+    ACTION_TIME_PUBLIC_BASE_URL:
+      process.env.BINANCE_ACTION_TIME_PUBLIC_REST_BASE_URL?.trim() ??
+      process.env.BINANCE_REST_BASE_URL?.trim() ??
+      "https://api.binance.com",
+
     API_RESTRICTIONS:
       "/sapi/v1/account/apiRestrictions",
 
@@ -31,6 +43,9 @@ export const BINANCE = {
 
     TICKER_PRICE:
   "/api/v3/ticker/price",
+
+    ORDER_BOOK:
+  "/api/v3/depth",
 
   ACCOUNT:
     "/api/v3/account",
@@ -81,8 +96,19 @@ export const BINANCE = {
   ABSOLUTE_MAX_MARKETS:
     400,
 
+  /*
+   * Public market-data protection only. These symbols stay subscribed when
+   * activity ranking changes; this does not grant trading authority.
+   */
+  DEFAULT_PROTECTED_MARKETS: [
+    "COTIUSDT",
+  ],
+
   PUBLIC_REST_TIMEOUT_MS:
     30_000,
+
+  ACTION_TIME_ORDER_BOOK_TIMEOUT_MS:
+    190,
 
   CONNECTION_ACTIVITY_GRACE_MS:
     15_000,

@@ -54,8 +54,20 @@ import {
 import {
   compareCandidateExecutionPriority,
   rankCandidatesForExecution,
-  resolveModeledCandidateNetProfitPercent,
+  resolveCandidateRankingEquivalentProfitInr,
 } from "./ExecutionCandidateRanking";
+
+import {
+  inventoryRebalancingScoreService,
+} from "../../rebalancing/services/InventoryRebalancingScoreService";
+
+import {
+  strategyOneExecutionPolicyService,
+} from "../../trading/policy/StrategyOneExecutionPolicyService";
+
+import {
+  PROFIT_TIER_POLICY,
+} from "../../arbitrage/config/profitTiers";
 
 const DEFAULT_CONFIG:
   MultiOpportunityPaperSchedulerConfig = {
@@ -83,7 +95,7 @@ const DEFAULT_CONFIG:
     85,
 
   minimumNetProfitPercent:
-    0.5,
+    PROFIT_TIER_POLICY.qualificationMinimumNetProfitPercent,
 
   maximumHistory:
     100,
@@ -921,24 +933,28 @@ export class MultiOpportunityPaperSchedulerService {
        * among the selected set. Execute the strongest final sized candidate
        * first; stable candidate priority provides the deterministic fallback.
        */
+      const resolveRebalanceBonus =
+        inventoryRebalancingScoreService
+          .createBonusResolver();
+
       selected.sort(
         (
           first,
           second,
         ) => {
           const firstExpectedProfit =
-            first.capital *
-            resolveModeledCandidateNetProfitPercent(
+            resolveCandidateRankingEquivalentProfitInr(
               first.qualification,
-            ) /
-            100;
+              resolveRebalanceBonus(first.qualification),
+              first.capital,
+            );
 
           const secondExpectedProfit =
-            second.capital *
-            resolveModeledCandidateNetProfitPercent(
+            resolveCandidateRankingEquivalentProfitInr(
               second.qualification,
-            ) /
-            100;
+              resolveRebalanceBonus(second.qualification),
+              second.capital,
+            );
 
           if (
             firstExpectedProfit !==
@@ -962,6 +978,7 @@ export class MultiOpportunityPaperSchedulerService {
                 ?.metrics
                 .averageNetReturnPercent ??
               null,
+            resolveRebalanceBonus,
           );
         },
       );
@@ -1314,6 +1331,10 @@ export class MultiOpportunityPaperSchedulerService {
         PostGuardRouteProfitability
       >,
   ): CandidateQualificationRecord[] {
+    const resolveRebalanceBonus =
+      inventoryRebalancingScoreService
+        .createBonusResolver();
+
     return rankCandidatesForExecution(
       qualifications,
       (qualification) =>
@@ -1325,6 +1346,7 @@ export class MultiOpportunityPaperSchedulerService {
           ?.metrics
           .averageNetReturnPercent ??
         null,
+      resolveRebalanceBonus,
     );
   }
 
@@ -1701,6 +1723,13 @@ export const multiOpportunityPaperSchedulerService =
 
         maximumBatchCapital:
           configuration.maximumBatchCapital,
+
+        minimumNetProfitPercent:
+          strategyOneExecutionPolicyService
+            .getActivePolicy()
+            .values
+            .paper
+            .minimumNetProfitPercent,
       };
     },
   );

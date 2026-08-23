@@ -1,7 +1,3 @@
-import {
-  PROFIT_TIER_POLICY,
-} from "../../../arbitrage/config/profitTiers";
-
 import type {
   ArbitrageOpportunity,
 } from "../../../arbitrage/models/ArbitrageOpportunity";
@@ -9,6 +5,19 @@ import type {
 import {
   opportunityService,
 } from "../../../arbitrage/services/OpportunityService";
+
+import {
+  assessStrategyOnePilotDispatchReservedFreshness,
+  isExactStrategyOnePilotRoute,
+  STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
+} from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+
+import {
+  strategyOneTimingCalibrationService,
+  type StrategyOneTimingHeadroomReview,
+} from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
 
 import {
   strategyOneCapitalPlacementService,
@@ -26,6 +35,10 @@ import {
 } from "../../../trading/execution/StrategyOneFundedRouteService";
 
 import {
+  strategyOneExecutionPolicyService,
+} from "../../../trading/policy/StrategyOneExecutionPolicyService";
+
+import {
   strategyOnePaperStressGate,
   type StrategyOnePaperStressGateReport,
 } from "../../../trading/execution/AutomatedPaperTradingService";
@@ -39,17 +52,20 @@ import {
   tinyLivePreflightService,
 } from "./TinyLivePreflightService";
 
-const PILOT_CAPITAL_PER_LEG_INR =
-  100 as const;
-
-const MINIMUM_TWO_LEG_INVENTORY_INR =
-  200 as const;
-
-const MAXIMUM_CURRENT_OPPORTUNITY_AGE_MS =
-  10_000;
+import {
+  strategyOneApiPermissionBoundaryService,
+  type StrategyOneApiPermissionExchange,
+  type StrategyOneApiPermissionBoundaryReport,
+} from "./StrategyOneApiPermissionBoundaryService";
 
 const REQUIRED_CONFIRMATION_TOKEN =
   "RUN_STRATEGY_ONE_PILOT_PREFLIGHT_ONLY";
+
+export interface StrategyOnePilotRuntimePolicy {
+  readonly capitalPerLegInr: number;
+  readonly minimumNetProfitPercent: number;
+  readonly maximumPreviewOpportunityAgeMs: number;
+}
 
 export type StrategyOnePilotPreviewState =
   | "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY"
@@ -59,6 +75,10 @@ export type StrategyOnePilotPreviewState =
 
 export interface StrategyOnePilotCheck {
   readonly key:
+    | "AUDITED_LIVE_VENUE_CONTRACT"
+    | "API_KEY_PERMISSION_BOUNDARY"
+    | "PILOT_TIMING_HEADROOM"
+    | "CURRENT_DISPATCH_RESERVED_FRESHNESS"
     | "CURRENT_LIVE_PROFIT_THRESHOLD"
     | "HISTORICAL_ROUTE_EVIDENCE"
     | "FRESH_TWO_LEG_FUNDING_AND_RULES"
@@ -80,6 +100,8 @@ export interface StrategyOnePilotCandidate {
   readonly currentNetProfitPerBaseUnit: number;
   readonly currentScore: number;
   readonly historical: StrategyOneCapitalPlacementRouteRank;
+  readonly apiPermissionBoundary: StrategyOneApiPermissionBoundaryReport;
+  readonly timing: StrategyOneTimingHeadroomReview;
   readonly funding: StrategyOneFundedRouteReport;
   readonly stress: StrategyOnePaperStressGateReport | null;
   readonly checks: readonly StrategyOnePilotCheck[];
@@ -87,17 +109,22 @@ export interface StrategyOnePilotCandidate {
 }
 
 export interface StrategyOnePilotPreviewReport {
-  readonly version: "92.0";
+  readonly version: "115.0";
   readonly generatedAt: number;
   readonly mode: "STRATEGY_ONE_ACTION_TIME_PREFLIGHT_PREVIEW";
   readonly state: StrategyOnePilotPreviewState;
-  readonly requestedCapitalPerLegInr: 100;
-  readonly minimumTwoLegInventoryInr: 200;
+  readonly requestedCapitalPerLegInr: number;
+  readonly minimumTwoLegInventoryInr: number;
   readonly minimumCurrentNetProfitPercent: number;
   readonly maximumOpportunityAgeMs: number;
+  readonly maximumExecutionGradeBookAgeMs: 250;
+  readonly maximumDispatchReservedBookAgeMs: 190;
+  readonly maximumExecutionGradeBookSkewMs: 250;
   readonly evidence: {
     readonly currentFreshExecuteOpportunities: number;
     readonly historicalAdapterReadyRoutes: number;
+    readonly excludedNonPilotCurrentOpportunities: number;
+    readonly excludedNonPilotHistoricalRoutes: number;
     readonly matchedCurrentRoutes: number;
     readonly fullyPreflightableMatches: number;
   };
@@ -124,7 +151,7 @@ export interface StrategyOnePilotSafety {
 }
 
 export interface StrategyOnePilotPreflightRunReport {
-  readonly version: "92.0";
+  readonly version: "115.0";
   readonly generatedAt: number;
   readonly mode: "STRATEGY_ONE_ACTION_TIME_PREFLIGHT";
   readonly decision:
@@ -140,12 +167,26 @@ export interface StrategyOnePilotPreflightRunReport {
 }
 
 export interface StrategyOnePilotPreflightDependencies {
+  getTinyLivePolicy(): StrategyOnePilotRuntimePolicy;
   getOpportunities(): readonly ArbitrageOpportunity[];
   getCapitalPlacement(now: number): StrategyOneCapitalPlacementReport;
+  getApiPermissionBoundary(
+    now: number,
+    requiredVenues?: readonly StrategyOneApiPermissionExchange[],
+  ): StrategyOneApiPermissionBoundaryReport;
   evaluateFunding(
     opportunity: ArbitrageOpportunity,
+    requestedCapitalInr: number,
     now: number,
   ): StrategyOneFundedRouteReport;
+  reviewTiming(
+    input: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+    now: number,
+  ): StrategyOneTimingHeadroomReview;
   evaluateStress(
     opportunity: ArbitrageOpportunity,
     quantity: number,
@@ -156,6 +197,23 @@ export interface StrategyOnePilotPreflightDependencies {
 
 const DEFAULT_DEPENDENCIES:
   StrategyOnePilotPreflightDependencies = {
+  getTinyLivePolicy:
+    () => {
+      const policy =
+        strategyOneExecutionPolicyService
+          .getActivePolicy()
+          .values
+          .tinyLive;
+
+      return {
+        capitalPerLegInr:
+          policy.capitalPerLegInr,
+        minimumNetProfitPercent:
+          policy.minimumNetProfitPercent,
+        maximumPreviewOpportunityAgeMs:
+          policy.maximumPreviewOpportunityAgeMs,
+      };
+    },
   getOpportunities:
     () =>
       opportunityService
@@ -167,21 +225,44 @@ const DEFAULT_DEPENDENCIES:
           paperTradeStore
             .getAllForReadOnlyAggregation(),
           now,
+          paperTradeStore
+            .getSettledRevision(),
+        ),
+  getApiPermissionBoundary:
+    (
+      now,
+      requiredVenues = [
+        "binance",
+        "bybit",
+      ],
+    ) =>
+      strategyOneApiPermissionBoundaryService
+        .getReportForVenues(
+          requiredVenues,
+          now,
         ),
   evaluateFunding:
     (
       opportunity,
+      requestedCapitalInr,
       now,
     ) =>
       strategyOneFundedRouteService
         .evaluate({
           opportunity,
           requestedCapitalInr:
-            PILOT_CAPITAL_PER_LEG_INR,
+            requestedCapitalInr,
           fundingBoundary:
             "AUTHENTICATED_LIVE_READINESS",
           now,
         }),
+  reviewTiming:
+    (input, now) =>
+      strategyOneTimingCalibrationService
+        .reviewHeadroom(
+          input,
+          now,
+        ),
   evaluateStress:
     (
       opportunity,
@@ -229,21 +310,32 @@ export class StrategyOnePilotPreflightService {
       now,
     );
 
+    const tinyLivePolicy =
+      this.dependencies
+        .getTinyLivePolicy();
+
+    assertTinyLivePolicy(
+      tinyLivePolicy,
+    );
+
     const placement =
       this.dependencies
         .getCapitalPlacement(
           now,
         );
 
+    const historicalCandidates = placement.routes.filter(
+      (route) =>
+        route.liveAdapterFoundationReady &&
+        route.uniqueSettlements >= placement.minimumRouteSample &&
+        route.deployableCashPnlInr > 0,
+    );
+
     const historicalRoutes =
-      placement.routes
+      historicalCandidates
         .filter(
           (route) =>
-            route.liveAdapterFoundationReady &&
-            route.uniqueSettlements >=
-              placement.minimumRouteSample &&
-            route.deployableCashPnlInr >
-              0,
+            isExactStrategyOnePilotRoute(route),
         );
 
     const historicalByRoute =
@@ -256,15 +348,23 @@ export class StrategyOnePilotPreflightService {
         ),
       );
 
+    const currentCandidates = this.dependencies.getOpportunities().filter(
+      (opportunity) => isCurrentExecuteOpportunity(
+        opportunity,
+        now,
+        tinyLivePolicy.maximumPreviewOpportunityAgeMs,
+      ),
+    );
+
     const currentOpportunities =
-      this.dependencies
-        .getOpportunities()
+      currentCandidates
         .filter(
           (opportunity) =>
-            isCurrentExecuteOpportunity(
-              opportunity,
-              now,
-            ),
+            isExactStrategyOnePilotRoute({
+              market: opportunity.pair.market,
+              buyExchange: opportunity.pair.buy.exchange,
+              sellExchange: opportunity.pair.sell.exchange,
+            }),
         );
 
     const matched =
@@ -284,6 +384,19 @@ export class StrategyOnePilotPreflightService {
                     opportunity,
                     historical,
                     placement.minimumRouteSample,
+                    tinyLivePolicy,
+                    this.dependencies
+                      .getApiPermissionBoundary(
+                        now,
+                        [
+                          opportunity.pair.buy.exchange
+                            .trim()
+                            .toLowerCase() as StrategyOneApiPermissionExchange,
+                          opportunity.pair.sell.exchange
+                            .trim()
+                            .toLowerCase() as StrategyOneApiPermissionExchange,
+                        ],
+                      ),
                     now,
                   ),
                 ]
@@ -326,26 +439,36 @@ export class StrategyOnePilotPreflightService {
 
     return freeze({
       version:
-        "92.0" as const,
+        "115.0" as const,
       generatedAt:
         now,
       mode:
         "STRATEGY_ONE_ACTION_TIME_PREFLIGHT_PREVIEW" as const,
       state,
       requestedCapitalPerLegInr:
-        PILOT_CAPITAL_PER_LEG_INR,
+        tinyLivePolicy.capitalPerLegInr,
       minimumTwoLegInventoryInr:
-        MINIMUM_TWO_LEG_INVENTORY_INR,
+        tinyLivePolicy.capitalPerLegInr *
+          2,
       minimumCurrentNetProfitPercent:
-        PROFIT_TIER_POLICY
-          .liveMinimumNetProfitPercent,
+        tinyLivePolicy.minimumNetProfitPercent,
       maximumOpportunityAgeMs:
-        MAXIMUM_CURRENT_OPPORTUNITY_AGE_MS,
+        tinyLivePolicy.maximumPreviewOpportunityAgeMs,
+      maximumExecutionGradeBookAgeMs:
+        STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
+      maximumDispatchReservedBookAgeMs:
+        STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+      maximumExecutionGradeBookSkewMs:
+        STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
       evidence: {
         currentFreshExecuteOpportunities:
           currentOpportunities.length,
         historicalAdapterReadyRoutes:
           historicalRoutes.length,
+        excludedNonPilotCurrentOpportunities:
+          currentCandidates.length - currentOpportunities.length,
+        excludedNonPilotHistoricalRoutes:
+          historicalCandidates.length - historicalRoutes.length,
         matchedCurrentRoutes:
           matched.length,
         fullyPreflightableMatches:
@@ -489,7 +612,7 @@ export class StrategyOnePilotPreflightService {
     ) {
       return freeze({
         version:
-          "92.0" as const,
+          "115.0" as const,
         generatedAt:
           now,
         mode:
@@ -516,7 +639,7 @@ export class StrategyOnePilotPreflightService {
       this.dependencies
         .runCorePreflight({
           requestedCapital:
-            PILOT_CAPITAL_PER_LEG_INR,
+            preview.requestedCapitalPerLegInr,
           market:
             selected.market,
           buyExchange:
@@ -551,7 +674,7 @@ export class StrategyOnePilotPreflightService {
 
     return freeze({
       version:
-        "92.0" as const,
+        "115.0" as const,
       generatedAt:
         now,
       mode:
@@ -579,30 +702,34 @@ export class StrategyOnePilotPreflightService {
       StrategyOneCapitalPlacementRouteRank,
     minimumHistoricalRouteSample:
       number,
+    tinyLivePolicy:
+      StrategyOnePilotRuntimePolicy,
+    apiPermissionBoundary:
+      StrategyOneApiPermissionBoundaryReport,
     now:
       number,
   ): StrategyOnePilotCandidate {
+    const timing =
+      this.dependencies
+        .reviewTiming({
+          market: opportunity.pair.market,
+          buyExchange: opportunity.pair.buy.exchange,
+          sellExchange: opportunity.pair.sell.exchange,
+        }, now);
+
     const funding =
       this.dependencies
         .evaluateFunding(
           opportunity,
+          tinyLivePolicy.capitalPerLegInr,
           now,
         );
 
     const exactPilotFunded =
-      funding.state ===
-        "FUNDED" &&
-      funding.executableQuantity !==
-        null &&
-      funding.executableQuantity >
-        0 &&
-      funding.estimatedExecutableCapitalInr !==
-        null &&
-      funding.estimatedExecutableCapitalInr >=
-        PILOT_CAPITAL_PER_LEG_INR -
-          0.01 &&
-      funding.buyFunding.sufficient &&
-      funding.sellFunding.sufficient;
+      isExactPilotFunding(
+        funding,
+        tinyLivePolicy.capitalPerLegInr,
+      );
 
     const stress =
       exactPilotFunded &&
@@ -621,19 +748,62 @@ export class StrategyOnePilotPreflightService {
         opportunity.netProfitPercent,
       ) &&
       opportunity.netProfitPercent >=
-        PROFIT_TIER_POLICY
-          .liveMinimumNetProfitPercent;
+        tinyLivePolicy.minimumNetProfitPercent;
+
+    const currentDispatchFreshness =
+      assessStrategyOnePilotDispatchReservedFreshness({
+        buyExchange: opportunity.pair.buy.exchange,
+        sellExchange: opportunity.pair.sell.exchange,
+        buyTimestamp: opportunity.pair.buy.timestamp,
+        sellTimestamp: opportunity.pair.sell.timestamp,
+        quotesAreFresh: opportunity.quotesAreFresh,
+        usedLastPriceFallback: opportunity.usedLastPriceFallback,
+        now,
+      });
 
     const checks:
       StrategyOnePilotCheck[] = [
       check(
+        "AUDITED_LIVE_VENUE_CONTRACT",
+        isExactStrategyOnePilotRoute({
+          market: opportunity.pair.market,
+          buyExchange: opportunity.pair.buy.exchange,
+          sellExchange: opportunity.pair.sell.exchange,
+        }),
+        "Strategy #1 LIVE pilot is restricted to an explicitly audited SPOT lane.",
+        [],
+      ),
+      check(
+        "API_KEY_PERMISSION_BOUNDARY",
+        apiPermissionBoundary.ready,
+        "Every route venue key must have signed-read plus SPOT trading access, withdrawals disabled and explicit IP binding.",
+        apiPermissionBoundary.blockers,
+      ),
+      check(
+        "PILOT_TIMING_HEADROOM",
+        timing.state ===
+          "READY",
+        "Mature execution-grade quote timing preserves dispatch budget plus operational headroom inside the immutable 250 ms ceiling.",
+        timing.blockers,
+      ),
+      check(
+        "CURRENT_DISPATCH_RESERVED_FRESHNESS",
+        currentDispatchFreshness.passed,
+        `Current BUY and SELL books must each be at most ${STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS} ms old before the action-time pipeline starts.`,
+        currentDispatchFreshness.passed
+          ? []
+          : [
+              `Current dispatch-reserved freshness failed: buyAge=${currentDispatchFreshness.buyAgeMs} ms, sellAge=${currentDispatchFreshness.sellAgeMs} ms, skew=${currentDispatchFreshness.skewMs} ms (${currentDispatchFreshness.reasons.join(", ")}).`,
+            ],
+      ),
+      check(
         "CURRENT_LIVE_PROFIT_THRESHOLD",
         currentProfitPassed,
-        `Current fee-adjusted net return must be at least ${PROFIT_TIER_POLICY.liveMinimumNetProfitPercent.toFixed(2)}%.`,
+        `Current fee-adjusted net return must be at least ${tinyLivePolicy.minimumNetProfitPercent.toFixed(2)}%.`,
         currentProfitPassed
           ? []
           : [
-              `Current net return ${finiteFixed(opportunity.netProfitPercent, 4)}% is below the ${PROFIT_TIER_POLICY.liveMinimumNetProfitPercent.toFixed(4)}% Tiny-LIVE threshold.`,
+              `Current net return ${finiteFixed(opportunity.netProfitPercent, 4)}% is below the ${tinyLivePolicy.minimumNetProfitPercent.toFixed(4)}% Tiny-LIVE threshold.`,
             ],
       ),
       check(
@@ -643,13 +813,13 @@ export class StrategyOnePilotPreflightService {
             minimumHistoricalRouteSample &&
           historical.deployableCashPnlInr >
             0,
-        "The exact directional route has durable positive historical evidence and two registered adapter foundations.",
+        "The exact directional route has durable positive historical evidence and audited LIVE contracts.",
         [],
       ),
       check(
         "FRESH_TWO_LEG_FUNDING_AND_RULES",
         exactPilotFunded,
-        "Fresh authenticated balances, exchange rules, depth and exact ₹100 sizing pass on both legs.",
+        `Fresh authenticated balances, exchange rules, depth and ₹${tinyLivePolicy.capitalPerLegInr} maximum sizing pass on both legs; only a mandatory sub-one-step quantity round-down is accepted.`,
         exactPilotFunded
           ? []
           : funding.blockers.length >
@@ -658,7 +828,7 @@ export class StrategyOnePilotPreflightService {
                 ...funding.blockers,
               ]
             : [
-                `Exact ₹${PILOT_CAPITAL_PER_LEG_INR} sizing was ${funding.state}; reduced pilots below the hard minimum are not accepted.`,
+                `₹${tinyLivePolicy.capitalPerLegInr} maximum sizing was ${funding.state}; only exchange-mandated quantity rounding below one shared step is accepted.`,
               ],
       ),
       check(
@@ -710,6 +880,8 @@ export class StrategyOnePilotPreflightService {
       currentScore:
         opportunity.score,
       historical,
+      apiPermissionBoundary,
+      timing,
       funding,
       stress,
       checks,
@@ -723,10 +895,214 @@ export class StrategyOnePilotPreflightService {
   }
 }
 
+function isExactPilotFunding(
+  funding:
+    StrategyOneFundedRouteReport,
+  requestedCapitalInr:
+    number,
+): boolean {
+  const commonSafetyPassed =
+    funding.fundingBoundary ===
+      "AUTHENTICATED_LIVE_READINESS" &&
+    funding.authenticatedBalancesRequired &&
+    !funding.isolatedPaperCapital &&
+    !funding.staleBalanceAllowed &&
+    funding.quantityNeverIncreased &&
+    funding.blockers.length ===
+      0 &&
+    funding.executableQuantity !==
+      null &&
+    Number.isFinite(
+      funding.executableQuantity,
+    ) &&
+    funding.executableQuantity >
+      0 &&
+    funding.estimatedExecutableCapitalInr !==
+      null &&
+    Number.isFinite(
+      funding.estimatedExecutableCapitalInr,
+    ) &&
+    funding.buyFunding.sufficient &&
+    funding.sellFunding.sufficient;
+
+  if (
+    !commonSafetyPassed ||
+    funding.estimatedExecutableCapitalInr ===
+      null
+  ) {
+    return false;
+  }
+
+  if (
+    funding.state ===
+      "FUNDED"
+  ) {
+    return funding.estimatedExecutableCapitalInr >=
+      requestedCapitalInr -
+        0.01;
+  }
+
+  return funding.state ===
+      "REDUCED" &&
+    isMandatorySharedIncrementOnlyReduction(
+      funding,
+      requestedCapitalInr,
+    );
+}
+
+function isMandatorySharedIncrementOnlyReduction(
+  funding:
+    StrategyOneFundedRouteReport,
+  requestedCapitalInr:
+    number,
+): boolean {
+  const normalization =
+    funding.quantityNormalization;
+  const capitalQuantity =
+    funding.capitalQuantity;
+  const preFundingQuantity =
+    funding.preFundingQuantity;
+  const balanceCappedQuantity =
+    funding.balanceCappedQuantity;
+  const executableQuantity =
+    funding.executableQuantity;
+  const estimatedCapitalInr =
+    funding.estimatedExecutableCapitalInr;
+
+  if (
+    normalization ===
+      null ||
+    normalization.state !==
+      "NORMALIZED" ||
+    !normalization.liveOrderSafe ||
+    !normalization.incrementEvidenceComplete ||
+    normalization.paperOnlyFallbackUsed ||
+    !normalization.roundDownOnly ||
+    !normalization.quantityNeverIncreased ||
+    normalization.blockers.length >
+      0 ||
+    normalization.commonQuantityIncrement ===
+      null ||
+    !Number.isFinite(
+      normalization.commonQuantityIncrement,
+    ) ||
+    normalization.commonQuantityIncrement <=
+      0 ||
+    normalization.reductionQuantity ===
+      null ||
+    !Number.isFinite(
+      normalization.reductionQuantity,
+    ) ||
+    capitalQuantity ===
+      null ||
+    !Number.isFinite(
+      capitalQuantity,
+    ) ||
+    capitalQuantity <=
+      0 ||
+    preFundingQuantity ===
+      null ||
+    balanceCappedQuantity ===
+      null ||
+    executableQuantity ===
+      null ||
+    estimatedCapitalInr ===
+      null
+  ) {
+    return false;
+  }
+
+  const quantityTolerance =
+    Math.max(
+      1e-12,
+      capitalQuantity *
+        1e-12,
+      normalization.commonQuantityIncrement *
+        1e-12,
+    );
+  const approximatelyEqual =
+    (
+      first:
+        number,
+      second:
+        number,
+    ): boolean =>
+      Number.isFinite(
+        first,
+      ) &&
+      Number.isFinite(
+        second,
+      ) &&
+      Math.abs(
+        first -
+          second,
+      ) <=
+        quantityTolerance;
+
+  const reductionQuantity =
+    capitalQuantity -
+      executableQuantity;
+  const maximumOneStepCapitalLossInr =
+    requestedCapitalInr *
+      (
+        normalization.commonQuantityIncrement /
+        capitalQuantity
+      );
+  const actualCapitalLossInr =
+    requestedCapitalInr -
+      estimatedCapitalInr;
+
+  return (
+    approximatelyEqual(
+      preFundingQuantity,
+      capitalQuantity,
+    ) &&
+    approximatelyEqual(
+      balanceCappedQuantity,
+      preFundingQuantity,
+    ) &&
+    approximatelyEqual(
+      normalization.rawQuantity,
+      balanceCappedQuantity,
+    ) &&
+    normalization.normalizedQuantity !==
+      null &&
+    approximatelyEqual(
+      normalization.normalizedQuantity,
+      executableQuantity,
+    ) &&
+    approximatelyEqual(
+      normalization.reductionQuantity,
+      reductionQuantity,
+    ) &&
+    reductionQuantity >
+      quantityTolerance &&
+    reductionQuantity <
+      normalization.commonQuantityIncrement +
+        quantityTolerance &&
+    actualCapitalLossInr >
+      0 &&
+    actualCapitalLossInr <=
+      maximumOneStepCapitalLossInr +
+        0.01 &&
+    Math.abs(
+      estimatedCapitalInr -
+        requestedCapitalInr *
+          (
+            executableQuantity /
+            capitalQuantity
+          ),
+    ) <=
+      0.01
+  );
+}
+
 function isCurrentExecuteOpportunity(
   opportunity:
     ArbitrageOpportunity,
   now:
+    number,
+  maximumAgeMs:
     number,
 ): boolean {
   const ageMs =
@@ -744,7 +1120,7 @@ function isCurrentExecuteOpportunity(
     ageMs >=
       0 &&
     ageMs <=
-      MAXIMUM_CURRENT_OPPORTUNITY_AGE_MS &&
+      maximumAgeMs &&
     Number.isFinite(
       opportunity.executableQty,
     ) &&
@@ -773,6 +1149,16 @@ function compareCandidates(
       Number(
         first.readyForOperatorPreflight,
       ) ||
+    Number(
+      second.timing.state ===
+        "READY",
+    ) -
+      Number(
+        first.timing.state ===
+          "READY",
+      ) ||
+    (second.timing.residualOperationalHeadroomMs ?? Number.NEGATIVE_INFINITY) -
+      (first.timing.residualOperationalHeadroomMs ?? Number.NEGATIVE_INFINITY) ||
     first.historical.rank -
       second.historical.rank ||
     second.currentNetProfitPercent -
@@ -796,12 +1182,12 @@ function buildPreviewBlockers(
   ) {
     case "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY":
       return [
-        "No fresh, executable, non-fallback Strategy #1 opportunity exists within the 10-second action-time window.",
+        "No fresh, executable, non-fallback audited Strategy #1 opportunity exists within the route-seed window.",
       ];
 
     case "WAITING_FOR_HISTORICAL_MATCH":
       return [
-        "Fresh executable opportunities exist, but none matches an adapter-ready route with sufficient credible historical evidence.",
+        "A current audited-lane opportunity exists, but it has no matching route with sufficient credible historical evidence.",
       ];
 
     case "BLOCKED_CURRENT_EVIDENCE":
@@ -886,6 +1272,35 @@ function safety(): StrategyOnePilotSafety {
     orderSubmissionPerformed:
       false,
   };
+}
+
+function assertTinyLivePolicy(
+  policy:
+    StrategyOnePilotRuntimePolicy,
+): void {
+  if (
+    !Number.isSafeInteger(
+      policy.capitalPerLegInr,
+    ) ||
+    policy.capitalPerLegInr <
+      100 ||
+    policy.capitalPerLegInr >
+      500 ||
+    !Number.isFinite(
+      policy.minimumNetProfitPercent,
+    ) ||
+    policy.minimumNetProfitPercent <
+      0 ||
+    !Number.isSafeInteger(
+      policy.maximumPreviewOpportunityAgeMs,
+    ) ||
+    policy.maximumPreviewOpportunityAgeMs <=
+      0
+  ) {
+    throw new Error(
+      "Active Strategy #1 Tiny-LIVE policy is invalid.",
+    );
+  }
 }
 
 function assertTimestamp(

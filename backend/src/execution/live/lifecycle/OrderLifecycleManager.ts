@@ -193,6 +193,9 @@ export class OrderLifecycleManager {
       planId:
         session.planId,
 
+      policyIdentity:
+        session.plan.policyIdentity,
+
       leg,
 
       purpose:
@@ -500,6 +503,8 @@ export class OrderLifecycleManager {
         session.id,
       planId:
         session.planId,
+      policyIdentity:
+        session.plan.policyIdentity,
       leg:
         input.leg,
       purpose:

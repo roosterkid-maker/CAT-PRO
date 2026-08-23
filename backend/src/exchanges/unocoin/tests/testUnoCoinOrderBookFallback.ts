@@ -3,6 +3,7 @@ import assert
 
 import {
   UnoCoinPublicApi,
+  UnoCoinPublicDataRejectedError,
   type UnoCoinFetch,
 } from "../UnoCoinPublicApi";
 
@@ -197,6 +198,232 @@ async function main():
       },
     ],
     "A valid responsive asset book must complete without paying the legacy public exchange-book latency.",
+  );
+
+  const directArrayApi =
+    new UnoCoinPublicApi(
+      async () =>
+        new Response(
+          JSON.stringify({
+            bids: [
+              {
+                coin:
+                  "BTC",
+
+                base_coin:
+                  "USDT",
+
+                order_type:
+                  "BID",
+
+                rate:
+                  "100.25",
+
+                volume:
+                  "0.75",
+              },
+            ],
+
+            asks: [
+              {
+                coin:
+                  "BTC",
+
+                base_coin:
+                  "USDT",
+
+                order_type:
+                  "ASK",
+
+                rate:
+                  "100.75",
+
+                volume:
+                  "1.25",
+              },
+            ],
+          }),
+          {
+            status:
+              200,
+          },
+        ),
+    );
+
+  const directArrayBook =
+    await directArrayApi
+      .getOrderBook(
+        "BTC_USDT",
+        100,
+      );
+
+  assert.deepEqual(
+    directArrayBook.bids,
+    [
+      [
+        "100.25",
+        "0.75",
+      ],
+    ],
+    "UnoCoin's current direct-array asset-book schema must normalize as executable depth.",
+  );
+
+  assert.deepEqual(
+    directArrayBook.asks,
+    [
+      [
+        "100.75",
+        "1.25",
+      ],
+    ],
+    "Both current direct-array and legacy nested asset-book schemas must remain supported.",
+  );
+
+  const hangingApi =
+    new UnoCoinPublicApi(
+      () =>
+        new Promise<Response>(
+          () =>
+            undefined,
+        ),
+      20,
+    );
+
+  const timeoutStartedAt =
+    Date.now();
+
+  await assert.rejects(
+    hangingApi.getTickers(),
+    /exceeded 20 ms/,
+    "A public fetch that ignores AbortSignal must still settle at the hard deadline.",
+  );
+
+  assert.ok(
+    Date.now() -
+      timeoutStartedAt <
+      500,
+    "The UnoCoin public hard deadline must remain bounded.",
+  );
+
+  let hangingOrderBookRequests =
+    0;
+
+  const hangingOrderBookApi =
+    new UnoCoinPublicApi(
+      () => {
+        hangingOrderBookRequests +=
+          1;
+
+        return new Promise<Response>(
+          () =>
+            undefined,
+        );
+      },
+      40,
+    );
+
+  const orderBookTimeoutStartedAt =
+    Date.now();
+
+  await assert.rejects(
+    hangingOrderBookApi.getOrderBook(
+      "BTC_USDT",
+      100,
+    ),
+    /order-book sources failed/,
+    "UnoCoin order-book recovery must fail closed when both public sources ignore AbortSignal.",
+  );
+
+  assert.ok(
+    hangingOrderBookRequests >=
+      1 &&
+      hangingOrderBookRequests <=
+        2,
+    "The primary and recovery order-book sources must each receive at most one bounded request.",
+  );
+
+  assert.ok(
+    Date.now() -
+      orderBookTimeoutStartedAt <
+      250,
+    "Primary and recovery order-book sources must share one total timeout instead of consuming two full deadlines.",
+  );
+
+  let dataRejectedRequests =
+    0;
+
+  const dataRejectedApi =
+    new UnoCoinPublicApi(
+      async (
+        input,
+      ) => {
+        dataRejectedRequests +=
+          1;
+
+        const url =
+          new URL(
+            input,
+          );
+
+        if (
+          url.pathname.startsWith(
+            "/api/v1/asset/orderbook/",
+          )
+        ) {
+          return new Response(
+            JSON.stringify({
+              bids: {
+                data: [],
+              },
+
+              asks: {
+                data: [],
+              },
+            }),
+            {
+              status:
+                200,
+            },
+          );
+        }
+
+        return new Response(
+          "not found",
+          {
+            status:
+              404,
+          },
+        );
+      },
+      40,
+    );
+
+  await assert.rejects(
+    dataRejectedApi.getOrderBook(
+      "BTC_USDT",
+      100,
+    ),
+    (error: unknown) =>
+      error instanceof
+        UnoCoinPublicDataRejectedError,
+    "A responsive market with no matching two-sided depth must remain a per-market data rejection, not a transport outage.",
+  );
+
+  await assert.rejects(
+    dataRejectedApi.getOrderBook(
+      "ETH_USDT",
+      100,
+    ),
+    (error: unknown) =>
+      error instanceof
+        UnoCoinPublicDataRejectedError,
+    "A second invalid asset book must remain a market-level data rejection while the retired recovery endpoint circuit is open.",
+  );
+
+  assert.equal(
+    dataRejectedRequests,
+    3,
+    "After one recovery 404, later invalid markets must skip the guaranteed-failing legacy endpoint during its bounded cooldown.",
   );
 
   console.log(

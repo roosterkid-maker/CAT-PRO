@@ -59,6 +59,14 @@ async function main():
             connected:
               true,
           },
+
+          {
+            name:
+              "ZebPay",
+
+            connected:
+              true,
+          },
         ],
 
       hasMarketRuleProvider:
@@ -69,6 +77,7 @@ async function main():
             "bybit",
             "coinswitch",
             "unocoin",
+            "zebpay",
           ].includes(
             exchange,
           ),
@@ -80,6 +89,7 @@ async function main():
           "bybit",
           "unocoin",
           "coinswitch",
+          "zebpay",
         ],
 
       getReadStatus:
@@ -90,8 +100,11 @@ async function main():
 
           verificationState:
             exchange ===
-            "coindcx"
+              "coindcx"
               ? "VERIFIED"
+              : exchange ===
+                  "zebpay"
+                ? "VERIFIED"
               : exchange ===
                   "binance"
                 ? "CONFIGURED_UNVERIFIED"
@@ -99,7 +112,9 @@ async function main():
 
           readOnlyVerificationFresh:
             exchange ===
-            "coindcx",
+              "coindcx" ||
+            exchange ===
+              "zebpay",
         }),
 
       getClockStates:
@@ -153,6 +168,13 @@ async function main():
           ].includes(
             exchange,
           ),
+
+      getPaperEligibleMarketCount:
+        (exchange) =>
+          exchange ===
+            "zebpay"
+            ? 3
+            : 0,
     });
 
   const report =
@@ -160,7 +182,7 @@ async function main():
 
   assertCondition(
     report.version ===
-      "19.27" &&
+      "19.28" &&
       report.targetExchangeCount ===
         5 &&
       report.exchanges.length ===
@@ -203,6 +225,39 @@ async function main():
         .liveOrderAdapters ===
         2,
     "Fleet summary must be derived from implementation and runtime evidence.",
+  );
+
+  assertCondition(
+    report.observationExchangeCount ===
+      1 &&
+      report.observationExchanges.length ===
+        1 &&
+      report.observationExchanges[0]
+        ?.exchange ===
+        "zebpay" &&
+      report.observationExchanges[0]
+        ?.marketData.connected &&
+      report.observationExchanges[0]
+        ?.marketRules.providerRegistered &&
+      report.observationExchanges[0]
+        ?.authenticatedRead.monitored &&
+      report.observationExchanges[0]
+        ?.authenticatedRead.verificationState ===
+        "VERIFIED" &&
+      report.observationExchanges[0]
+        ?.authenticatedRead.fresh &&
+      !report.observationExchanges[0]
+        ?.liveOrderAdapter.adapterRegistered &&
+      report.observationSummary
+        .marketDataConnected ===
+        1 &&
+      report.observationSummary
+        .executionEligible ===
+        1 &&
+      report.observationSummary
+        .paperEligibleMarkets ===
+        3,
+    "ZebPay PAPER eligibility must be evidence-derived without changing five-exchange LIVE readiness or exposing private execution capability.",
   );
 
   const bybit =

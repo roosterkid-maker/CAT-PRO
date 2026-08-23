@@ -965,6 +965,13 @@ export class LiveExecutionCoordinator {
             this.clampReservationTtl(
               remainingLifetimeMs,
             ),
+
+          inventoryRequirements:
+            nonLive
+              ? undefined
+              : this.createLiveInventoryRequirements(
+                  session.plan,
+                ),
         });
 
     if (
@@ -1746,6 +1753,60 @@ export class LiveExecutionCoordinator {
 
     session.reservationId =
       null;
+  }
+
+  private createLiveInventoryRequirements(
+    plan:
+      ExecutionPlan,
+  ) {
+    const buyQuoteAsset =
+      plan.buy.quoteAsset?.trim().toUpperCase() ??
+      "";
+    const sellBaseAsset =
+      plan.sell.baseAsset?.trim().toUpperCase() ??
+      "";
+    const buyAmount =
+      plan.buy.balanceReservationAmount ??
+      plan.buy.quantity * plan.buy.limitPrice;
+    const sellAmount =
+      plan.sell.balanceReservationAmount ??
+      plan.sell.quantity;
+
+    if (!buyQuoteAsset || !sellBaseAsset) {
+      throw new Error(
+        "LIVE execution requires explicit BUY quote-asset and SELL base-asset reservation evidence.",
+      );
+    }
+
+    if (
+      !Number.isFinite(buyAmount) ||
+      buyAmount <= 0 ||
+      !Number.isFinite(sellAmount) ||
+      sellAmount <= 0
+    ) {
+      throw new Error(
+        "LIVE execution requires positive native wallet reservation amounts for both legs.",
+      );
+    }
+
+    return [
+      {
+        exchange:
+          plan.buy.exchange,
+        asset:
+          buyQuoteAsset,
+        amount:
+          buyAmount,
+      },
+      {
+        exchange:
+          plan.sell.exchange,
+        asset:
+          sellBaseAsset,
+        amount:
+          sellAmount,
+      },
+    ];
   }
 
   private releaseLock(

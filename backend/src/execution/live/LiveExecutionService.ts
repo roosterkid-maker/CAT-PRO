@@ -40,7 +40,14 @@ import {
 } from "./resilience/SafeReadLiveExecutionAdapter";
 
 const LIVE_EXECUTION_ENABLED =
-  false as const;
+  process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
+  process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
+  process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
+    "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
+  process.env
+    .STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION
+    ?.trim() ===
+  "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME";
 
 export interface LiveExecutionExchangeStatus {
   exchange:
@@ -88,7 +95,7 @@ export interface LiveExecutionExchangeStatus {
     | null;
 
   liveExecutionEnabled:
-    false;
+    boolean;
 
   /*
    * Backward-compatible strict connectivity flag.
@@ -139,9 +146,8 @@ export class LiveExecutionService {
     /*
      * V22.20 adds the official Bybit V5 spot order
      * lifecycle foundation. Global LIVE execution
-     * remains compile-time disabled, so registration
-     * adds capability evidence without connectivity or
-     * order-submission authorization.
+     * remains behind the exact multi-key runtime gate, so
+     * registration alone adds no connectivity or order authority.
      */
     this.register(
       new SafeReadLiveExecutionAdapter(
@@ -155,8 +161,8 @@ export class LiveExecutionService {
     /*
      * V22.21 implements CoinSwitch PRO LIMIT create,
      * status, and two-phase cancellation. Registration
-     * remains non-connected while the global LIVE gate
-     * is compile-time disabled.
+     * remains non-connected while the global LIVE runtime
+     * gate is closed.
      */
     this.register(
       new SafeReadLiveExecutionAdapter(
@@ -167,13 +173,14 @@ export class LiveExecutionService {
     /*
      * V95 adds the official UnoCoin ordinary LIMIT create,
      * pair-history status, and confirmed cancellation foundation.
-     * Global LIVE execution remains compile-time disabled.
+     * Global LIVE execution remains fail-closed by default.
      */
     this.register(
       new SafeReadLiveExecutionAdapter(
         unoCoinExecutionAdapter,
       ),
     );
+
   }
 
   register(
@@ -504,7 +511,7 @@ export class LiveExecutionService {
         readiness.lastVerificationError,
 
       liveExecutionEnabled:
-        false,
+        LIVE_EXECUTION_ENABLED,
 
       adapterConnected:
         false,

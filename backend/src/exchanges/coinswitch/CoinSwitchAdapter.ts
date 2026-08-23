@@ -552,6 +552,15 @@ export class CoinSwitchAdapter
   }
 
   /**
+   * Read-only bounded capacity used by the manager's adaptive subscription
+   * window. It exposes no socket, credential or execution authority.
+   */
+  getMaximumSubscribedMarkets():
+    number {
+    return this.resolveMaximumSubscribedMarkets();
+  }
+
+  /**
    * Return only current subscriptions that still own a genuinely fresh,
    * quantity-bearing book. The manager uses this read-only view to keep
    * healthy streams sticky across small counterpart-freshness fluctuations;

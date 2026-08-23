@@ -243,4 +243,84 @@ router.post(
   },
 );
 
+/*
+ * POST /api/execution/alerts/history/resolve-inactive
+ *
+ * {
+ *   "resolutionNote":
+ *     "Underlying condition validated clear."
+ * }
+ *
+ * Optional:
+ * {
+ *   "onlyCritical": true
+ * }
+ *
+ * Resolves all matching inactive history rows.
+ */
+router.post(
+  "/history/resolve-inactive",
+
+  (
+    request,
+    response,
+  ) => {
+    try {
+      const body =
+        request.body ?? {};
+
+      const resolutionNote =
+        typeof body
+          .resolutionNote ===
+          "string"
+          ? body.resolutionNote
+          : "";
+
+      const onlyCritical =
+        typeof body
+          .onlyCritical ===
+          "boolean"
+          ? body.onlyCritical
+          : false;
+
+      const resolved =
+        productionAlertHistoryService
+          .resolveInactive(
+            resolutionNote,
+            onlyCritical,
+          );
+
+      response.json({
+        success:
+          true,
+
+        data: {
+          resolvedCount:
+            resolved.length,
+
+          alerts:
+            resolved,
+        },
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      response
+        .status(
+          409,
+        )
+        .json({
+          success:
+            false,
+
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unable to resolve inactive production alerts.",
+        });
+    }
+  },
+);
+
 export default router;

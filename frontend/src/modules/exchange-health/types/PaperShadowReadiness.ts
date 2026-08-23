@@ -1,4 +1,5 @@
 import type {
+  CatProFleetExchange,
   CatProTargetExchange,
 } from "./ExchangeFleet";
 
@@ -7,8 +8,10 @@ export type ExchangeFeeEvidenceSource =
   | "PUBLIC_API"
   | "ACCOUNT_API";
 
-export interface PaperShadowExchangeReadiness {
-  exchange: CatProTargetExchange;
+export interface PaperShadowExchangeReadiness<
+  TExchange extends CatProFleetExchange = CatProTargetExchange,
+> {
+  exchange: TExchange;
 
   displayName: string;
 
@@ -86,6 +89,21 @@ export interface FiveExchangePaperShadowReadinessReport {
 
   exchanges:
     PaperShadowExchangeReadiness[];
+
+  paperExtensionExchangeCount?: 1;
+
+  paperExtensionExchanges?:
+    PaperShadowExchangeReadiness<"zebpay">[];
+
+  paperExtensionSummary?: {
+    shadowAvailableExchanges: number;
+
+    paperAvailableExchanges: number;
+
+    totalShadowEligibleMarkets: number;
+
+    totalPaperEligibleMarkets: number;
+  };
 
   blockers: string[];
 

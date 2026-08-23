@@ -1,4 +1,5 @@
 import {createHash} from "node:crypto";
+import {binanceUsdMCredentialsProvider} from "../../../derivatives/providers/BinanceUsdMCredentialsProvider";
 import {binanceHttpClient} from "../../../exchanges/binance/api/BinanceHttpClient";
 import type {BinanceCredentials} from "../../../exchanges/binance/api/BinanceCredentialsProvider";
 import {binanceCredentialsProvider} from "../../../exchanges/binance/api/BinanceCredentialsProvider";
@@ -130,7 +131,7 @@ export class BinanceUsdMOrderFillFeeSource implements OrderFillFeeSource {
   readonly exchange = "binance"; readonly product = "PERPETUAL" as const;
   readonly source = "BINANCE_USDM_ACCOUNT_TRADES" as const;
   constructor(private readonly port: BinanceUsdMOrderPort = new DefaultBinanceUsdMOrderPort(),
-    private readonly credentials: {getCredentials(): BinanceCredentials} = binanceCredentialsProvider) {}
+    private readonly credentials: {getCredentials(): BinanceCredentials} = binanceUsdMCredentialsProvider) {}
   async getFills(market: string, orderId: string): Promise<readonly VenueOrderFill[]> {
     const time = await this.port.getPublic<BinanceServerTime>("/fapi/v1/time"); const timestamp = Number(time.serverTime);
     if (!Number.isSafeInteger(timestamp) || timestamp <= 0) throw new Error("Binance USD-M server time is invalid.");

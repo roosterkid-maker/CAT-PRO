@@ -100,6 +100,17 @@ export interface BybitExecutionUniverseFilterResult {
     BybitExecutionUniverseReport;
 }
 
+export interface BybitOpportunityEligibilitySnapshot {
+  generatedAt: number;
+
+  observedMarkets: number;
+
+  executionEligibleMarkets: number;
+
+  eligibleMarkets:
+    ReadonlySet<string>;
+}
+
 interface BybitQualityEvidence {
   readonly market: string;
 
@@ -109,6 +120,32 @@ interface BybitQualityEvidence {
 
   readonly recentInterUpdateGapsMs:
     readonly number[];
+}
+
+interface BybitRollingGapStatistics {
+  readonly sourceGaps:
+    readonly number[];
+
+  readonly messagesReceived:
+    number;
+
+  readonly lastDataAt:
+    number | null;
+
+  readonly maximumQuoteAgeMs:
+    number;
+
+  readonly gaps:
+    readonly number[];
+
+  readonly reliableGapSamples:
+    number;
+
+  readonly unreliableGapSamples:
+    number;
+
+  readonly eventReliabilityPercent:
+    number;
 
   readonly p50InterUpdateGapMs:
     number | null;
@@ -141,6 +178,19 @@ export class BybitExecutionUniverseService {
 
   private static readonly ROLLING_EVENT_GAP_WINDOW =
     30;
+
+  /*
+   * Market-data events mutate the authoritative gap list only when a genuine
+   * Bybit book is published. Opportunity scans can run many times between two
+   * such events, so sorting the same rolling distribution on every scan is
+   * pure hot-path waste. The source-list identity plus event counters make the
+   * cache restart/clear safe without weakening the live freshness check below.
+   */
+  private readonly rollingGapStatisticsByMarket =
+    new Map<
+      string,
+      BybitRollingGapStatistics
+    >();
 
   isExecutionEligible(
     exchange:
@@ -239,6 +289,60 @@ export class BybitExecutionUniverseService {
         ),
 
       report,
+    };
+  }
+
+  /**
+   * Scanner-only eligibility view. The UI report intentionally retains full
+   * per-market diagnostics and sorting, but the event-driven opportunity hot
+   * path needs only an O(1) eligibility set plus two counters. Avoiding the
+   * report DTO and its sort on every 10 ms scan preserves identical quality
+   * gates while cutting allocation and CPU pressure.
+   */
+  getOpportunityEligibilitySnapshot(
+    now =
+      Date.now(),
+  ): BybitOpportunityEligibilitySnapshot {
+    const eligibleMarkets =
+      new Set<string>();
+
+    let observedMarkets =
+      0;
+
+    bybitSubscriptionAuditService
+      .forEachEventEvidence(
+        (
+          evidence,
+        ) => {
+          observedMarkets +=
+            1;
+
+          const quality =
+            this.getMarketQualityFromEventEvidence(
+              evidence,
+              now,
+            );
+
+          if (
+            quality.eligible
+          ) {
+            eligibleMarkets.add(
+              quality.market,
+            );
+          }
+        },
+      );
+
+    return {
+      generatedAt:
+        now,
+
+      observedMarkets,
+
+      executionEligibleMarkets:
+        eligibleMarkets.size,
+
+      eligibleMarkets,
     };
   }
 
@@ -441,40 +545,18 @@ export class BybitExecutionUniverseService {
           "bybit",
         );
 
-    const gaps =
-      record
-        .recentInterUpdateGapsMs
-        .slice(
-          -BybitExecutionUniverseService
-            .ROLLING_EVENT_GAP_WINDOW,
-        );
+    const statistics =
+      this.getRollingGapStatistics(
+        record,
+        maximumQuoteAgeMs,
+      );
 
-    const reliableGapSamples =
-      gaps.filter(
-        (
-          gapMs,
-        ) =>
-          gapMs <=
-          maximumQuoteAgeMs,
-      ).length;
-
-    const unreliableGapSamples =
-      gaps.length -
-      reliableGapSamples;
-
-    const eventReliabilityPercent =
-      gaps.length >
-        0
-        ? Number(
-            (
-              reliableGapSamples /
-              gaps.length *
-              100
-            ).toFixed(
-              2,
-            ),
-          )
-        : 0;
+    const {
+      gaps,
+      reliableGapSamples,
+      unreliableGapSamples,
+      eventReliabilityPercent,
+    } = statistics;
 
     const book =
       orderBookService.get(
@@ -575,13 +657,13 @@ export class BybitExecutionUniverseService {
           .MINIMUM_EVENT_RELIABILITY_PERCENT,
 
       p50InterUpdateGapMs:
-        record.p50InterUpdateGapMs,
+        statistics.p50InterUpdateGapMs,
 
       p95InterUpdateGapMs:
-        record.p95InterUpdateGapMs,
+        statistics.p95InterUpdateGapMs,
 
       maximumInterUpdateGapMs:
-        record.maximumInterUpdateGapMs,
+        statistics.maximumInterUpdateGapMs,
 
       currentBookPresent,
 
@@ -603,6 +685,43 @@ export class BybitExecutionUniverseService {
     now:
       number,
   ): BybitExecutionMarketQuality {
+    return this.getMarketQualityFromRecord(
+      record,
+      now,
+    );
+  }
+
+  private getRollingGapStatistics(
+    record:
+      BybitQualityEvidence,
+
+    maximumQuoteAgeMs:
+      number,
+  ): BybitRollingGapStatistics {
+    const market =
+      this.normalizeMarket(
+        record.market,
+      );
+
+    const cached =
+      this.rollingGapStatisticsByMarket
+        .get(
+          market,
+        );
+
+    if (
+      cached?.sourceGaps ===
+        record.recentInterUpdateGapsMs &&
+      cached.messagesReceived ===
+        record.messagesReceived &&
+      cached.lastDataAt ===
+        record.lastDataAt &&
+      cached.maximumQuoteAgeMs ===
+        maximumQuoteAgeMs
+    ) {
+      return cached;
+    }
+
     const gaps =
       record
         .recentInterUpdateGapsMs
@@ -622,39 +741,82 @@ export class BybitExecutionUniverseService {
             second,
         );
 
-    return this.getMarketQualityFromRecord(
-      {
-        market:
-          record.market,
+    let reliableGapSamples =
+      0;
 
-        messagesReceived:
-          record.messagesReceived,
+    for (
+      const gapMs
+      of gaps
+    ) {
+      if (
+        gapMs <=
+        maximumQuoteAgeMs
+      ) {
+        reliableGapSamples +=
+          1;
+      }
+    }
 
-        lastDataAt:
-          record.lastDataAt,
+    const statistics:
+      BybitRollingGapStatistics = {
+      sourceGaps:
+        record.recentInterUpdateGapsMs,
 
-        recentInterUpdateGapsMs:
-          gaps,
+      messagesReceived:
+        record.messagesReceived,
 
-        p50InterUpdateGapMs:
-          this.percentileFromOrdered(
-            orderedGaps,
-            0.5,
-          ),
+      lastDataAt:
+        record.lastDataAt,
 
-        p95InterUpdateGapMs:
-          this.percentileFromOrdered(
-            orderedGaps,
-            0.95,
-          ),
+      maximumQuoteAgeMs,
 
-        maximumInterUpdateGapMs:
-          orderedGaps.at(
-            -1,
-          ) ?? null,
-      },
-      now,
-    );
+      gaps,
+
+      reliableGapSamples,
+
+      unreliableGapSamples:
+        gaps.length -
+        reliableGapSamples,
+
+      eventReliabilityPercent:
+        gaps.length >
+          0
+          ? Number(
+              (
+                reliableGapSamples /
+                gaps.length *
+                100
+              ).toFixed(
+                2,
+              ),
+            )
+          : 0,
+
+      p50InterUpdateGapMs:
+        this.percentileFromOrdered(
+          orderedGaps,
+          0.5,
+        ),
+
+      p95InterUpdateGapMs:
+        this.percentileFromOrdered(
+          orderedGaps,
+          0.95,
+        ),
+
+      maximumInterUpdateGapMs:
+        orderedGaps.at(
+          -1,
+        ) ?? null,
+    };
+
+    this.rollingGapStatisticsByMarket
+      .set(
+        market,
+        statistics,
+      );
+
+    return statistics;
   }
 
   private percentileFromOrdered(

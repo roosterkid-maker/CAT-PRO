@@ -17,6 +17,10 @@ import {
   readLatestValidJsonlRecord,
 } from "../JsonlTailReader";
 
+import {
+  JsonlSnapshotStore,
+} from "../JsonlSnapshotStore";
+
 interface FixtureRecord {
   valid: true;
 
@@ -231,6 +235,139 @@ function main(): void {
         .oversizedLinesIgnored ===
         1,
       "Reverse JSONL restore must discard a fragmented oversized tail without repeatedly assembling it, then recover the preceding valid record.",
+    );
+
+    const snapshotPath =
+      join(
+        directory,
+        "cumulative-snapshots.jsonl",
+      );
+    const snapshotWriter =
+      new JsonlSnapshotStore<FixtureRecord>({
+        filePath:
+          snapshotPath,
+        isPayload:
+          isFixture,
+      });
+
+    for (
+      let sequence =
+        1;
+      sequence <=
+        2_000;
+      sequence +=
+        1
+    ) {
+      snapshotWriter.append({
+        valid:
+          true,
+        sequence,
+        payload:
+          "x".repeat(256),
+      });
+    }
+
+    appendFileSync(
+      snapshotPath,
+      "{\"truncated-tail\":",
+      "utf8",
+    );
+
+    const snapshotReader =
+      new JsonlSnapshotStore<FixtureRecord>({
+        filePath:
+          snapshotPath,
+        isPayload:
+          isFixture,
+      });
+    const latestSnapshot =
+      snapshotReader.readLatest();
+    const snapshotDiagnostics =
+      snapshotReader.getDiagnostics();
+
+    assertCondition(
+      latestSnapshot?.sequence ===
+        2_000 &&
+      snapshotDiagnostics.linesRead ===
+        2 &&
+      snapshotDiagnostics.lastSequence ===
+        2_000,
+      "Cumulative snapshot restore must skip a broken tail, read only the latest valid envelope and retain its append sequence.",
+    );
+
+    appendFileSync(
+      snapshotPath,
+      "\n",
+      "utf8",
+    );
+
+    const resumedEnvelope =
+      snapshotReader.append({
+        valid:
+          true,
+        sequence:
+          2_001,
+        payload:
+          "resumed",
+      });
+
+    assertCondition(
+      resumedEnvelope.sequence ===
+        2_001,
+      "Bounded snapshot restore must continue the durable envelope sequence.",
+    );
+
+    const checkpointPath =
+      join(
+        directory,
+        "bounded-checkpoint.jsonl",
+      );
+    const checkpointStore =
+      new JsonlSnapshotStore<FixtureRecord>({
+        filePath:
+          checkpointPath,
+        isPayload:
+          isFixture,
+      });
+
+    checkpointStore.replaceAllAtomically([{
+      valid:
+        true,
+      sequence:
+        1,
+      payload:
+        "first-checkpoint",
+    }]);
+    checkpointStore.replaceAllAtomically([{
+      valid:
+        true,
+      sequence:
+        2,
+      payload:
+        "second-checkpoint",
+    }]);
+
+    const currentCheckpoint =
+      new JsonlSnapshotStore<FixtureRecord>({
+        filePath:
+          checkpointPath,
+        isPayload:
+          isFixture,
+      }).readLatest();
+    const previousCheckpoint =
+      new JsonlSnapshotStore<FixtureRecord>({
+        filePath:
+          `${checkpointPath}.previous`,
+        isPayload:
+          isFixture,
+      }).readLatest();
+
+    assertCondition(
+      currentCheckpoint?.sequence ===
+        2 &&
+      previousCheckpoint?.sequence ===
+        1,
+      "Atomic checkpoint replacement must retain the latest cumulative state plus one valid crash fallback without appending redundant history.",
     );
   } finally {
     rmSync(

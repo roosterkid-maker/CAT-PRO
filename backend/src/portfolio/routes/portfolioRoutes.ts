@@ -22,6 +22,26 @@ import {
   positionService,
 } from "../services/PositionService";
 
+import {
+  normalizedInventorySnapshotService,
+} from "../../rebalancing/services/NormalizedInventorySnapshotService";
+
+import {
+  capitalAllocationAndImbalanceService,
+} from "../../rebalancing/services/CapitalAllocationAndImbalanceService";
+
+import {
+  rebalancingDecisionEngine,
+} from "../../rebalancing/services/RebalancingDecisionEngine";
+
+import {
+  capitalManagerSafetyContextService,
+} from "../../rebalancing/services/CapitalManagerSafetyContextService";
+
+import {
+  tradingAccountService,
+} from "../../trading/account/TradingAccountService";
+
 const router =
   Router();
 
@@ -75,6 +95,81 @@ router.get(
       data:
         exchangeBalancePortfolioService
           .getReport(),
+    });
+  },
+);
+
+/*
+ * Read-only normalized inventory truth for capital-rebalancing analysis.
+ * This endpoint has no order, transfer, withdrawal or balance-mutation path.
+ */
+router.get(
+  "/rebalancing-inventory",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    response.json({
+      success:
+        true,
+      data:
+        normalizedInventorySnapshotService
+          .getSnapshot(),
+    });
+  },
+);
+
+/*
+ * Read-only five-exchange allocation and imbalance analysis. The service
+ * deliberately has no route to submit an order, transfer or withdrawal.
+ */
+router.get(
+  "/rebalancing-status",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    const now = Date.now();
+    const inventory = normalizedInventorySnapshotService
+      .getSnapshot(now);
+
+    const allocation = capitalAllocationAndImbalanceService
+      .evaluate(
+        inventory,
+        undefined,
+        now,
+      );
+    const account = tradingAccountService
+      .getAccount();
+
+    response.json({
+      success:
+        true,
+      data: {
+        allocation,
+        plan:
+          rebalancingDecisionEngine
+            .plan(
+              allocation,
+              capitalManagerSafetyContextService
+                .getContext(
+                  account,
+                  now,
+                ),
+              undefined,
+              now,
+            ),
+      },
     });
   },
 );

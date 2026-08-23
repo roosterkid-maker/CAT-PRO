@@ -77,7 +77,10 @@ export interface StrategyMetadata {
     | "29.0"
     | "30.0"
     | "31.0"
-    | "35.0";
+    | "35.0"
+    | "165.0"
+    | "176.0"
+    | "180.0";
 
   readonly category:
     | "CROSS_EXCHANGE_ARBITRAGE"

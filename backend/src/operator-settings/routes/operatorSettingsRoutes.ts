@@ -19,6 +19,14 @@ import {
   paperTradingDataResetService,
 } from "../../trading/services/PaperTradingDataResetService";
 
+import {
+  strategyOneExecutionPolicyService,
+} from "../../trading/policy/StrategyOneExecutionPolicyService";
+
+import {
+  strategyOneTimingCalibrationService,
+} from "../../arbitrage/execution/StrategyOneTimingCalibrationService";
+
 const router =
   Router();
 
@@ -265,6 +273,160 @@ router.post(
               ? error.message
               : "PAPER trading data reset failed.",
         });
+    }
+  },
+);
+
+router.put(
+  "/strategy-one-policy/activate",
+
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    try {
+      strategyOneExecutionPolicyService
+        .activate(
+          typeof request.body?.policyId ===
+            "string"
+            ? request.body.policyId
+            : "",
+
+          typeof request.body?.confirmation ===
+            "string"
+            ? request.body.confirmation
+            : "",
+        );
+
+      return response.json({
+        success:
+          true,
+
+        data:
+          operatorSettingsService
+            .getReport(),
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      return response
+        .status(409)
+        .json({
+          success:
+            false,
+
+          message:
+            error instanceof Error
+              ? error.message
+              : "Strategy #1 policy activation failed closed.",
+        });
+    }
+  },
+);
+
+router.get(
+  "/strategy-one-timing-calibration",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({
+      success: true,
+      data: strategyOneTimingCalibrationService.getDiagnostics(),
+    });
+  },
+);
+
+router.post(
+  "/strategy-one-timing-calibration/propose",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const proposal = strategyOneTimingCalibrationService.propose(
+        typeof request.body?.routeKey === "string"
+          ? request.body.routeKey
+          : "",
+        Date.now(),
+        request.body?.bootstrapAttempts === 2
+          ? 2
+          : 1,
+      );
+
+      response.json({success: true, data: proposal});
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Strategy #1 timing proposal failed closed.",
+      });
+    }
+  },
+);
+
+router.put(
+  "/strategy-one-timing-calibration/:id/approve",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const approved = strategyOneTimingCalibrationService.approve(
+        request.params.id,
+        typeof request.body?.confirmation === "string"
+          ? request.body.confirmation
+          : "",
+      );
+
+      response.json({success: true, data: approved});
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Strategy #1 timing approval failed closed.",
+      });
+    }
+  },
+);
+
+router.put(
+  "/strategy-one-timing-calibration/:id/revoke",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const revoked = strategyOneTimingCalibrationService.revoke(
+        request.params.id,
+      );
+
+      response.json({success: true, data: revoked});
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Strategy #1 timing revocation failed closed.",
+      });
     }
   },
 );

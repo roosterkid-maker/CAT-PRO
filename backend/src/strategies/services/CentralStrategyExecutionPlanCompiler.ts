@@ -159,8 +159,8 @@ function compileSignal(signal: StrategySignal): Compilation {
         family: "SPOT_PERPETUAL",
         pattern: "PARALLEL_TWO_LEG",
         legs: [
-          leg(signal.id, 1, signal.evidence.exchange, "SPOT", signal.evidence.market, "BUY", "MARKET", signal.evidence.quantity, signal.evidence.spotBuyVwap, "PARALLEL"),
-          leg(signal.id, 2, signal.evidence.exchange, "PERPETUAL", signal.evidence.market, "SELL", "MARKET", signal.evidence.quantity, signal.evidence.perpetualSellVwap, "PARALLEL"),
+          leg(signal.id, 1, signal.evidence.spotExchange, "SPOT", signal.evidence.market, "BUY", "MARKET", signal.evidence.quantity, signal.evidence.spotBuyVwap, "PARALLEL"),
+          leg(signal.id, 2, signal.evidence.perpetualExchange, "PERPETUAL", signal.evidence.market, "SELL", "MARKET", signal.evidence.quantity, signal.evidence.perpetualSellVwap, "PARALLEL"),
         ],
         modeledNetValue: signal.evidence.expectedNetQuote,
         modeledNetValueUnit: "QUOTE",
@@ -169,7 +169,9 @@ function compileSignal(signal: StrategySignal): Compilation {
           kind: "BASIS_CONVERGENCE",
           lifecycleOwner: "CENTRAL_SHARED_ORCHESTRATOR",
           entryBasisPercent: signal.evidence.grossBasisPercent,
-          closeAtOrBelowAbsoluteBasisPercent: Math.max(0.05, Math.abs(signal.evidence.grossBasisPercent) * 0.25),
+          closeAtOrBelowAbsoluteBasisPercent: signal.evidence.closeAtOrBelowAbsoluteBasisPercent,
+          nextOpeningDelayMs: signal.evidence.nextOpeningDelayMs,
+          perpetualLeverage: signal.evidence.perpetualLeverage,
           fundingTimestamps: [signal.evidence.nextFundingTime],
           requiresFundingEvidence: true,
           forcedTimeExitAllowed: false,
@@ -327,7 +329,10 @@ function validateSettlementPolicy(policy: CentralStrategySettlementPolicy): void
       return;
     case "BASIS_CONVERGENCE":
       if (!Number.isFinite(policy.entryBasisPercent) || !Number.isFinite(policy.closeAtOrBelowAbsoluteBasisPercent) ||
-          policy.closeAtOrBelowAbsoluteBasisPercent < 0 || !Number.isSafeInteger(policy.fundingTimestamps[0])) throw new Error("Basis settlement policy evidence is invalid.");
+          policy.closeAtOrBelowAbsoluteBasisPercent < 0 ||
+          !Number.isSafeInteger(policy.nextOpeningDelayMs) || policy.nextOpeningDelayMs <= 0 ||
+          policy.perpetualLeverage !== 1 ||
+          !Number.isSafeInteger(policy.fundingTimestamps[0])) throw new Error("Basis settlement policy evidence is invalid.");
       return;
     case "FUNDING_CAPTURE_THEN_EXIT":
       if (!Number.isSafeInteger(policy.notBefore) || policy.notBefore <= 0 || policy.fundingTimestamps.length !== 2 ||

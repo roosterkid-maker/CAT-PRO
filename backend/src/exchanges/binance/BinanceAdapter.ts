@@ -64,6 +64,81 @@ type BinanceMessage =
   | BinanceCombinedMessage
   | BinanceSubscriptionResponse;
 
+export interface BinanceActionTimeOrderBookRefreshReport {
+  readonly exchange: "binance";
+  readonly market: string;
+  readonly accepted: boolean;
+  readonly requestedAt: number;
+  readonly receivedAt: number | null;
+  readonly roundTripMs: number;
+  readonly error: string | null;
+}
+
+export interface BinancePublicOrderBookSnapshotFetcher {
+  fetch(
+    market: string,
+    timeoutMs: number,
+  ): Promise<unknown>;
+}
+
+const DEFAULT_PUBLIC_ORDER_BOOK_SNAPSHOT_FETCHER:
+  BinancePublicOrderBookSnapshotFetcher = {
+  async fetch(
+    market,
+    timeoutMs,
+  ): Promise<unknown> {
+    const url =
+      buildBinanceActionTimeOrderBookUrl(
+        market,
+      );
+
+    const response =
+      await fetch(
+        url,
+        {
+          signal:
+            AbortSignal.timeout(
+              timeoutMs,
+            ),
+        },
+      );
+
+    if (
+      !response.ok
+    ) {
+      throw new Error(
+        `Binance public order-book refresh failed with HTTP ${response.status}.`,
+      );
+    }
+
+    return response.json();
+  },
+};
+
+export function buildBinanceActionTimeOrderBookUrl(
+  market:
+    string,
+): URL {
+  const url =
+    new URL(
+      `${BINANCE.REST.ACTION_TIME_PUBLIC_BASE_URL}${BINANCE.REST.ORDER_BOOK}`,
+    );
+
+  url.searchParams.set(
+    "symbol",
+    market,
+  );
+
+  url.searchParams.set(
+    "limit",
+    String(
+      BINANCE.DEPTH.LEVELS,
+    ),
+  );
+
+  return url;
+}
+
 export class BinanceAdapter
   implements ExchangeAdapter
 {
@@ -100,6 +175,12 @@ export class BinanceAdapter
       ) => void)
     | null =
     null;
+
+  constructor(
+    private readonly publicOrderBookSnapshotFetcher:
+      BinancePublicOrderBookSnapshotFetcher =
+      DEFAULT_PUBLIC_ORDER_BOOK_SNAPSHOT_FETCHER,
+  ) {}
 
   async connect():
     Promise<void> {
@@ -298,6 +379,144 @@ export class BinanceAdapter
       callback;
   }
 
+  /**
+   * Bounded public-read refresh used only after an otherwise-qualified
+   * Strategy #1 action is blocked by stale books. Normal fresh candidates
+   * remain on the WebSocket fast path and never pay this network cost.
+   */
+  async refreshOrderBookSnapshot(
+    marketValue:
+      string,
+    timeoutMs:
+      number =
+      BINANCE
+        .ACTION_TIME_ORDER_BOOK_TIMEOUT_MS,
+  ): Promise<BinanceActionTimeOrderBookRefreshReport> {
+    const market =
+      marketValue
+        .trim()
+        .toUpperCase();
+
+    const requestedAt =
+      Date.now();
+
+    if (
+      !/^[A-Z0-9]{6,24}$/u.test(
+        market,
+      )
+    ) {
+      return {
+        exchange:
+          "binance",
+        market,
+        accepted:
+          false,
+        requestedAt,
+        receivedAt:
+          null,
+        roundTripMs:
+          0,
+        error:
+          "Binance action-time order-book market is invalid.",
+      };
+    }
+
+    if (
+      !Number.isSafeInteger(
+        timeoutMs,
+      ) ||
+      timeoutMs <
+        50 ||
+      timeoutMs >
+        1_000
+    ) {
+      return {
+        exchange:
+          "binance",
+        market,
+        accepted:
+          false,
+        requestedAt,
+        receivedAt:
+          null,
+        roundTripMs:
+          0,
+        error:
+          "Binance action-time order-book timeout must be 50-1000 ms.",
+      };
+    }
+
+    try {
+      const payload =
+        await this
+          .publicOrderBookSnapshotFetcher
+          .fetch(
+            market,
+            timeoutMs,
+          ) as BinancePartialDepth;
+
+      const receivedAt =
+        Date.now();
+
+      const accepted =
+        this.applyOrderBookSnapshot(
+          market,
+          payload,
+          receivedAt,
+        );
+
+      return {
+        exchange:
+          "binance",
+        market,
+        accepted:
+          accepted.accepted,
+        requestedAt,
+        receivedAt:
+          accepted.accepted
+            ? receivedAt
+            : null,
+        roundTripMs:
+          Math.max(
+            0,
+            receivedAt -
+              requestedAt,
+          ),
+        error:
+          accepted.accepted
+            ? null
+            : accepted.reason,
+      };
+    } catch (
+      error:
+        unknown
+    ) {
+      const completedAt =
+        Date.now();
+
+      return {
+        exchange:
+          "binance",
+        market,
+        accepted:
+          false,
+        requestedAt,
+        receivedAt:
+          null,
+        roundTripMs:
+          Math.max(
+            0,
+            completedAt -
+              requestedAt,
+          ),
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown Binance action-time order-book refresh failure.",
+      };
+    }
+  }
+
   private async loadTradingSymbols():
     Promise<string[]> {
     const [
@@ -414,15 +633,31 @@ export class BinanceAdapter
         BINANCE.QUOTE_ASSET,
         BINANCE.SECONDARY_QUOTE_ASSETS,
         BINANCE.SECONDARY_QUOTE_RESERVE_RATIO,
+        Date.now(),
+        this.resolveProtectedMarkets(),
       );
 
     const selectedSymbols = [...selection.selected];
 
     console.log(
-      `[${this.name}] Selected ${selectedSymbols.length} of ${activeSymbols.length} active spot markets (primary=${selection.selectedPrimaryMarkets}, secondary=${selection.selectedSecondaryMarkets}, anchors=${selection.selectedAnchorMarkets}, overlap=${selection.selectedExternalOverlapMarkets}, activity=${selection.selectedWithActivityEvidence}, quotes=${JSON.stringify(selection.quoteDistribution)}, limit=${maximumMarkets}).`,
+      `[${this.name}] Selected ${selectedSymbols.length} of ${activeSymbols.length} active spot markets (primary=${selection.selectedPrimaryMarkets}, secondary=${selection.selectedSecondaryMarkets}, anchors=${selection.selectedAnchorMarkets}, protected=${selection.selectedProtectedMarkets}, overlap=${selection.selectedExternalOverlapMarkets}, activity=${selection.selectedWithActivityEvidence}, quotes=${JSON.stringify(selection.quoteDistribution)}, limit=${maximumMarkets}).`,
     );
 
     return selectedSymbols;
+  }
+
+  private resolveProtectedMarkets(): ReadonlySet<string> {
+    const configured =
+      process.env.BINANCE_PROTECTED_MARKETS
+        ?.split(",")
+        .map((market) => market.trim().toUpperCase())
+        .filter(Boolean) ??
+      [];
+
+    return new Set([
+      ...BINANCE.DEFAULT_PROTECTED_MARKETS,
+      ...configured,
+    ]);
   }
 
   private resolveMaximumMarkets():
@@ -808,6 +1043,43 @@ export class BinanceAdapter
       return;
     }
 
+    this.applyOrderBookSnapshot(
+      market,
+      depth,
+      Date.now(),
+    );
+  }
+
+  private applyOrderBookSnapshot(
+    market:
+      string,
+    depth:
+      BinancePartialDepth,
+    timestamp:
+      number,
+  ): {
+    readonly accepted: boolean;
+    readonly reason: string | null;
+  } {
+    if (
+      !depth ||
+      typeof depth !==
+        "object" ||
+      !Array.isArray(
+        depth.bids,
+      ) ||
+      !Array.isArray(
+        depth.asks,
+      )
+    ) {
+      return {
+        accepted:
+          false,
+        reason:
+          "Binance order-book refresh returned an invalid payload.",
+      };
+    }
+
     const bids =
       this.normalizeDepthSide(
         depth.bids,
@@ -826,7 +1098,12 @@ export class BinanceAdapter
       asks.length ===
         0
     ) {
-      return;
+      return {
+        accepted:
+          false,
+        reason:
+          "Binance order-book refresh has no valid two-sided depth.",
+      };
     }
 
     const bestBid =
@@ -845,11 +1122,13 @@ export class BinanceAdapter
       bestAsk.price <
         bestBid.price
     ) {
-      return;
+      return {
+        accepted:
+          false,
+        reason:
+          "Binance order-book refresh is crossed or incomplete.",
+      };
     }
-
-    const timestamp =
-      Date.now();
 
     const orderBook:
       OrderBook = {
@@ -871,9 +1150,22 @@ export class BinanceAdapter
      *
      * Therefore replace() is correct.
      */
-    orderBookService.replace(
-      orderBook,
-    );
+    const replacement =
+      orderBookService
+        .replace(
+          orderBook,
+        );
+
+    if (
+      !replacement.accepted
+    ) {
+      return {
+        accepted:
+          false,
+        reason:
+          `Binance order-book refresh was rejected: ${replacement.reason}.`,
+      };
+    }
 
     /*
      * CRITICAL FRESHNESS SYNCHRONIZATION
@@ -917,6 +1209,13 @@ export class BinanceAdapter
         `[${this.name}] Synchronized depth: ${market} | bids=${bids.length} | asks=${asks.length} | bid=${bestBid.price} | ask=${bestAsk.price} | books=${orderBookService.size()} | depthUpdates=${this.depthUpdateCount}`,
       );
     }
+
+    return {
+      accepted:
+        true,
+      reason:
+        null,
+    };
   }
 
   /*

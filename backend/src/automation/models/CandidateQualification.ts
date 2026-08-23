@@ -92,6 +92,33 @@ export interface CandidateCapitalAwareLiquidityAssessment {
   recommendation:
     string | null;
 
+  /** Exact accepted opportunity used for market-rule and last-look checks. */
+  opportunityResolved?: boolean;
+
+  /** Quantity/min-notional/precision rules were evaluated for both legs. */
+  marketRulesChecked?: boolean;
+
+  /** True only when both venue increments are complete enough for a real order. */
+  liveOrderSafe?: boolean;
+
+  fundedRouteState?:
+    "FUNDED" |
+    "REDUCED" |
+    "BLOCKED" |
+    null;
+
+  stressStatus?:
+    "PASSED" |
+    "BLOCKED" |
+    null;
+
+  /** Conservative net after exact VWAP, fees, adverse-move reserve and buffer. */
+  postStressNetProfit?:
+    number | null;
+
+  postStressNetProfitPercent?:
+    number | null;
+
   minimumRequiredNetProfitPercent:
     number;
 
@@ -157,6 +184,15 @@ export interface CandidateQualificationConfig {
     number;
 
   minimumPersistenceMs:
+    number;
+
+  fastLaneMinimumPostStressNetProfitPercent:
+    number;
+
+  fastLaneMinimumConsecutiveDistinctBookObservations:
+    number;
+
+  fastLaneMinimumPersistenceMs:
     number;
 
   minimumNetProfitPercent:

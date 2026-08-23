@@ -24,6 +24,14 @@ const BotDashboard = lazy(
   () => import("@/modules/bot/pages/BotDashboard"),
 );
 
+const AgentSakhondraDashboard = lazy(
+  () => import("@/modules/agent-sakhondra/pages/AgentSakhondraDashboard"),
+);
+
+const TradeFlowDashboard = lazy(
+  () => import("@/modules/trade-flow/pages/TradeFlowDashboard"),
+);
+
 const ExecutionMonitoringDashboard =
   lazy(
     () =>
@@ -180,6 +188,40 @@ export default function AppRouter() {
           }
           element={
             <BotDashboard />
+          }
+        />
+
+        <Route
+          path={
+            APP_PAGE_PATHS["agent-sakhondra"]
+          }
+          element={
+            <AgentSakhondraDashboard />
+          }
+        />
+
+        <Route
+          path={
+            APP_PAGE_PATHS[
+              "trade-intelligence"
+            ]
+          }
+          element={
+            <TradeFlowDashboard />
+          }
+        />
+
+        <Route
+          path="/trade-flow"
+          element={
+            <Navigate
+              to={
+                APP_PAGE_PATHS[
+                  "trade-intelligence"
+                ]
+              }
+              replace
+            />
           }
         />
 

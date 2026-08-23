@@ -3,6 +3,14 @@ import {
 } from "../../execution/capabilities/services/ExchangeCapabilityService";
 
 import {
+  getExchangeFeeEvidence,
+} from "../../arbitrage/config/fees";
+
+import {
+  marketCache,
+} from "../../services/cache.service";
+
+import {
   liveExecutionService,
 } from "../../execution/live/LiveExecutionService";
 
@@ -25,13 +33,20 @@ export const CAT_PRO_TARGET_EXCHANGES = [
 export type CatProTargetExchange =
   typeof CAT_PRO_TARGET_EXCHANGES[number];
 
+export type CatProObservationExchange =
+  "zebpay";
+
+export type CatProFleetExchange =
+  | CatProTargetExchange
+  | CatProObservationExchange;
+
 export type ExchangeCapabilityImplementationState =
   | "IMPLEMENTED"
   | "DOCUMENTED_NOT_IMPLEMENTED";
 
 interface ExchangeFleetDefinition {
   exchange:
-    CatProTargetExchange;
+    CatProFleetExchange;
 
   displayName: string;
 
@@ -42,7 +57,7 @@ interface ExchangeFleetDefinition {
 
 export interface ExchangeFleetCapability {
   exchange:
-    CatProTargetExchange;
+    CatProFleetExchange;
 
   displayName: string;
 
@@ -106,7 +121,7 @@ export interface ExchangeFleetCapability {
 export interface ExchangeFleetCapabilityReport {
   generatedAt: number;
 
-  version: "19.27";
+  version: "19.28";
 
   targetExchangeCount: 5;
 
@@ -130,6 +145,19 @@ export interface ExchangeFleetCapabilityReport {
 
   exchanges:
     ExchangeFleetCapability[];
+
+  observationExchangeCount: 1;
+
+  observationExchanges:
+    ExchangeFleetCapability[];
+
+  observationSummary: {
+    marketDataConnected: number;
+
+    executionEligible: number;
+
+    paperEligibleMarkets: number;
+  };
 
   notes: string[];
 }
@@ -172,6 +200,10 @@ export interface ExchangeFleetRegistryDependencies {
   hasLiveOrderAdapter(
     exchange: string,
   ): boolean;
+
+  getPaperEligibleMarketCount?(
+    exchange: string,
+  ): number;
 }
 
 const FLEET_DEFINITIONS:
@@ -247,6 +279,23 @@ const FLEET_DEFINITIONS:
   },
 ] as const;
 
+const OBSERVATION_DEFINITIONS:
+  readonly ExchangeFleetDefinition[] = [
+  {
+    exchange:
+      "zebpay",
+
+    displayName:
+      "ZebPay",
+
+    officialDocumentationUrl:
+      "https://docs.zebpay.com/",
+
+    marketDataImplemented:
+      true,
+  },
+] as const;
+
 export class ExchangeFleetRegistry {
   constructor(
     private readonly dependencies:
@@ -295,8 +344,11 @@ export class ExchangeFleetRegistry {
           ),
       );
 
-    const exchanges =
-      FLEET_DEFINITIONS.map(
+    const capabilities =
+      [
+        ...FLEET_DEFINITIONS,
+        ...OBSERVATION_DEFINITIONS,
+      ].map(
         (definition) => {
           const exchange =
             definition.exchange;
@@ -424,12 +476,51 @@ export class ExchangeFleetRegistry {
         },
       );
 
+    const targetExchanges =
+      new Set<string>(
+        CAT_PRO_TARGET_EXCHANGES,
+      );
+
+    const exchanges =
+      capabilities.filter(
+        (exchange) =>
+          targetExchanges.has(
+            exchange.exchange,
+          ),
+      );
+
+    const observationExchanges =
+      capabilities.filter(
+        (exchange) =>
+          exchange.exchange ===
+          "zebpay",
+      );
+
+    const observationPaperEligibleMarkets =
+      this.dependencies
+        .getPaperEligibleMarketCount?.(
+          "zebpay",
+        ) ??
+      0;
+
+    const observationExecutionEligible =
+      observationExchanges.filter(
+        (exchange) =>
+          exchange.marketData.connected &&
+          exchange.marketRules.providerRegistered &&
+          exchange.authenticatedRead.verificationState ===
+            "VERIFIED" &&
+          exchange.authenticatedRead.fresh &&
+          observationPaperEligibleMarkets >
+            0,
+      ).length;
+
     return {
       generatedAt:
         Date.now(),
 
       version:
-        "19.27",
+        "19.28",
 
       targetExchangeCount:
         5,
@@ -489,6 +580,26 @@ export class ExchangeFleetRegistry {
 
       exchanges,
 
+      observationExchangeCount:
+        1,
+
+      observationExchanges,
+
+      observationSummary: {
+        marketDataConnected:
+          observationExchanges.filter(
+            (exchange) =>
+              exchange.marketData
+                .connected,
+          ).length,
+
+        executionEligible:
+          observationExecutionEligible,
+
+        paperEligibleMarkets:
+          observationPaperEligibleMarkets,
+      },
+
       notes: [
         "The five-exchange target fleet is explicit and authoritative.",
 
@@ -497,6 +608,10 @@ export class ExchangeFleetRegistry {
         "UnoCoin market data uses validated public REST snapshots; ticker-only responses never become executable without quantity-bearing order-book evidence.",
 
         "CoinSwitch market data uses audited public Socket.IO full-depth snapshots; REST ticker-only responses never become executable without quantity-bearing order-book evidence.",
+
+        "ZebPay is a staged PAPER-extension lane with genuine quantity-bearing depth, exact Spot order rules, authenticated side-aware fee evidence and native-unit balance synchronization. It may enter normal PAPER qualification only when all central economics, freshness, liquidity and capital gates pass.",
+
+        "ZebPay remains excluded from LIVE readiness and dispatch: its execution adapter foundation is deliberately unregistered until authenticated private order/fill evidence and the central Strategy #1 venue contract are independently proven.",
 
         "Runtime connectivity and verification fields are evidence-based and default fail-closed.",
 
@@ -569,4 +684,66 @@ export const exchangeFleetRegistry =
           .hasAdapter(
             exchange,
           ),
+
+    getPaperEligibleMarketCount:
+      (exchange) => {
+        const executableMarkets =
+          new Set(
+            marketCache
+              .getExecutableByExchange(
+                exchange,
+              )
+              .map(
+                (quote) =>
+                  quote.market
+                    .trim()
+                    .toUpperCase()
+                    .replace(
+                      /[\s_,\-/]+/g,
+                      "",
+                    ),
+              ),
+          );
+
+        return exchangeCapabilityService
+          .getCachedCapabilities(
+            exchange,
+          )
+          .filter(
+            (capability) =>
+              executableMarkets.has(
+                capability.market
+                  .trim()
+                  .toUpperCase()
+                  .replace(
+                    /[\s_,\-/]+/g,
+                    "",
+                  ),
+              ) &&
+              capability.tradingEnabled &&
+              !capability.maintenanceMode &&
+              capability.order.supportedOrderTypes.includes(
+                "limit",
+              ) &&
+              (
+                capability.quantity.quantityStep !==
+                  null ||
+                capability.quantity.quantityPrecision !==
+                  null
+              ) &&
+              (
+                capability.price.priceStep !==
+                  null ||
+                capability.price.pricePrecision !==
+                  null
+              ) &&
+              capability.notional.minimumNotional !==
+                null &&
+              getExchangeFeeEvidence(
+                exchange,
+                capability.market,
+              ) !==
+                null,
+          ).length;
+      },
   });

@@ -27,6 +27,7 @@ import {
 
 import {
   unoCoinPublicApi,
+  UnoCoinPublicDataRejectedError,
   type UnoCoinPublicMarketApi,
 } from "./UnoCoinPublicApi";
 
@@ -40,6 +41,11 @@ interface UnoCoinAvailableMarket {
 
   canonicalMarket: string;
 }
+
+type UnoCoinBookRefreshResult =
+  | "SUCCESS"
+  | "DATA_REJECTED"
+  | "TRANSPORT_FAILURE";
 
 export interface UnoCoinAdapterDiagnostics {
   pairsLoaded: number;
@@ -73,6 +79,21 @@ export interface UnoCoinAdapterDiagnostics {
   orderBookRefreshMs: number;
 
   maximumConcurrentBookReads: number;
+
+  adaptiveMarketLimit: number;
+
+  adaptiveConcurrentBookReads: number;
+
+  transportFailureBatches: number;
+
+  consecutiveTransportFailureBatches: number;
+
+  consecutiveHealthyBatches: number;
+
+  orderBookBackoffUntil:
+    number | null;
+
+  suppressedBookReads: number;
 
   transientFailuresRetained: number;
 
@@ -111,6 +132,28 @@ export class UnoCoinAdapter
 
   private readonly scheduleTimers:
     boolean;
+
+  private readonly configuredMaximumOrderBookMarkets:
+    number;
+
+  private readonly configuredMaximumConcurrentBookReads:
+    number;
+
+  private adaptiveMarketLimit =
+    1;
+
+  private adaptiveConcurrentBookReads =
+    1;
+
+  private consecutiveTransportFailureBatches =
+    0;
+
+  private consecutiveHealthyBatches =
+    0;
+
+  private orderBookBackoffUntil:
+    number | null =
+    null;
 
   private readonly availableMarkets =
     new Map<
@@ -220,6 +263,27 @@ export class UnoCoinAdapter
     maximumConcurrentBookReads:
       UNOCOIN.MAXIMUM_CONCURRENT_BOOK_READS,
 
+    adaptiveMarketLimit:
+      1,
+
+    adaptiveConcurrentBookReads:
+      1,
+
+    transportFailureBatches:
+      0,
+
+    consecutiveTransportFailureBatches:
+      0,
+
+    consecutiveHealthyBatches:
+      0,
+
+    orderBookBackoffUntil:
+      null,
+
+    suppressedBookReads:
+      0,
+
     transientFailuresRetained:
       0,
 
@@ -250,9 +314,17 @@ export class UnoCoinAdapter
       options.scheduleTimers ??
       true;
 
+    this.configuredMaximumOrderBookMarkets =
+      this.resolveMaximumOrderBookMarkets();
+
+    this.configuredMaximumConcurrentBookReads =
+      this.resolveMaximumConcurrentBookReads();
+
     this.diagnostics
       .maximumConcurrentBookReads =
-      this.resolveMaximumConcurrentBookReads();
+      this.configuredMaximumConcurrentBookReads;
+
+    this.resetAdaptiveBookPressure();
   }
 
   async connect():
@@ -262,6 +334,14 @@ export class UnoCoinAdapter
       this.isConnected()
     ) {
       return;
+    }
+
+    if (
+      this.orderBookRefreshInProgress
+    ) {
+      throw new Error(
+        "UnoCoin catalog recovery deferred until the bounded in-flight order-book batch settles.",
+      );
     }
 
     this.stopTimers();
@@ -301,6 +381,8 @@ export class UnoCoinAdapter
     this.publishTickers(
       tickers,
     );
+
+    this.resetAdaptiveBookPressure();
 
     this.connected =
       true;
@@ -350,6 +432,8 @@ export class UnoCoinAdapter
 
     this.quarantinedUntilByMarket
       .clear();
+
+    this.resetAdaptiveBookPressure();
 
     this.diagnostics
       .activeQuarantinedMarkets =
@@ -803,6 +887,32 @@ export class UnoCoinAdapter
       return;
     }
 
+    const now =
+      this.now();
+
+    if (
+      this.orderBookBackoffUntil !==
+        null &&
+      this.orderBookBackoffUntil >
+        now
+    ) {
+      this.diagnostics
+        .suppressedBookReads +=
+        Math.min(
+          this.adaptiveMarketLimit,
+          this.subscribedMarkets.size,
+        );
+
+      return;
+    }
+
+    this.orderBookBackoffUntil =
+      null;
+
+    this.diagnostics
+      .orderBookBackoffUntil =
+      null;
+
     this.orderBookRefreshInProgress =
       true;
 
@@ -810,10 +920,20 @@ export class UnoCoinAdapter
       const tickerIds = [
         ...this.subscribedMarkets
           .values(),
-      ];
+      ].slice(
+        0,
+        this.adaptiveMarketLimit,
+      );
 
       let nextIndex =
         0;
+
+      let transportFailureObserved =
+        false;
+
+      const results:
+        UnoCoinBookRefreshResult[] =
+        [];
 
       const workers =
         Array.from(
@@ -821,12 +941,13 @@ export class UnoCoinAdapter
             length:
               Math.min(
                 this.diagnostics
-                  .maximumConcurrentBookReads,
+                  .adaptiveConcurrentBookReads,
                 tickerIds.length,
               ),
           },
           async () => {
             while (
+              !transportFailureObserved &&
               nextIndex <
               tickerIds.length
             ) {
@@ -839,10 +960,23 @@ export class UnoCoinAdapter
                 1;
 
               if (tickerId) {
-                await this
+                const result =
+                  await this
                   .refreshOrderBook(
                     tickerId,
                   );
+
+                results.push(
+                  result,
+                );
+
+                if (
+                  result ===
+                    "TRANSPORT_FAILURE"
+                ) {
+                  transportFailureObserved =
+                    true;
+                }
               }
             }
           },
@@ -850,6 +984,18 @@ export class UnoCoinAdapter
 
       await Promise.all(
         workers,
+      );
+
+      this.diagnostics
+        .suppressedBookReads +=
+        Math.max(
+          0,
+          tickerIds.length -
+            results.length,
+        );
+
+      this.recordOrderBookBatchResult(
+        results,
       );
     } finally {
       this.orderBookRefreshInProgress =
@@ -859,7 +1005,7 @@ export class UnoCoinAdapter
 
   private async refreshOrderBook(
     tickerId: string,
-  ): Promise<void> {
+  ): Promise<UnoCoinBookRefreshResult> {
     try {
       const incomingBook =
         await this.api
@@ -897,7 +1043,7 @@ export class UnoCoinAdapter
           "invalid or crossed snapshot",
         );
 
-        return;
+        return "DATA_REJECTED";
       }
 
       const replacement =
@@ -939,7 +1085,7 @@ export class UnoCoinAdapter
           `authoritative store rejected snapshot: ${replacement.reason}`,
         );
 
-        return;
+        return "DATA_REJECTED";
       }
 
       const bestBid =
@@ -960,7 +1106,7 @@ export class UnoCoinAdapter
           tickerId,
         );
 
-        return;
+        return "DATA_REJECTED";
       }
 
       const ticker:
@@ -1054,6 +1200,8 @@ export class UnoCoinAdapter
         .activeQuarantinedMarkets =
         this.quarantinedUntilByMarket
           .size;
+
+      return "SUCCESS";
     } catch (
       error
     ) {
@@ -1101,7 +1249,178 @@ export class UnoCoinAdapter
           ? error.message
           : "unknown public API failure",
       );
+
+      if (
+        error instanceof
+          UnoCoinPublicDataRejectedError
+      ) {
+        return "DATA_REJECTED";
+      }
+
+      return "TRANSPORT_FAILURE";
     }
+  }
+
+  private recordOrderBookBatchResult(
+    results:
+      readonly UnoCoinBookRefreshResult[],
+  ): void {
+    if (
+      results.length ===
+        0
+    ) {
+      return;
+    }
+
+    const transportFailures =
+      results.filter(
+        (result) =>
+          result ===
+          "TRANSPORT_FAILURE",
+      ).length;
+
+    if (
+      transportFailures ===
+        0
+    ) {
+      this.consecutiveTransportFailureBatches =
+        0;
+
+      this.consecutiveHealthyBatches +=
+        1;
+
+      if (
+        this.consecutiveHealthyBatches >=
+          2
+      ) {
+        this.consecutiveHealthyBatches =
+          0;
+
+        this.adaptiveMarketLimit =
+          Math.min(
+            this.configuredMaximumOrderBookMarkets,
+            this.adaptiveMarketLimit +
+              1,
+          );
+
+        this.adaptiveConcurrentBookReads =
+          Math.min(
+            this.configuredMaximumConcurrentBookReads,
+            Math.max(
+              1,
+              Math.ceil(
+                this.adaptiveMarketLimit /
+                4,
+              ),
+            ),
+          );
+      }
+
+      this.syncAdaptiveDiagnostics();
+
+      return;
+    }
+
+    this.diagnostics
+      .transportFailureBatches +=
+      1;
+
+    this.consecutiveTransportFailureBatches +=
+      1;
+
+    this.consecutiveHealthyBatches =
+      0;
+
+    const failureRatio =
+      transportFailures /
+      results.length;
+
+    this.adaptiveMarketLimit =
+      failureRatio >=
+        0.5
+        ? Math.max(
+            1,
+            Math.floor(
+              this.adaptiveMarketLimit /
+              2,
+            ),
+          )
+        : Math.max(
+            1,
+            this.adaptiveMarketLimit -
+              1,
+          );
+
+    this.adaptiveConcurrentBookReads =
+      1;
+
+    const backoffMs =
+      Math.min(
+        60_000,
+        5_000 *
+          2 **
+            Math.min(
+              4,
+              this.consecutiveTransportFailureBatches -
+                1,
+            ),
+      );
+
+    this.orderBookBackoffUntil =
+      this.now() +
+      backoffMs;
+
+    this.syncAdaptiveDiagnostics();
+
+    console.warn(
+      `[${this.name}] Adaptive public-book pressure reduced to ${this.adaptiveMarketLimit} market(s), ${this.adaptiveConcurrentBookReads} concurrent read(s), ${backoffMs} ms backoff after ${transportFailures}/${results.length} transport failure(s).`,
+    );
+  }
+
+  private resetAdaptiveBookPressure():
+    void {
+    this.adaptiveMarketLimit =
+      Math.min(
+        3,
+        this.configuredMaximumOrderBookMarkets,
+      );
+
+    this.adaptiveConcurrentBookReads =
+      1;
+
+    this.consecutiveTransportFailureBatches =
+      0;
+
+    this.consecutiveHealthyBatches =
+      0;
+
+    this.orderBookBackoffUntil =
+      null;
+
+    this.syncAdaptiveDiagnostics();
+  }
+
+  private syncAdaptiveDiagnostics():
+    void {
+    this.diagnostics
+      .adaptiveMarketLimit =
+      this.adaptiveMarketLimit;
+
+    this.diagnostics
+      .adaptiveConcurrentBookReads =
+      this.adaptiveConcurrentBookReads;
+
+    this.diagnostics
+      .consecutiveTransportFailureBatches =
+      this.consecutiveTransportFailureBatches;
+
+    this.diagnostics
+      .consecutiveHealthyBatches =
+      this.consecutiveHealthyBatches;
+
+    this.diagnostics
+      .orderBookBackoffUntil =
+      this.orderBookBackoffUntil;
   }
 
   private recordBookFailure(
@@ -1245,7 +1564,7 @@ export class UnoCoinAdapter
       ...selected.values(),
     ].slice(
         0,
-        this.resolveMaximumOrderBookMarkets(),
+        this.adaptiveMarketLimit,
       );
   }
 

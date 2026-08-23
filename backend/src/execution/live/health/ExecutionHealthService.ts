@@ -59,7 +59,7 @@ export interface ExchangeExecutionHealth {
     | null;
 
   liveExecutionEnabled:
-    false;
+    boolean;
 
   adapterConnected: boolean;
 

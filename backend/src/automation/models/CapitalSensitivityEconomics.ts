@@ -3,7 +3,13 @@ export type CapitalSensitivityRouteSource =
   | "RECENT_POSITIVE_SPREAD_REJECTION";
 
 export interface CapitalSensitivityPoint {
+  /** Account-side capital. Always INR. */
   capital: number;
+
+  /** Actual amount passed to the market-quote depth simulator. */
+  executionCapital: number;
+
+  executionCapitalCurrency: string;
 
   simulationSuccess: boolean;
 
@@ -53,6 +59,10 @@ export interface CapitalSensitivityRouteReport {
 
   sellExchange: string;
 
+  quoteAsset: string | null;
+
+  quoteCapitalPerInr: number | null;
+
   source: CapitalSensitivityRouteSource;
 
   sourceRawSpreadPercent: number | null;
@@ -95,7 +105,7 @@ export interface CapitalSensitivityEconomicsReport {
 
   version: "17.4";
 
-  build: "2";
+  build: "3";
 
   mode: "DIAGNOSTIC_ONLY";
 
@@ -104,6 +114,8 @@ export interface CapitalSensitivityEconomicsReport {
   liveExecutionAllowed: false;
 
   configuration: {
+    accountCapitalCurrency: "INR";
+
     minimumCapital: number;
 
     maximumCapital: number;

@@ -525,6 +525,9 @@ export class ExecutionSettlementService {
       planId:
         session.planId,
 
+      policyIdentity:
+        session.plan.policyIdentity,
+
       market:
         session.market,
 
@@ -1030,6 +1033,9 @@ export class ExecutionSettlementService {
       planId:
         session.planId,
 
+      policyIdentity:
+        session.plan.policyIdentity,
+
       market:
         session.market,
 
@@ -1439,6 +1445,12 @@ export class ExecutionSettlementService {
           multiplier,
       ) /
       multiplier
+    );
+  }
+
+  hasPendingReconciliation(): boolean {
+    return Array.from(this.settlements.values()).some(
+      (settlement) => settlement.status !== "SETTLED",
     );
   }
 }

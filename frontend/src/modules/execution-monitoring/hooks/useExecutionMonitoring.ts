@@ -40,7 +40,9 @@ export function useExecutionMetrics() {
   });
 }
 
-export function useExecutionHealth() {
+export function useExecutionHealth(
+  enabled = true,
+) {
   return useQuery({
     queryKey: [
       "execution-health",
@@ -58,11 +60,14 @@ export function useExecutionHealth() {
 
     staleTime:
       4_000,
+
+    enabled,
   });
 }
 
 export function useRecentExecutions(
   limit = 20,
+  enabled = true,
 ) {
   return useQuery({
     queryKey: [
@@ -83,6 +88,8 @@ export function useRecentExecutions(
 
     staleTime:
       4_000,
+
+    enabled,
   });
 }
 

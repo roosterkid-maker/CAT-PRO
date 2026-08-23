@@ -18,6 +18,7 @@ import type {
 import {
   summarizeDerivativePaperVenues,
 } from "../services/DerivativePaperEvidenceSummary";
+import {derivativeVenueCapabilityRegistry} from "../../derivatives/services/DerivativeVenueCapabilityRegistry";
 
 interface BasisRuntimeEvidence {
   readonly running: boolean;
@@ -91,7 +92,7 @@ export class SpotPerpetualBasisPaperClosureObservabilityService {
     const economicallyEvaluable = assessments.filter((item) => item.economics !== null);
     const best = maximum(economicallyEvaluable, (item) => item.economics!.expectedNetPercent);
     const providers = summarizeDerivativePaperVenues({
-      exchanges: configuration.exchanges,
+      exchanges: configuration.perpetualExchanges,
       targetQuoteAmount: configuration.targetQuoteCapital,
       account,
       fees,
@@ -120,6 +121,7 @@ export class SpotPerpetualBasisPaperClosureObservabilityService {
     const activeQueue = queue.filter((item) => item.state === "QUEUED" || item.state === "LEASED").length;
     const completedQueue = queue.filter((item) => item.state === "COMPLETED").length;
     const paperEvidenceReady = providers.filter((item) => item.paperEvidenceReady).length;
+    const topology = derivativeVenueCapabilityRegistry.getSnapshot(now);
 
     const state: SpotPerpetualBasisPaperClosureState = !runtime.running || !economics
       ? "NO_DATA"
@@ -137,7 +139,7 @@ export class SpotPerpetualBasisPaperClosureObservabilityService {
                 : "WAITING_FOR_QUALIFIED_EDGE";
 
     return freeze({
-      version: "69.0" as const,
+      version: "176.0" as const,
       generatedAt: now,
       strategyId: configuration.strategyId,
       mode: "SPOT_PERPETUAL_BASIS_PAPER_CLOSURE_OBSERVABILITY" as const,
@@ -158,6 +160,9 @@ export class SpotPerpetualBasisPaperClosureObservabilityService {
         netPositiveRoutes: economicallyEvaluable.filter((item) => item.economics!.expectedNetPercent > 0).length,
         qualifiedRoutes: economics?.qualifiedRoutes ?? 0,
         minimumExpectedNetPercent: configuration.minimumExpectedNetPercent,
+        closeAtOrBelowAbsoluteBasisPercent: configuration.closeAtOrBelowAbsoluteBasisPercent,
+        nextOpeningDelayMs: configuration.nextOpeningDelayMs,
+        perpetualLeverage: configuration.perpetualLeverage,
         bestRoute: best ? routeSummary(best) : null,
         dominantBlockers: countBlockers(assessments).slice(0, 8),
       },
@@ -170,6 +175,7 @@ export class SpotPerpetualBasisPaperClosureObservabilityService {
         paperEvidenceReadyVenues: paperEvidenceReady,
         venues: providers,
       },
+      topology: topology.summary,
       lineage: {
         admissionsObserved: admissions.length,
         plansAdmitted: planAdmissions.filter((item) => item.decision === "SHADOW_SIGNAL_ADMITTED").length,
@@ -199,7 +205,8 @@ function routeSummary(assessment: SpotPerpetualBasisAssessment) {
   const economics = assessment.economics!;
   return {
     routeId: assessment.id,
-    exchange: assessment.exchange,
+    spotExchange: assessment.spotExchange,
+    perpetualExchange: assessment.perpetualExchange,
     market: assessment.market,
     status: assessment.status,
     blockers: [...assessment.blockers],

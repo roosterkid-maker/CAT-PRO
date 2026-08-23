@@ -7,6 +7,11 @@ export type CandidateRouteReturnResolver = (
     CandidateQualificationRecord,
 ) => number | null;
 
+export type CandidateRebalanceBonusResolver = (
+  qualification:
+    CandidateQualificationRecord,
+) => number;
+
 export function resolveModeledCandidateNetProfitPercent(
   qualification:
     CandidateQualificationRecord,
@@ -101,6 +106,38 @@ export function resolveModeledCandidateProfitInr(
     : Number.NEGATIVE_INFINITY;
 }
 
+export function resolveCandidateRankingEquivalentProfitInr(
+  qualification:
+    CandidateQualificationRecord,
+
+  rebalanceBonusBps =
+    0,
+
+  capitalOverrideInr?:
+    number,
+): number {
+  const actualModeledProfit = capitalOverrideInr !== undefined
+    ? capitalOverrideInr *
+        resolveModeledCandidateNetProfitPercent(qualification) /
+        100
+    : resolveModeledCandidateProfitInr(qualification);
+  const capitalAware = qualification.liquidityAssessment.capitalAware;
+  const referenceCapital = capitalOverrideInr ?? (
+    Number.isFinite(capitalAware.validationCapital) &&
+    capitalAware.validationCapital > 0
+      ? capitalAware.validationCapital
+      : qualification.candidate.latest.requestedCapitalInr ?? 0
+  );
+  const safeBonusBps =
+    qualification.qualified &&
+    resolveModeledCandidateNetProfitPercent(qualification) > 0 &&
+    Number.isFinite(rebalanceBonusBps)
+      ? Math.max(0, Math.min(25, rebalanceBonusBps))
+      : 0;
+
+  return actualModeledProfit + referenceCapital * safeBonusBps / 10_000;
+}
+
 /**
  * Shared, deterministic priority for a simultaneous Strategy #1 candidate
  * set. Every caller therefore sees the same best-executable-first ordering.
@@ -114,6 +151,9 @@ export function compareCandidateExecutionPriority(
 
   resolveRouteReturn?:
     CandidateRouteReturnResolver,
+
+  resolveRebalanceBonus?:
+    CandidateRebalanceBonusResolver,
 ): number {
   const firstModeledProfit =
     resolveModeledCandidateProfitInr(
@@ -124,6 +164,28 @@ export function compareCandidateExecutionPriority(
     resolveModeledCandidateProfitInr(
       second,
     );
+
+  const firstRankingProfit =
+    resolveCandidateRankingEquivalentProfitInr(
+      first,
+      resolveRebalanceBonus?.(first) ?? 0,
+    );
+
+  const secondRankingProfit =
+    resolveCandidateRankingEquivalentProfitInr(
+      second,
+      resolveRebalanceBonus?.(second) ?? 0,
+    );
+
+  if (
+    firstRankingProfit !==
+    secondRankingProfit
+  ) {
+    return (
+      secondRankingProfit -
+      firstRankingProfit
+    );
+  }
 
   if (
     firstModeledProfit !==
@@ -262,6 +324,9 @@ export function rankCandidatesForExecution(
 
   resolveRouteReturn?:
     CandidateRouteReturnResolver,
+
+  resolveRebalanceBonus?:
+    CandidateRebalanceBonusResolver,
 ): CandidateQualificationRecord[] {
   return [
     ...qualifications,
@@ -274,6 +339,7 @@ export function rankCandidatesForExecution(
         first,
         second,
         resolveRouteReturn,
+        resolveRebalanceBonus,
       ),
   );
 }

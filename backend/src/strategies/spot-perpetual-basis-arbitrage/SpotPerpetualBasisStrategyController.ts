@@ -59,10 +59,10 @@ const METADATA: StrategyMetadata = {
   id: SPOT_PERPETUAL_BASIS_ARBITRAGE_STRATEGY_ID,
   strategyNumber: 4,
   displayName: "Spot-Perpetual Basis Arbitrage",
-  version: "27.0",
+  version: "176.0",
   category: "SPOT_PERPETUAL_BASIS_ARBITRAGE",
   description:
-    "SHADOW-only cash-and-carry spot/perpetual economics with genuine full-depth VWAP, funding, fees and market rules.",
+    "PAPER-first cash-and-carry across independent spot/perpetual venues with full-depth VWAP, round-trip fees, conservative funding and central lifecycle settlement.",
   controllerMode: "SHADOW_ONLY",
   signalSource: "DerivativeMarketData",
   legacyHistoryAttribution: "UNATTRIBUTED_LEGACY",

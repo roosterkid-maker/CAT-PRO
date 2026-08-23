@@ -298,6 +298,15 @@ async function main(): Promise<void> {
 
   assert.ok(signal.evidence.expectedNetPercent > 1);
   assert.equal(signal.evidence.expectedFundingIsGuaranteed, false);
+  assert.equal(signal.evidence.spotExchange, "binance");
+  assert.equal(signal.evidence.perpetualExchange, "binance");
+  assert.equal(signal.evidence.positiveFundingExcludedFromQualification, true);
+  assert.equal(signal.evidence.fundingQualificationCreditQuote, 0);
+  assert.ok(signal.evidence.roundTripFeeQuote > signal.evidence.entryFeeQuote);
+  assert.equal(signal.evidence.exitFeeReserveQuote, signal.evidence.entryFeeQuote);
+  assert.equal(signal.evidence.closeAtOrBelowAbsoluteBasisPercent, 0.1);
+  assert.equal(signal.evidence.nextOpeningDelayMs, 120_000);
+  assert.equal(signal.evidence.perpetualLeverage, 1);
   assert.equal(signal.evidence.fullDepthApplied, true);
   assert.deepEqual(signal.evidence.executionReadinessBlockers, [
     "POSITION_EVIDENCE_MISSING",
@@ -325,6 +334,78 @@ async function main(): Promise<void> {
   assert.ok(thresholdBlocked.assessments[0]?.blockers.includes("EXPECTED_NET_THRESHOLD_NOT_MET"));
   assert.ok((thresholdBlocked.assessments[0]?.economics?.expectedNetPercent ?? 0) > 1);
   assert.ok((thresholdBlocked.assessments[0]?.economics?.thresholdShortfallPercent ?? 0) > 3);
+
+  const crossVenueEngine = new SpotPerpetualBasisEconomicsEngine({
+    getSpotBook: (exchange) => ({...spotBook(now), exchange}),
+    getDerivativeDepth: () => derivativeDepth("BTCUSDT", now),
+    getSpotCapability: (exchange) => ({...spotCapability(now), exchange}),
+    getSpotFee: (exchange, market) => ({exchange, market, makerPercent: 0.1, takerPercent: 0.1,
+      source: "STATIC_CONFIG", synchronizedAt: null, expiresAt: null}),
+    getDerivativeFee: (exchange) => fees.get(exchange),
+  });
+  const crossVenue = crossVenueEngine.evaluate(
+    derivativeSnapshot(now),
+    createSpotPerpetualBasisConfiguration({enabled: true, spotExchanges: ["coindcx"],
+      perpetualExchanges: ["binance"], markets: ["BTCUSDT"], targetQuoteCapital: 1_000,
+      minimumExpectedNetPercent: 0.2, maximumEvidenceAgeMs: 5_000, maximumTimestampSkewMs: 1_000}),
+    now,
+  );
+  assert.equal(crossVenue.qualifiedRoutes, 1);
+  assert.equal(crossVenue.assessments[0]?.spotExchange, "coindcx");
+  assert.equal(crossVenue.assessments[0]?.perpetualExchange, "binance");
+  assert.throws(() => createSpotPerpetualBasisConfiguration({perpetualLeverage: 2}), /restricted to 1x/);
+
+  const cacheReads = {
+    spotBook: 0,
+    derivativeDepth: 0,
+    spotCapability: 0,
+    spotFee: 0,
+    derivativeFee: 0,
+  };
+  const cacheEngine = new SpotPerpetualBasisEconomicsEngine({
+    getSpotBook: () => {
+      cacheReads.spotBook += 1;
+      return spotBook(now);
+    },
+    getDerivativeDepth: () => {
+      cacheReads.derivativeDepth += 1;
+      return derivativeDepth("BTCUSDT", now);
+    },
+    getSpotCapability: () => {
+      cacheReads.spotCapability += 1;
+      return spotCapability(now);
+    },
+    getSpotFee: () => {
+      cacheReads.spotFee += 1;
+      return {exchange: "binance", market: "BTCUSDT", makerPercent: 0.1, takerPercent: 0.1,
+        source: "STATIC_CONFIG", synchronizedAt: null, expiresAt: null};
+    },
+    getDerivativeFee: (exchange) => {
+      cacheReads.derivativeFee += 1;
+      return fees.get(exchange);
+    },
+  });
+  const repeatedMarket = derivativeSnapshot(now).markets[0];
+  assert.ok(repeatedMarket);
+  const cacheSnapshot = {
+    ...derivativeSnapshot(now),
+    markets: [repeatedMarket, structuredClone(repeatedMarket)],
+  };
+  const cacheEvaluation = cacheEngine.evaluate(
+    cacheSnapshot,
+    createSpotPerpetualBasisConfiguration({enabled: true, exchanges: ["binance"],
+      markets: ["BTCUSDT"], targetQuoteCapital: 1_000, minimumExpectedNetPercent: 0.2,
+      maximumEvidenceAgeMs: 5_000, maximumTimestampSkewMs: 1_000}),
+    now,
+  );
+  assert.equal(cacheEvaluation.evaluatedRoutes, 2);
+  assert.deepEqual(cacheReads, {
+    spotBook: 1,
+    derivativeDepth: 1,
+    spotCapability: 1,
+    spotFee: 1,
+    derivativeFee: 1,
+  });
 
   const noFeeEngine = new SpotPerpetualBasisEconomicsEngine({
     getSpotBook: () => spotBook(now),

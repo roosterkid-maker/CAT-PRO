@@ -18,6 +18,18 @@ import {
   executionRestartRecoveryGateService,
 } from "../recovery/ExecutionRestartRecoveryGateService";
 
+import {
+  strategyOneTwoLegRecoveryResolutionService,
+} from "../recovery/StrategyOneTwoLegRecoveryResolutionService";
+
+import {
+  strategyOneTwoLegRestartRecoveryService,
+} from "../recovery/StrategyOneTwoLegRestartRecoveryService";
+
+import {
+  strategyOneResidualRecoveryAssistantService,
+} from "../recovery/StrategyOneResidualRecoveryAssistantService";
+
 const router =
   Router();
 
@@ -102,6 +114,144 @@ router.get(
             .getReport(),
       },
     });
+  },
+);
+
+router.get(
+  "/strategy-one-two-leg",
+  (
+    _request,
+    response,
+  ) => {
+    response.json({
+      success: true,
+      data: {
+        recoveryGate:
+          strategyOneTwoLegRestartRecoveryService.getReport(),
+        resolutions:
+          strategyOneTwoLegRecoveryResolutionService.getDiagnostics(),
+      },
+    });
+  },
+);
+
+/*
+ * CAT PRO V142
+ *
+ * Evidence-only Strategy #1 residual-recovery assistant. GET is a pure
+ * diagnostics read. Explicit inspection may perform known-order status reads
+ * through allowNewSubmission=false reconciliation, but it cannot submit,
+ * cancel, transfer, withdraw or otherwise mutate exchange state.
+ */
+router.get(
+  "/strategy-one-residual-assistant",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({
+      success: true,
+      data: strategyOneResidualRecoveryAssistantService.getDiagnostics(),
+    });
+  },
+);
+
+router.post(
+  "/strategy-one-residual-assistant/:sessionId/inspect",
+  async (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const preview =
+        await strategyOneResidualRecoveryAssistantService.inspectSession(
+          request.params.sessionId,
+        );
+
+      response
+        .status(preview.state === "BLOCKED" ? 409 : 200)
+        .json({success: preview.state !== "BLOCKED", data: preview});
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Strategy #1 residual recovery inspection failed closed.",
+      });
+    }
+  },
+);
+
+router.put(
+  "/strategy-one-residual-assistant/:previewId/approve",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const preview =
+        strategyOneResidualRecoveryAssistantService.approvePreview(
+          request.params.previewId,
+          typeof request.body?.confirmation === "string"
+            ? request.body.confirmation
+            : "",
+        );
+
+      response.json({success: true, data: preview});
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Strategy #1 recovery approval failed closed.",
+      });
+    }
+  },
+);
+
+router.post(
+  "/strategy-one-two-leg/:sessionId/resolve",
+  async (
+    request,
+    response,
+  ) => {
+    try {
+      const resolutionNote =
+        typeof request.body?.resolutionNote === "string"
+          ? request.body.resolutionNote
+          : "";
+      const resolution =
+        await strategyOneTwoLegRecoveryResolutionService.resolveSession(
+          request.params.sessionId,
+          resolutionNote,
+        );
+
+      response.json({
+        success: true,
+        data: {
+          resolution,
+          recoveryGate:
+            strategyOneTwoLegRestartRecoveryService.getReport(),
+        },
+      });
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Strategy #1 two-leg recovery resolution failed.",
+        recoveryGate:
+          strategyOneTwoLegRestartRecoveryService.getReport(),
+      });
+    }
   },
 );
 

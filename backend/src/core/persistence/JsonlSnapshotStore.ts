@@ -1,14 +1,25 @@
 import {
   appendFileSync,
+  closeSync,
+  copyFileSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 
 import {
   dirname,
 } from "node:path";
+
+import {
+  readLatestValidJsonlRecord,
+  type JsonlTailReadDiagnostics,
+} from "./JsonlTailReader";
 
 export interface JsonlSnapshotEnvelope<T> {
   storeVersion: 1;
@@ -266,6 +277,138 @@ export class JsonlSnapshotStore<T> {
     }
   }
 
+  /**
+   * Crash-safe bounded checkpoint replacement.
+   *
+   * The current checkpoint is copied to a single `.previous` fallback before
+   * an fsynced temporary file atomically replaces it. This is intended for
+   * cumulative analytics/cache snapshots where retaining every redundant
+   * historical copy would grow disk usage without adding authoritative
+   * evidence. It must not be used for event journals.
+   */
+  replaceAllAtomically(
+    payloads:
+      readonly T[],
+  ): void {
+    const writtenAt =
+      Date.now();
+    const text =
+      payloads
+        .map(
+          (
+            payload,
+            index,
+          ) =>
+            JSON.stringify({
+              storeVersion:
+                1,
+              sequence:
+                index +
+                1,
+              writtenAt,
+              payload:
+                structuredClone(
+                  payload,
+                ),
+            } satisfies JsonlSnapshotEnvelope<T>),
+        )
+        .join(
+          "\n",
+        );
+    const filePath =
+      this.options
+        .filePath;
+    const temporaryPath =
+      `${filePath}.tmp-${process.pid}-${writtenAt}`;
+    const previousPath =
+      `${filePath}.previous`;
+
+    try {
+      mkdirSync(
+        dirname(
+          filePath,
+        ),
+        {
+          recursive:
+            true,
+        },
+      );
+
+      writeFileSync(
+        temporaryPath,
+        text
+          ? `${text}\n`
+          : "",
+        "utf8",
+      );
+
+      const descriptor =
+        openSync(
+          temporaryPath,
+          "r+",
+        );
+
+      try {
+        fsyncSync(
+          descriptor,
+        );
+      } finally {
+        closeSync(
+          descriptor,
+        );
+      }
+
+      if (
+        existsSync(
+          filePath,
+        )
+      ) {
+        copyFileSync(
+          filePath,
+          previousPath,
+        );
+      }
+
+      renameSync(
+        temporaryPath,
+        filePath,
+      );
+
+      this.sequence =
+        payloads.length;
+      this.writes +=
+        1;
+      this.lastWriteAt =
+        writtenAt;
+      this.lastError =
+        null;
+    } catch (
+      error:
+        unknown
+    ) {
+      this.writeFailures +=
+        1;
+      this.lastError =
+        error instanceof Error
+          ? error.message
+          : "Unknown atomic JSONL checkpoint replacement error.";
+
+      try {
+        rmSync(
+          temporaryPath,
+          {
+            force:
+              true,
+          },
+        );
+      } catch {
+        // Best-effort cleanup; the original checkpoint remains authoritative.
+      }
+
+      throw error;
+    }
+  }
+
   clear(): void {
     this.replaceAll(
       [],
@@ -415,6 +558,148 @@ export class JsonlSnapshotStore<T> {
           : "Unknown JSONL snapshot read error.";
 
       return [];
+    }
+  }
+
+  /**
+   * Restore only the newest valid snapshot by walking the JSONL file from
+   * the end in bounded chunks. Snapshot payloads are cumulative, so callers
+   * that need only the latest durable state must use this instead of loading
+   * an append-only file whose size grows for the lifetime of the bot.
+   */
+  readLatest():
+    T | null {
+    this.resetReadDiagnostics();
+
+    if (
+      !existsSync(
+        this.options
+          .filePath,
+      )
+    ) {
+      this.lastReadAt =
+        Date.now();
+
+      return null;
+    }
+
+    const completion: {
+      value:
+        JsonlTailReadDiagnostics | null;
+    } = {
+      value:
+        null,
+    };
+
+    try {
+      const result =
+        readLatestValidJsonlRecord<
+          JsonlSnapshotEnvelope<T> | T
+        >(
+          this.options
+            .filePath,
+          (
+            value,
+          ): value is JsonlSnapshotEnvelope<T> | T =>
+            this.decodeEnvelope(
+              value,
+            ) !==
+              null ||
+            (
+              this.options
+                .decodeLegacy?.(
+                  value,
+                ) ??
+              null
+            ) !==
+              null,
+          {
+            onComplete:
+              (
+                diagnostics,
+              ) => {
+                completion.value =
+                  diagnostics;
+              },
+          },
+        );
+
+      const diagnostics =
+        result ??
+        completion.value;
+
+      if (diagnostics) {
+        this.linesRead =
+          diagnostics.linesInspected;
+
+        this.malformedRecordsIgnored =
+          diagnostics.malformedLinesIgnored +
+          diagnostics.oversizedLinesIgnored;
+      }
+
+      this.lastReadAt =
+        Date.now();
+
+      this.lastError =
+        null;
+
+      if (!result) {
+        return null;
+      }
+
+      const envelope =
+        this.decodeEnvelope(
+          result.value,
+        );
+
+      if (envelope) {
+        this.sequence =
+          Math.max(
+            this.sequence,
+            envelope.sequence,
+          );
+
+        this.validRecordsRead =
+          1;
+
+        return structuredClone(
+          envelope.payload,
+        );
+      }
+
+      const legacy =
+        this.options
+          .decodeLegacy?.(
+            result.value,
+          ) ??
+        null;
+
+      if (!legacy) {
+        return null;
+      }
+
+      this.validRecordsRead =
+        1;
+
+      this.legacyRecordsRead =
+        1;
+
+      return structuredClone(
+        legacy,
+      );
+    } catch (
+      error:
+        unknown
+    ) {
+      this.lastReadAt =
+        Date.now();
+
+      this.lastError =
+        error instanceof Error
+          ? error.message
+          : "Unknown JSONL bounded-tail read error.";
+
+      return null;
     }
   }
 

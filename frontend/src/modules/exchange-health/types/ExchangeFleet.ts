@@ -5,13 +5,17 @@ export type CatProTargetExchange =
   | "unocoin"
   | "coinswitch";
 
+export type CatProFleetExchange =
+  | CatProTargetExchange
+  | "zebpay";
+
 export type ExchangeCapabilityImplementationState =
   | "IMPLEMENTED"
   | "DOCUMENTED_NOT_IMPLEMENTED";
 
 export interface ExchangeFleetCapability {
   exchange:
-    CatProTargetExchange;
+    CatProFleetExchange;
 
   displayName: string;
 
@@ -75,7 +79,7 @@ export interface ExchangeFleetCapability {
 export interface ExchangeFleetCapabilityReport {
   generatedAt: number;
 
-  version: "19.27";
+  version: "19.28";
 
   targetExchangeCount: 5;
 
@@ -99,6 +103,19 @@ export interface ExchangeFleetCapabilityReport {
 
   exchanges:
     ExchangeFleetCapability[];
+
+  observationExchangeCount: 1;
+
+  observationExchanges:
+    ExchangeFleetCapability[];
+
+  observationSummary: {
+    marketDataConnected: number;
+
+    executionEligible: number;
+
+    paperEligibleMarkets: number;
+  };
 
   notes: string[];
 }

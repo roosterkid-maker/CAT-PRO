@@ -21,6 +21,10 @@ import {
   executionRecoveryResolutionService,
 } from "./ExecutionRecoveryResolutionService";
 
+import {
+  strategyOneTwoLegRestartRecoveryService,
+} from "./StrategyOneTwoLegRestartRecoveryService";
+
 const POSSIBLY_OPEN_STATUSES =
   new Set([
     "SUBMISSION_REQUESTED",
@@ -109,6 +113,10 @@ export class ExecutionRestartRecoveryGateService {
       orderLifecycleEvidenceService
         .getDiagnostics();
 
+    const strategyOnePairs =
+      strategyOneTwoLegRestartRecoveryService
+        .getReport();
+
     const findings:
       ExecutionRestartRecoveryFinding[] =
       [];
@@ -151,6 +159,10 @@ export class ExecutionRestartRecoveryGateService {
         `Order lifecycle evidence has ${orderEvidence.writeFailures} persistence write failure(s).`,
       );
     }
+
+    persistenceIntegrityProblems.push(
+      ...strategyOnePairs.persistenceProblems,
+    );
 
     for (
       const problem
@@ -305,12 +317,42 @@ export class ExecutionRestartRecoveryGateService {
       });
     }
 
+    for (const pair of strategyOnePairs.unresolved) {
+      findings.push({
+        key:
+          pair.state === "PREPARED"
+            ? "STRATEGY_ONE_PAIR_PREPARED_BEFORE_DISPATCH"
+            : "STRATEGY_ONE_PAIR_REQUIRES_AUTHORITATIVE_RECOVERY",
+
+        source:
+          "STRATEGY_ONE_TWO_LEG_EVIDENCE",
+
+        sessionId:
+          pair.sessionId,
+
+        orderId:
+          null,
+
+        severity:
+          pair.state === "PREPARED"
+            ? "WARNING"
+            : "CRITICAL",
+
+        message:
+          pair.state === "PREPARED"
+            ? `Strategy #1 pair ${pair.sessionId} was durably prepared but never crossed its dispatch boundary; explicit evidence-bound resolution is required.`
+            : `Strategy #1 pair ${pair.sessionId} remains ${pair.state}; no retry, replacement, hedge, or unwind is automatic.`,
+      });
+    }
+
     const classification =
       this.resolveClassification(
         persistenceIntegrityProblems,
         unresolvedInterrupted.length,
         possibleOpenOrders.length,
         possibleExposureSessions.length,
+        strategyOnePairs.summary.unresolvedSessions,
+        strategyOnePairs.summary.possibleExposureSessions,
       );
 
     const allowNewLivePreparation =
@@ -326,6 +368,8 @@ export class ExecutionRestartRecoveryGateService {
             unresolvedInterrupted.length,
             possibleOpenOrders.length,
             possibleExposureSessions.length,
+            strategyOnePairs.summary.unresolvedSessions,
+            strategyOnePairs.summary.possibleExposureSessions,
           );
 
     return {
@@ -383,6 +427,12 @@ export class ExecutionRestartRecoveryGateService {
           possibleExposureSessions
             .length,
 
+        unresolvedStrategyOneTwoLegSessions:
+          strategyOnePairs.summary.unresolvedSessions,
+
+        strategyOneTwoLegPossibleExposureSessions:
+          strategyOnePairs.summary.possibleExposureSessions,
+
         persistenceIntegrityProblems:
           persistenceIntegrityProblems
             .length,
@@ -412,6 +462,8 @@ export class ExecutionRestartRecoveryGateService {
         "No historical operational session is restored into coordinator memory.",
 
         "No automatic cancellation, resubmission, hedge or unwind occurs.",
+
+        "V109 includes durable Strategy #1 pair-session evidence in restart recovery; DISPATCHING is treated as possible exposure.",
 
         "LIVE trading and LIVE order submission remain disabled.",
 
@@ -556,10 +608,17 @@ export class ExecutionRestartRecoveryGateService {
 
     possibleExposureSessions:
       number,
+
+    strategyOnePairSessions:
+      number,
+
+    strategyOnePairPossibleExposureSessions:
+      number,
   ):
     ExecutionRestartRecoveryClassification {
     if (
-      possibleExposureSessions >
+      possibleExposureSessions +
+        strategyOnePairPossibleExposureSessions >
       0
     ) {
       return "POSSIBLE_EXPOSURE";
@@ -576,6 +635,8 @@ export class ExecutionRestartRecoveryGateService {
       persistenceProblems.length >
         0 ||
       interruptedRealSessions >
+        0 ||
+      strategyOnePairSessions >
         0
     ) {
       return "REVIEW_REQUIRED";
@@ -598,6 +659,12 @@ export class ExecutionRestartRecoveryGateService {
       number,
 
     possibleExposureSessions:
+      number,
+
+    strategyOnePairSessions:
+      number,
+
+    strategyOnePairPossibleExposureSessions:
       number,
   ): string[] {
     const blockers:
@@ -629,6 +696,24 @@ export class ExecutionRestartRecoveryGateService {
     ) {
       blockers.push(
         `${possibleExposureSessions} session(s) still contain possible execution exposure.`,
+      );
+    }
+
+    if (
+      strategyOnePairSessions >
+      0
+    ) {
+      blockers.push(
+        `${strategyOnePairSessions} Strategy #1 two-leg session(s) require explicit durable recovery resolution.`,
+      );
+    }
+
+    if (
+      strategyOnePairPossibleExposureSessions >
+      0
+    ) {
+      blockers.push(
+        `${strategyOnePairPossibleExposureSessions} Strategy #1 two-leg session(s) may contain real execution exposure.`,
       );
     }
 

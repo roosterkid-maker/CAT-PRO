@@ -15,6 +15,9 @@ import {
 import type {
   DerivativeAccountReadProvider,
 } from "../providers/DerivativeAccountReadProvider";
+import {CoinDCXFuturesAccountReadProvider, CoinSwitchFuturesAccountReadProvider,
+  ZebPayFuturesAccountReadProvider} from "../providers/MultiVenueDerivativeAccountProviders";
+import {DERIVATIVE_CANDIDATE_MARKETS} from "../providers/DerivativeProviderUtilities";
 
 export interface DerivativeAccountEvidenceConfiguration {
   readonly markets: readonly string[];
@@ -24,7 +27,7 @@ export interface DerivativeAccountEvidenceConfiguration {
 }
 
 const DEFAULT_CONFIGURATION: DerivativeAccountEvidenceConfiguration = {
-  markets: ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+  markets: DERIVATIVE_CANDIDATE_MARKETS,
   refreshIntervalMs: 15_000,
   freshnessThresholdMs: 30_000,
   retentionMs: 120_000,
@@ -42,6 +45,9 @@ export class DerivativeAccountEvidenceService {
     providers: readonly DerivativeAccountReadProvider[] = [
       new BinanceUsdMAccountReadProvider(),
       new BybitLinearAccountReadProvider(),
+      new CoinDCXFuturesAccountReadProvider(),
+      new CoinSwitchFuturesAccountReadProvider(),
+      new ZebPayFuturesAccountReadProvider(),
     ],
     configuration: Partial<DerivativeAccountEvidenceConfiguration> = {},
   ) {
@@ -51,8 +57,8 @@ export class DerivativeAccountEvidenceService {
       ...configuration,
       markets: normalizeMarkets(configuration.markets ?? DEFAULT_CONFIGURATION.markets),
     };
-    if (this.configuration.markets.length === 0 || this.configuration.markets.length > 10) {
-      throw new Error("Derivative account evidence requires one to ten bounded markets.");
+    if (this.configuration.markets.length === 0 || this.configuration.markets.length > 20) {
+      throw new Error("Derivative account evidence requires one to twenty bounded markets.");
     }
     for (const timing of [this.configuration.refreshIntervalMs, this.configuration.freshnessThresholdMs, this.configuration.retentionMs]) {
       if (!Number.isSafeInteger(timing) || timing <= 0) throw new Error("Derivative account evidence timings must be positive integers.");

@@ -626,6 +626,15 @@ export class UnoCoinExecutionAdapter
     }
 
     if (
+      request.timeInForce !==
+      undefined
+    ) {
+      throw new Error(
+        "UnoCoin time-in-force is not documented by the audited adapter contract.",
+      );
+    }
+
+    if (
       request.clientOrderId !==
       undefined
     ) {

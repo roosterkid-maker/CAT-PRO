@@ -156,6 +156,27 @@ export class CoinDCXHttpClient {
     }
   }
 
+  async getPrivate<T>(
+    path: string,
+    body: CoinDCXRequestBody,
+    credentials: CoinDCXCredentials,
+  ): Promise<T> {
+    const signedRequest = coinDCXSigner.sign(
+      body,
+      credentials.apiKey,
+      credentials.apiSecret,
+    );
+    try {
+      const response = await this.client.get<T>(path, {
+        data: signedRequest.payload,
+        headers: signedRequest.headers,
+      });
+      return response.data;
+    } catch (error: unknown) {
+      throw this.createRequestError("GET", path, error);
+    }
+  }
+
   private createRequestError(
     method:
       string,

@@ -43,6 +43,8 @@ export type CentralStrategySettlementPolicy =
       readonly lifecycleOwner: "CENTRAL_SHARED_ORCHESTRATOR";
       readonly entryBasisPercent: number;
       readonly closeAtOrBelowAbsoluteBasisPercent: number;
+      readonly nextOpeningDelayMs: number;
+      readonly perpetualLeverage: 1;
       readonly fundingTimestamps: readonly [number];
       readonly requiresFundingEvidence: true;
       readonly forcedTimeExitAllowed: false;

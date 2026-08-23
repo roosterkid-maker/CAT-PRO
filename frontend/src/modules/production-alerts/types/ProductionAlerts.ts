@@ -186,3 +186,19 @@ export interface ProductionAlertMutationResponse {
 
   data: ProductionAlertHistoryRecord;
 }
+
+export interface ProductionAlertBulkResolveRequest {
+  resolutionNote: string;
+
+  onlyCritical?: boolean;
+}
+
+export interface ProductionAlertBulkResolveResponse {
+  success: boolean;
+
+  data: {
+    resolvedCount: number;
+
+    alerts: ProductionAlertHistoryRecord[];
+  };
+}

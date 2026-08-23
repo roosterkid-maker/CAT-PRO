@@ -1,20 +1,13 @@
 import {
   Activity,
-  CircleDollarSign,
+  Database,
   Server,
-  TrendingUp,
   Wifi,
 } from "lucide-react";
 
 import {
-  useOpportunities,
-} from "@/modules/arbitrage/hooks/useOpportunities";
-
-import {
-  useArbitragePnL,
-  useExecutionHealth,
-  useExecutionMetrics,
-} from "@/modules/execution-monitoring/hooks/useExecutionMonitoring";
+  useSystemHealth,
+} from "@/modules/system-health/hooks/useSystemHealth";
 
 import {
   useSocketStore,
@@ -78,6 +71,17 @@ const healthStatusConfig = {
       "text-warning",
   },
 
+  SCANNING: {
+    label:
+      "Scanning",
+
+    dotClassName:
+      "bg-brand",
+
+    textClassName:
+      "text-brand",
+  },
+
   UNHEALTHY: {
     label:
       "Unhealthy",
@@ -114,58 +118,48 @@ export default function StatusBar() {
     ];
 
   const healthQuery =
-    useExecutionHealth();
-
-  const metricsQuery =
-    useExecutionMetrics();
-
-  const pnlQuery =
-    useArbitragePnL(
-      5,
-    );
-
-  const opportunityQuery =
-    useOpportunities();
+    useSystemHealth();
 
   const health =
-    healthQuery.data;
+    healthQuery.data
+      ?.data;
 
-  const metrics =
-    metricsQuery.data;
+  const allMarketDataConnected =
+    Boolean(
+      health &&
+      health.exchanges.length >
+        0 &&
+      health.exchanges.every(
+        (exchange) =>
+          exchange.connected,
+      ),
+    );
 
-  const pnl =
-    pnlQuery.data;
+  const executableMarketDataAvailable =
+    (
+      health?.cache
+        .executableQuotes ??
+      0
+    ) >
+    0;
 
-  const opportunities =
-    opportunityQuery.data
-      ?.data ??
-    [];
-
-  const actionableOpportunities =
-    opportunities.filter(
-      (opportunity) =>
-        opportunity.decision ===
-          "EXECUTE" ||
-        opportunity.decision ===
-          "REVIEW",
-    ).length;
+  const readinessStatus =
+    healthQuery.isError
+      ? "UNHEALTHY"
+      : health ===
+          undefined
+        ? "NO_DATA"
+        : health.trading.ready
+          ? "HEALTHY"
+          : allMarketDataConnected &&
+              executableMarketDataAvailable
+            ? "SCANNING"
+            : "DEGRADED";
 
   const healthConfig =
     healthStatusConfig[
-      health?.status ??
-      "NO_DATA"
+      readinessStatus
     ];
-
-  const netProfit =
-    pnl?.netProfit ??
-    0;
-
-  const pnlClassName =
-    netProfit > 0
-      ? "text-success"
-      : netProfit < 0
-        ? "text-danger"
-        : "text-text-muted";
 
   const backendConnected =
     socketStatus ===
@@ -240,16 +234,22 @@ export default function StatusBar() {
         <TextMetric
           className="hidden sm:flex"
           icon={
-            <TrendingUp
+            <Database
               size={13}
             />
           }
-          label="Opportunities"
+          label="Executable quotes"
           value={String(
-            actionableOpportunities,
+            health
+              ?.cache
+              .executableQuotes ??
+            0,
           )}
           valueClassName={
-            actionableOpportunities >
+            (health
+              ?.cache
+              .executableQuotes ??
+            0) >
             0
               ? "text-success"
               : "text-text-muted"
@@ -263,28 +263,13 @@ export default function StatusBar() {
               size={13}
             />
           }
-          label="Executions"
+          label="Shared markets"
           value={String(
-            metrics
-              ?.totalExecutions ??
-              0,
+            health
+              ?.engine
+              .sharedMarkets ??
+            0,
           )}
-        />
-
-        <TextMetric
-          className="hidden lg:flex"
-          icon={
-            <CircleDollarSign
-              size={13}
-            />
-          }
-          label="Net P&L"
-          value={`₹${formatCurrency(
-            netProfit,
-          )}`}
-          valueClassName={
-            pnlClassName
-          }
         />
       </div>
 
@@ -296,7 +281,7 @@ export default function StatusBar() {
         <ExchangeBadge
           name="CoinDCX"
           connected={
-            getExchangeVerification(
+            getExchangeConnection(
               health?.exchanges,
               "coindcx",
             )
@@ -306,7 +291,7 @@ export default function StatusBar() {
         <ExchangeBadge
           name="Binance"
           connected={
-            getExchangeVerification(
+            getExchangeConnection(
               health?.exchanges,
               "binance",
             )
@@ -436,19 +421,11 @@ function ExchangeBadge({
   );
 }
 
-function getExchangeVerification(
+function getExchangeConnection(
   exchanges:
     | Array<{
-        exchange: string;
-
-        authenticationVerified:
-          boolean;
-
-        exchangeApiReachable:
-          boolean;
-
-        readOnlyVerificationFresh:
-          boolean;
+        name: string;
+        connected: boolean;
       }>
     | undefined,
   exchangeName: string,
@@ -456,7 +433,7 @@ function getExchangeVerification(
   const status =
     exchanges?.find(
       (exchange) =>
-        exchange.exchange
+        exchange.name
           .trim()
           .toLowerCase() ===
         exchangeName,
@@ -464,33 +441,6 @@ function getExchangeVerification(
 
   return Boolean(
     status
-      ?.authenticationVerified &&
-    status
-      .exchangeApiReachable &&
-    status
-      .readOnlyVerificationFresh,
-  );
-}
-
-function formatCurrency(
-  value: number,
-): string {
-  if (
-    !Number.isFinite(value)
-  ) {
-    return "0.00";
-  }
-
-  return new Intl.NumberFormat(
-    "en-IN",
-    {
-      minimumFractionDigits:
-        2,
-
-      maximumFractionDigits:
-        2,
-    },
-  ).format(
-    value,
+      ?.connected,
   );
 }

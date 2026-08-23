@@ -29,6 +29,14 @@ export type ExecutionTimeInForce =
   | "IOC"
   | "FOK";
 
+export interface ExecutionPolicyIdentity {
+  readonly policyId: string;
+
+  readonly revision: number;
+
+  readonly policyHash: string;
+}
+
 export interface ExecutionLeg {
   readonly exchange: string;
 
@@ -64,10 +72,22 @@ export interface ExecutionLeg {
 
   readonly quoteAsset?:
     string;
+
+  /** Native wallet units held atomically before a LIVE submission. */
+  readonly balanceReservationAmount?:
+    number;
 }
 
 export interface ExecutionPlan {
   readonly id: string;
+
+  /**
+   * Immutable identity of the policy that authorized
+   * planning. Historical execution evidence can use
+   * this to prove which thresholds were in force.
+   */
+  readonly policyIdentity?:
+    ExecutionPolicyIdentity;
 
   /**
    * Schema version allows future execution plans

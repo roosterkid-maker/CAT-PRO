@@ -76,7 +76,7 @@ export default function ExchangeBalancesPanel() {
       true;
 
   return (
-    <section className="overflow-hidden rounded-xl border border-border-default bg-panel">
+    <section className="dashboard-balance-deck overflow-hidden rounded-xl border border-border-default bg-panel">
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-default px-5 py-5">
         <div>
           <div className="flex items-center gap-2 text-accent-primary">
@@ -197,7 +197,7 @@ function ExchangeBalanceCard({
     ];
 
   return (
-    <article className="min-w-0 bg-panel p-4">
+    <article className="dashboard-balance-card min-w-0 bg-panel p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">

@@ -1,3 +1,11 @@
+import {
+  createHash,
+} from "node:crypto";
+
+import {
+  getExchangeTakerFeePercent,
+} from "../config/fees";
+
 import type {
   ArbitrageOpportunity,
 } from "../models/ArbitrageOpportunity";
@@ -18,6 +26,52 @@ import type {
   ArbitrageLiveExecutionResult,
 } from "./models/ArbitrageLiveExecutionResult";
 
+import type {
+  LiveExecutionAdapter,
+} from "../../execution/live/contracts/LiveExecutionAdapter";
+
+import type {
+  LiveExecutionExchangeStatus,
+} from "../../execution/live/LiveExecutionService";
+
+import {
+  strategyOneOrderTimeSafetyService,
+  type StrategyOneOrderTimeSafetyReport,
+} from "./StrategyOneOrderTimeSafetyService";
+
+import {
+  strategyOneExecutionTimingEvidenceService,
+} from "./StrategyOneExecutionTimingEvidenceService";
+
+import {
+  sharedRecoveryIntentService,
+} from "../../recovery/services/SharedRecoveryIntentService";
+
+import {
+  strategyOneTwoLegLiveExecutionService,
+  type StrategyOneTwoLegExecutionResult,
+} from "../../execution/live/arbitrage/StrategyOneTwoLegLiveExecutionService";
+
+import type {
+  SharedRecoveryIntent,
+  SharedRecoveryIntentProposal,
+} from "../../recovery/models/SharedRecoveryIntent";
+
+import {
+  strategyOneTinyLiveActionAuthorityService,
+  type StrategyOneTinyLiveAuthorityRecord,
+} from "../../execution/live/tiny-live/StrategyOneTinyLiveActionAuthorityService";
+
+import {
+  capitalReservationService,
+} from "../../trading/capital/CapitalReservationService";
+
+import type {
+  CapitalReservation,
+  CreateCapitalReservationRequest,
+  CreateCapitalReservationResult,
+} from "../../trading/capital/CapitalReservation";
+
 const LIVE_CONFIRMATION =
   "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION";
 
@@ -27,16 +81,188 @@ export interface ArbitrageExecutionOptions {
   pollingIntervalMs?: number;
 
   cancelOnTimeout?: boolean;
+
+  actionAuthorityId?: string;
 }
 
+export interface ArbitrageExecutionCoordinatorDependencies {
+  readonly liveExecution: {
+    hasAdapter(
+      exchange: string,
+    ): boolean;
+
+    getAdapter(
+      exchange: string,
+    ): LiveExecutionAdapter;
+
+    getExchangeStatus(
+      exchange: string,
+    ): LiveExecutionExchangeStatus;
+  };
+
+  readonly orderTimeSafety: {
+    evaluate(input: {
+      opportunity: ArbitrageOpportunity;
+      quantity: number;
+      now?: number;
+    }): StrategyOneOrderTimeSafetyReport;
+  };
+
+  readonly timingEvidence: {
+    observeLastLook(
+      report: StrategyOneOrderTimeSafetyReport,
+      observedAt?: number,
+    ): void;
+    observeLiveDispatch(input: {
+      readonly lastLook: StrategyOneOrderTimeSafetyReport;
+      readonly buyDispatchAt: number;
+      readonly sellDispatchAt: number;
+    }): void;
+    recordObserverFailure(): void;
+  };
+
+  readonly twoLegExecution: {
+    executeOrReconcile(input: {
+      readonly sessionId: string;
+      readonly opportunityId: string;
+      readonly lastLookDecisionId: string;
+      readonly buyRequest: LiveExecutionRequest;
+      readonly sellRequest: LiveExecutionRequest;
+      readonly allowNewSubmission: boolean;
+      readonly now?: number;
+    }): Promise<StrategyOneTwoLegExecutionResult>;
+  };
+
+  readonly recoveryIntent: {
+    stage(
+      proposal: SharedRecoveryIntentProposal,
+      now?: number,
+    ): SharedRecoveryIntent;
+  };
+
+  readonly capitalReservations: {
+    reserve(
+      request: CreateCapitalReservationRequest,
+    ): CreateCapitalReservationResult;
+    commit(
+      reservationId: string,
+      reason?: string,
+    ): CapitalReservation | null;
+    release(
+      reservationId: string,
+      reason?: string,
+    ): CapitalReservation | null;
+  };
+
+  readonly getTakerFeePercent: (
+    exchange: string,
+    market: string,
+    now: number,
+  ) => number | null;
+
+  readonly recordPnL: (
+    result: ArbitrageLiveExecutionResult,
+  ) => void;
+
+  readonly liveConfirmationPresent:
+    () => boolean;
+
+  readonly consumeActionAuthority: (input: {
+    readonly authorityId: string;
+    readonly opportunity: ArbitrageOpportunity;
+    readonly now: number;
+  }) => StrategyOneTinyLiveAuthorityRecord;
+
+  readonly bindActionAuthorityPair: (
+    authorityId: string,
+    pairSessionId: string,
+    now: number,
+  ) => StrategyOneTinyLiveAuthorityRecord;
+
+  readonly finalizeActionAuthority: (
+    authorityId: string,
+    result: ArbitrageLiveExecutionResult,
+    now: number,
+  ) => StrategyOneTinyLiveAuthorityRecord;
+
+  readonly now:
+    () => number;
+}
+
+const DEFAULT_DEPENDENCIES:
+  ArbitrageExecutionCoordinatorDependencies = {
+  liveExecution:
+    liveExecutionService,
+  orderTimeSafety:
+    strategyOneOrderTimeSafetyService,
+  timingEvidence:
+    strategyOneExecutionTimingEvidenceService,
+  twoLegExecution:
+    strategyOneTwoLegLiveExecutionService,
+  recoveryIntent:
+    sharedRecoveryIntentService,
+  capitalReservations:
+    capitalReservationService,
+  getTakerFeePercent:
+    getExchangeTakerFeePercent,
+  recordPnL:
+    (result) => {
+      arbitragePnLService.record(
+        result,
+        {
+          persist:
+            true,
+        },
+      );
+    },
+  liveConfirmationPresent:
+    () =>
+      process.env
+        .ARBITRAGE_LIVE_CONFIRMATION
+        ?.trim() ===
+      LIVE_CONFIRMATION,
+  consumeActionAuthority:
+    (input) => strategyOneTinyLiveActionAuthorityService.consume(input),
+  bindActionAuthorityPair:
+    (authorityId, pairSessionId, now) =>
+      strategyOneTinyLiveActionAuthorityService.bindPair(
+        authorityId,
+        pairSessionId,
+        now,
+      ),
+  finalizeActionAuthority:
+    (authorityId, result, now) =>
+      strategyOneTinyLiveActionAuthorityService.finalize(
+        authorityId,
+        result,
+        now,
+      ),
+  now:
+    Date.now,
+};
+
 export class ArbitrageExecutionCoordinator {
+  private readonly dependencies:
+    ArbitrageExecutionCoordinatorDependencies;
+
+  constructor(
+    dependencies:
+      Partial<ArbitrageExecutionCoordinatorDependencies> = {},
+  ) {
+    this.dependencies = {
+      ...DEFAULT_DEPENDENCIES,
+      ...dependencies,
+    };
+  }
+
   async execute(
     opportunity: ArbitrageOpportunity,
     options:
       ArbitrageExecutionOptions = {},
   ): Promise<ArbitrageLiveExecutionResult> {
     const startedAt =
-      Date.now();
+      this.dependencies
+        .now();
 
     const preflightReasons =
       this.validateOpportunity(
@@ -54,7 +280,7 @@ export class ArbitrageExecutionCoordinator {
         .toLowerCase();
 
     if (
-      !liveExecutionService.hasAdapter(
+      !this.dependencies.liveExecution.hasAdapter(
         buyExchange,
       )
     ) {
@@ -64,7 +290,7 @@ export class ArbitrageExecutionCoordinator {
     }
 
     if (
-      !liveExecutionService.hasAdapter(
+      !this.dependencies.liveExecution.hasAdapter(
         sellExchange,
       )
     ) {
@@ -74,13 +300,20 @@ export class ArbitrageExecutionCoordinator {
     }
 
     if (
-      process.env
-        .ARBITRAGE_LIVE_CONFIRMATION
-        ?.trim() !==
-      LIVE_CONFIRMATION
+      !this.dependencies
+        .liveConfirmationPresent()
     ) {
       preflightReasons.push(
         "Explicit arbitrage live-execution confirmation is missing.",
+      );
+    }
+
+    const actionAuthorityId =
+      options.actionAuthorityId?.trim() ?? "";
+
+    if (!actionAuthorityId) {
+      preflightReasons.push(
+        "A one-time Strategy #1 Tiny-LIVE action authority is required.",
       );
     }
 
@@ -97,24 +330,16 @@ export class ArbitrageExecutionCoordinator {
       );
     }
 
-    const buyAdapter =
-      liveExecutionService.getAdapter(
-        buyExchange,
-      );
-
-    const sellAdapter =
-      liveExecutionService.getAdapter(
-        sellExchange,
-      );
-
     const buyAdapterStatus =
-      liveExecutionService
+      this.dependencies
+        .liveExecution
         .getExchangeStatus(
           buyExchange,
         );
 
     const sellAdapterStatus =
-      liveExecutionService
+      this.dependencies
+        .liveExecution
         .getExchangeStatus(
           sellExchange,
         );
@@ -150,11 +375,279 @@ export class ArbitrageExecutionCoordinator {
       );
     }
 
-    const quantity =
-      opportunity.executableQty;
+    let consumedAuthority:
+      StrategyOneTinyLiveAuthorityRecord;
 
+    try {
+      consumedAuthority =
+        this.dependencies.consumeActionAuthority({
+          authorityId: actionAuthorityId,
+          opportunity,
+          now: this.dependencies.now(),
+        });
+    } catch (error: unknown) {
+      return this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        [
+          this.getErrorMessage(
+            "One-time Tiny-LIVE action authority was rejected",
+            error,
+          ),
+        ],
+      );
+    }
+
+    const authorityQuantity =
+      consumedAuthority.exactQuantity;
+
+    if (
+      !Number.isFinite(authorityQuantity) ||
+      authorityQuantity <= 0 ||
+      authorityQuantity > opportunity.availableExecutableQty + 1e-12
+    ) {
+      const blocked = this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        ["Authorized quantity exceeds current executable depth or is invalid."],
+        null,
+        authorityQuantity,
+      );
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      return blocked;
+    }
+
+    /*
+     * This synchronous decision is intentionally the final data/economics
+     * read before adapter access. A stale book, missing calibrated TTL,
+     * unsupported FOK mapping, absent fill stream, partial depth, or eroded
+     * profit produces zero adapter execute() calls.
+     */
+    const lastLook =
+      this.dependencies
+        .orderTimeSafety
+        .evaluate({
+          opportunity,
+          quantity:
+            authorityQuantity,
+          now:
+            this.dependencies
+              .now(),
+        });
+
+    try {
+      this.dependencies
+        .timingEvidence
+        .observeLastLook(
+          lastLook,
+          this.dependencies
+            .now(),
+        );
+    } catch {
+      try {
+        this.dependencies
+          .timingEvidence
+          .recordObserverFailure();
+      } catch {
+        /* Timing diagnostics cannot change the last-look decision. */
+      }
+    }
+
+    if (
+      lastLook.decision !==
+        "APPROVED" ||
+      lastLook.selectedBuyTimeInForce ===
+        null ||
+      lastLook.selectedSellTimeInForce ===
+        null ||
+      lastLook.buyLimitPrice ===
+        null ||
+      lastLook.sellLimitPrice ===
+        null
+    ) {
+      const blocked = this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        [
+          "Strategy #1 order-time last-look blocked exchange submission.",
+          ...lastLook.reasons,
+        ],
+        lastLook,
+        authorityQuantity,
+      );
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      return blocked;
+    }
+
+    const quantity =
+      authorityQuantity;
+
+    const executionIdentity =
+      createHash("sha256")
+        .update(
+          JSON.stringify({
+            opportunityId: opportunity.id,
+            lastLookDecisionId: lastLook.decisionId,
+            policyHash: lastLook.policyHash,
+            market: lastLook.market,
+            buyExchange,
+            sellExchange,
+            quantity,
+          }),
+        )
+        .digest("hex");
     const executionSuffix =
-      `${opportunity.id}-${Date.now()}`;
+      executionIdentity.slice(0, 24);
+    const twoLegSessionId =
+      `strategy-one:${executionIdentity}`;
+
+    let assets: {
+      asset: string;
+      quoteAsset: string;
+    };
+
+    try {
+      assets =
+        this.resolveAssets(
+          opportunity,
+        );
+    } catch (error: unknown) {
+      const blocked = this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        [
+          this.getErrorMessage(
+            "Atomic exchange-asset reservation could not resolve the market assets",
+            error,
+          ),
+        ],
+        lastLook,
+        authorityQuantity,
+      );
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      return blocked;
+    }
+    const reservationNow =
+      this.dependencies.now();
+    const buyFeePercent =
+      this.dependencies.getTakerFeePercent(
+        buyExchange,
+        opportunity.pair.market,
+        reservationNow,
+      );
+
+    if (
+      !Number.isFinite(buyFeePercent) ||
+      (buyFeePercent ?? -1) < 0 ||
+      assets.asset === "QUOTE" ||
+      assets.quoteAsset === "QUOTE"
+    ) {
+      const blocked = this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        [
+          "Atomic exchange-asset reservation could not derive fresh fee and exact asset evidence.",
+        ],
+        lastLook,
+        authorityQuantity,
+      );
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      return blocked;
+    }
+
+    const reservation =
+      this.dependencies.capitalReservations.reserve({
+        ownerType:
+          "EXECUTION_PLAN",
+        ownerId:
+          twoLegSessionId,
+        amount:
+          consumedAuthority.capitalPerLegInr,
+        ttlMs:
+          60_000,
+        inventoryRequirements: [
+          {
+            exchange:
+              buyExchange,
+            asset:
+              assets.quoteAsset,
+            amount:
+              quantity *
+              lastLook.buyLimitPrice *
+              (1 + (buyFeePercent ?? 0) / 100),
+          },
+          {
+            exchange:
+              sellExchange,
+            asset:
+              assets.asset,
+            amount:
+              quantity,
+          },
+        ],
+      });
+
+    if (
+      !reservation.approved ||
+      !reservation.reservation
+    ) {
+      const blocked = this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        [
+          "Atomic two-leg wallet reservation blocked exchange dispatch.",
+          ...reservation.reasons,
+        ],
+        lastLook,
+        authorityQuantity,
+      );
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      return blocked;
+    }
+
+    const capitalReservationId =
+      reservation.reservation.id;
+
+    try {
+      this.dependencies.bindActionAuthorityPair(
+        actionAuthorityId,
+        twoLegSessionId,
+        this.dependencies.now(),
+      );
+    } catch (error: unknown) {
+      const blocked = this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        [
+          this.getErrorMessage(
+            "Tiny-LIVE pair authority binding failed before exchange dispatch",
+            error,
+          ),
+        ],
+        lastLook,
+        authorityQuantity,
+      );
+      this.dependencies.capitalReservations.release(
+        capitalReservationId,
+        "Tiny-LIVE pair authority binding failed before exchange dispatch.",
+      );
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      return blocked;
+    }
 
     const commonOptions = {
       timeoutMs:
@@ -175,6 +668,9 @@ export class ArbitrageExecutionCoordinator {
       exchange:
         buyExchange,
 
+      product:
+        "SPOT",
+
       market:
         opportunity.pair.market,
 
@@ -184,10 +680,13 @@ export class ArbitrageExecutionCoordinator {
       orderType:
         "limit",
 
+      timeInForce:
+        lastLook.selectedBuyTimeInForce,
+
       quantity,
 
       price:
-        opportunity.buyPrice,
+        lastLook.buyLimitPrice,
 
       clientOrderId:
         this.createClientOrderId(
@@ -203,6 +702,9 @@ export class ArbitrageExecutionCoordinator {
       exchange:
         sellExchange,
 
+      product:
+        "SPOT",
+
       market:
         opportunity.pair.market,
 
@@ -212,10 +714,13 @@ export class ArbitrageExecutionCoordinator {
       orderType:
         "limit",
 
+      timeInForce:
+        lastLook.selectedSellTimeInForce,
+
       quantity,
 
       price:
-        opportunity.sellPrice,
+        lastLook.sellLimitPrice,
 
       clientOrderId:
         this.createClientOrderId(
@@ -227,62 +732,118 @@ export class ArbitrageExecutionCoordinator {
     };
 
     /*
-     * Cross-exchange spot arbitrage assumes balances
-     * are already pre-positioned on both exchanges.
-     *
-     * Both legs are submitted concurrently to reduce
-     * directional exposure. Execution is not atomic:
-     * either leg can still fail or partially fill.
+     * The pair owner journals one immutable two-leg identity before either
+     * central gateway call. Both legs then dispatch concurrently. A timeout,
+     * crash, missing acknowledgement, or evidence gap is POSSIBLE_EXPOSURE
+     * and is never converted into an automatic retry.
      */
-    const [
-      buySettlement,
-      sellSettlement,
-    ] =
-      await Promise.allSettled([
-        buyAdapter.execute(
-          buyRequest,
-        ),
+    let twoLegExecution:
+      StrategyOneTwoLegExecutionResult | null =
+      null;
+    let twoLegFailure:
+      unknown =
+      null;
 
-        sellAdapter.execute(
-          sellRequest,
-        ),
-      ]);
-
-    const buyResult =
-      buySettlement.status ===
-      "fulfilled"
-        ? buySettlement.value
-        : null;
-
-    const sellResult =
-      sellSettlement.status ===
-      "fulfilled"
-        ? sellSettlement.value
-        : null;
-
-    const reasons:
-      string[] = [];
-
-    if (
-      buySettlement.status ===
-      "rejected"
+    try {
+      twoLegExecution =
+        await this.dependencies
+          .twoLegExecution
+          .executeOrReconcile({
+            sessionId:
+              twoLegSessionId,
+            opportunityId:
+              opportunity.id,
+            lastLookDecisionId:
+              lastLook.decisionId,
+            buyRequest,
+            sellRequest,
+            allowNewSubmission:
+              true,
+            now:
+              this.dependencies
+                .now(),
+          });
+    } catch (
+      error: unknown
     ) {
-      reasons.push(
-        this.getErrorMessage(
-          "Buy leg failed",
-          buySettlement.reason,
-        ),
-      );
+      twoLegFailure =
+        error;
     }
 
+    const buyDispatchAt =
+      twoLegExecution
+        ?.buyDispatchedAt ??
+      null;
+    const sellDispatchAt =
+      twoLegExecution
+        ?.sellDispatchedAt ??
+      null;
+
     if (
-      sellSettlement.status ===
-      "rejected"
+      buyDispatchAt !==
+        null &&
+      sellDispatchAt !==
+        null
     ) {
+      try {
+        this.dependencies
+          .timingEvidence
+          .observeLiveDispatch({
+            lastLook,
+            buyDispatchAt,
+            sellDispatchAt,
+          });
+      } catch {
+        try {
+          this.dependencies
+            .timingEvidence
+            .recordObserverFailure();
+        } catch {
+          /* Timing diagnostics cannot change a durable gateway result. */
+        }
+      }
+    }
+
+    const dispatchSkewMs =
+      buyDispatchAt !==
+        null &&
+      sellDispatchAt !==
+        null
+        ? Math.abs(
+            sellDispatchAt -
+              buyDispatchAt,
+          )
+        : null;
+
+    const buyResult =
+      twoLegExecution
+        ?.buyResponse
+        ?.record
+        ?.result ??
+      null;
+
+    const sellResult =
+      twoLegExecution
+        ?.sellResponse
+        ?.record
+        ?.result ??
+      null;
+
+    const reasons:
+      string[] = [
+        ...(
+          twoLegExecution
+            ?.session
+            .reasons ??
+          []
+        ),
+      ];
+
+    if (twoLegFailure) {
       reasons.push(
         this.getErrorMessage(
-          "Sell leg failed",
-          sellSettlement.reason,
+          "Durable two-leg execution failed",
+          twoLegFailure,
         ),
       );
     }
@@ -335,24 +896,45 @@ export class ArbitrageExecutionCoordinator {
           buyFilledQuantity,
       );
 
-    const recoveryRequired =
+    const knownResidualRecoveryRequired =
       unmatchedBuyQuantity > 0 ||
       unmatchedSellQuantity > 0;
+
+    const possibleExposure =
+      twoLegFailure !==
+        null ||
+      twoLegExecution
+        ?.possibleExposure ===
+        true;
+
+    const recoveryRequired =
+      knownResidualRecoveryRequired ||
+      possibleExposure;
 
     const bothFilled =
       buyResult?.status ===
         "FILLED" &&
       sellResult?.status ===
         "FILLED" &&
+      twoLegExecution
+        ?.session
+        .state ===
+        "COMPLETED" &&
       !recoveryRequired;
 
     const anyFill =
       buyFilledQuantity > 0 ||
       sellFilledQuantity > 0;
 
-    if (recoveryRequired) {
+    if (knownResidualRecoveryRequired) {
       reasons.push(
-        "Buy and sell filled quantities do not match. Manual or automated hedge recovery is required.",
+        "Buy and sell filled quantities do not match. Audited residual recovery is required.",
+      );
+    }
+
+    if (possibleExposure) {
+      reasons.push(
+        "At least one exchange outcome is uncertain. New LIVE submissions and automatic retries must remain blocked until authoritative reconciliation.",
       );
     }
 
@@ -388,7 +970,42 @@ export class ArbitrageExecutionCoordinator {
     }
 
     const completedAt =
-      Date.now();
+      this.dependencies
+        .now();
+
+    let recoveryIntent:
+      SharedRecoveryIntent |
+      null =
+      null;
+
+    if (knownResidualRecoveryRequired) {
+      try {
+        recoveryIntent =
+          this.stageRecoveryIntent({
+            opportunity,
+            lastLook,
+            buyFilledQuantity,
+            sellFilledQuantity,
+            unmatchedBuyQuantity,
+            unmatchedSellQuantity,
+            createdAt:
+              completedAt,
+          });
+
+        reasons.push(
+          "Residual exposure was staged as immutable recovery evidence; automatic recovery order submission remains disabled.",
+        );
+      } catch (
+        error: unknown
+      ) {
+        reasons.push(
+          this.getErrorMessage(
+            "Residual recovery intent staging failed closed",
+            error,
+          ),
+        );
+      }
+    }
 
     const executionResult:
       ArbitrageLiveExecutionResult = {
@@ -398,7 +1015,9 @@ export class ArbitrageExecutionCoordinator {
       status:
         bothFilled
           ? "COMPLETED"
-          : recoveryRequired
+          : possibleExposure
+            ? "POSSIBLE_EXPOSURE"
+            : knownResidualRecoveryRequired
             ? "RECOVERY_REQUIRED"
             : anyFill
               ? "PARTIALLY_COMPLETED"
@@ -421,6 +1040,8 @@ export class ArbitrageExecutionCoordinator {
 
       sellResult,
 
+      twoLegSessionId,
+
       matchedFilledQuantity,
 
       unmatchedBuyQuantity,
@@ -435,7 +1056,15 @@ export class ArbitrageExecutionCoordinator {
         completedAt -
         startedAt,
 
+      dispatchSkewMs,
+
+      lastLook,
+
       recoveryRequired,
+
+      possibleExposure,
+
+      recoveryIntent,
 
       reasons: [
         ...new Set(
@@ -444,17 +1073,52 @@ export class ArbitrageExecutionCoordinator {
       ],
     };
 
+    if (!recoveryRequired) {
+      const finalizedReservation =
+        anyFill
+          ? this.dependencies.capitalReservations.commit(
+              capitalReservationId,
+              "Strategy #1 two-leg execution ended with balanced authoritative fill evidence.",
+            )
+          : this.dependencies.capitalReservations.release(
+              capitalReservationId,
+              "Strategy #1 two-leg execution ended without a fill or residual exposure.",
+            );
+
+      if (!finalizedReservation) {
+        executionResult.reasons.push(
+          "Atomic wallet reservation was already absent or expired during finalization.",
+        );
+      }
+    } else {
+      executionResult.reasons.push(
+        "Atomic exchange-asset holds remain active while residual or possible exposure requires authoritative reconciliation.",
+      );
+    }
+
     /*
      * P&L service records only results where both
      * execution-leg results are available.
      */
-    arbitragePnLService.record(
-  executionResult,
-  {
-    persist:
-      true,
-  },
-);
+    this.dependencies
+      .recordPnL(
+        executionResult,
+      );
+
+    try {
+      this.dependencies.finalizeActionAuthority(
+        actionAuthorityId,
+        executionResult,
+        this.dependencies.now(),
+      );
+    } catch (error: unknown) {
+      executionResult.reasons.push(
+        this.getErrorMessage(
+          "Tiny-LIVE authority finalization failed; further attempts remain fail-closed",
+          error,
+        ),
+      );
+    }
 
     return executionResult;
   }
@@ -590,9 +1254,16 @@ export class ArbitrageExecutionCoordinator {
     sellExchange: string,
     startedAt: number,
     reasons: string[],
+    lastLook:
+      StrategyOneOrderTimeSafetyReport |
+      null =
+      null,
+    requestedQuantity =
+      opportunity.executableQty,
   ): ArbitrageLiveExecutionResult {
     const completedAt =
-      Date.now();
+      this.dependencies
+        .now();
 
     return {
       success:
@@ -608,7 +1279,7 @@ export class ArbitrageExecutionCoordinator {
         opportunity.pair.market,
 
       requestedQuantity:
-        opportunity.executableQty,
+        requestedQuantity,
 
       buyExchange,
 
@@ -637,14 +1308,195 @@ export class ArbitrageExecutionCoordinator {
         completedAt -
         startedAt,
 
+      dispatchSkewMs:
+        null,
+
+      lastLook,
+
       recoveryRequired:
         false,
+
+      recoveryIntent:
+        null,
 
       reasons: [
         ...new Set(
           reasons,
         ),
       ],
+    };
+  }
+
+  private stageRecoveryIntent(
+    input: {
+      opportunity:
+        ArbitrageOpportunity;
+      lastLook:
+        StrategyOneOrderTimeSafetyReport;
+      buyFilledQuantity: number;
+      sellFilledQuantity: number;
+      unmatchedBuyQuantity: number;
+      unmatchedSellQuantity: number;
+      createdAt: number;
+    },
+  ): SharedRecoveryIntent {
+    const longResidual =
+      input.unmatchedBuyQuantity >
+      0;
+    const quantity =
+      longResidual
+        ? input.unmatchedBuyQuantity
+        : input.unmatchedSellQuantity;
+    const venue =
+      longResidual
+        ? input.lastLook.buyExchange
+        : input.lastLook.sellExchange;
+    const side =
+      longResidual
+        ? "SELL" as const
+        : "BUY" as const;
+    const referencePrice =
+      longResidual
+        ? input.lastLook.sellLimitPrice
+        : input.lastLook.buyLimitPrice;
+
+    if (
+      quantity <= 0 ||
+      referencePrice ===
+        null ||
+      referencePrice <= 0
+    ) {
+      throw new Error(
+        "Residual quantity or reference price is invalid.",
+      );
+    }
+
+    const assets =
+      this.resolveAssets(
+        input.opportunity,
+      );
+    const sourceValidationHash =
+      createHash(
+        "sha256",
+      )
+        .update(
+          JSON.stringify({
+            opportunityId:
+              input.opportunity.id,
+            lastLookDecisionId:
+              input.lastLook.decisionId,
+            buyFilledQuantity:
+              input.buyFilledQuantity,
+            sellFilledQuantity:
+              input.sellFilledQuantity,
+            quantity,
+            venue,
+            side,
+            referencePrice,
+          }),
+        )
+        .digest(
+          "hex",
+        );
+
+    return this.dependencies
+      .recoveryIntent
+      .stage(
+        {
+          sourceStrategyId:
+            "cross-exchange-arbitrage",
+          sourceEvidenceId:
+            input.lastLook.decisionId,
+          sourceValidationHash,
+          sourceType:
+            "STRATEGY_RESIDUAL_EXPOSURE",
+          mode:
+            "LIVE",
+          severity:
+            "CRITICAL",
+          routeId:
+            `${input.lastLook.buyExchange}->${input.lastLook.sellExchange}:${input.lastLook.market}`,
+          asset:
+            assets.asset,
+          quoteAsset:
+            assets.quoteAsset,
+          residualDirection:
+            longResidual
+              ? "LONG"
+              : "SHORT",
+          venue,
+          market:
+            input.lastLook.market,
+          side,
+          quantity,
+          referencePrice,
+          estimatedQuoteValue:
+            quantity *
+            referencePrice,
+          sourceCreatedAt:
+            input.createdAt,
+          sourceExpiresAt:
+            input.createdAt +
+            60_000,
+        },
+        input.createdAt,
+      );
+  }
+
+  private resolveAssets(
+    opportunity:
+      ArbitrageOpportunity,
+  ): {
+    asset: string;
+    quoteAsset: string;
+  } {
+    const market =
+      opportunity.pair.market
+        .trim()
+        .toUpperCase()
+        .replace(
+          /[^A-Z0-9]/gu,
+          "",
+        );
+    const quoteAsset =
+      opportunity.quoteAsset
+        ?.trim()
+        .toUpperCase() ||
+      [
+        "USDT",
+        "USDC",
+        "INR",
+        "BTC",
+        "ETH",
+      ].find(
+        (candidate) =>
+          market.endsWith(
+            candidate,
+          ),
+      ) ||
+      "QUOTE";
+    const asset =
+      market.endsWith(
+        quoteAsset,
+      )
+        ? market.slice(
+            0,
+            -quoteAsset.length,
+          )
+        : market;
+
+    if (
+      !asset ||
+      !quoteAsset
+    ) {
+      throw new Error(
+        "Residual recovery assets could not be derived from the opportunity.",
+      );
+    }
+
+    return {
+      asset,
+      quoteAsset,
     };
   }
 
@@ -702,6 +1554,21 @@ export class ArbitrageExecutionCoordinator {
     return error instanceof Error
       ? `${prefix}: ${error.message}`
       : `${prefix}: unknown error.`;
+  }
+
+  private finalizeAuthoritySafely(
+    authorityId: string,
+    result: ArbitrageLiveExecutionResult,
+  ): void {
+    try {
+      this.dependencies.finalizeActionAuthority(
+        authorityId,
+        result,
+        this.dependencies.now(),
+      );
+    } catch {
+      /* Durable unfinalized authority remains a hard block for another attempt. */
+    }
   }
 }
 

@@ -19,7 +19,7 @@ export default function SystemHealthWidget({
 }: SystemHealthWidgetProps) {
   if (!health) {
     return (
-      <div className="rounded-xl border border-border-default bg-panel p-5">
+      <div className="dashboard-health-console rounded-xl border border-border-default bg-panel p-5">
         <Header
           status={
             loading
@@ -73,7 +73,7 @@ export default function SystemHealthWidget({
       : 0;
 
   return (
-    <div className="rounded-xl border border-border-default bg-panel p-5">
+    <div className="dashboard-health-console rounded-xl border border-border-default bg-panel p-5">
       <Header
         status={
           allConnected
@@ -99,7 +99,7 @@ export default function SystemHealthWidget({
                 key={
                   exchange.name
                 }
-                className="flex items-center justify-between rounded-lg border border-border-default bg-panel-light px-4 py-3"
+                className="dashboard-health-row flex items-center justify-between rounded-lg border border-border-default bg-panel-light px-4 py-3"
               >
                 <p className="font-semibold">
                   {exchange.name}
@@ -218,7 +218,7 @@ function HealthMetric({
   value,
 }: HealthMetricProps) {
   return (
-    <div className="rounded-lg border border-border-default bg-panel-light p-3">
+    <div className="dashboard-health-metric rounded-lg border border-border-default bg-panel-light p-3">
       <p className="text-xs text-text-muted">
         {label}
       </p>

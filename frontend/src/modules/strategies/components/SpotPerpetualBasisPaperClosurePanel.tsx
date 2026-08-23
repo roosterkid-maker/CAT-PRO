@@ -41,7 +41,7 @@ export function SpotPerpetualBasisPaperClosurePanel() {
             <div className="flex items-center gap-2 text-brand">
               <GitCompareArrows className="size-5" />
               <p className="text-xs font-semibold uppercase tracking-[0.16em]">
-                V69 Strategy #4 PAPER Closure
+                V176 Strategy #4 PAPER Basis Engine
               </p>
             </div>
             <h2 className="mt-2 text-xl font-bold text-text-primary">
@@ -69,6 +69,11 @@ export function SpotPerpetualBasisPaperClosurePanel() {
             tone={report.economics.qualifiedRoutes > 0 ? "success" : "warning"} />
           <Metric label="Required expected net" value={formatPercent(report.economics.minimumExpectedNetPercent)} />
         </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <Metric label="Venue combinations / market" value={report.topology.totalVenueCombinationsPerSharedMarket} />
+          <Metric label="Intra-exchange" value={report.topology.intraExchangeCombinationsPerSharedMarket} />
+          <Metric label="Cross-exchange" value={report.topology.crossExchangeCombinationsPerSharedMarket} />
+        </div>
       </div>
 
       <div className="grid gap-4 p-5 xl:grid-cols-[1.05fr_1.4fr]">
@@ -84,13 +89,14 @@ export function SpotPerpetualBasisPaperClosurePanel() {
           {best ? (
             <div className="mt-4">
               <p className="font-mono text-sm font-bold text-text-primary">
-                {best.exchange.toUpperCase()} · {best.market}
+                {best.spotExchange.toUpperCase()} SPOT → {best.perpetualExchange.toUpperCase()} PERP · {best.market}
               </p>
               <p className="mt-1 text-xs text-text-muted">LONG spot → SHORT linear perpetual</p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <Fact label="Gross basis" value={formatPercent(best.grossBasisPercent)} />
-                <Fact label="Expected funding" value={formatPercent(best.expectedFundingPercent)} />
-                <Fact label="Fees" value={formatPercent(best.totalFeePercent)} />
+                <Fact label="Funding forecast" value={`${formatPercent(best.expectedFundingPercent)} · not credited`} />
+                <Fact label="Round-trip fees" value={formatPercent(best.totalFeePercent)} />
+                <Fact label="Slippage reserve" value={formatPercent(best.spotSlippageBufferPercent + best.perpetualSlippageBufferPercent)} />
                 <Fact label="Safety buffer" value={formatPercent(best.safetyBufferPercent)} />
                 <Fact label="Expected net" value={formatPercent(best.expectedNetPercent)} />
                 <Fact label="Quantity" value={formatNumber(best.quantity)} />
@@ -144,6 +150,9 @@ export function SpotPerpetualBasisPaperClosurePanel() {
         </section>
 
         <div className="xl:col-span-2 flex flex-wrap gap-2 border-t border-border-default pt-4 text-[10px] font-semibold uppercase tracking-[0.1em] text-text-muted">
+          <Safety label={`Close basis ≤ ${formatPercent(report.economics.closeAtOrBelowAbsoluteBasisPercent)}`} passed />
+          <Safety label={`Re-open delay ${Math.round(report.economics.nextOpeningDelayMs / 1000)}s`} passed />
+          <Safety label={`${report.economics.perpetualLeverage}x leverage`} passed />
           <Safety label="Signed reads only" passed={report.safety.authenticatedReadsOnly} />
           <Safety label="No margin inference" passed={!report.safety.balanceOrMarginInferenceAllowed} />
           <Safety label="Fees and rules required" passed={report.safety.feesAndRulesRemainRequired} />

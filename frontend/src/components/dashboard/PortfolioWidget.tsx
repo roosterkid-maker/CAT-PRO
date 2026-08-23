@@ -46,7 +46,7 @@ export default function PortfolioWidget({
   winRate,
 }: PortfolioWidgetProps) {
   return (
-    <div className="rounded-xl border border-border-default bg-panel p-5">
+    <div className="dashboard-portfolio-console rounded-xl border border-border-default bg-panel p-5">
       <div className="mb-5">
         <p className="text-xs uppercase tracking-[0.18em] text-text-muted">
           Portfolio

@@ -12,6 +12,7 @@ import {getExchangeFeeEvidence} from "../../arbitrage/config/fees";
 import type {CentralStrategyExecutionLeg, CentralStrategyExecutionPlan} from "../models/CentralStrategyExecutionPlan";
 import type {CentralPaperPlanEvidence} from "./CentralPaperPlanAdmissionService";
 import {centralPaperCapitalValuationService} from "./CentralPaperCapitalValuationService";
+import {centralPaperPositionLedgerService, type CentralPaperPositionLedgerService} from "./CentralPaperPositionLedgerService";
 
 export interface CentralPaperRuntimeLegInspection {
   readonly legId: string;
@@ -115,6 +116,11 @@ export class CentralPaperRuntimeEvidenceCollector {
 }
 
 export class DefaultCentralPaperRuntimeEvidencePort implements CentralPaperRuntimeEvidencePort {
+  constructor(
+    private readonly basisPositions: Pick<CentralPaperPositionLedgerService, "getOpenGroups" | "getClosedGroups"> =
+      centralPaperPositionLedgerService,
+  ) {}
+
   getAccount() { return tradingAccountService.getAccount(); }
   evaluateAccountCapital(amount: number) { return tradingAccountService.evaluateTrade(amount); }
   valueCapital(plan: CentralStrategyExecutionPlan, now: number) { return centralPaperCapitalValuationService.value(plan, now); }
@@ -138,7 +144,11 @@ export class DefaultCentralPaperRuntimeEvidencePort implements CentralPaperRunti
       sellExchange: input.plan.legs.find((item) => item.side === "SELL")?.exchange ?? second?.exchange,
       quotesFresh: input.legs.every((item) => item.quoteFresh), pairSynchronized: skew !== null && skew <= 5_000,
       timestampSkewMs: skew, maximumPairSkewMs: 5_000});
-    return {approved: assessment.approved && complete, level: assessment.level, score: assessment.score, reasons: assessment.reasons};
+    const basisLifecycleBlockers = basisRouteLifecycleBlockers(input.plan, input.now, this.basisPositions);
+    return {approved: assessment.approved && complete && basisLifecycleBlockers.length === 0,
+      level: basisLifecycleBlockers.length > 0 ? "BLOCKED" as const : assessment.level,
+      score: basisLifecycleBlockers.length > 0 ? 0 : assessment.score,
+      reasons: [...assessment.reasons, ...basisLifecycleBlockers]};
   }
 
   getStatisticalPromotion(plan: CentralStrategyExecutionPlan, now: number) {
@@ -240,6 +250,31 @@ export class DefaultCentralPaperRuntimeEvidencePort implements CentralPaperRunti
       feeEvidenceFresh: fee !== null, quoteFresh: depth !== null, fullQuantityAvailable: fullQuantity,
       quoteTimestamp: depth?.sourceTimestamp ?? null, blockers};
   }
+}
+
+function basisRouteLifecycleBlockers(
+  plan: CentralStrategyExecutionPlan,
+  now: number,
+  positions: Pick<CentralPaperPositionLedgerService, "getOpenGroups" | "getClosedGroups">,
+): readonly string[] {
+  const policy = plan.settlementPolicy;
+  if (policy.kind !== "BASIS_CONVERGENCE") return [];
+  const route = basisRouteKey(plan.legs);
+  const matchingOpen = positions.getOpenGroups().some((group) =>
+    group.strategyId === plan.strategyId && basisRouteKey(group.positions) === route,
+  );
+  if (matchingOpen) return ["BASIS_ROUTE_POSITION_ALREADY_OPEN"];
+  const latestClose = positions.getClosedGroups()
+    .filter((group) => group.strategyId === plan.strategyId && basisRouteKey(group.positions) === route)
+    .reduce((latest, group) => Math.max(latest, group.closedAt ?? 0), 0);
+  return latestClose > 0 && now < latestClose + policy.nextOpeningDelayMs
+    ? ["BASIS_ROUTE_REOPEN_DELAY_ACTIVE"]
+    : [];
+}
+
+function basisRouteKey(legs: readonly {readonly exchange: string; readonly product: "SPOT" | "PERPETUAL"; readonly market: string}[]): string {
+  return legs.map((leg) => `${leg.exchange.trim().toLowerCase()}:${leg.product}:${leg.market.trim().toUpperCase()}`)
+    .sort().join("|");
 }
 
 function fundingContext(

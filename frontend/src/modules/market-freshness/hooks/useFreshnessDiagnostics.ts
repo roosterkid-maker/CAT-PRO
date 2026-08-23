@@ -12,14 +12,18 @@ export function useFreshnessDiagnostics() {
       "market-freshness-diagnostics",
     ],
 
-    queryFn:
-      fetchFreshnessDiagnostics,
+    queryFn: ({
+      signal,
+    }) =>
+      fetchFreshnessDiagnostics(
+        signal,
+      ),
 
     refetchInterval:
-      3_000,
+      10_000,
 
     staleTime:
-      1_000,
+      8_000,
 
     retry:
       2,

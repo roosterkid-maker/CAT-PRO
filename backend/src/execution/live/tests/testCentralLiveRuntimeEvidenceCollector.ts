@@ -99,7 +99,7 @@ function dynamicPlan(): CentralStrategyExecutionPlan { return {...base("plan:dyn
     {id: "bid", sequence: 1, exchange: "binance", product: "SPOT", market: "BTCUSDT", side: "BUY", orderType: "LIMIT_POST_ONLY", quantity: 0.1, referencePrice: 99, reduceOnly: false, dependency: "PARALLEL", evidenceOnly: true},
     {id: "ask", sequence: 2, exchange: "binance", product: "SPOT", market: "BTCUSDT", side: "SELL", orderType: "LIMIT_POST_ONLY", quantity: 0.1, referencePrice: 101, reduceOnly: false, dependency: "PARALLEL", evidenceOnly: true}]}; }
 function derivativePlan(): CentralStrategyExecutionPlan { return {...base("plan:basis", "spot-perpetual-basis-arbitrage", "PARALLEL_TWO_LEG"),
-  routeFamily: "SPOT_PERPETUAL", settlementPolicy: {kind: "BASIS_CONVERGENCE", lifecycleOwner: "CENTRAL_SHARED_ORCHESTRATOR", entryBasisPercent: 1, closeAtOrBelowAbsoluteBasisPercent: 0.2, fundingTimestamps: [now - 1_000], requiresFundingEvidence: true, forcedTimeExitAllowed: false}, legs: [
+  routeFamily: "SPOT_PERPETUAL", settlementPolicy: {kind: "BASIS_CONVERGENCE", lifecycleOwner: "CENTRAL_SHARED_ORCHESTRATOR", entryBasisPercent: 1, closeAtOrBelowAbsoluteBasisPercent: 0.2, nextOpeningDelayMs: 120_000, perpetualLeverage: 1, fundingTimestamps: [now - 1_000], requiresFundingEvidence: true, forcedTimeExitAllowed: false}, legs: [
     {id: "spot", sequence: 1, exchange: "binance", product: "SPOT", market: "BTCUSDT", side: "BUY", orderType: "MARKET", quantity: 0.1, referencePrice: 99, reduceOnly: false, dependency: "PARALLEL", evidenceOnly: true},
     {id: "perp", sequence: 2, exchange: "bybit", product: "PERPETUAL", market: "BTCUSDT", side: "SELL", orderType: "MARKET", quantity: 0.1, referencePrice: 101, reduceOnly: false, dependency: "PARALLEL", evidenceOnly: true}]}; }
 

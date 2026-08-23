@@ -2,6 +2,10 @@ import {
   productionAlertHistoryService,
 } from "../alerts/ProductionAlertHistoryService";
 
+import type {
+  ProductionAlertHistoryRecord,
+} from "../alerts/ProductionAlertHistory";
+
 import {
   liveExecutionService,
 } from "../LiveExecutionService";
@@ -45,6 +49,68 @@ const MAXIMUM_TINY_LIVE_CAPITAL =
 const REQUIRED_PREFLIGHT_CONFIRMATION =
   "RUN_TINY_LIVE_PREFLIGHT_ONLY";
 
+const CLOCK_UNSAFE_ALERT_PREFIX =
+  "CLOCK_UNSAFE_";
+
+/*
+ * Exchange clock alerts are local to the signed-request venue that produced
+ * them. The dedicated SIGNED_REQUEST_CLOCK_SAFETY gate below still checks
+ * both exact route venues fail-closed. Every other unresolved CRITICAL alert
+ * remains global because recovery, persistence, accounting and account state
+ * can invalidate any LIVE route.
+ */
+export function isCriticalAlertRelevantToTinyLiveRoute(
+  alert:
+    ProductionAlertHistoryRecord,
+  buyExchange:
+    string,
+  sellExchange:
+    string,
+): boolean {
+  if (
+    alert.status ===
+      "RESOLVED" ||
+    alert.severity !==
+      "CRITICAL"
+  ) {
+    return false;
+  }
+
+  if (
+    alert.source !==
+      "CLOCK_SAFETY"
+  ) {
+    return true;
+  }
+
+  if (
+    !alert.key.startsWith(
+      CLOCK_UNSAFE_ALERT_PREFIX,
+    )
+  ) {
+    return true;
+  }
+
+  const alertExchange =
+    alert.key
+      .slice(
+        CLOCK_UNSAFE_ALERT_PREFIX.length,
+      )
+      .trim()
+      .toLowerCase();
+
+  if (
+    !alertExchange
+  ) {
+    return true;
+  }
+
+  return alertExchange ===
+      buyExchange ||
+    alertExchange ===
+      sellExchange;
+}
+
 export class TinyLivePreflightService {
   evaluate(
     request:
@@ -85,6 +151,27 @@ export class TinyLivePreflightService {
     const alertHistory =
       productionAlertHistoryService
         .getReport();
+
+    const routeCriticalAlerts =
+      alertHistory
+        .alerts
+        .filter(
+          (
+            alert,
+          ) =>
+            isCriticalAlertRelevantToTinyLiveRoute(
+              alert,
+              buyExchange,
+              sellExchange,
+            ),
+        );
+
+    const criticalAlertGatePassed =
+      alertHistory
+        .persistenceHealthy &&
+      routeCriticalAlerts
+        .length ===
+        0;
 
     const credentialSafety =
       credentialSafetyService
@@ -382,24 +469,28 @@ export class TinyLivePreflightService {
 
       "NO_UNRESOLVED_CRITICAL_ALERT",
 
-      !alertHistory
-        .livePromotionBlocked &&
-        alertHistory
-          .summary
-          .unresolvedCritical ===
-          0,
+      criticalAlertGatePassed,
 
-      "No unresolved CRITICAL production alert blocks LIVE promotion.",
+      "No unresolved route-relevant or global CRITICAL production alert blocks LIVE promotion.",
 
-      !alertHistory
-        .livePromotionBlocked &&
-      alertHistory
-        .summary
-        .unresolvedCritical ===
-        0
+      criticalAlertGatePassed
         ? []
         : [
-            ...alertHistory.blockers,
+            ...routeCriticalAlerts
+              .map(
+                (
+                  alert,
+                ) =>
+                  `${alert.key}: ${alert.title}`,
+              ),
+
+            ...(
+              alertHistory
+                .persistenceHealthy
+                ? []
+                : alertHistory
+                    .blockers
+            ),
           ],
     );
 

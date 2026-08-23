@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type {StrategySignal} from "../models/StrategySignal";
 import {CentralStrategyExecutionPlanCompiler} from "../services/CentralStrategyExecutionPlanCompiler";
+import {DefaultCentralPaperRuntimeEvidencePort} from "../services/CentralPaperRuntimeEvidenceCollector";
 
 const now = 1_780_000_000_000;
 const expiresAt = now + 5_000;
@@ -53,8 +54,10 @@ async function main(): Promise<void> {
 
   const fixtures: readonly StrategySignal[] = [
     base("SPOT_PERPETUAL_BASIS_SHADOW_OPPORTUNITY", "spot-perpetual-basis-arbitrage", {
-      exchange: "binance", market: "BTCUSDT", quantity: 1, spotBuyVwap: 100, perpetualSellVwap: 102,
-      grossBasisPercent: 2, nextFundingTime: now + 10_000, expectedNetQuote: 1, executionReadinessBlockers: ["DERIVATIVE_ADAPTER_MISSING"]}),
+      spotExchange: "coindcx", perpetualExchange: "binance", market: "BTCUSDT", quantity: 1,
+      spotBuyVwap: 100, perpetualSellVwap: 102, grossBasisPercent: 2,
+      closeAtOrBelowAbsoluteBasisPercent: 0.1, nextOpeningDelayMs: 120_000, perpetualLeverage: 1,
+      nextFundingTime: now + 10_000, expectedNetQuote: 1, executionReadinessBlockers: ["DERIVATIVE_ADAPTER_MISSING"]}),
     base("FUNDING_RATE_ARBITRAGE_SHADOW_OPPORTUNITY", "funding-rate-arbitrage", {
       market: "BTCUSDT", longExchange: "binance", shortExchange: "bybit", quantity: 1,
       longEntryVwap: 100, shortEntryVwap: 101, nextFundingTimeLong: now + 10_000, nextFundingTimeShort: now + 12_000,
@@ -85,6 +88,39 @@ async function main(): Promise<void> {
     assert.equal(plan.settlementPolicy.lifecycleOwner, "CENTRAL_SHARED_ORCHESTRATOR");
     assert.ok(Object.isFrozen(plan));
   }
+  const basisPlan = compiler.compile(fixtures[0]!, now);
+  assert.deepEqual(basisPlan.legs.map((item) => [item.exchange, item.product]), [
+    ["coindcx", "SPOT"], ["binance", "PERPETUAL"],
+  ]);
+  assert.equal(basisPlan.settlementPolicy.kind, "BASIS_CONVERGENCE");
+  if (basisPlan.settlementPolicy.kind === "BASIS_CONVERGENCE") {
+    assert.equal(basisPlan.settlementPolicy.closeAtOrBelowAbsoluteBasisPercent, 0.1);
+    assert.equal(basisPlan.settlementPolicy.nextOpeningDelayMs, 120_000);
+    assert.equal(basisPlan.settlementPolicy.perpetualLeverage, 1);
+  }
+  const routePositions = basisPlan.legs.map((item) => ({
+    exchange: item.exchange, product: item.product, market: item.market,
+  }));
+  const inspections = basisPlan.legs.map((item) => ({legId: item.id, balanceVerified: true,
+    fundingVerified: true, fundingSource: "AUTHENTICATED_ACCOUNT_BALANCE" as const,
+    externalBalanceRequired: true, paperAdapterSupported: true, marketRulesVerified: true,
+    feeEvidenceFresh: true, quoteFresh: true, fullQuantityAvailable: true,
+    quoteTimestamp: now, blockers: []}));
+  const openRoutePort = new DefaultCentralPaperRuntimeEvidencePort({
+    getOpenGroups: () => [{strategyId: basisPlan.strategyId, positions: routePositions}] as never,
+    getClosedGroups: () => [],
+  });
+  const openRisk = openRoutePort.assessRisk({plan: basisPlan, capital: 1_000, legs: inspections, now});
+  assert.equal(openRisk.approved, false);
+  assert.ok(openRisk.reasons.includes("BASIS_ROUTE_POSITION_ALREADY_OPEN"));
+  const coolingRoutePort = new DefaultCentralPaperRuntimeEvidencePort({
+    getOpenGroups: () => [],
+    getClosedGroups: () => [{strategyId: basisPlan.strategyId, positions: routePositions,
+      closedAt: now - 60_000}] as never,
+  });
+  const coolingRisk = coolingRoutePort.assessRisk({plan: basisPlan, capital: 1_000, legs: inspections, now});
+  assert.equal(coolingRisk.approved, false);
+  assert.ok(coolingRisk.reasons.includes("BASIS_ROUTE_REOPEN_DELAY_ACTIVE"));
 
   assert.throws(() => compiler.compile({...fixtures[0], executionAuthorized: true} as unknown as StrategySignal, now), /non-executable/);
   assert.throws(() => compiler.compile({...fixtures[0], generatedAt: now + 1} as unknown as StrategySignal, now), /current non-expired signal/);

@@ -12,6 +12,9 @@ export interface DerivativeFeeConfiguration {
 const EXPECTED_EXCHANGES = [
   "binance",
   "bybit",
+  "coindcx",
+  "coinswitch",
+  "zebpay",
 ] as const;
 
 export class DerivativeFeeEvidenceService {
@@ -37,6 +40,7 @@ export class DerivativeFeeEvidenceService {
 
       this.evidence.set(exchange, deepFreeze({
         exchange,
+        market: null,
         product: "LINEAR_PERPETUAL",
         makerPercent: configuration.makerPercent,
         takerPercent: configuration.takerPercent,
@@ -49,15 +53,54 @@ export class DerivativeFeeEvidenceService {
   }
 
   get(exchange: string): DerivativeFeeEvidence | null {
-    const record = this.evidence.get(normalizeExchange(exchange));
+    const normalized = normalizeExchange(exchange);
+    const record = this.evidence.get(normalized) ??
+      [...this.evidence.values()].find((item) => item.exchange === normalized) ?? null;
     return record ? immutableClone(record) : null;
+  }
+
+  getForMarket(exchange: string, market: string): DerivativeFeeEvidence | null {
+    const normalizedExchange = normalizeExchange(exchange);
+    const normalizedMarket = market.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const exact = this.evidence.get(`${normalizedExchange}:${normalizedMarket}`);
+    const venue = this.evidence.get(normalizedExchange);
+    const record = exact ?? venue ?? null;
+    return record ? immutableClone(record) : null;
+  }
+
+  observePublicInstrumentRules(input: {
+    readonly exchange: string;
+    readonly market: string;
+    readonly makerPercent: number;
+    readonly takerPercent: number;
+    readonly observedAt: number;
+  }): void {
+    const exchange = normalizeExchange(input.exchange);
+    const market = input.market.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!exchange || !market || !validPercent(input.makerPercent) ||
+        !validPercent(input.takerPercent) || !Number.isSafeInteger(input.observedAt) || input.observedAt <= 0) {
+      throw new Error("Invalid public derivative fee evidence.");
+    }
+    if (this.evidence.has(exchange)) return;
+    this.evidence.set(`${exchange}:${market}`, deepFreeze({
+      exchange,
+      market,
+      product: "LINEAR_PERPETUAL",
+      makerPercent: input.makerPercent,
+      takerPercent: input.takerPercent,
+      source: "PUBLIC_INSTRUMENT_RULES",
+      configuredAt: input.observedAt,
+      executionAuthorized: false,
+      liveExecutionAllowed: false,
+    }));
   }
 
   getSnapshot(now = Date.now()): DerivativeFeeEvidenceSnapshot {
     const evidence = [...this.evidence.values()]
       .sort((first, second) => first.exchange.localeCompare(second.exchange));
+    const configuredVenueCount = new Set(evidence.map((item) => item.exchange)).size;
     const missingExchanges = EXPECTED_EXCHANGES
-      .filter((exchange) => !this.evidence.has(exchange));
+      .filter((exchange) => !evidence.some((item) => item.exchange === exchange));
 
     return immutableClone({
       generatedAt: now,
@@ -68,7 +111,7 @@ export class DerivativeFeeEvidenceService {
           ? "PARTIAL"
           : "AVAILABLE",
       expectedExchanges: [...EXPECTED_EXCHANGES],
-      configuredExchanges: evidence.length,
+      configuredExchanges: configuredVenueCount,
       evidence,
       missingExchanges,
       safety: {
@@ -92,6 +135,21 @@ function loadEnvironmentConfiguration(): DerivativeFeeConfiguration[] {
       exchange: "bybit",
       maker: "BYBIT_LINEAR_MAKER_FEE_PERCENT",
       taker: "BYBIT_LINEAR_TAKER_FEE_PERCENT",
+    },
+    {
+      exchange: "coindcx",
+      maker: "COINDCX_FUTURES_MAKER_FEE_PERCENT",
+      taker: "COINDCX_FUTURES_TAKER_FEE_PERCENT",
+    },
+    {
+      exchange: "coinswitch",
+      maker: "COINSWITCH_FUTURES_MAKER_FEE_PERCENT",
+      taker: "COINSWITCH_FUTURES_TAKER_FEE_PERCENT",
+    },
+    {
+      exchange: "zebpay",
+      maker: "ZEBPAY_FUTURES_MAKER_FEE_PERCENT",
+      taker: "ZEBPAY_FUTURES_TAKER_FEE_PERCENT",
     },
   ] as const;
   const configurations: DerivativeFeeConfiguration[] = [];

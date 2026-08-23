@@ -288,8 +288,17 @@ export interface TriangularArbitrageLegSignalEvidence {
   readonly feePercent: number;
   readonly feeAmount: number;
   readonly outputAfterFee: number;
+  readonly feeAsset: string;
+  readonly averageFillPrice: number;
+  readonly topOfBookPrice: number;
+  readonly depthSlippagePercent: number;
+  readonly roundingDustInputQuantity: number;
+  readonly consumedDepthLevels: number;
+  readonly orderBookTimestamp: number;
+  readonly orderBookAgeMs: number;
   readonly topOfBookMaximumInput: number;
   readonly capabilitySynchronizedAt: number;
+  readonly executionPolicy: "FOK_OR_IOC_LIMIT_FUTURE_ONLY";
 }
 
 export interface TriangularArbitrageSignalEvidence {
@@ -299,8 +308,16 @@ export interface TriangularArbitrageSignalEvidence {
   readonly assets: readonly [string, string, string, string];
   readonly initialInputQuantity: number;
   readonly finalOutputQuantity: number;
+  readonly expectedNetProfitQuantity: number;
+  readonly expectedNetProfitPercent: number;
   readonly netProfitQuantity: number;
   readonly netProfitPercent: number;
+  readonly stressNetProfitQuantity: number;
+  readonly stressNetProfitPercent: number;
+  readonly absoluteNetProfitInr: number;
+  readonly tdsCapitalLockInr: number;
+  readonly reserveDragPercent: number;
+  readonly maximumBookSkewMs: number;
   readonly minimumNetProfitPercent: number;
   readonly referenceGrossMultiplier: number;
   readonly computedNetMultiplier: number;
@@ -308,6 +325,11 @@ export interface TriangularArbitrageSignalEvidence {
   readonly feesApplied: true;
   readonly marketRulesApplied: true;
   readonly topOfBookDepthApplied: true;
+  readonly fullDepthVwapApplied: true;
+  readonly stressTestApplied: true;
+  readonly tdsTreatedAsCapitalLock: true;
+  readonly lifecycleOwner: "CENTRAL_SHARED_ORCHESTRATOR";
+  readonly capitalOwner: "ACLA_STRATEGY_SCOPED_SUBLEDGER";
 }
 
 export interface TriangularArbitrageStrategySignal {
@@ -326,7 +348,8 @@ export interface TriangularArbitrageStrategySignal {
 }
 
 export interface SpotPerpetualBasisSignalEvidence {
-  readonly exchange: string;
+  readonly spotExchange: string;
+  readonly perpetualExchange: string;
   readonly market: string;
   readonly direction: "LONG_SPOT_SHORT_PERPETUAL";
   readonly quantity: number;
@@ -339,15 +362,26 @@ export interface SpotPerpetualBasisSignalEvidence {
   readonly perpetualSlippagePercent: number;
   readonly spotFeePercent: number;
   readonly derivativeFeePercent: number;
+  readonly entryFeeQuote: number;
+  readonly exitFeeReserveQuote: number;
+  readonly roundTripFeeQuote: number;
   readonly totalFeeQuote: number;
   readonly fundingRate: number;
   readonly nextFundingTime: number;
   readonly expectedFundingQuote: number;
   readonly expectedFundingIsGuaranteed: false;
+  readonly fundingQualificationCreditQuote: number;
+  readonly positiveFundingExcludedFromQualification: boolean;
+  readonly slippageBufferQuote: number;
+  readonly spotSlippageBufferPercent: number;
+  readonly perpetualSlippageBufferPercent: number;
   readonly safetyBufferQuote: number;
   readonly expectedNetQuote: number;
   readonly expectedNetPercent: number;
   readonly minimumExpectedNetPercent: number;
+  readonly closeAtOrBelowAbsoluteBasisPercent: number;
+  readonly nextOpeningDelayMs: number;
+  readonly perpetualLeverage: 1;
   readonly spotBookTimestamp: number;
   readonly derivativeBookTimestamp: number;
   readonly derivativeTickerTimestamp: number;

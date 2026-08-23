@@ -43,6 +43,7 @@ import type {
 } from "../../../automation/models/ShadowExecutionDispatcher";
 
 import {
+  resolveUnifiedAutomatedExecutionMode,
   UnifiedAutomatedExecutionOrchestratorService,
 } from "../services/UnifiedAutomatedExecutionOrchestratorService";
 
@@ -55,8 +56,8 @@ import {
 } from "../../../automation/services/OpportunityMonitorService";
 
 import {
-  shadowExecutionDispatcherService,
-} from "../../../automation/services/ShadowExecutionDispatcherService";
+  CandidateQualificationService,
+} from "../../../automation/services/CandidateQualificationService";
 
 import type {
   UnifiedAutomatedExecutionPaperScheduler,
@@ -273,6 +274,16 @@ implements UnifiedAutomatedExecutionShadowDispatcher {
             candidateKey,
             status:
               "SHADOW_DISPATCHED",
+            strategyAttribution: {
+              attributionStatus:
+                "ATTRIBUTED",
+              strategyId:
+                "cross-exchange-arbitrage",
+              signalId:
+                `signal-${candidateKey}`,
+              intentId:
+                null,
+            },
           }) as never,
         ),
     };
@@ -646,6 +657,62 @@ async function testShadowOwnershipAndDeduplication():
   );
 }
 
+function testProductionModeAdmissionStateMachine():
+  void {
+  const baseState = {
+    accountEnabled:
+      true,
+    emergencyStop:
+      false,
+    accountMode:
+      "PAPER",
+  };
+
+  assert.equal(
+    resolveUnifiedAutomatedExecutionMode({
+      ...baseState,
+      paperExecutionAllowed:
+        false,
+    }),
+    "SHADOW",
+    "An armed-but-not-ready controller must keep collecting genuine SHADOW evidence.",
+  );
+
+  assert.equal(
+    resolveUnifiedAutomatedExecutionMode({
+      ...baseState,
+      paperExecutionAllowed:
+        true,
+    }),
+    "PAPER",
+    "PAPER becomes the execution owner only after the complete controller gate passes.",
+  );
+
+  assert.equal(
+    resolveUnifiedAutomatedExecutionMode({
+      ...baseState,
+      emergencyStop:
+        true,
+      paperExecutionAllowed:
+        true,
+    }),
+    "DISABLED",
+    "Emergency stop must remain authoritative even after PAPER admission.",
+  );
+
+  assert.equal(
+    resolveUnifiedAutomatedExecutionMode({
+      ...baseState,
+      accountMode:
+        "LIVE",
+      paperExecutionAllowed:
+        true,
+    }),
+    "LIVE_BLOCKED",
+    "The unified orchestrator must never acquire a LIVE submission mode.",
+  );
+}
+
 async function testPaperModeSeparation():
   Promise<void> {
   const item =
@@ -853,9 +920,23 @@ async function testActualSignalToShadowRuntimePath():
       );
   }
 
+  /*
+   * This test exercises signal ownership and the SHADOW handoff, not market
+   * capability/order-book integration. Keep executable-economics disabled in
+   * this isolated fixture; the dedicated candidate qualification test covers
+   * the production fail-closed rules.
+   */
+  const handoffQualifier =
+    new CandidateQualificationService({
+      capitalAwareLiquidityEnabled:
+        false,
+    });
+
   executionCandidateQueueService
     .synchronize(
       baseTime,
+      handoffQualifier
+        .getQualifiedCandidates(),
     );
 
   const unified =
@@ -863,7 +944,7 @@ async function testActualSignalToShadowRuntimePath():
       queue:
         executionCandidateQueueService,
       shadowDispatcher:
-        shadowExecutionDispatcherService,
+        new TestShadowDispatcher(),
       resolveMode:
         () =>
           "SHADOW",
@@ -932,6 +1013,7 @@ async function testActualSignalToShadowRuntimePath():
 
 async function main():
   Promise<void> {
+  testProductionModeAdmissionStateMachine();
   await testShadowOwnershipAndDeduplication();
   await testPaperModeSeparation();
   await testLiveRemainsBlocked();

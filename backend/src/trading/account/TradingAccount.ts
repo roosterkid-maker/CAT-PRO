@@ -32,6 +32,15 @@ export interface TradingAccount {
 
   availableCapital: number;
 
+  /**
+   * PAPER-only Section 194S withholding that remains a recoverable tax
+   * credit, but is not immediately deployable trading cash.
+   *
+   * Optional for backward compatibility with pre-TDS ledger snapshots.
+   * TradingAccountService always normalizes a missing value to zero.
+   */
+  paperTdsReceivable?: number;
+
   todayProfit: number;
 
   todayLoss: number;
@@ -132,6 +141,8 @@ export const defaultTradingAccount: TradingAccount = {
   currentCapital: 100_000,
 
   availableCapital: 100_000,
+
+  paperTdsReceivable: 0,
 
   todayProfit: 0,
 

@@ -14,6 +14,20 @@ let snapshotRequest:
   | Promise<void>
   | null = null;
 let lifecycleId = 0;
+let marketUiConsumerCount = 0;
+
+const MARKET_UI_FLUSH_INTERVAL_MS =
+  100;
+
+const pendingTickerUpdates =
+  new Map<
+    string,
+    MarketTicker
+  >();
+
+let marketUiFlushTimer:
+  | ReturnType<typeof setTimeout>
+  | null = null;
 
 export function startSocketManager(): void {
   if (stopTimer) {
@@ -42,7 +56,12 @@ export function startSocketManager(): void {
     useSocketStore.getState().setStatus("connected");
     console.log("[Socket] Connected:", socket.id);
 
-    void refreshMarketSnapshot();
+    if (
+      marketUiConsumerCount >
+      0
+    ) {
+      void refreshMarketSnapshot();
+    }
   });
 
   socket.on("disconnect", () => {
@@ -60,7 +79,9 @@ export function startSocketManager(): void {
   });
 
   socket.on("ticker", (ticker: MarketTicker) => {
-    useMarketStore.getState().updateTicker(ticker);
+    queueTickerForUi(
+      ticker,
+    );
   });
 
   socket.on("tickers", (tickers: MarketTicker[]) => {
@@ -72,17 +93,75 @@ export function startSocketManager(): void {
       return;
     }
 
-    useMarketStore
-      .getState()
-      .updateTickers(
-        tickers,
+    for (
+      const ticker
+      of tickers
+    ) {
+      queueTickerForUi(
+        ticker,
       );
+    }
   });
 
-  void refreshMarketSnapshot();
+}
+
+/**
+ * Live market rows are the only frontend consumer of the high-volume ticker
+ * store. Keep the socket connected globally for status and reconnect state,
+ * but hydrate and mutate the 600+ row UI store only while the Markets page is
+ * mounted. This removes ten large object copies per second from every other
+ * dashboard without changing backend ingestion or trading behavior.
+ */
+export function acquireMarketUiStream(): () => void {
+  marketUiConsumerCount +=
+    1;
+
+  if (
+    marketUiConsumerCount ===
+    1
+  ) {
+    void refreshMarketSnapshot();
+  }
+
+  let released =
+    false;
+
+  return () => {
+    if (released) {
+      return;
+    }
+
+    released =
+      true;
+
+    marketUiConsumerCount =
+      Math.max(
+        0,
+        marketUiConsumerCount -
+          1,
+      );
+
+    if (
+      marketUiConsumerCount ===
+      0
+    ) {
+      clearMarketUiQueue();
+
+      useMarketStore
+        .getState()
+        .clear();
+    }
+  };
 }
 
 export function refreshMarketSnapshot(): Promise<void> {
+  if (
+    marketUiConsumerCount ===
+    0
+  ) {
+    return Promise.resolve();
+  }
+
   if (
     snapshotRequest
   ) {
@@ -104,7 +183,9 @@ export function refreshMarketSnapshot(): Promise<void> {
         ) => {
           if (
             requestLifecycle !==
-            lifecycleId
+              lifecycleId ||
+            marketUiConsumerCount ===
+              0
           ) {
             return;
           }
@@ -196,7 +277,116 @@ export function stopSocketManager(): void {
     lifecycleId += 1;
     snapshotRequest = null;
 
+    clearMarketUiQueue();
+
     initialized = false;
     stopTimer = null;
   }, 250);
+}
+
+function queueTickerForUi(
+  ticker: MarketTicker,
+): void {
+  if (
+    marketUiConsumerCount ===
+    0
+  ) {
+    return;
+  }
+
+  const exchange =
+    typeof ticker.exchange ===
+    "string"
+      ? ticker.exchange
+          .trim()
+          .toLowerCase()
+      : "";
+
+  const market =
+    typeof ticker.market ===
+    "string"
+      ? ticker.market
+          .trim()
+          .toUpperCase()
+      : "";
+
+  if (
+    !exchange ||
+    !market
+  ) {
+    return;
+  }
+
+  const key =
+    `${exchange}:${market}`;
+
+  const pending =
+    pendingTickerUpdates.get(
+      key,
+    );
+
+  if (
+    pending &&
+    pending.timestamp >
+      ticker.timestamp
+  ) {
+    return;
+  }
+
+  pendingTickerUpdates.set(
+    key,
+    ticker,
+  );
+
+  if (
+    marketUiFlushTimer
+  ) {
+    return;
+  }
+
+  marketUiFlushTimer =
+    setTimeout(
+      flushMarketUiQueue,
+      MARKET_UI_FLUSH_INTERVAL_MS,
+    );
+}
+
+function flushMarketUiQueue(): void {
+  marketUiFlushTimer =
+    null;
+
+  if (
+    pendingTickerUpdates.size ===
+    0
+  ) {
+    return;
+  }
+
+  const tickers =
+    Array.from(
+      pendingTickerUpdates.values(),
+    );
+
+  pendingTickerUpdates.clear();
+
+  useMarketStore
+    .getState()
+    .updateTickers(
+      tickers,
+    );
+}
+
+function clearMarketUiQueue(): void {
+  if (
+    marketUiFlushTimer
+  ) {
+    clearTimeout(
+      marketUiFlushTimer,
+    );
+
+    marketUiFlushTimer =
+      null;
+  }
+
+  pendingTickerUpdates.clear();
 }

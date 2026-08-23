@@ -6,7 +6,9 @@ import {
   fetchExchangeClockSafety,
 } from "../services/exchangeHealthApi";
 
-export function useExchangeClockSafety() {
+export function useExchangeClockSafety(
+  enabled = true,
+) {
   return useQuery({
     queryKey: [
       "exchange-health",
@@ -27,5 +29,7 @@ export function useExchangeClockSafety() {
       3_000,
 
     retry: 2,
+
+    enabled,
   });
 }

@@ -11,52 +11,17 @@ import {
 } from "lucide-react";
 
 import {
+  lazy,
+  Suspense,
   useState,
 } from "react";
 
 import {
   useCentralPaperLifecycle,
   useCentralStrategyLiveReadiness,
-  useEightStrategyPaperReadiness,
   useStrategies,
   useStrategy,
 } from "../hooks/useStrategies";
-
-import {
-  StatisticalResearchPanel,
-} from "../components/StatisticalResearchPanel";
-
-import {
-  StatisticalPaperLifecyclePanel,
-} from "../components/StatisticalPaperLifecyclePanel";
-
-import {
-  EightStrategyPaperReadinessPanel,
-} from "../components/EightStrategyPaperReadinessPanel";
-
-import {
-  PersonalStrategyOneBotPanel,
-} from "../components/PersonalStrategyOneBotPanel";
-
-import {
-  TriangularPaperClosurePanel,
-} from "../components/TriangularPaperClosurePanel";
-
-import {
-  SpotPerpetualBasisPaperClosurePanel,
-} from "../components/SpotPerpetualBasisPaperClosurePanel";
-
-import {
-  FundingRatePaperClosurePanel,
-} from "../components/FundingRatePaperClosurePanel";
-
-import {
-  PerpetualPerpetualPaperClosurePanel,
-} from "../components/PerpetualPerpetualPaperClosurePanel";
-
-import {
-  DynamicMarketMakingPaperClosurePanel,
-} from "../components/DynamicMarketMakingPaperClosurePanel";
 
 import type {
   StrategyAttributionCoverage,
@@ -65,6 +30,60 @@ import type {
 
 const PRIMARY_STRATEGY_ID =
   "cross-exchange-arbitrage";
+
+const StatisticalResearchPanel = lazy(() =>
+  import("../components/StatisticalResearchPanel").then((module) => ({
+    default: module.StatisticalResearchPanel,
+  })),
+);
+
+const StatisticalPaperLifecyclePanel = lazy(() =>
+  import("../components/StatisticalPaperLifecyclePanel").then((module) => ({
+    default: module.StatisticalPaperLifecyclePanel,
+  })),
+);
+
+const EightStrategyPaperReadinessPanel = lazy(() =>
+  import("../components/EightStrategyPaperReadinessPanel").then((module) => ({
+    default: module.EightStrategyPaperReadinessPanel,
+  })),
+);
+
+const PersonalStrategyOneBotPanel = lazy(() =>
+  import("../components/PersonalStrategyOneBotPanel").then((module) => ({
+    default: module.PersonalStrategyOneBotPanel,
+  })),
+);
+
+const TriangularPaperClosurePanel = lazy(() =>
+  import("../components/TriangularPaperClosurePanel").then((module) => ({
+    default: module.TriangularPaperClosurePanel,
+  })),
+);
+
+const SpotPerpetualBasisPaperClosurePanel = lazy(() =>
+  import("../components/SpotPerpetualBasisPaperClosurePanel").then((module) => ({
+    default: module.SpotPerpetualBasisPaperClosurePanel,
+  })),
+);
+
+const FundingRatePaperClosurePanel = lazy(() =>
+  import("../components/FundingRatePaperClosurePanel").then((module) => ({
+    default: module.FundingRatePaperClosurePanel,
+  })),
+);
+
+const PerpetualPerpetualPaperClosurePanel = lazy(() =>
+  import("../components/PerpetualPerpetualPaperClosurePanel").then((module) => ({
+    default: module.PerpetualPerpetualPaperClosurePanel,
+  })),
+);
+
+const DynamicMarketMakingPaperClosurePanel = lazy(() =>
+  import("../components/DynamicMarketMakingPaperClosurePanel").then((module) => ({
+    default: module.DynamicMarketMakingPaperClosurePanel,
+  })),
+);
 
 export default function StrategyDashboard() {
   const [
@@ -82,9 +101,6 @@ export default function StrategyDashboard() {
 
   const liveReadinessQuery =
     useCentralStrategyLiveReadiness();
-
-  const paperReadinessQuery =
-    useEightStrategyPaperReadiness();
 
   const detailQuery =
     useStrategy(
@@ -106,7 +122,6 @@ export default function StrategyDashboard() {
         detailQuery.refetch(),
         lifecycleQuery.refetch(),
         liveReadinessQuery.refetch(),
-        paperReadinessQuery.refetch(),
       ]);
     };
 
@@ -242,8 +257,7 @@ export default function StrategyDashboard() {
     collectionQuery.isFetching ||
     detailQuery.isFetching ||
     lifecycleQuery.isFetching ||
-    liveReadinessQuery.isFetching ||
-    paperReadinessQuery.isFetching;
+    liveReadinessQuery.isFetching;
 
   const liveReadiness =
     liveReadinessQuery.data?.data;
@@ -334,11 +348,16 @@ export default function StrategyDashboard() {
           )}
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <Metric
             label="Registered Strategies"
             value={collection.strategyCount.toLocaleString()}
             status={collection.evidenceStatus}
+          />
+          <Metric
+            label="Market Snapshots Processed"
+            value={strategy.runtime.processedSnapshots.toLocaleString()}
+            status={strategy.runtime.evidence.snapshot}
           />
           <Metric
             label="Current Signals"
@@ -346,7 +365,7 @@ export default function StrategyDashboard() {
             status={strategy.runtime.evidence.signals}
           />
           <Metric
-            label="Signals Observed"
+            label="Qualified Signals Emitted"
             value={strategy.runtime.totalSignalsObserved.toLocaleString()}
             status={strategy.runtime.evidence.snapshot}
           />
@@ -358,38 +377,40 @@ export default function StrategyDashboard() {
         </div>
       </section>
 
-      {strategy.metadata.id === "statistical-arbitrage" ? (
-        <>
-          <StatisticalResearchPanel />
-          <StatisticalPaperLifecyclePanel />
-        </>
-      ) : null}
+      <Suspense fallback={<StrategyEvidenceLoading />}>
+        {strategy.metadata.id === "statistical-arbitrage" ? (
+          <>
+            <StatisticalResearchPanel />
+            <StatisticalPaperLifecyclePanel />
+          </>
+        ) : null}
 
-      {strategy.metadata.id === "triangular-arbitrage" ? (
-        <TriangularPaperClosurePanel />
-      ) : null}
+        {strategy.metadata.id === "triangular-arbitrage" ? (
+          <TriangularPaperClosurePanel />
+        ) : null}
 
-      {strategy.metadata.id === "spot-perpetual-basis-arbitrage" ? (
-        <SpotPerpetualBasisPaperClosurePanel />
-      ) : null}
+        {strategy.metadata.id === "spot-perpetual-basis-arbitrage" ? (
+          <SpotPerpetualBasisPaperClosurePanel />
+        ) : null}
 
-      {strategy.metadata.id === "funding-rate-arbitrage" ? (
-        <FundingRatePaperClosurePanel />
-      ) : null}
+        {strategy.metadata.id === "funding-rate-arbitrage" ? (
+          <FundingRatePaperClosurePanel />
+        ) : null}
 
-      {strategy.metadata.id === "perpetual-perpetual-arbitrage" ? (
-        <PerpetualPerpetualPaperClosurePanel />
-      ) : null}
+        {strategy.metadata.id === "perpetual-perpetual-arbitrage" ? (
+          <PerpetualPerpetualPaperClosurePanel />
+        ) : null}
 
-      {strategy.metadata.id === "dynamic-market-making" ? (
-        <DynamicMarketMakingPaperClosurePanel />
-      ) : null}
+        {strategy.metadata.id === "dynamic-market-making" ? (
+          <DynamicMarketMakingPaperClosurePanel />
+        ) : null}
 
-      {strategy.metadata.id === "cross-exchange-arbitrage" ? <PersonalStrategyOneBotPanel /> : null}
+        {strategy.metadata.id === "cross-exchange-arbitrage" ? <PersonalStrategyOneBotPanel /> : null}
 
-      {strategy.metadata.id !== "cross-exchange-arbitrage"
-        ? <EightStrategyPaperReadinessPanel selectedStrategyId={strategy.metadata.id} />
-        : null}
+        {strategy.metadata.id !== "cross-exchange-arbitrage"
+          ? <EightStrategyPaperReadinessPanel selectedStrategyId={strategy.metadata.id} />
+          : null}
+      </Suspense>
 
       <section className="rounded-xl border border-border-default bg-panel p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -2870,6 +2891,17 @@ export default function StrategyDashboard() {
           Legacy records are never inferred from market, exchange, or route. Strategy metrics only use explicit matching strategy identity.
         </p>
       </section>
+    </section>
+  );
+}
+
+function StrategyEvidenceLoading() {
+  return (
+    <section
+      aria-live="polite"
+      className="rounded-xl border border-border-default bg-panel p-5 text-sm text-text-muted"
+    >
+      Loading selected strategy evidence...
     </section>
   );
 }

@@ -1,4 +1,8 @@
 import {
+  memo,
+} from "react";
+
+import {
   TableCell,
   TableRow,
 } from "@/shared/ui/table";
@@ -19,7 +23,7 @@ type ExchangeIdentity = {
   className: string;
 };
 
-export default function MarketTableRow({
+function MarketTableRow({
   market,
 }: MarketTableRowProps) {
   const isFavorite = useFavoritesStore((state) =>
@@ -57,7 +61,7 @@ export default function MarketTableRow({
     market.bestAskPrice !== null;
 
   return (
-    <TableRow className="group border-border-default transition-colors hover:bg-panel-light">
+    <TableRow className="group h-[72px] border-border-default transition-colors hover:bg-panel-light">
       <TableCell className="w-12 text-center">
         <button
           type="button"
@@ -129,7 +133,6 @@ export default function MarketTableRow({
       </TableCell>
 
       <TableCell
-        key={`${market.exchange}-${market.market}-${market.timestamp}`}
         className={`min-w-36 text-right font-mono font-semibold tabular-nums transition-colors ${priceClass}`}
       >
         {formatPrice(
@@ -287,3 +290,7 @@ function getUpdateState(
     className: "text-danger",
   };
 }
+
+export default memo(
+  MarketTableRow,
+);

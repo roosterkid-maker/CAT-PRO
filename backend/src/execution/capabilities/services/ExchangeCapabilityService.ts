@@ -25,6 +25,10 @@ import {
   unoCoinCapabilityProvider,
 } from "../providers/unocoin/UnoCoinCapabilityProvider";
 
+import {
+  zebPayCapabilityProvider,
+} from "../providers/zebpay/ZebPayCapabilityProvider";
+
 import type {
   ExchangeCapabilityProvider,
   ExchangeCapabilityQuery,
@@ -805,4 +809,5 @@ export const exchangeCapabilityService =
     coinDCXCapabilityProvider,
     coinSwitchCapabilityProvider,
     unoCoinCapabilityProvider,
+    zebPayCapabilityProvider,
   ]);

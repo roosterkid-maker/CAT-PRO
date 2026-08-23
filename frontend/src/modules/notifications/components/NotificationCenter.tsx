@@ -276,60 +276,165 @@ async function playNotificationSound(
       await audioContext.resume();
     }
 
-    const oscillator =
-      audioContext.createOscillator();
-
-    const gain =
-      audioContext.createGain();
-
     const now =
       audioContext.currentTime;
 
-    oscillator.type =
-      "sine";
+    const masterGain =
+      audioContext.createGain();
 
-    oscillator.frequency.setValueAtTime(
-      getSoundFrequency(
-        severity,
-      ),
+    const echoDelay =
+      audioContext.createDelay(
+        0.2,
+      );
+
+    const echoGain =
+      audioContext.createGain();
+
+    masterGain.gain.setValueAtTime(
+      0.72,
       now,
     );
 
-    gain.gain.setValueAtTime(
-      0.0001,
+    echoDelay.delayTime.setValueAtTime(
+      0.085,
       now,
     );
 
-    gain.gain.exponentialRampToValueAtTime(
-      0.12,
-      now + 0.015,
+    echoGain.gain.setValueAtTime(
+      0.16,
+      now,
     );
 
-    gain.gain.exponentialRampToValueAtTime(
-      0.0001,
-      now + 0.22,
-    );
-
-    oscillator.connect(
-      gain,
-    );
-
-    gain.connect(
+    masterGain.connect(
       audioContext.destination,
     );
 
-    oscillator.start(
-      now,
+    masterGain.connect(
+      echoDelay,
     );
 
-    oscillator.stop(
-      now + 0.24,
+    echoDelay.connect(
+      echoGain,
     );
 
-    oscillator.addEventListener(
+    echoGain.connect(
+      audioContext.destination,
+    );
+
+    let finalOscillator:
+      OscillatorNode | null =
+      null;
+
+    for (
+      const note
+      of getFuturisticChime(
+        severity,
+      )
+    ) {
+      const startAt =
+        now + note.delaySeconds;
+
+      const stopAt =
+        startAt + note.durationSeconds;
+
+      const oscillator =
+        audioContext.createOscillator();
+
+      const shimmer =
+        audioContext.createOscillator();
+
+      const shimmerGain =
+        audioContext.createGain();
+
+      const envelope =
+        audioContext.createGain();
+
+      oscillator.type =
+        "sine";
+
+      shimmer.type =
+        "triangle";
+
+      oscillator.frequency.setValueAtTime(
+        note.frequencyHz,
+        startAt,
+      );
+
+      oscillator.frequency.exponentialRampToValueAtTime(
+        note.frequencyHz * 1.012,
+        stopAt,
+      );
+
+      shimmer.frequency.setValueAtTime(
+        note.frequencyHz * 2.01,
+        startAt,
+      );
+
+      shimmerGain.gain.setValueAtTime(
+        0.11,
+        startAt,
+      );
+
+      envelope.gain.setValueAtTime(
+        0.0001,
+        startAt,
+      );
+
+      envelope.gain.exponentialRampToValueAtTime(
+        note.volume,
+        startAt + 0.012,
+      );
+
+      envelope.gain.exponentialRampToValueAtTime(
+        0.0001,
+        stopAt,
+      );
+
+      oscillator.connect(
+        envelope,
+      );
+
+      shimmer.connect(
+        shimmerGain,
+      );
+
+      shimmerGain.connect(
+        envelope,
+      );
+
+      envelope.connect(
+        masterGain,
+      );
+
+      oscillator.start(
+        startAt,
+      );
+
+      shimmer.start(
+        startAt,
+      );
+
+      oscillator.stop(
+        stopAt,
+      );
+
+      shimmer.stop(
+        stopAt,
+      );
+
+      finalOscillator =
+        oscillator;
+    }
+
+    finalOscillator?.addEventListener(
       "ended",
       () => {
-        void audioContext?.close();
+        window.setTimeout(
+          () => {
+            void audioContext?.close();
+          },
+          140,
+        );
       },
       {
         once:
@@ -351,21 +456,104 @@ async function playNotificationSound(
   }
 }
 
-function getSoundFrequency(
+interface FuturisticChimeNote {
+  readonly frequencyHz: number;
+  readonly delaySeconds: number;
+  readonly durationSeconds: number;
+  readonly volume: number;
+}
+
+function getFuturisticChime(
   severity:
     NotificationSeverity,
-): number {
+): readonly FuturisticChimeNote[] {
   switch (severity) {
     case "success":
-      return 880;
+      return [
+        {
+          frequencyHz: 659.25,
+          delaySeconds: 0,
+          durationSeconds: 0.24,
+          volume: 0.085,
+        },
+        {
+          frequencyHz: 987.77,
+          delaySeconds: 0.085,
+          durationSeconds: 0.3,
+          volume: 0.078,
+        },
+        {
+          frequencyHz: 1318.51,
+          delaySeconds: 0.17,
+          durationSeconds: 0.38,
+          volume: 0.068,
+        },
+      ];
 
     case "warning":
-      return 620;
+      return [
+        {
+          frequencyHz: 659.25,
+          delaySeconds: 0,
+          durationSeconds: 0.22,
+          volume: 0.08,
+        },
+        {
+          frequencyHz: 554.37,
+          delaySeconds: 0.095,
+          durationSeconds: 0.28,
+          volume: 0.076,
+        },
+        {
+          frequencyHz: 830.61,
+          delaySeconds: 0.2,
+          durationSeconds: 0.32,
+          volume: 0.066,
+        },
+      ];
 
     case "error":
-      return 360;
+      return [
+        {
+          frequencyHz: 440,
+          delaySeconds: 0,
+          durationSeconds: 0.23,
+          volume: 0.082,
+        },
+        {
+          frequencyHz: 349.23,
+          delaySeconds: 0.09,
+          durationSeconds: 0.28,
+          volume: 0.076,
+        },
+        {
+          frequencyHz: 261.63,
+          delaySeconds: 0.18,
+          durationSeconds: 0.36,
+          volume: 0.07,
+        },
+      ];
 
     default:
-      return 740;
+      return [
+        {
+          frequencyHz: 587.33,
+          delaySeconds: 0,
+          durationSeconds: 0.22,
+          volume: 0.078,
+        },
+        {
+          frequencyHz: 880,
+          delaySeconds: 0.085,
+          durationSeconds: 0.28,
+          volume: 0.072,
+        },
+        {
+          frequencyHz: 1174.66,
+          delaySeconds: 0.17,
+          durationSeconds: 0.34,
+          volume: 0.064,
+        },
+      ];
   }
 }

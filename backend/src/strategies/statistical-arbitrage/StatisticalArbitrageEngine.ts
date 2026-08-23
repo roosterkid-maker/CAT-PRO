@@ -134,8 +134,8 @@ export class StatisticalArbitrageEngine {
     if (!positive(longQuantity) || !positive(shortQuantity) || longQuantity < longMarketEvidence.rules.minimumQuantity || shortQuantity < shortMarketEvidence.rules.minimumQuantity) blockers.add("QUANTITY_INVALID");
     if (longQuantity > longMarketEvidence.rules.maximumMarketQuantity || shortQuantity > shortMarketEvidence.rules.maximumMarketQuantity) blockers.add("MAXIMUM_QUANTITY_EXCEEDED");
     if (blockers.size > 0) return this.blocked(pair, blockers, snapshot.generatedAt);
-    const longFill = vwapCalculator.calculate([...longDepth.asks], longQuantity);
-    const shortFill = vwapCalculator.calculate([...shortDepth.bids], shortQuantity);
+    const longFill = vwapCalculator.calculate(longDepth.asks, longQuantity);
+    const shortFill = vwapCalculator.calculate(shortDepth.bids, shortQuantity);
     if (longFill.partialFill || shortFill.partialFill || longFill.filledQuantity < longQuantity || shortFill.filledQuantity < shortQuantity) {
       blockers.add("DEPTH_INSUFFICIENT"); return this.blocked(pair, blockers, snapshot.generatedAt);
     }

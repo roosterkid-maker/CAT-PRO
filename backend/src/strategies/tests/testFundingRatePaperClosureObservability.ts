@@ -184,7 +184,8 @@ const feeSnapshot: DerivativeFeeEvidenceSnapshot = {
   expectedExchanges: ["binance", "bybit"],
   configuredExchanges: 2,
   evidence: [{
-    exchange: "binance",
+      exchange: "binance",
+      market: null,
     product: "LINEAR_PERPETUAL",
     makerPercent: 0.02,
     takerPercent: 0.05,
@@ -193,7 +194,8 @@ const feeSnapshot: DerivativeFeeEvidenceSnapshot = {
     executionAuthorized: false,
     liveExecutionAllowed: false,
   }, {
-    exchange: "bybit",
+      exchange: "bybit",
+      market: null,
     product: "LINEAR_PERPETUAL",
     makerPercent: 0.02,
     takerPercent: 0.055,

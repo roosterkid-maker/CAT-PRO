@@ -29,6 +29,27 @@ export interface PaperTradeStoreDiagnostics {
   lastError: string | null;
 }
 
+export interface PaperTradeStoreSummary {
+  totalStoredRecords: number;
+  activeStoredRecords: number;
+  closedStoredRecords: number;
+  expectedProfitAcrossStoredRecords: number;
+  actualProfitAcrossClosedStoredRecords: number;
+}
+
+export interface PaperTradePageCursor {
+  openedAt: number;
+  id: string;
+}
+
+export interface PaperTradePage {
+  trades: PaperTrade[];
+  nextCursor: PaperTradePageCursor | null;
+  hasMore: boolean;
+  totalStoredRecords: number;
+  revision: number;
+}
+
 const DEFAULT_PAPER_TRADE_FILE =
   resolve(
     process.cwd(),
@@ -56,6 +77,18 @@ export class PaperTradeStore {
 
   private settledRevision =
     0;
+
+  private readOnlySnapshot:
+    readonly PaperTrade[] | null =
+    null;
+
+  private orderedReadOnlySnapshot:
+    readonly PaperTrade[] | null =
+    null;
+
+  private summarySnapshot:
+    PaperTradeStoreSummary | null =
+    null;
 
   constructor(
     persistenceFilePath =
@@ -132,25 +165,12 @@ export class PaperTradeStore {
   }
 
   getAll(): PaperTrade[] {
-    return Array.from(
-      this.trades.values(),
-    )
-      .sort(
-        (
-          first,
-          second,
-        ) =>
-          second.openedAt -
-          first.openedAt,
-      )
-      .map(
-        (
-          trade,
-        ) =>
-          structuredClone(
-            trade,
-          ),
-      );
+    return this.trades.size ===
+      0
+      ? []
+      : this.getRecent(
+          this.trades.size,
+        );
   }
 
   /**
@@ -160,9 +180,221 @@ export class PaperTradeStore {
    * Public/API consumers must continue to use getAll(), which deep-clones.
    */
   getAllForReadOnlyAggregation(): readonly PaperTrade[] {
-    return Array.from(
-      this.trades.values(),
-    );
+    if (
+      this.readOnlySnapshot ===
+      null
+    ) {
+      this.readOnlySnapshot =
+        Object.freeze(
+          Array.from(
+            this.trades.values(),
+          ),
+        );
+    }
+
+    return this.readOnlySnapshot;
+  }
+
+  /**
+   * Bounded public history for operator tables. This deliberately clones only
+   * the requested rows instead of cloning the complete durable PAPER ledger on
+   * every dashboard poll.
+   */
+  getRecent(
+    limit:
+      number,
+  ): PaperTrade[] {
+    return this.getPage(
+      limit,
+    ).trades;
+  }
+
+  /**
+   * Stable newest-first cursor page for operator history. The cursor is the
+   * final `(openedAt, id)` tuple already observed by the caller, so newly
+   * inserted trades at the front cannot shift or duplicate subsequent pages.
+   */
+  getPage(
+    limit:
+      number,
+
+    cursor:
+      PaperTradePageCursor | null =
+        null,
+  ): PaperTradePage {
+    if (
+      !Number.isSafeInteger(
+        limit,
+      ) ||
+      limit <
+        1
+    ) {
+      throw new Error(
+        "Recent PAPER trade limit must be a positive safe integer.",
+      );
+    }
+
+    if (
+      cursor !==
+        null &&
+      (
+        !Number.isSafeInteger(
+          cursor.openedAt,
+        ) ||
+        cursor.openedAt <=
+          0 ||
+        typeof cursor.id !==
+          "string" ||
+        cursor.id.trim().length ===
+          0
+      )
+    ) {
+      throw new Error(
+        "PAPER trade cursor must contain a positive openedAt timestamp and non-empty ID.",
+      );
+    }
+
+    if (
+      this.orderedReadOnlySnapshot ===
+      null
+    ) {
+      this.orderedReadOnlySnapshot =
+        Object.freeze(
+          [
+            ...this.trades.values(),
+          ].sort(
+            comparePaperTradeHistoryOrder,
+          ),
+        );
+    }
+
+    const startIndex =
+      cursor ===
+        null
+        ? 0
+        : findFirstTradeAfterCursor(
+            this.orderedReadOnlySnapshot,
+            cursor,
+          );
+
+    const pageWindow =
+      this.orderedReadOnlySnapshot
+      .slice(
+        startIndex,
+        startIndex +
+          limit +
+          1,
+      );
+
+    const hasMore =
+      pageWindow.length >
+        limit;
+
+    const pageTrades =
+      pageWindow.slice(
+        0,
+        limit,
+      );
+
+    const lastTrade =
+      pageTrades.at(
+        -1,
+      );
+
+    return {
+      trades:
+        pageTrades
+      .map(
+        (
+          trade,
+        ) =>
+          structuredClone(
+            trade,
+          ),
+        ),
+      nextCursor:
+        hasMore &&
+        lastTrade
+          ? {
+              openedAt:
+                lastTrade.openedAt,
+              id:
+                lastTrade.id,
+            }
+          : null,
+      hasMore,
+      totalStoredRecords:
+        this.trades.size,
+      revision:
+        this.revision,
+    };
+  }
+
+  getSummary(): PaperTradeStoreSummary {
+    if (
+      this.summarySnapshot !==
+      null
+    ) {
+      return {
+        ...this.summarySnapshot,
+      };
+    }
+
+    let activeStoredRecords =
+      0;
+    let closedStoredRecords =
+      0;
+    let expectedProfitAcrossStoredRecords =
+      0;
+    let actualProfitAcrossClosedStoredRecords =
+      0;
+
+    for (
+      const trade
+      of this.trades.values()
+    ) {
+      if (
+        trade.status ===
+          "validated" ||
+        trade.status ===
+          "open" ||
+        trade.status ===
+          "monitoring"
+      ) {
+        activeStoredRecords +=
+          1;
+      }
+
+      expectedProfitAcrossStoredRecords +=
+        trade.expectedProfit;
+
+      if (
+        trade.status !==
+        "closed"
+      ) {
+        continue;
+      }
+
+      closedStoredRecords +=
+        1;
+      actualProfitAcrossClosedStoredRecords +=
+        trade.actualProfit ??
+        0;
+    }
+
+    this.summarySnapshot =
+      Object.freeze({
+        totalStoredRecords:
+          this.trades.size,
+        activeStoredRecords,
+        closedStoredRecords,
+        expectedProfitAcrossStoredRecords,
+        actualProfitAcrossClosedStoredRecords,
+      });
+
+    return {
+      ...this.summarySnapshot,
+    };
   }
 
   getByStatus(
@@ -354,6 +586,8 @@ export class PaperTradeStore {
 
       this.settledRevision +=
         1;
+
+      this.invalidateReadSnapshots();
     }
 
     this.restored =
@@ -391,6 +625,8 @@ export class PaperTradeStore {
       this.settledRevision +=
         1;
 
+      this.invalidateReadSnapshots();
+
       this.restored =
         true;
 
@@ -422,6 +658,8 @@ export class PaperTradeStore {
     this.revision +=
       1;
 
+    this.invalidateReadSnapshots();
+
     if (
       trade.status ===
         "closed" ||
@@ -431,6 +669,15 @@ export class PaperTradeStore {
       this.settledRevision +=
         1;
     }
+  }
+
+  private invalidateReadSnapshots(): void {
+    this.readOnlySnapshot =
+      null;
+    this.orderedReadOnlySnapshot =
+      null;
+    this.summarySnapshot =
+      null;
   }
 
   private isEquivalent(
@@ -1029,6 +1276,85 @@ export class PaperTradeStore {
       )
     );
   }
+}
+
+function comparePaperTradeHistoryOrder(
+  first:
+    PaperTrade,
+
+  second:
+    PaperTrade,
+): number {
+  const timestampDifference =
+    second.openedAt -
+    first.openedAt;
+
+  return timestampDifference !==
+    0
+    ? timestampDifference
+    : second.id.localeCompare(
+        first.id,
+      );
+}
+
+function isStrictlyAfterCursor(
+  trade:
+    PaperTrade,
+
+  cursor:
+    PaperTradePageCursor,
+): boolean {
+  return trade.openedAt <
+    cursor.openedAt ||
+    (
+      trade.openedAt ===
+        cursor.openedAt &&
+      trade.id.localeCompare(
+        cursor.id,
+      ) <
+        0
+    );
+}
+
+function findFirstTradeAfterCursor(
+  trades:
+    readonly PaperTrade[],
+
+  cursor:
+    PaperTradePageCursor,
+): number {
+  let lower =
+    0;
+  let upper =
+    trades.length;
+
+  while (
+    lower <
+    upper
+  ) {
+    const middle =
+      lower +
+      Math.floor(
+        (upper - lower) /
+          2,
+      );
+
+    if (
+      isStrictlyAfterCursor(
+        trades[middle],
+        cursor,
+      )
+    ) {
+      upper =
+        middle;
+    } else {
+      lower =
+        middle +
+        1;
+    }
+  }
+
+  return lower;
 }
 
 export const paperTradeStore =

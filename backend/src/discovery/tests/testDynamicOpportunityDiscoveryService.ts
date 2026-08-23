@@ -6,6 +6,10 @@ import {
   DynamicOpportunityDiscoveryService,
 } from "../services/DynamicOpportunityDiscoveryService";
 
+import {
+  DynamicOpportunityDiscoveryRunnerService,
+} from "../services/DynamicOpportunityDiscoveryRunnerService";
+
 function assertCondition(
   condition: boolean,
   message: string,
@@ -236,6 +240,50 @@ function main(): void {
     !snapshot.safety.liveExecutionAllowed &&
     !snapshot.safety.orderSubmissionAllowed,
     "Shared discovery must remain read-only and execution isolated.",
+  );
+
+  const runner =
+    new DynamicOpportunityDiscoveryRunnerService(
+      service,
+      1_000,
+    );
+
+  const listenerSnapshots:
+    (typeof snapshot)[] =
+      [];
+
+  runner.subscribe(
+    (published) => {
+      listenerSnapshots.push(
+        published,
+      );
+    },
+  );
+
+  const publishedSnapshot =
+    runner.refresh(
+      now,
+    );
+
+  assertCondition(
+    listenerSnapshots[0] ===
+      publishedSnapshot &&
+    runner.getLatestSnapshot() ===
+      publishedSnapshot,
+    "The runner must share one immutable snapshot instead of synchronously cloning the large discovery graph per consumer.",
+  );
+
+  assertCondition(
+    Object.isFrozen(
+      publishedSnapshot,
+    ) &&
+    Object.isFrozen(
+      publishedSnapshot.books,
+    ) &&
+    Object.isFrozen(
+      publishedSnapshot.triangularPaths,
+    ),
+    "The shared discovery snapshot must remain recursively immutable.",
   );
 
   console.log(

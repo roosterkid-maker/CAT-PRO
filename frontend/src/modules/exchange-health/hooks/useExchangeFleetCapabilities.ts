@@ -6,7 +6,9 @@ import {
   fetchExchangeFleetCapabilities,
 } from "../services/exchangeHealthApi";
 
-export function useExchangeFleetCapabilities() {
+export function useExchangeFleetCapabilities(
+  enabled = true,
+) {
   return useQuery({
     queryKey: [
       "exchange-health",
@@ -27,5 +29,7 @@ export function useExchangeFleetCapabilities() {
       3_000,
 
     retry: 2,
+
+    enabled,
   });
 }

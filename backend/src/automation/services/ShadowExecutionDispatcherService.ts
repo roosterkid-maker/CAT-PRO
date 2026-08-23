@@ -9,8 +9,12 @@ import type {
 } from "../models/ShadowExecutionDispatcher";
 
 import {
-  candidateQualificationService,
-} from "./CandidateQualificationService";
+  opportunityMonitorService,
+} from "./OpportunityMonitorService";
+
+import type {
+  CandidateQualificationRecord,
+} from "../models/CandidateQualification";
 
 import {
   cloneStrategyAttribution,
@@ -167,21 +171,10 @@ export class ShadowExecutionDispatcherService {
         this.config.maximumBatchSize
       ) {
         const queueItem =
-          allowedCandidateKeys
-            ? executionCandidateQueueService
-                .getReadyItems()
-                .find(
-                  (
-                    item,
-                  ) =>
-                    allowedCandidateKeys
-                      .has(
-                        item.candidateKey,
-                      ),
-                ) ??
-              null
-            : executionCandidateQueueService
-                .getNextReady();
+          executionCandidateQueueService
+            .getNextReady(
+              allowedCandidateKeys,
+            );
 
         if (
           !queueItem
@@ -203,11 +196,43 @@ export class ShadowExecutionDispatcherService {
         this.totalAttempts +=
           1;
 
-        const qualification =
-          candidateQualificationService
-            .getQualification(
+        /*
+         * Queue synchronization already performed the expensive exact-depth,
+         * order-rule and post-stress qualification. Re-running it here in the
+         * same short-lived SHADOW handoff duplicated book walks and could lose
+         * the exact accepted snapshot between stages. Reuse that immutable
+         * evidence only while the monitored candidate generation and latest
+         * opportunity ID are still identical. PAPER execution still performs
+         * its own final funded/stress last look.
+         */
+        const currentCandidate =
+          opportunityMonitorService
+            .getCandidate(
               queueItem.candidateKey,
             );
+
+        const qualification =
+          currentCandidate !==
+            null &&
+          currentCandidate.status ===
+            "ACTIVE" &&
+          currentCandidate.latestOpportunityId ===
+            queueItem
+              .qualification
+              .candidate
+              .latestOpportunityId &&
+          currentCandidate.firstSeenAt ===
+            queueItem
+              .qualification
+              .candidate
+              .firstSeenAt &&
+          currentCandidate.reappearances ===
+            queueItem
+              .qualification
+              .candidate
+              .reappearances
+            ? queueItem.qualification
+            : null;
 
         if (
           !qualification ||
@@ -693,9 +718,7 @@ export class ShadowExecutionDispatcherService {
 
   private createCandidateGeneration(
     qualification:
-      ReturnType<
-        typeof candidateQualificationService.getQualifiedCandidates
-      >[number],
+      CandidateQualificationRecord,
   ): string {
     const candidate =
       qualification.candidate;
@@ -723,9 +746,7 @@ export class ShadowExecutionDispatcherService {
 
   private resolvePersistence(
     qualification:
-      ReturnType<
-        typeof candidateQualificationService.getQualifiedCandidates
-      >[number],
+      CandidateQualificationRecord,
   ): number {
     const candidate =
       qualification.candidate;

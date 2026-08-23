@@ -179,7 +179,16 @@ export class OpportunityMonitorService {
 
         existing.consecutiveObservations =
           0;
+
+        existing.consecutiveDistinctBookObservations =
+          0;
       }
+
+      const distinctBookGeneration =
+        existing.latest.buyQuoteTimestamp !==
+          opportunity.pair.buy.timestamp ||
+        existing.latest.sellQuoteTimestamp !==
+          opportunity.pair.sell.timestamp;
 
       existing.status =
         "ACTIVE";
@@ -209,6 +218,17 @@ export class OpportunityMonitorService {
 
       existing.consecutiveObservations +=
         1;
+
+      if (
+        distinctBookGeneration
+      ) {
+        existing.consecutiveDistinctBookObservations =
+          (
+            existing.consecutiveDistinctBookObservations ??
+            0
+          ) +
+          1;
+      }
 
       existing.missedSnapshots =
         0;
@@ -255,6 +275,18 @@ export class OpportunityMonitorService {
 
         opportunityTimestamp:
           opportunity.timestamp,
+
+        buyQuoteTimestamp:
+          opportunity.pair.buy.timestamp,
+
+        sellQuoteTimestamp:
+          opportunity.pair.sell.timestamp,
+
+        quotesAreFresh:
+          opportunity.quotesAreFresh,
+
+        usedLastPriceFallback:
+          opportunity.usedLastPriceFallback,
       };
 
       if (
@@ -309,6 +341,9 @@ export class OpportunityMonitorService {
         snapshotGeneratedAt;
 
       candidate.consecutiveObservations =
+        0;
+
+      candidate.consecutiveDistinctBookObservations =
         0;
 
       candidate.lifetimeMs =
@@ -371,6 +406,33 @@ export class OpportunityMonitorService {
           candidate,
         )
       : null;
+  }
+
+  /**
+   * Visit authoritative ACTIVE candidates synchronously without cloning and
+   * sorting the whole set first. Internal hot-path consumers must treat each
+   * candidate as immutable; public/operator APIs continue using cloned DTOs.
+   */
+  forEachActiveCandidate(
+    visitor:
+      (
+        candidate:
+          MonitoredOpportunityCandidate,
+      ) => void,
+  ): void {
+    for (
+      const candidate
+      of this.candidates.values()
+    ) {
+      if (
+        candidate.status ===
+        "ACTIVE"
+      ) {
+        visitor(
+          candidate,
+        );
+      }
+    }
   }
 
   getActiveCandidates():
@@ -581,6 +643,9 @@ export class OpportunityMonitorService {
       consecutiveObservations:
         1,
 
+      consecutiveDistinctBookObservations:
+        1,
+
       missedSnapshots:
         0,
 
@@ -629,6 +694,18 @@ export class OpportunityMonitorService {
 
         opportunityTimestamp:
           opportunity.timestamp,
+
+        buyQuoteTimestamp:
+          opportunity.pair.buy.timestamp,
+
+        sellQuoteTimestamp:
+          opportunity.pair.sell.timestamp,
+
+        quotesAreFresh:
+          opportunity.quotesAreFresh,
+
+        usedLastPriceFallback:
+          opportunity.usedLastPriceFallback,
       },
 
       best: {

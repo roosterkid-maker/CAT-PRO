@@ -14,7 +14,7 @@ export default function HeroCard({
   children,
 }: HeroCardProps) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-border-default bg-panel shadow-sm">
+    <section className="dashboard-hero-card overflow-hidden rounded-2xl border border-border-default bg-panel shadow-sm">
       <header className="flex items-start justify-between border-b border-border-default px-6 py-5">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">

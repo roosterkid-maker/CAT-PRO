@@ -36,8 +36,9 @@ const economics: SpotPerpetualBasisEconomicsSnapshot = {
   qualifiedRoutes: 0,
   blockedRoutes: 2,
   assessments: [{
-    id: "binance:BTCUSDT:snapshot",
-    exchange: "binance",
+    id: "coindcx:binance:BTCUSDT:snapshot",
+    spotExchange: "coindcx",
+    perpetualExchange: "binance",
     market: "BTCUSDT",
     status: "BLOCKED",
     blockers: ["EXPECTED_NET_THRESHOLD_NOT_MET"],
@@ -46,11 +47,18 @@ const economics: SpotPerpetualBasisEconomicsSnapshot = {
       spotBuyVwap: 100,
       perpetualSellVwap: 100.2,
       grossBasisPercent: 0.2,
+      entryFeeQuote: 1,
+      exitFeeReserveQuote: 1,
       totalFeeQuote: 2,
       totalFeePercent: 0.2,
       fundingRate: 0.0005,
       expectedFundingQuote: 0.5,
       expectedFundingPercent: 0.05,
+      fundingQualificationCreditQuote: 0,
+      positiveFundingExcludedFromQualification: true,
+      slippageBufferQuote: 1,
+      spotSlippageBufferPercent: 0.05,
+      perpetualSlippageBufferPercent: 0.05,
       safetyBufferQuote: 2,
       safetyBufferPercent: 0.2,
       expectedNetQuote: -1.5,
@@ -62,8 +70,9 @@ const economics: SpotPerpetualBasisEconomicsSnapshot = {
     executionAuthorized: false,
     automaticExecutionAllowed: false,
   }, {
-    id: "bybit:ETHUSDT:snapshot",
-    exchange: "bybit",
+    id: "binance:bybit:ETHUSDT:snapshot",
+    spotExchange: "binance",
+    perpetualExchange: "bybit",
     market: "ETHUSDT",
     status: "BLOCKED",
     blockers: ["DERIVATIVE_DEPTH_MISSING"],
@@ -168,6 +177,7 @@ const feeSnapshot: DerivativeFeeEvidenceSnapshot = {
   configuredExchanges: 2,
   evidence: ["binance", "bybit"].map((exchange) => ({
     exchange,
+    market: null,
     product: "LINEAR_PERPETUAL" as const,
     makerPercent: 0.02,
     takerPercent: 0.05,
@@ -209,7 +219,7 @@ function main(): void {
   const service = new SpotPerpetualBasisPaperClosureObservabilityService(port, 1_000);
 
   const evidenceBlocked = service.getReport(now);
-  assert.equal(evidenceBlocked.version, "69.0");
+  assert.equal(evidenceBlocked.version, "176.0");
   assert.equal(evidenceBlocked.state, "DERIVATIVE_EVIDENCE_BLOCKED");
   assert.equal(evidenceBlocked.derivativeEvidence.authenticatedReadReadyVenues, 1);
   assert.equal(evidenceBlocked.derivativeEvidence.targetMarginCoveredVenues, 0);

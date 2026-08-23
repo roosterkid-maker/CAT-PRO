@@ -147,11 +147,12 @@ export interface PersonalBotCapitalPlacement {
   };
   buyVenues: PersonalBotCapitalPlacementVenueRank[];
   sellVenues: PersonalBotCapitalPlacementVenueRank[];
+  totalRoutes: number;
   routes: PersonalBotCapitalPlacementRouteRank[];
   pilot: {
     state: "NO_DATA" | "NO_ADAPTER_READY_ROUTE" | "COLLECTING" | "CANDIDATE_FOR_PREFLIGHT";
-    requestedPerLegInr: 100;
-    minimumTwoLegInventoryInr: 200;
+    requestedPerLegInr: number;
+    minimumTwoLegInventoryInr: number;
     recommendedRoute: PersonalBotCapitalPlacementRouteRank | null;
     reasons: string[];
     preflightRequired: true;
@@ -167,6 +168,334 @@ export interface PersonalBotCapitalPlacement {
     balanceMutated: false;
     liveExecutionAllowed: false;
     orderSubmissionAllowed: false;
+  };
+}
+
+export type PersonalCapitalManagerState =
+  | "EVIDENCE_INCOMPLETE"
+  | "WAITING_FOR_ROUTE"
+  | "OPERATOR_ACTION_REQUIRED"
+  | "READY_FOR_PREFLIGHT";
+
+export interface PersonalCapitalManagerAction {
+  priority: number;
+  kind:
+    | "HOLD_OFF_EXCHANGE_RESERVE"
+    | "WAIT_FOR_CURRENT_ROUTE"
+    | "REFRESH_BALANCE_EVIDENCE"
+    | "PREPOSITION_ASSET"
+    | "KEEP_POSITION"
+    | "RUN_READ_ONLY_PREFLIGHT";
+  state: "WAITING" | "BLOCKED" | "ACTION_REQUIRED" | "READY";
+  exchange: string | null;
+  asset: string | null;
+  amount: number | null;
+  unit: "INR" | "NATIVE_ASSET" | null;
+  instruction: string;
+  operatorApprovalRequired: boolean;
+  automaticExecutionAllowed: false;
+}
+
+export interface PersonalCapitalManager {
+  version: "158.0";
+  generatedAt: number;
+  mode: "ADVISORY_ONLY";
+  state: PersonalCapitalManagerState;
+  pilotPolicy: {
+    recommendedStartingBankrollInr: 3_000;
+    maximumInitialExchangeExposureInr: 2_000;
+    offExchangeReserveInr: 1_000;
+    offExchangeReserveLocation: "OPERATOR_LINKED_BANK_ACCOUNT";
+    offExchangeReserveEvidence: "NOT_OBSERVED_BY_BOT";
+    requestedPerLegInr: number;
+    minimumTwoLegInventoryInr: number;
+  };
+  evidence: {
+    exchanges: number;
+    freshExchanges: number;
+    allExchangeBalancesFresh: boolean;
+    currentRouteAvailable: boolean;
+    currentRouteFullySpecified: boolean;
+    historicalRouteMatched: boolean;
+    nativeAssetUnitsNeverSummed: true;
+  };
+  capitalTruth: {
+    valuationState: "NO_FRESH_BALANCE_EVIDENCE" | "INR_SUBTOTAL_ONLY" | "FULLY_INR_DENOMINATED";
+    verifiedInrSubtotal: {
+      availableInr: number | null;
+      lockedInr: number | null;
+      totalInr: number | null;
+      contributingExchanges: number;
+    };
+    allAssetPortfolioValueInr: number | null;
+    positiveUnvaluedAssetCount: number;
+    nativeAssetTotals: Array<{
+      asset: string;
+      availableBalance: number;
+      lockedBalance: number;
+      totalBalance: number;
+      contributingExchanges: number;
+    }>;
+    paper: {
+      source: "ISOLATED_PAPER_LEDGER";
+      budgetInr: number;
+      accountingEquityInr: number;
+      availableAccountingEquityInr: number;
+      tdsReceivableInr: number;
+      tdsTreatment: "RECOVERABLE_CASH_LOCK_NOT_TRADING_FEE";
+      includedInLiveBalanceTotals: false;
+    };
+    missingValuesNeverTreatedAsZero: true;
+  };
+  profitTruth: {
+    mode: "PAPER_EVIDENCE_ONLY";
+    currency: "INR";
+    credibleSettlements: number;
+    grossTradingProfitInr: number;
+    tradingFeesInr: number;
+    economicNetPnlInr: number;
+    tdsWithheldInr: number;
+    deployableCashPnlInr: number;
+    realizedLossesInr: number;
+    pendingSettlements: number;
+    pendingPnlInr: null;
+    taxReserveInr: null;
+    safelyWithdrawableProfitInr: null;
+    withdrawalState: "UNAVAILABLE_WITHOUT_RECONCILED_LIVE_LEDGER";
+    paperProfitNeverWithdrawable: true;
+  };
+  allocation: {
+    basis: "CURRENT_EXECUTE_REQUIREMENT_PLUS_DURABLE_ROUTE_DEMAND";
+    status: "EVIDENCE_INCOMPLETE" | "WAITING_FOR_CURRENT_ROUTE" | "TARGETS_AVAILABLE";
+    staticEqualAllocationUsed: false;
+    stage: "SINGLE_CYCLE_TINY_LIVE_ADVISORY";
+    targetOperatingCycles: 1;
+    targets: Array<{
+      side: "BUY_QUOTE" | "SELL_BASE";
+      exchange: string;
+      asset: string;
+      minimumAmount: number;
+      targetAmount: number;
+      maximumAmount: number;
+      currentAmount: number;
+      deficitAmount: number;
+      surplusAmount: number;
+      estimatedOperatingCycles: number;
+      state: "NO_DATA" | "DEFICIT" | "ON_TARGET" | "SURPLUS";
+      blockedCurrentRoute: boolean;
+      reason: string;
+    }>;
+    demandRanking: Array<{
+      rank: number;
+      side: "BUY" | "SELL";
+      exchange: string;
+      settlementSharePercent: number;
+      uniqueSettlements: number;
+      realizedPnlInr: number;
+      averageNetReturnPercent: number;
+      confidence: "LOW" | "MEDIUM" | "HIGH";
+    }>;
+    scalingBlockedUntilLiveEvidence: true;
+    explanation: string;
+  };
+  route: {
+    routeKey: string;
+    market: string;
+    buyExchange: string;
+    sellExchange: string;
+    baseAsset: string | null;
+    quoteAsset: string | null;
+    fundingState: "FUNDED" | "REDUCED" | "BLOCKED";
+    historicalRank: number | null;
+    historicalSettlements: number | null;
+    confidence: "LOW" | "MEDIUM" | "HIGH" | null;
+    requirements: PersonalBotInventoryRequirement[];
+  } | null;
+  venues: Array<{
+    exchange: string;
+    displayName: string;
+    status: "SYNCHRONIZED" | "STALE" | "FAILED" | "NOT_CONFIGURED" | "PENDING";
+    lastSynchronizedAt: number | null;
+    balanceAgeMs: number | null;
+    positiveAssetCount: number;
+    synchronizedAssetCount: number;
+    assetsTruncated: boolean;
+    assets: Array<{
+      asset: string;
+      availableBalance: number;
+      lockedBalance: number;
+      totalBalance: number;
+    }>;
+  }>;
+  actions: PersonalCapitalManagerAction[];
+  rebalancing: {
+    version: "158.0";
+    phase: "PHASE_A_B_ADVISORY";
+    authorityMode: "ADVISORY_ONLY";
+    inventory: {
+      version: "121.0";
+      generatedAt: number;
+      state: "READY_FOR_REBALANCING_ANALYSIS" | "PARTIAL_EVIDENCE" | "NO_BALANCE_EVIDENCE";
+      valuationAsset: "USDT";
+      maximumBalanceAgeMs: number;
+      totals: {
+        exchanges: number;
+        synchronizedExchanges: number;
+        positiveAssets: number;
+        currentValuations: number;
+        staleValuations: number;
+        unavailableValuations: number;
+        knownAvailableValueUsdt: number;
+        knownAvailableAfterReservationsValueUsdt: number;
+        knownLockedValueUsdt: number;
+        knownTotalValueUsdt: number;
+        decisionUsableValueUsdt: number;
+        authoritativeAvailableCapitalUsdt: number | null;
+        authoritativeLockedCapitalUsdt: number | null;
+        authoritativeTotalCapitalUsdt: number | null;
+        directUsdtAvailable: number;
+        directUsdtAvailableAfterReservations: number;
+        directUsdtLocked: number;
+        directUsdtTotal: number;
+      };
+      exchanges: Array<{
+        exchange: string;
+        displayName: string;
+        balanceStatus: string;
+        lastSynchronizedAt: number | null;
+        balanceAgeMs: number | null;
+        positiveAssets: number;
+        currentValuations: number;
+        staleValuations: number;
+        unavailableValuations: number;
+        authoritativeTotalValueUsdt: number | null;
+        authoritativeAvailableAfterReservationsValueUsdt: number | null;
+        knownTotalValueUsdt: number;
+        directUsdtAvailableAfterReservations: number;
+        unvaluedPositiveAssets: string[];
+      }>;
+      blockers: string[];
+      limitations: string[];
+      missingValuesTreatedAsZero: false;
+      accountingCapitalMixedWithWalletValuation: false;
+    };
+    policyBasis: {
+      policyId: string;
+      revision: number;
+      source: "CREDIBLE_STRATEGY_ONE_SETTLEMENTS_PLUS_CURRENT_ROUTE";
+      staticEqualAllocationUsed: false;
+      crediblePaperSettlements: number;
+      currentRouteBoostApplied: boolean;
+      evidenceSufficient: boolean;
+      formula: string;
+    };
+    allocation: {
+      version: "122.0";
+      generatedAt: number;
+      state: "READY" | "BLOCKED_EVIDENCE" | "BLOCKED_POLICY";
+      policy: {
+        policyId: string;
+        revision: number;
+        targets: Array<{
+          exchange: string;
+          targetPercent: number;
+          minimumPercent: number;
+          maximumPercent: number;
+          emergencyReserveUsdt: number;
+        }>;
+      };
+      capital: {
+        totalUsdt: number | null;
+        availableAfterReservationsUsdt: number | null;
+        reservedInventoryUsdt: number | null;
+        inTransitUsdt: null;
+      };
+      exchanges: Array<{
+        exchange: string;
+        displayName: string;
+        state: "CRITICAL_LOW" | "UNDERFUNDED" | "BALANCED" | "OVERFUNDED" | "CRITICAL_HIGH";
+        currentCapitalUsdt: number;
+        availableCapitalUsdt: number;
+        targetCapitalUsdt: number;
+        minimumCapitalUsdt: number;
+        maximumCapitalUsdt: number;
+        emergencyReserveUsdt: number;
+        imbalanceUsdt: number;
+        imbalancePercentOfTarget: number;
+        deficitToTargetUsdt: number;
+        surplusAboveTargetUsdt: number;
+        transferableSurplusUsdt: number;
+        activeReservedCapitalUsdt: number;
+        suggestedAction: "NO_ACTION" | "PREFER_NATURAL_REBALANCE" | "SOFT_REBALANCE_ANALYSIS" | "HARD_REBALANCE_ANALYSIS";
+        reasons: string[];
+      }>;
+      summary: {
+        criticalLow: number;
+        underfunded: number;
+        balanced: number;
+        overfunded: number;
+        criticalHigh: number;
+        totalDeficitToTargetUsdt: number;
+        totalSurplusAboveTargetUsdt: number;
+        totalTransferableSurplusUsdt: number;
+      };
+      blockers: string[];
+    };
+    plan: {
+      version: "124.0";
+      generatedAt: number;
+      state: "BLOCKED" | "NO_REBALANCE_REQUIRED" | "NATURAL_REBALANCE_AVAILABLE" | "SOFT_REBALANCE_PREFERRED" | "HARD_REBALANCE_ANALYSIS_REQUIRED";
+      currentAction: "BLOCK" | "NO_ACTION" | "PRIORITIZE_NATURAL_REVERSE" | "PREFER_INVENTORY_AWARE_TRADES" | "WAIT_FOR_OPERATOR_APPROVED_HARD_REBALANCE_INFRASTRUCTURE";
+      desiredMoves: Array<{
+        sequence: number;
+        sourceExchange: string;
+        destinationExchange: string;
+        amountUsdt: number;
+        submissionState: "ANALYSIS_ONLY";
+        transferAsset: null;
+        transferNetwork: null;
+        estimatedCostUsdt: null;
+        reason: string;
+      }>;
+      blockers: string[];
+      reasons: string[];
+    };
+    safetyContext: {
+      executionRecoveryPending: boolean;
+      settlementReconciliationPending: boolean;
+      emergencyStopActive: boolean;
+    };
+    phases: {
+      phaseAUnifiedTruth: "ACTIVE";
+      phaseBAdvisoryRebalancing: "ACTIVE";
+      phaseCManualTransfers: "LOCKED_NOT_IMPLEMENTED";
+      phaseDCappedAutomaticTransfers: "LOCKED_NOT_IMPLEMENTED";
+      phaseEProfitWithdrawalManager: "LOCKED_WITHOUT_LIVE_LEDGER";
+    };
+    safety: {
+      readOnly: true;
+      executionHotPathUntouched: true;
+      balanceMutationAllowed: false;
+      transferSubmissionAllowed: false;
+      withdrawalSubmissionAllowed: false;
+      bankWithdrawalAllowed: false;
+      liveOrderSubmissionAllowed: false;
+      explicitAuthorityRequiredForLaterPhases: true;
+    };
+  };
+  safety: {
+    advisoryOnly: true;
+    paperCapitalIsolated: true;
+    paperExecutionAffected: false;
+    automaticFundMovementAllowed: false;
+    transferInitiated: false;
+    withdrawalInitiated: false;
+    balanceMutated: false;
+    liveExecutionAllowed: false;
+    orderSubmissionAllowed: false;
+    bankWithdrawalAllowed: false;
+    transferAuthorityMode: "ADVISORY_ONLY";
+    emergencyFreezeAvailableBeforeTransferPhases: true;
   };
 }
 
@@ -535,6 +864,7 @@ export interface PersonalStrategyOneBotData {
     };
   };
   capitalPlacement: PersonalBotCapitalPlacement;
+  capitalManager: PersonalCapitalManager;
   performance: {
     storedExecutions: number;
     successfulExecutions: number;
@@ -649,6 +979,7 @@ export interface PersonalStrategyOneBotData {
       equationBalanced: boolean;
     };
     availableCapital: number;
+    paperTdsReceivable: number;
     capitalBudgetInr: number;
     minimumCapitalPerTrade: number;
     maximumCapitalPerTrade: number;
@@ -687,6 +1018,22 @@ export interface PersonalStrategyOneBotData {
 export interface PersonalStrategyOneBotResponse {
   success: true;
   data: PersonalStrategyOneBotData;
+}
+
+export interface PersonalStrategyOnePerformanceSummaryResponse {
+  success: true;
+  data: {
+    version: "148.0";
+    generatedAt: number;
+    profile: "PERSONAL_STRATEGY_ONE_PERFORMANCE_SUMMARY";
+    performance: PersonalStrategyOneBotData["performance"];
+    safety: {
+      readOnlyAggregation: true;
+      paperExecutionTriggeredByRead: false;
+      liveExecutionAllowed: false;
+      orderSubmissionAllowed: false;
+    };
+  };
 }
 
 export interface PersonalBotControlResponse {

@@ -108,8 +108,11 @@ export interface AutomatedPaperExecutionControllerDiagnostics {
 
   liveExecutionAllowed: false;
 
+  armingAuthority:
+    "PERSISTED_DASHBOARD_CONTROL";
+
   confirmationVariable:
-    "AUTOMATED_PAPER_TRADING_CONFIRMATION";
+    null;
 
   config: AutomatedPaperExecutionControllerConfig;
 

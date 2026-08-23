@@ -1,3 +1,7 @@
+import type {
+  ExecutionPolicyIdentity,
+} from "../../../trading/models/ExecutionPlan";
+
 export type ExecutionSettlementStatus =
   | "READY"
   | "SETTLED"
@@ -10,6 +14,9 @@ export interface ExecutionSettlementRecord {
   sessionId: string;
 
   planId: string;
+
+  policyIdentity?:
+    ExecutionPolicyIdentity;
 
   market: string;
 
@@ -86,6 +93,9 @@ export interface ExecutionAuditRecord {
   sessionId: string;
 
   planId: string;
+
+  policyIdentity?:
+    ExecutionPolicyIdentity;
 
   market: string;
 

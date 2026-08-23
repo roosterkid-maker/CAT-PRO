@@ -33,6 +33,12 @@ export interface MonitoredOpportunityCandidate {
 
   consecutiveObservations: number;
 
+  /**
+   * Consecutive observations backed by a different BUY/SELL book-timestamp
+   * generation. Optional for backward-compatible persisted/test evidence.
+   */
+  consecutiveDistinctBookObservations?: number;
+
   missedSnapshots: number;
 
   reappearances: number;
@@ -65,6 +71,14 @@ export interface MonitoredOpportunityCandidate {
     requestedQuoteCapital?: number;
 
     opportunityTimestamp: number;
+
+    buyQuoteTimestamp: number;
+
+    sellQuoteTimestamp: number;
+
+    quotesAreFresh: boolean;
+
+    usedLastPriceFallback: boolean;
   };
 
   best: {

@@ -45,6 +45,14 @@ const DEFAULT_PERSISTENCE_FILE =
     "live-performance-evidence.jsonl",
   );
 
+const DEFAULT_CHECKPOINT_FILE =
+  resolve(
+    process.cwd(),
+    "logs",
+    "execution",
+    "live-performance-checkpoint.jsonl",
+  );
+
 const MAXIMUM_RESTORED_SNAPSHOTS =
   720;
 
@@ -67,8 +75,35 @@ interface PersistedLivePerformanceEvidence {
     ExecutionSettlementRecord[];
 }
 
+interface PersistedLivePerformanceCheckpoint {
+  schemaVersion: 2;
+
+  persistedAt: number;
+
+  metrics:
+    ExecutionMetricsReport;
+
+  metricSnapshots:
+    ExecutionMetricsSnapshot[];
+
+  settlements:
+    ExecutionSettlementRecord[];
+}
+
 export interface LivePerformanceEvidencePersistenceDiagnostics {
   persistenceFilePath: string;
+
+  legacyPersistenceFilePath: string;
+
+  restoreSource:
+    "NONE" |
+    "CHECKPOINT" |
+    "CHECKPOINT_PREVIOUS" |
+    "LEGACY_BOUNDED_TAIL";
+
+  boundedCheckpoint: true;
+
+  legacyAppendDisabled: true;
 
   restored: boolean;
 
@@ -102,6 +137,18 @@ export interface LivePerformanceEvidencePersistenceDiagnostics {
     lastSequence: number;
   };
 
+  legacyFoundation: {
+    exists: boolean;
+
+    linesRead: number;
+
+    validRecordsRead: number;
+
+    malformedRecordsIgnored: number;
+
+    lastSequence: number;
+  };
+
   sessionEvidence:
     ReturnType<
       typeof liveExecutionSessionEvidenceService.getDiagnostics
@@ -109,10 +156,24 @@ export interface LivePerformanceEvidencePersistenceDiagnostics {
 }
 
 export class LivePerformanceEvidencePersistenceService {
-  private readonly store:
+  private readonly legacyStore:
     JsonlSnapshotStore<
       PersistedLivePerformanceEvidence
     >;
+
+  private readonly checkpointStore:
+    JsonlSnapshotStore<
+      PersistedLivePerformanceCheckpoint
+    >;
+
+  private readonly previousCheckpointStore:
+    JsonlSnapshotStore<
+      PersistedLivePerformanceCheckpoint
+    >;
+
+  private restoreSource:
+    LivePerformanceEvidencePersistenceDiagnostics["restoreSource"] =
+    "NONE";
 
   private restored =
     false;
@@ -150,8 +211,10 @@ export class LivePerformanceEvidencePersistenceService {
   constructor(
     persistenceFilePath =
       DEFAULT_PERSISTENCE_FILE,
+    checkpointFilePath =
+      DEFAULT_CHECKPOINT_FILE,
   ) {
-    this.store =
+    this.legacyStore =
       new JsonlSnapshotStore<
         PersistedLivePerformanceEvidence
       >({
@@ -176,6 +239,35 @@ export class LivePerformanceEvidencePersistenceService {
             )
               ? value
               : null,
+      });
+
+    const checkpointOptions = {
+      isPayload:
+        (
+          value:
+            unknown,
+        ): value is PersistedLivePerformanceCheckpoint =>
+          this.isValidCheckpoint(
+            value,
+          ),
+    };
+
+    this.checkpointStore =
+      new JsonlSnapshotStore<
+        PersistedLivePerformanceCheckpoint
+      >({
+        filePath:
+          checkpointFilePath,
+        ...checkpointOptions,
+      });
+
+    this.previousCheckpointStore =
+      new JsonlSnapshotStore<
+        PersistedLivePerformanceCheckpoint
+      >({
+        filePath:
+          `${checkpointFilePath}.previous`,
+        ...checkpointOptions,
       });
 
     this.restore();
@@ -229,10 +321,18 @@ export class LivePerformanceEvidencePersistenceService {
       return;
     }
 
+    const snapshots =
+      this.mergeSnapshots(
+        metricSnapshot,
+      );
+    const mergedSettlements =
+      this.mergeSettlements(
+        settlements,
+      );
     const payload:
-      PersistedLivePerformanceEvidence = {
+      PersistedLivePerformanceCheckpoint = {
       schemaVersion:
-        1,
+        2,
 
       persistedAt:
         now,
@@ -242,28 +342,18 @@ export class LivePerformanceEvidencePersistenceService {
           metrics,
         ),
 
-      metricSnapshot:
-        metricSnapshot
-          ? structuredClone(
-              metricSnapshot,
-            )
-          : null,
+      metricSnapshots:
+        snapshots,
 
       settlements:
-        settlements.map(
-          (
-            settlement,
-          ) =>
-            structuredClone(
-              settlement,
-            ),
-        ),
+        mergedSettlements,
     };
 
     try {
-      this.store.append(
-        payload,
-      );
+      this.checkpointStore
+        .replaceAllAtomically([
+          payload,
+        ]);
 
       this.lastPersistedAt =
         now;
@@ -271,7 +361,7 @@ export class LivePerformanceEvidencePersistenceService {
       this.lastFingerprint =
         fingerprint;
 
-      this.absorb(
+      this.absorbCheckpoint(
         payload,
       );
     } catch {
@@ -351,12 +441,27 @@ export class LivePerformanceEvidencePersistenceService {
   getDiagnostics():
     LivePerformanceEvidencePersistenceDiagnostics {
     const foundation =
-      this.store
+      this.checkpointStore
+        .getDiagnostics();
+    const legacyFoundation =
+      this.legacyStore
         .getDiagnostics();
 
     return {
       persistenceFilePath:
         foundation.filePath,
+
+      legacyPersistenceFilePath:
+        legacyFoundation.filePath,
+
+      restoreSource:
+        this.restoreSource,
+
+      boundedCheckpoint:
+        true,
+
+      legacyAppendDisabled:
+        true,
 
       restored:
         this.restored,
@@ -410,6 +515,24 @@ export class LivePerformanceEvidencePersistenceService {
           foundation.lastSequence,
       },
 
+      legacyFoundation: {
+        exists:
+          legacyFoundation.exists,
+
+        linesRead:
+          legacyFoundation.linesRead,
+
+        validRecordsRead:
+          legacyFoundation.validRecordsRead,
+
+        malformedRecordsIgnored:
+          legacyFoundation
+            .malformedRecordsIgnored,
+
+        lastSequence:
+          legacyFoundation.lastSequence,
+      },
+
       /*
        * VERSION 18 BUILD 2
        *
@@ -424,25 +547,60 @@ export class LivePerformanceEvidencePersistenceService {
 
   private restore():
     void {
-    const records =
-      this.store
-        .readAll();
+    const checkpoint =
+      this.checkpointStore
+        .readLatest();
+
+    if (checkpoint) {
+      this.absorbCheckpoint(
+        checkpoint,
+      );
+
+      this.restoreSource =
+        "CHECKPOINT";
+
+      this.finishRestore();
+      return;
+    }
+
+    const previousCheckpoint =
+      this.previousCheckpointStore
+        .readLatest();
+
+    if (previousCheckpoint) {
+      this.absorbCheckpoint(
+        previousCheckpoint,
+      );
+
+      this.restoreSource =
+        "CHECKPOINT_PREVIOUS";
+
+      this.finishRestore();
+      return;
+    }
+
+    const record =
+      this.legacyStore
+        .readLatest();
 
     if (
-      records.length ===
-      0
+      !record
     ) {
       return;
     }
 
-    for (
-      const record
-      of records
-    ) {
-      this.absorb(
-        record,
-      );
-    }
+    this.absorb(
+      record,
+    );
+
+    this.restoreSource =
+      "LEGACY_BOUNDED_TAIL";
+
+    this.finishRestore();
+  }
+
+  private finishRestore():
+    void {
 
     this.restored =
       true;
@@ -561,6 +719,221 @@ export class LivePerformanceEvidencePersistenceService {
     }
   }
 
+  private absorbCheckpoint(
+    checkpoint:
+      PersistedLivePerformanceCheckpoint,
+  ):
+    void {
+    this.restoredMetrics =
+      structuredClone(
+        checkpoint.metrics,
+      );
+
+    this.lastPersistedAt =
+      Math.max(
+        this.lastPersistedAt ??
+          0,
+        checkpoint.persistedAt,
+      );
+
+    for (
+      const snapshot
+      of checkpoint.metricSnapshots
+    ) {
+      this.addSnapshot(
+        snapshot,
+      );
+    }
+
+    this.addSettlements(
+      checkpoint.settlements,
+    );
+  }
+
+  private mergeSnapshots(
+    metricSnapshot:
+      ExecutionMetricsSnapshot | null,
+  ):
+    ExecutionMetricsSnapshot[] {
+    const snapshots =
+      this.restoredSnapshots
+        .map(
+          (
+            snapshot,
+          ) =>
+            structuredClone(
+              snapshot,
+            ),
+        );
+
+    if (
+      metricSnapshot &&
+      !snapshots.some(
+        (
+          snapshot,
+        ) =>
+          snapshot.timestamp ===
+          metricSnapshot.timestamp,
+      )
+    ) {
+      snapshots.push(
+        structuredClone(
+          metricSnapshot,
+        ),
+      );
+    }
+
+    return snapshots
+      .sort(
+        (
+          first,
+          second,
+        ) =>
+          first.timestamp -
+          second.timestamp,
+      )
+      .slice(
+        -MAXIMUM_RESTORED_SNAPSHOTS,
+      );
+  }
+
+  private mergeSettlements(
+    settlements:
+      readonly ExecutionSettlementRecord[],
+  ):
+    ExecutionSettlementRecord[] {
+    const merged =
+      new Map(
+        this.restoredSettlements,
+      );
+
+    for (
+      const settlement
+      of settlements
+    ) {
+      const existing =
+        merged.get(
+          settlement.sessionId,
+        );
+      const timestamp =
+        settlement.settledAt ??
+        settlement.createdAt;
+      const existingTimestamp =
+        existing
+          ? (
+              existing.settledAt ??
+              existing.createdAt
+            )
+          : -1;
+
+      if (
+        !existing ||
+        timestamp >=
+          existingTimestamp
+      ) {
+        merged.set(
+          settlement.sessionId,
+          structuredClone(
+            settlement,
+          ),
+        );
+      }
+    }
+
+    return [...merged.values()]
+      .sort(
+        (
+          first,
+          second,
+        ) =>
+          second.createdAt -
+          first.createdAt,
+      );
+  }
+
+  private addSnapshot(
+    snapshot:
+      ExecutionMetricsSnapshot,
+  ):
+    void {
+    if (
+      this.restoredSnapshots.some(
+        (
+          current,
+        ) =>
+          current.timestamp ===
+          snapshot.timestamp,
+      )
+    ) {
+      return;
+    }
+
+    this.restoredSnapshots.push(
+      structuredClone(
+        snapshot,
+      ),
+    );
+    this.restoredSnapshots.sort(
+      (
+        first,
+        second,
+      ) =>
+        first.timestamp -
+        second.timestamp,
+    );
+
+    if (
+      this.restoredSnapshots.length >
+      MAXIMUM_RESTORED_SNAPSHOTS
+    ) {
+      this.restoredSnapshots.splice(
+        0,
+        this.restoredSnapshots.length -
+          MAXIMUM_RESTORED_SNAPSHOTS,
+      );
+    }
+  }
+
+  private addSettlements(
+    settlements:
+      readonly ExecutionSettlementRecord[],
+  ):
+    void {
+    for (
+      const settlement
+      of settlements
+    ) {
+      const existing =
+        this.restoredSettlements
+          .get(
+            settlement.sessionId,
+          );
+      const settlementTimestamp =
+        settlement.settledAt ??
+        settlement.createdAt;
+      const existingTimestamp =
+        existing
+          ? (
+              existing.settledAt ??
+              existing.createdAt
+            )
+          : -1;
+
+      if (
+        !existing ||
+        settlementTimestamp >=
+          existingTimestamp
+      ) {
+        this.restoredSettlements.set(
+          settlement.sessionId,
+          structuredClone(
+            settlement,
+          ),
+        );
+      }
+    }
+  }
+
   private isValidPayload(
     value:
       unknown,
@@ -595,6 +968,41 @@ export class LivePerformanceEvidencePersistenceService {
     }
 
     return true;
+  }
+
+  private isValidCheckpoint(
+    value:
+      unknown,
+  ): value is
+    PersistedLivePerformanceCheckpoint {
+    return this.isRecord(
+      value,
+    ) &&
+      value.schemaVersion ===
+        2 &&
+      typeof value.persistedAt ===
+        "number" &&
+      Number.isFinite(
+        value.persistedAt,
+      ) &&
+      this.isRecord(
+        value.metrics,
+      ) &&
+      typeof value.metrics
+        .totalExecutions ===
+        "number" &&
+      Array.isArray(
+        value.metrics
+          .exchanges,
+      ) &&
+      Array.isArray(
+        value.metricSnapshots,
+      ) &&
+      value.metricSnapshots.length <=
+        MAXIMUM_RESTORED_SNAPSHOTS &&
+      Array.isArray(
+        value.settlements,
+      );
   }
 
   private isRecord(

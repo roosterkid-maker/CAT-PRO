@@ -344,6 +344,24 @@ export class ShadowPerformanceAnalyticsService {
           ),
       },
 
+      thresholds: {
+        successRatePercent:
+          this.config
+            .targetSuccessRatePercent,
+        executableRatePercent:
+          this.config
+            .targetExecutableRatePercent,
+        profitableSampleRatePercent:
+          this.config
+            .targetProfitableSampleRatePercent,
+        dataAvailabilityRatePercent:
+          this.config
+            .targetDataAvailabilityPercent,
+        profitRetentionPercent:
+          this.config
+            .targetProfitRetentionPercent,
+      },
+
       summary: {
         trackedDispatches:
           records.length,

@@ -13,6 +13,7 @@ import {tradingAccountService} from "../../trading/account/TradingAccountService
 import type {PaperCapitalConfiguration} from "../../trading/capital/PaperCapitalConfigurationService";
 import {paperCapitalConfigurationService} from "../../trading/capital/PaperCapitalConfigurationService";
 import type {PaperTrade} from "../../trading/models/PaperTrade";
+import type {ExecutedPriceCredibilityReport} from "../../trading/analysis/CrossVenuePriceCredibilityService";
 import {evaluateExecutedPriceCredibility} from "../../trading/analysis/CrossVenuePriceCredibilityService";
 import type {
   DailyExecutionReservationEvidence,
@@ -41,11 +42,34 @@ import type {
 import {
   strategyOneCapitalPlacementService,
 } from "./StrategyOneCapitalPlacementService";
+import type {
+  ExchangeBalanceDashboardReport,
+} from "../../portfolio/services/ExchangeBalancePortfolioService";
+import {
+  exchangeBalancePortfolioService,
+} from "../../portfolio/services/ExchangeBalancePortfolioService";
+import type {
+  PersonalCapitalManagerReport,
+} from "./PersonalCapitalManagerService";
+import {
+  personalCapitalManagerService,
+} from "./PersonalCapitalManagerService";
+import {
+  normalizedInventorySnapshotService,
+} from "../../rebalancing/services/NormalizedInventorySnapshotService";
+import type {
+  NormalizedInventorySnapshot,
+} from "../../rebalancing/models/NormalizedInventorySnapshot";
+import {
+  capitalManagerSafetyContextService,
+} from "../../rebalancing/services/CapitalManagerSafetyContextService";
 
 const BOT_CLOCK_TIME_ZONE = "Asia/Kolkata" as const;
 const BOT_CLOCK_UTC_OFFSET_MINUTES = 330;
 const BOT_CLOCK_UTC_OFFSET_MS = BOT_CLOCK_UTC_OFFSET_MINUTES * 60 * 1_000;
 const HOUR_MS = 60 * 60 * 1_000;
+const PERSONAL_BOT_CAPITAL_PLACEMENT_ROUTE_LIMIT = 25;
+const PERSONAL_BOT_EXCLUDED_EXECUTION_LIMIT = 20;
 
 export type PersonalStrategyOneBotState =
   | "PAUSED"
@@ -178,7 +202,11 @@ export interface PersonalStrategyOneBotReport {
       readonly orderSubmissionAllowed: false;
     };
   };
-  readonly capitalPlacement: StrategyOneCapitalPlacementReport;
+  readonly capitalPlacement: Omit<StrategyOneCapitalPlacementReport, "routes"> & {
+    readonly totalRoutes: number;
+    readonly routes: StrategyOneCapitalPlacementReport["routes"];
+  };
+  readonly capitalManager: PersonalCapitalManagerReport;
   readonly performance: {
     readonly storedExecutions: number;
     readonly successfulExecutions: number;
@@ -270,6 +298,7 @@ export interface PersonalStrategyOneBotReport {
       readonly equationBalanced: boolean;
     };
     readonly availableCapital: number;
+    readonly paperTdsReceivable: number;
     readonly capitalBudgetInr: number;
     readonly minimumCapitalPerTrade: number;
     readonly maximumCapitalPerTrade: number;
@@ -299,6 +328,19 @@ export interface PersonalStrategyOneBotReport {
     readonly fakeOpportunityAllowed: false;
     readonly fakeBalanceAllowed: false;
     readonly accountPolicyMutated: false;
+    readonly paperExecutionTriggeredByRead: false;
+    readonly liveExecutionAllowed: false;
+    readonly orderSubmissionAllowed: false;
+  };
+}
+
+export interface PersonalStrategyOnePerformanceSummary {
+  readonly version: "148.0";
+  readonly generatedAt: number;
+  readonly profile: "PERSONAL_STRATEGY_ONE_PERFORMANCE_SUMMARY";
+  readonly performance: PersonalStrategyOneBotReport["performance"];
+  readonly safety: {
+    readonly readOnlyAggregation: true;
     readonly paperExecutionTriggeredByRead: false;
     readonly liveExecutionAllowed: false;
     readonly orderSubmissionAllowed: false;
@@ -390,7 +432,19 @@ export interface PersonalStrategyOneBotDependencies {
   getCapitalPlacement(
     trades: readonly PaperTrade[],
     now: number,
+    settledRevision: number,
   ): StrategyOneCapitalPlacementReport;
+  getSettledTradeRevision(): number;
+  getExchangeBalanceReport(now: number): ExchangeBalanceDashboardReport;
+  getNormalizedInventory(now: number): NormalizedInventorySnapshot;
+  getRebalancingSafetyContext(
+    now: number,
+    account: TradingAccount,
+  ): {
+    readonly executionRecoveryPending: boolean;
+    readonly settlementReconciliationPending: boolean;
+    readonly emergencyStopActive: boolean;
+  };
   getDailyReservationEvidence(now: number): DailyExecutionReservationEvidence;
   getDailyAccountReservationAttempts(now: number): readonly TradingAccountCapitalReservationAttempt[];
   getDailyReservationSessions(now: number): readonly DailyExecutionReservationSessionEvidence[];
@@ -402,6 +456,18 @@ export interface PersonalStrategyOneBotDependencies {
     now: number,
     fundingBoundary: StrategyOneFundingBoundary,
   ): StrategyOneFundedRouteReport;
+}
+
+interface PersonalStrategyOneTradeAnalytics {
+  readonly strategyTrades: readonly PaperTrade[];
+  readonly successfulTrades: readonly PaperTrade[];
+  readonly excludedTrades: readonly {
+    trade: PaperTrade;
+    credibility: ExecutedPriceCredibilityReport;
+  }[];
+  readonly winningExecutions: number;
+  readonly realizedPnl: number;
+  readonly capitalManagerProfitEvidence: ReturnType<typeof buildCapitalManagerProfitEvidence>;
 }
 
 const DEFAULT_DEPENDENCIES: PersonalStrategyOneBotDependencies = {
@@ -417,10 +483,30 @@ const DEFAULT_DEPENDENCIES: PersonalStrategyOneBotDependencies = {
       .getAllForReadOnlyAggregation(),
   getProfitValidation: (now) => postGuardProfitValidationLedgerService.getReport(now),
   getConversion: (now) => personalOpportunityConversionService.getReport(now),
-  getCapitalPlacement: (trades, now) =>
+  getCapitalPlacement: (trades, now, settledRevision) =>
     strategyOneCapitalPlacementService
       .getReport(
         trades,
+        now,
+        settledRevision,
+      ),
+  getSettledTradeRevision: () =>
+    paperTradeStore
+      .getSettledRevision(),
+  getExchangeBalanceReport: (now) =>
+    exchangeBalancePortfolioService
+      .getReport(
+        now,
+      ),
+  getNormalizedInventory: (now) =>
+    normalizedInventorySnapshotService
+      .getSnapshot(
+        now,
+      ),
+  getRebalancingSafetyContext: (now, account) =>
+    capitalManagerSafetyContextService
+      .getContext(
+        account,
         now,
       ),
   getDailyReservationEvidence: (now) =>
@@ -444,8 +530,140 @@ const DEFAULT_DEPENDENCIES: PersonalStrategyOneBotDependencies = {
 export class PersonalStrategyOneBotService {
   private readonly dependencies: PersonalStrategyOneBotDependencies;
 
+  private cachedTradeSource:
+    readonly PaperTrade[] | null =
+    null;
+
+  private cachedTradeAnalytics:
+    PersonalStrategyOneTradeAnalytics | null =
+    null;
+
   constructor(dependencies: Partial<PersonalStrategyOneBotDependencies> = {}) {
     this.dependencies = {...DEFAULT_DEPENDENCIES, ...dependencies};
+  }
+
+  getPerformanceSummary(
+    now =
+      Date.now(),
+  ): PersonalStrategyOnePerformanceSummary {
+    if (
+      !Number.isSafeInteger(
+        now,
+      ) ||
+      now <=
+        0
+    ) {
+      throw new Error(
+        "Personal Strategy #1 performance timestamp must be a positive safe integer.",
+      );
+    }
+
+    const tradeAnalytics =
+      this.getTradeAnalytics(
+        this.dependencies
+          .getTrades(),
+      );
+    const localDayStart =
+      startOfLocalDay(
+        now,
+      );
+    const successfulToday =
+      tradeAnalytics
+        .successfulTrades
+        .filter(
+          (
+            trade,
+          ) =>
+            (
+              trade.closedAt ??
+              trade.openedAt
+            ) >=
+            localDayStart,
+        );
+    const hourlySuccessfulTrades =
+      buildLocalHourlyBuckets(
+        now,
+        successfulToday,
+      );
+    const currentClockHour =
+      hourlySuccessfulTrades.find(
+        (
+          bucket,
+        ) =>
+          bucket.current,
+      );
+
+    return freeze({
+      version:
+        "148.0" as const,
+      generatedAt:
+        now,
+      profile:
+        "PERSONAL_STRATEGY_ONE_PERFORMANCE_SUMMARY" as const,
+      performance: {
+        storedExecutions:
+          tradeAnalytics
+            .strategyTrades
+            .length,
+        successfulExecutions:
+          tradeAnalytics
+            .successfulTrades
+            .length,
+        excludedUncredibleExecutions:
+          tradeAnalytics
+            .excludedTrades
+            .length,
+        successfulToday:
+          successfulToday.length,
+        successfulCurrentClockHour:
+          currentClockHour
+            ?.successfulTrades ??
+          0,
+        currentClockHourLabel:
+          currentClockHour
+            ?.label ??
+          "NO CURRENT HOUR",
+        hourlySuccessfulTrades,
+        hourlyClockBasis:
+          "ASIA_KOLKATA" as const,
+        hourlyTimeZone:
+          BOT_CLOCK_TIME_ZONE,
+        winningExecutions:
+          tradeAnalytics
+            .winningExecutions,
+        winRatePercent:
+          tradeAnalytics
+            .successfulTrades
+            .length >
+          0
+            ? tradeAnalytics
+                .winningExecutions /
+              tradeAnalytics
+                .successfulTrades
+                .length *
+              100
+            : null,
+        realizedPnl:
+          tradeAnalytics
+            .realizedPnl,
+        realizedPnlToday:
+          sumRealizedPnl(
+            successfulToday,
+          ),
+        pnlUnit:
+          "ACCOUNT_CURRENCY" as const,
+      },
+      safety: {
+        readOnlyAggregation:
+          true as const,
+        paperExecutionTriggeredByRead:
+          false as const,
+        liveExecutionAllowed:
+          false as const,
+        orderSubmissionAllowed:
+          false as const,
+      },
+    });
   }
 
   getReport(now = Date.now()): PersonalStrategyOneBotReport {
@@ -518,23 +736,10 @@ export class PersonalStrategyOneBotService {
     };
     const conversion = this.dependencies.getConversion(now);
     const allTrades = this.dependencies.getTrades();
-    const strategyTrades = allTrades
-      .filter((trade) => trade.strategyAttribution?.strategyId === "cross-exchange-arbitrage")
-      .sort((first, second) => second.openedAt - first.openedAt);
-    const settledTrades = strategyTrades.filter((trade) =>
-      trade.status === "closed" && trade.closedAt !== null && trade.actualProfit !== null);
-    const evaluatedSettledTrades = settledTrades.map((trade) => ({
-      trade,
-      credibility: evaluateExecutedPriceCredibility(
-        trade.buyPrice,
-        trade.actualSellPrice ?? trade.sellPrice,
-      ),
-    }));
-    const successfulTrades = evaluatedSettledTrades
-      .filter(({credibility}) => credibility.credible)
-      .map(({trade}) => trade);
-    const excludedTrades = evaluatedSettledTrades
-      .filter(({credibility}) => !credibility.credible);
+    const tradeAnalytics = this.getTradeAnalytics(allTrades);
+    const strategyTrades = tradeAnalytics.strategyTrades;
+    const successfulTrades = tradeAnalytics.successfulTrades;
+    const excludedTrades = tradeAnalytics.excludedTrades;
     const excludedUncredibleExecutions = excludedTrades.length;
     const localDayStart = startOfLocalDay(now);
     const dailySettledTrades = allTrades.filter((trade) =>
@@ -556,7 +761,52 @@ export class PersonalStrategyOneBotService {
         .getCapitalPlacement(
           allTrades,
           now,
+          this.dependencies
+            .getSettledTradeRevision(),
         );
+    const botCapitalPlacement =
+      freeze({
+        ...capitalPlacement,
+        totalRoutes:
+          capitalPlacement.routes.length,
+        routes:
+          capitalPlacement.routes.slice(
+            0,
+            PERSONAL_BOT_CAPITAL_PLACEMENT_ROUTE_LIMIT,
+          ),
+      });
+    const capitalManager =
+      personalCapitalManagerService
+        .getReport({
+          now,
+          inventoryPlan,
+          capitalPlacement,
+          exchangeBalances:
+            this.dependencies
+              .getExchangeBalanceReport(
+                now,
+              ),
+          paperCapital: {
+            budgetInr: paperCapital.capitalBudgetInr,
+            accountingEquityInr: account.currentCapital,
+            availableAccountingEquityInr: account.availableCapital,
+            tdsReceivableInr: account.paperTdsReceivable ?? 0,
+          },
+          profitEvidence:
+            tradeAnalytics
+              .capitalManagerProfitEvidence,
+          normalizedInventory:
+            this.dependencies
+              .getNormalizedInventory(
+                now,
+              ),
+          rebalancingSafetyContext:
+            this.dependencies
+              .getRebalancingSafetyContext(
+                now,
+                account,
+              ),
+        });
     const dailyReservationEvidence =
       this.dependencies
         .getDailyReservationEvidence(
@@ -579,7 +829,7 @@ export class PersonalStrategyOneBotService {
     );
     const dailyActivityEquationTotal = dailySettledTrades.length +
       dailyReservationEvidence.dryRunReservations + otherUnlinkedOrNonSettledReservations;
-    const winningExecutions = successfulTrades.filter((trade) => (trade.actualProfit ?? 0) > 0).length;
+    const winningExecutions = tradeAnalytics.winningExecutions;
     const remainingDailyTrades = Math.max(0, account.limits.maximumDailyTrades - account.tradesToday);
     const blockers: string[] = [];
 
@@ -661,7 +911,9 @@ export class PersonalStrategyOneBotService {
         liveBalancesMutated: false as const,
       },
       inventoryPlan,
-      capitalPlacement,
+      capitalPlacement:
+        botCapitalPlacement,
+      capitalManager,
       performance: {
         storedExecutions: strategyTrades.length,
         successfulExecutions: successfulTrades.length,
@@ -676,7 +928,7 @@ export class PersonalStrategyOneBotService {
         winRatePercent: successfulTrades.length > 0
           ? (winningExecutions / successfulTrades.length) * 100
           : null,
-        realizedPnl: sumRealizedPnl(successfulTrades),
+        realizedPnl: tradeAnalytics.realizedPnl,
         realizedPnlToday: sumRealizedPnl(successfulToday),
         pnlUnit: "ACCOUNT_CURRENCY" as const,
       },
@@ -715,7 +967,12 @@ export class PersonalStrategyOneBotService {
           simulated: true as const,
         };
       }),
-      excludedExecutions: excludedTrades.map(({trade, credibility}) => {
+      excludedExecutions: excludedTrades
+        .slice(
+          0,
+          PERSONAL_BOT_EXCLUDED_EXECUTION_LIMIT,
+        )
+        .map(({trade, credibility}) => {
         const assets = splitMarket(trade.market);
         const sellPrice = trade.actualSellPrice ?? trade.sellPrice;
         const ratioExcessPercent = credibility.priceRatio === null
@@ -748,7 +1005,7 @@ export class PersonalStrategyOneBotService {
           excludedFromPnl: true as const,
           simulated: true as const,
         };
-      }),
+        }),
       paper: {
         accountEnabled: account.enabled,
         accountMode: account.mode,
@@ -780,6 +1037,7 @@ export class PersonalStrategyOneBotService {
           equationBalanced: dailyActivityEquationTotal === account.tradesToday,
         },
         availableCapital: account.availableCapital,
+        paperTdsReceivable: account.paperTdsReceivable ?? 0,
         capitalBudgetInr: paperCapital.capitalBudgetInr,
         minimumCapitalPerTrade: paperCapital.minimumCapitalPerTrade,
         maximumCapitalPerTrade: paperCapital.maximumCapitalPerTrade,
@@ -814,6 +1072,60 @@ export class PersonalStrategyOneBotService {
         orderSubmissionAllowed: false as const,
       },
     });
+  }
+
+  private getTradeAnalytics(
+    allTrades: readonly PaperTrade[],
+  ): PersonalStrategyOneTradeAnalytics {
+    if (
+      this.cachedTradeSource ===
+        allTrades &&
+      this.cachedTradeAnalytics !==
+        null
+    ) {
+      return this.cachedTradeAnalytics;
+    }
+
+    const strategyTrades = allTrades
+      .filter((trade) => trade.strategyAttribution?.strategyId === "cross-exchange-arbitrage")
+      .sort((first, second) => second.openedAt - first.openedAt);
+    const evaluatedSettledTrades = strategyTrades
+      .filter((trade) =>
+        trade.status === "closed" &&
+        trade.closedAt !== null &&
+        trade.actualProfit !== null)
+      .map((trade) => ({
+        trade,
+        credibility: evaluateExecutedPriceCredibility(
+          trade.buyPrice,
+          trade.actualSellPrice ?? trade.sellPrice,
+        ),
+      }));
+    const successfulTrades = evaluatedSettledTrades
+      .filter(({credibility}) => credibility.credible)
+      .map(({trade}) => trade);
+    const excludedTrades = evaluatedSettledTrades
+      .filter(({credibility}) => !credibility.credible);
+    const analytics: PersonalStrategyOneTradeAnalytics = {
+      strategyTrades,
+      successfulTrades,
+      excludedTrades,
+      winningExecutions: successfulTrades.filter(
+        (trade) => (trade.actualProfit ?? 0) > 0,
+      ).length,
+      realizedPnl: sumRealizedPnl(successfulTrades),
+      capitalManagerProfitEvidence: buildCapitalManagerProfitEvidence(
+        successfulTrades,
+        strategyTrades,
+      ),
+    };
+
+    this.cachedTradeSource =
+      allTrades;
+    this.cachedTradeAnalytics =
+      analytics;
+
+    return analytics;
   }
 }
 
@@ -1441,6 +1753,59 @@ function twoDigitHour(hour: number): string {
 
 function sumRealizedPnl(trades: readonly PaperTrade[]): number {
   return trades.reduce((total, trade) => total + (trade.actualProfit ?? 0), 0);
+}
+
+function buildCapitalManagerProfitEvidence(
+  credibleSettlements: readonly PaperTrade[],
+  strategyTrades: readonly PaperTrade[],
+): {
+  credibleSettlements: number;
+  grossTradingProfitInr: number;
+  tradingFeesInr: number;
+  economicNetPnlInr: number;
+  tdsWithheldInr: number;
+  deployableCashPnlInr: number;
+  realizedLossesInr: number;
+  pendingSettlements: number;
+} {
+  const tradingFeesInr = credibleSettlements.reduce(
+    (total, trade) => total + trade.estimatedFees,
+    0,
+  );
+  const economicNetPnlInr = sumRealizedPnl(credibleSettlements);
+  const tdsWithheldInr = credibleSettlements.reduce(
+    (total, trade) => total + (trade.tdsWithheld ?? 0),
+    0,
+  );
+  const deployableCashPnlInr = credibleSettlements.reduce(
+    (total, trade) => total + (
+      trade.deployableCashProfit ??
+      (trade.actualProfit ?? 0) - (trade.tdsWithheld ?? 0)
+    ),
+    0,
+  );
+  const realizedLossesInr = credibleSettlements.reduce(
+    (total, trade) => total + Math.abs(Math.min(0, trade.actualProfit ?? 0)),
+    0,
+  );
+  const finalStatuses = new Set<PaperTrade["status"]>([
+    "closed",
+    "cancelled",
+    "failed",
+  ]);
+
+  return {
+    credibleSettlements: credibleSettlements.length,
+    grossTradingProfitInr: economicNetPnlInr + tradingFeesInr,
+    tradingFeesInr,
+    economicNetPnlInr,
+    tdsWithheldInr,
+    deployableCashPnlInr,
+    realizedLossesInr,
+    pendingSettlements: strategyTrades.filter(
+      (trade) => !finalStatuses.has(trade.status),
+    ).length,
+  };
 }
 
 function splitMarket(market: string): {baseAsset: string; quoteAsset: string} {

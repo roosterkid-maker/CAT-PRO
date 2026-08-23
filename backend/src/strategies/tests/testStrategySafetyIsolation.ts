@@ -791,10 +791,31 @@ function main():
       "utf8",
     );
 
-  assert.match(
-    liveExecutionSource,
-    /const LIVE_EXECUTION_ENABLED\s*=\s*false as const;/,
-    "LIVE_EXECUTION_ENABLED must remain false as const.",
+  for (
+    const requiredRuntimeGate
+    of [
+      /TRADING_MODE[\s\S]*===\s*["']live["']/,
+      /LIVE_TRADING_ENABLED[\s\S]*===\s*["']true["']/,
+      /ARBITRAGE_LIVE_CONFIRMATION[\s\S]*ENABLE_CONFIRMED_ARBITRAGE_EXECUTION/,
+      /STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION[\s\S]*ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME/,
+    ]
+  ) {
+    assert.match(
+      liveExecutionSource,
+      requiredRuntimeGate,
+      "LIVE execution must remain behind every exact Strategy #1 runtime gate.",
+    );
+  }
+
+  assert.equal(
+    process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
+      process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
+      process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
+        "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
+      process.env.STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION?.trim() ===
+        "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME",
+    false,
+    "The deterministic test runtime must remain fail-closed for LIVE execution.",
   );
 
   console.log(

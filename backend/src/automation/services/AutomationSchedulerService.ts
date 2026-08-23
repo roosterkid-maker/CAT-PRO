@@ -63,6 +63,18 @@ import {
   unifiedAutomatedExecutionOrchestratorService,
 } from "../../workflows/cross-exchange-arbitrage/services/UnifiedAutomatedExecutionOrchestratorService";
 
+import {
+  strategyOneExecutionTimingEvidenceService,
+} from "../../arbitrage/execution/StrategyOneExecutionTimingEvidenceService";
+
+import {
+  strategyOnePilotEquivalentPaperEvidenceService,
+} from "../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+
+import {
+  strategyOneTinyLivePreArmService,
+} from "../../execution/live/tiny-live/StrategyOneTinyLivePreArmService";
+
 export interface AutomationSchedulerConfig {
   intervalMs: number;
 
@@ -1053,6 +1065,37 @@ export class AutomationSchedulerService {
       ),
     );
 
+    strategyOneExecutionTimingEvidenceService
+      .observePaperStage(
+        snapshot,
+        "PIPELINE_START",
+        pipelineStartedAt,
+      );
+
+    /*
+     * V125 one-shot Tiny-LIVE trigger. With no active arm this is an O(1)
+     * in-memory return. This scheduler already runs after the scanner snapshot
+     * callback; an armed exact route therefore receives priority over PAPER
+     * analytics without adding network/persistence work to market-data ingest.
+     */
+    void strategyOneTinyLivePreArmService
+      .observeSnapshot(
+        snapshot,
+      )
+      .catch(
+        (
+          error:
+            unknown,
+        ) => {
+          console.error(
+            "[AutomationScheduler] Strategy #1 one-shot pre-arm trigger failed closed:",
+            error instanceof Error
+              ? error.message
+              : "Unknown pre-arm trigger failure.",
+          );
+        },
+      );
+
     const stageDurations:
       Record<string, number> =
       {};
@@ -1111,7 +1154,7 @@ export class AutomationSchedulerService {
     const qualifications =
       candidateQualificationService
         .getActiveQualifications(
-          snapshot.generatedAt,
+          Date.now(),
         );
 
     completeStage(
@@ -1137,6 +1180,13 @@ export class AutomationSchedulerService {
       ),
     );
 
+    strategyOneExecutionTimingEvidenceService
+      .observePaperStage(
+        snapshot,
+        "QUEUE_READY",
+        Date.now(),
+      );
+
     if (
       snapshot.opportunities.length >
       0
@@ -1151,10 +1201,32 @@ export class AutomationSchedulerService {
       );
     }
 
-    await unifiedAutomatedExecutionOrchestratorService
-      .run(
-        snapshot.generatedAt,
+    strategyOneExecutionTimingEvidenceService
+      .observePaperStage(
+        snapshot,
+        "EXECUTION_START",
+        Date.now(),
       );
+
+    try {
+      await unifiedAutomatedExecutionOrchestratorService
+        .run(
+          snapshot.generatedAt,
+        );
+    } finally {
+      /*
+       * The pilot freshness owner receives the exact immutable snapshot and
+       * original pipeline observation time, but its route/dedup/distribution
+       * bookkeeping runs only after the sole PAPER execution handoff. This
+       * preserves evidence even when that handoff fails without delaying
+       * candidate qualification, queueing or execution start.
+       */
+      strategyOnePilotEquivalentPaperEvidenceService
+        .observeSnapshot(
+          snapshot,
+          pipelineStartedAt,
+        );
+    }
 
     completeStage(
       "executionOrchestrator",
@@ -1168,6 +1240,13 @@ export class AutomationSchedulerService {
           snapshot.generatedAt,
       ),
     );
+
+    strategyOneExecutionTimingEvidenceService
+      .observePaperStage(
+        snapshot,
+        "EXECUTION_COMPLETE",
+        Date.now(),
+      );
 
     /*
      * These collectors are evidence/analytics owners. They consume the exact

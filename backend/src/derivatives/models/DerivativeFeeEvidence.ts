@@ -3,7 +3,8 @@ export interface DerivativeFeeEvidence {
   readonly product: "LINEAR_PERPETUAL";
   readonly makerPercent: number;
   readonly takerPercent: number;
-  readonly source: "EXPLICIT_OPERATOR_CONFIG";
+  readonly source: "EXPLICIT_OPERATOR_CONFIG" | "PUBLIC_INSTRUMENT_RULES";
+  readonly market: string | null;
   readonly configuredAt: number;
   readonly executionAuthorized: false;
   readonly liveExecutionAllowed: false;

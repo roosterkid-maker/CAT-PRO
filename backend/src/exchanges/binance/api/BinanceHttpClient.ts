@@ -139,20 +139,24 @@ export class BinanceHttpClient {
     string | null =
     null;
 
-  constructor() {
+  constructor(
+    client?:
+      AxiosInstance,
+  ) {
     this.client =
+      client ??
       axios.create({
-        baseURL:
-          BINANCE.REST.BASE_URL,
+          baseURL:
+            BINANCE.REST.BASE_URL,
 
-        timeout:
-          10_000,
+          timeout:
+            10_000,
 
-        headers: {
-          Accept:
-            "application/json",
-        },
-      });
+          headers: {
+            Accept:
+              "application/json",
+          },
+        });
   }
 
   async getPublic<T>(
@@ -526,50 +530,101 @@ export class BinanceHttpClient {
       binanceCredentialsProvider
         .getCredentials();
 
-    const signedRequest =
-      binanceSigner
-        .createSignedTimestampRequest(
-          parameters,
-
-          credentials.apiSecret,
-
-          {
-            timestamp:
-              this.getSynchronizedTimestamp(),
-
-            recvWindow:
-              5_000,
-          },
-        );
-
-    try {
-      const response =
-        await this.client.request<T>({
-          method,
-
-          url:
-            `${path}?${signedRequest.signedQueryString}`,
-
-          headers: {
-            "X-MBX-APIKEY":
-              credentials.apiKey,
-
-            Accept:
-              "application/json",
-          },
-        });
-
-      return response.data;
-    } catch (
-      error:
-        unknown
+    for (
+      let attempt = 0;
+      attempt < 2;
+      attempt += 1
     ) {
-      throw this.createRequestError(
-        method,
-        path,
-        error,
-      );
+      const signedRequest =
+        binanceSigner
+          .createSignedTimestampRequest(
+            parameters,
+
+            credentials.apiSecret,
+
+            {
+              timestamp:
+                this.getSynchronizedTimestamp(),
+
+              recvWindow:
+                5_000,
+            },
+          );
+
+      try {
+        const response =
+          await this.client.request<T>({
+            method,
+
+            url:
+              `${path}?${signedRequest.signedQueryString}`,
+
+            headers: {
+              "X-MBX-APIKEY":
+                credentials.apiKey,
+
+              Accept:
+                "application/json",
+            },
+          });
+
+        return response.data;
+      } catch (
+        error:
+          unknown
+      ) {
+        /*
+         * Binance rejects -1021 before accepting an order. One immediate
+         * authoritative re-sync and re-sign is therefore safe for GET and
+         * order requests, while every ambiguous/network failure remains
+         * non-retried to prevent duplicate submissions.
+         */
+        if (
+          attempt === 0 &&
+          this.isTimestampSynchronizationError(
+            error,
+          )
+        ) {
+          await this.synchronizeServerTime();
+          continue;
+        }
+
+        throw this.createRequestError(
+          method,
+          path,
+          error,
+        );
+      }
     }
+
+    throw new Error(
+      `Binance ${method.toUpperCase()} ${path} failed after timestamp re-synchronization.`,
+    );
+  }
+
+  private isTimestampSynchronizationError(
+    error:
+      unknown,
+  ): boolean {
+    if (
+      !axios.isAxiosError<
+        BinanceApiErrorResponse
+      >(
+        error,
+      )
+    ) {
+      return false;
+    }
+
+    const code =
+      this.toOptionalString(
+        error.response
+          ?.data
+          ?.code,
+      );
+
+    return code ===
+      "-1021";
   }
 
   private createRequestError(

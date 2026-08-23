@@ -41,7 +41,7 @@ export default function Header({ onPageChange }: HeaderProps) {
 
   return (
     <header className="cat-pro-header min-h-20 border-b px-8 py-3">
-      <div className="shrink-0">
+      <div className="cat-pro-header-brand shrink-0">
         <h1 className="cat-pro-wordmark text-2xl font-bold">
           CAT PRO
         </h1>
@@ -53,8 +53,9 @@ export default function Header({ onPageChange }: HeaderProps) {
 
       <FuturisticBotIdentity />
 
-      <div className="flex flex-wrap items-center justify-end gap-3 justify-self-end">
+      <div className="cat-pro-header-controls flex flex-wrap items-center justify-end gap-3 justify-self-end">
         <TerminalChip
+          className="cat-pro-market-chip"
           color={
             terminalState === "live"
               ? "green"
@@ -75,11 +76,17 @@ export default function Header({ onPageChange }: HeaderProps) {
           }
         />
 
-        <ExchangeFleetMenu
-          onOpenExchangeHealth={() => onPageChange("exchange-health")}
-        />
+        <div className="cat-pro-exchange-menu">
+          <ExchangeFleetMenu
+            onOpenExchangeHealth={() => onPageChange("exchange-health")}
+            connectedMarketDataCount={connectedCount}
+            totalExchangeCount={totalExchanges}
+            marketDataLoading={isLoading}
+            marketDataUnavailable={isError}
+          />
+        </div>
 
-        <TerminalChip color="blue" label="V20.9" />
+        <TerminalChip className="cat-pro-version-chip" color="blue" label="V20.9" />
         <LiveClock />
       </div>
     </header>
@@ -95,6 +102,8 @@ function FuturisticBotIdentity() {
     >
       <span aria-hidden="true" className="hft-header-orbit hft-header-orbit-cyan" />
       <span aria-hidden="true" className="hft-header-orbit hft-header-orbit-magenta" />
+      <span aria-hidden="true" className="hft-om-symbol">ॐ</span>
+      <span aria-hidden="true" className="hft-swastik-symbol">卐</span>
 
       <span className="hft-header-title">
         <span>HOPUN</span>
@@ -137,7 +146,7 @@ function LiveClock() {
   });
 
   return (
-    <div className="min-w-24 text-right">
+    <div className="cat-pro-live-clock min-w-24 text-right">
       <p className="text-xs uppercase tracking-wide text-text-muted">
         Local Time
       </p>
@@ -152,9 +161,10 @@ function LiveClock() {
 interface TerminalChipProps {
   label: string;
   color: "green" | "red" | "yellow" | "blue";
+  className?: string;
 }
 
-function TerminalChip({ label, color }: TerminalChipProps) {
+function TerminalChip({ label, color, className = "" }: TerminalChipProps) {
   const styles: Record<TerminalChipProps["color"], string> = {
     green: "border-success/30 bg-success/10 text-success",
     red: "border-danger/30 bg-danger/10 text-danger",
@@ -164,7 +174,7 @@ function TerminalChip({ label, color }: TerminalChipProps) {
 
   return (
     <div
-      className={`terminal-chip whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold ${styles[color]}`}
+      className={`terminal-chip whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold ${styles[color]} ${className}`}
     >
       <span
         aria-hidden="true"

@@ -43,8 +43,20 @@ export interface AutomatedPaperCycleResult {
 export class AutomatedPaperTradingCycleService {
   async run():
     Promise<AutomatedPaperCycleResult> {
+    /*
+     * Consume one immutable scanner snapshot for ranking and resolution.
+     * The previous implementation triggered two independent scans, so the
+     * ranked route could disappear or receive a different opportunity ID
+     * before execution lookup even when the market had not materially moved.
+     */
+    const sourceOpportunities =
+      opportunityService
+        .getLastOpportunities();
+
     const ranking =
-      opportunityRankingService.rank();
+      opportunityRankingService.rank(
+        sourceOpportunities,
+      );
 
     const topRanked =
       ranking.opportunities[0];
@@ -73,10 +85,6 @@ export class AutomatedPaperTradingCycleService {
         ],
       };
     }
-
-    const sourceOpportunities =
-      opportunityService
-        .getOpportunities();
 
     const opportunity =
       sourceOpportunities.find(

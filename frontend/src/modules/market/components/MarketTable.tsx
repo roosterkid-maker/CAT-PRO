@@ -1,16 +1,21 @@
 import {
+  useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
 import {
   Table,
   TableBody,
+  TableCell,
+  TableRow,
 } from "@/shared/ui/table";
 
-import {
-  useMarketStore,
-} from "@/store/market.store";
+import type {
+  MarketViewModel,
+} from "@/types/MarketViewModel";
 
 import {
   useFavoritesStore,
@@ -25,12 +30,39 @@ import type {
   SortField,
 } from "../types/MarketSort";
 
-export default function MarketTable() {
-  const marketMap =
-    useMarketStore(
-      (state) =>
-        state.markets,
+interface MarketTableProps {
+  sourceMarkets:
+    MarketViewModel[];
+}
+
+const MARKET_ROW_HEIGHT_PX =
+  72;
+
+const MARKET_ROW_OVERSCAN =
+  8;
+
+export default function MarketTable({
+  sourceMarkets,
+}: MarketTableProps) {
+  const scrollContainerRef =
+    useRef<HTMLDivElement>(
+      null,
     );
+
+  const scrollFrameRef =
+    useRef<number | null>(
+      null,
+    );
+
+  const [
+    scrollTop,
+    setScrollTop,
+  ] = useState(0);
+
+  const [
+    viewportHeight,
+    setViewportHeight,
+  ] = useState(640);
 
   const [
     search,
@@ -115,9 +147,7 @@ export default function MarketTable() {
             .toLowerCase();
 
         const filteredMarkets =
-          Object.values(
-            marketMap,
-          ).filter(
+          sourceMarkets.filter(
             (
               market,
             ) => {
@@ -198,7 +228,7 @@ export default function MarketTable() {
         );
       },
       [
-        marketMap,
+        sourceMarkets,
         search,
         sort,
         exchange,
@@ -212,9 +242,7 @@ export default function MarketTable() {
       () =>
         Array.from(
           new Set(
-            Object.values(
-              marketMap,
-            ).map(
+            sourceMarkets.map(
               (
                 market,
               ) =>
@@ -231,9 +259,168 @@ export default function MarketTable() {
             ),
         ),
       [
-        marketMap,
+        sourceMarkets,
       ],
     );
+
+  const visibleRange =
+    useMemo(
+      () => {
+        const start =
+          Math.max(
+            0,
+            Math.floor(
+              scrollTop /
+                MARKET_ROW_HEIGHT_PX,
+            ) -
+              MARKET_ROW_OVERSCAN,
+          );
+
+        const visibleCount =
+          Math.ceil(
+            viewportHeight /
+              MARKET_ROW_HEIGHT_PX,
+          ) +
+          MARKET_ROW_OVERSCAN *
+            2;
+
+        const end =
+          Math.min(
+            markets.length,
+            start +
+              visibleCount,
+          );
+
+        return {
+          start,
+          end,
+          topHeight:
+            start *
+            MARKET_ROW_HEIGHT_PX,
+          bottomHeight:
+            Math.max(
+              0,
+              markets.length -
+                end,
+            ) *
+            MARKET_ROW_HEIGHT_PX,
+        };
+      },
+      [
+        markets.length,
+        scrollTop,
+        viewportHeight,
+      ],
+    );
+
+  const visibleMarkets =
+    useMemo(
+      () =>
+        markets.slice(
+          visibleRange.start,
+          visibleRange.end,
+        ),
+      [
+        markets,
+        visibleRange.end,
+        visibleRange.start,
+      ],
+    );
+
+  const handleScroll =
+    useCallback(
+      () => {
+        if (
+          scrollFrameRef.current !==
+          null
+        ) {
+          return;
+        }
+
+        scrollFrameRef.current =
+          window.requestAnimationFrame(
+            () => {
+              scrollFrameRef.current =
+                null;
+
+              setScrollTop(
+                scrollContainerRef.current
+                  ?.scrollTop ??
+                  0,
+              );
+            },
+          );
+      },
+      [],
+    );
+
+  useEffect(
+    () => {
+      const container =
+        scrollContainerRef.current;
+
+      if (!container) {
+        return;
+      }
+
+      const updateViewportHeight =
+        () => {
+          setViewportHeight(
+            container.clientHeight,
+          );
+        };
+
+      updateViewportHeight();
+
+      const resizeObserver =
+        new ResizeObserver(
+          updateViewportHeight,
+        );
+
+      resizeObserver.observe(
+        container,
+      );
+
+      return () => {
+        resizeObserver.disconnect();
+
+        if (
+          scrollFrameRef.current !==
+          null
+        ) {
+          window.cancelAnimationFrame(
+            scrollFrameRef.current,
+          );
+
+          scrollFrameRef.current =
+            null;
+        }
+      };
+    },
+    [],
+  );
+
+  useEffect(
+    () => {
+      const container =
+        scrollContainerRef.current;
+
+      if (!container) {
+        return;
+      }
+
+      container.scrollTop =
+        0;
+
+      setScrollTop(0);
+    },
+    [
+      exchange,
+      favoritesOnly,
+      search,
+      sort,
+    ],
+  );
 
   return (
     <div>
@@ -264,7 +451,15 @@ export default function MarketTable() {
         }
       />
 
-      <div className="max-h-[60vh] overflow-auto rounded-lg border border-border-default bg-panel">
+      <div
+        ref={
+          scrollContainerRef
+        }
+        onScroll={
+          handleScroll
+        }
+        className="max-h-[60vh] overflow-auto rounded-lg border border-border-default bg-panel"
+      >
         <Table>
           <MarketTableHeader
             sort={
@@ -276,7 +471,24 @@ export default function MarketTable() {
           />
 
           <TableBody>
-            {markets.map(
+            {visibleRange.topHeight >
+              0 && (
+              <TableRow
+                aria-hidden="true"
+                className="border-0 hover:bg-transparent"
+              >
+                <TableCell
+                  colSpan={7}
+                  className="p-0"
+                  style={{
+                    height:
+                      visibleRange.topHeight,
+                  }}
+                />
+              </TableRow>
+            )}
+
+            {visibleMarkets.map(
               (
                 market,
               ) => (
@@ -287,6 +499,23 @@ export default function MarketTable() {
                   }
                 />
               ),
+            )}
+
+            {visibleRange.bottomHeight >
+              0 && (
+              <TableRow
+                aria-hidden="true"
+                className="border-0 hover:bg-transparent"
+              >
+                <TableCell
+                  colSpan={7}
+                  className="p-0"
+                  style={{
+                    height:
+                      visibleRange.bottomHeight,
+                  }}
+                />
+              </TableRow>
             )}
           </TableBody>
         </Table>

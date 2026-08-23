@@ -260,6 +260,13 @@ export class BybitExecutionAdapter
                       true,
                   }
                 : {}),
+              ...(request.timeInForce !==
+                undefined
+                ? {
+                    timeInForce:
+                      request.timeInForce,
+                  }
+                : {}),
               ...(request.price !==
               undefined
                 ? {
@@ -539,6 +546,36 @@ export class BybitExecutionAdapter
     ) {
       throw new Error(
         "Bybit post-only execution requires a limit order.",
+      );
+    }
+
+    if (
+      request.timeInForce !==
+        undefined &&
+      (
+        request.orderType !==
+          "limit" ||
+        request.postOnly ===
+          true
+      )
+    ) {
+      throw new Error(
+        "Bybit time-in-force is supported only for non-post-only limit orders.",
+      );
+    }
+
+    if (
+      request.timeInForce !==
+        undefined &&
+      request.timeInForce !==
+        "GTC" &&
+      request.timeInForce !==
+        "IOC" &&
+      request.timeInForce !==
+        "FOK"
+    ) {
+      throw new Error(
+        "Bybit time-in-force must be GTC, IOC, or FOK.",
       );
     }
 

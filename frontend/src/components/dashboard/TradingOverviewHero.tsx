@@ -180,7 +180,7 @@ function TerminalMetric({
   color = "text-text-primary",
 }: TerminalMetricProps) {
   return (
-    <div>
+    <div className="dashboard-hero-metric">
       <p className="text-xs uppercase tracking-[0.18em] text-text-muted">
         {label}
       </p>
@@ -206,7 +206,7 @@ function ExchangeBadge({
 }: ExchangeBadgeProps) {
   return (
     <div
-      className={`rounded-full border px-4 py-2 text-sm font-medium ${
+      className={`dashboard-exchange-badge rounded-full border px-4 py-2 text-sm font-medium ${
         online
           ? "border-success/30 bg-success/10 text-success"
           : "border-danger/30 bg-danger/10 text-danger"

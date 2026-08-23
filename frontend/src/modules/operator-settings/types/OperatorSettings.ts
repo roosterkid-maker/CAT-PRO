@@ -157,6 +157,91 @@ export interface OperatorSettingsReport {
     liveOrderSubmissionFromSettingsAllowed: false;
   };
 
+  strategyOnePolicy: {
+    generatedAt: number;
+    mode: "VERSIONED_STRATEGY_ONE_POLICY";
+    active: {
+      schemaVersion: "102.0";
+      policyId: string;
+      revision: number;
+      label: string;
+      rationale: string;
+      policyHash: string;
+      values: {
+        discovery: {
+          minimumSpreadPercent: number;
+          minimumNetProfitPercent: number;
+          referenceCapitalInr: number;
+          minimumLiquidityPercent: number;
+          maximumQuoteAgeMs: number;
+          maximumCrossExchangePriceRatio: number;
+          allowLastPriceFallback: false;
+        };
+        qualification: {
+          minimumConsecutiveObservations: number;
+          minimumPersistenceMs: number;
+          minimumNetProfitPercent: number;
+          minimumLiquidityScore: number;
+          minimumFreshnessScore: number;
+        };
+        paper: {
+          minimumNetProfitPercent: number;
+          maximumSnapshotAgeMs: number;
+          routeCooldownMs: number;
+          maximumCapitalPerTradeInr: number;
+          buySlippagePercent: number;
+          sellSlippagePercent: number;
+          safetyBufferPercent: number;
+          requireCompleteTwoLegDepth: true;
+        };
+        tinyLive: {
+          mode: "PREFLIGHT_ONLY";
+          capitalPerLegInr: number;
+          maximumConcurrentTrades: 1;
+          minimumNetProfitPercent: number;
+          maximumPreviewOpportunityAgeMs: number;
+          orderSubmissionMaximumQuoteAgeMs: null;
+          requireCompleteTwoLegDepth: true;
+          requirePrefundedBalances: true;
+          requireParallelDispatch: true;
+          requireAuditedTimeInForce: true;
+          requireWebSocketFillConfirmation: true;
+          requireBoundedResidualRecovery: true;
+        };
+      };
+      safety: {
+        liveOrderSubmissionAllowed: false;
+        automaticFundMovementAllowed: false;
+        midTradeMutationAllowed: false;
+        activationRequiresBotPaused: true;
+        activationRequiresNoOpenExposure: true;
+      };
+    };
+    availableVersions: Array<{
+      policyId: string;
+      revision: number;
+      label: string;
+      policyHash: string;
+      active: boolean;
+    }>;
+    activationGuard: {
+      clear: boolean;
+      botPaused: boolean;
+      accountOpenTrades: number;
+      activeExecutionSessions: number;
+      activeExecutionLocks: number;
+      nonTerminalOrders: number;
+      unresolvedRecoveryIncidents: number;
+      blockers: string[];
+    };
+    activationConfirmation: "ACTIVATE_VERSIONED_STRATEGY_ONE_POLICY";
+    activationIsAtomic: true;
+    persistenceIsAppendOnly: true;
+    liveOrderSubmissionAllowed: false;
+    orderTimeQuoteAgeCalibrated: false;
+    reasons: string[];
+  };
+
   safetyInvariants:
     string[];
 }

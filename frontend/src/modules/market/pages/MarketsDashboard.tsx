@@ -8,6 +8,7 @@ import {
 
 import {
   useEffect,
+  useMemo,
   useState,
 } from "react";
 
@@ -23,6 +24,7 @@ import {
 } from "@/store/socket.store";
 
 import {
+  acquireMarketUiStream,
   refreshMarketSnapshot,
 } from "@/socket/socketManager";
 
@@ -30,6 +32,12 @@ import MarketTable
   from "../components/MarketTable";
 
 export default function MarketsDashboard() {
+  useEffect(
+    () =>
+      acquireMarketUiStream(),
+    [],
+  );
+
   const marketMap =
     useMarketStore(
       (state) =>
@@ -61,8 +69,14 @@ export default function MarketsDashboard() {
     );
 
   const markets =
-    Object.values(
-      marketMap,
+    useMemo(
+      () =>
+        Object.values(
+          marketMap,
+        ),
+      [
+        marketMap,
+      ],
     );
 
   const [
@@ -95,36 +109,55 @@ export default function MarketsDashboard() {
   );
 
   const executableCount =
-    markets.filter(
-      (market) =>
-        market.executable,
-    ).length;
+    useMemo(
+      () =>
+        markets.filter(
+          (market) =>
+            market.executable,
+        ).length,
+      [
+        markets,
+      ],
+    );
 
   const freshCount =
-    markets.filter(
-      (
-        market,
-      ) => {
-        const age =
-          now -
-          market.timestamp;
+    useMemo(
+      () =>
+        markets.filter(
+          (
+            market,
+          ) => {
+            const age =
+              now -
+              market.timestamp;
 
-        return (
-          age >= 0 &&
-          age <= 10_000
-        );
-      },
-    ).length;
+            return (
+              age >= 0 &&
+              age <= 10_000
+            );
+          },
+        ).length,
+      [
+        markets,
+        now,
+      ],
+    );
 
   const exchangeCount =
-    new Set(
-      markets.map(
-        (market) =>
-          market.exchange
-            .trim()
-            .toLowerCase(),
-      ),
-    ).size;
+    useMemo(
+      () =>
+        new Set(
+          markets.map(
+            (market) =>
+              market.exchange
+                .trim()
+                .toLowerCase(),
+          ),
+        ).size,
+      [
+        markets,
+      ],
+    );
 
   return (
     <div className="space-y-5">
@@ -288,7 +321,11 @@ export default function MarketsDashboard() {
               </section>
             )
           : (
-              <MarketTable />
+              <MarketTable
+                sourceMarkets={
+                  markets
+                }
+              />
             )
       }
     </div>

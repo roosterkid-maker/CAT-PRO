@@ -78,6 +78,14 @@ function dependencies(
         summary: {
           completed:
             completedShadow,
+          successRatePercent:
+            shadowReady
+              ? 100
+              : 0,
+          dataAvailabilityRatePercent:
+            shadowReady
+              ? 100
+              : 0,
         },
         sampleRequirement: {
           minimumCompletedOutcomes:
@@ -90,7 +98,25 @@ function dependencies(
               0,
               50 -
                 completedShadow,
-            ),
+              ),
+        },
+        thresholds: {
+          successRatePercent:
+            70,
+          executableRatePercent:
+            80,
+          profitableSampleRatePercent:
+            60,
+          dataAvailabilityRatePercent:
+            90,
+          profitRetentionPercent:
+            50,
+        },
+        profitability: {
+          averageProfitRetentionPercent:
+            shadowReady
+              ? 100
+              : 0,
         },
         readiness: {
           level:
@@ -236,6 +262,25 @@ async function main(): Promise<void> {
     blocked.stage,
     "PAPER_BLOCKED",
   );
+  assert.deepEqual(
+    blocked.summary
+      .shadowQuality,
+    {
+      successRatePercent:
+        0,
+      successRateTargetPercent:
+        70,
+      dataAvailabilityRatePercent:
+        0,
+      dataAvailabilityTargetPercent:
+        90,
+      profitRetentionPercent:
+        0,
+      profitRetentionTargetPercent:
+        50,
+    },
+    "The readiness API must expose authoritative shadow-quality actuals and configured targets.",
+  );
   assert.equal(
     blocked.soak
       .evidenceStatus,
@@ -357,6 +402,24 @@ async function main(): Promise<void> {
     soaked.orderSubmissionAllowed,
     false,
   );
+  assert.deepEqual(
+    soaked.summary
+      .shadowQuality,
+    {
+      successRatePercent:
+        100,
+      successRateTargetPercent:
+        70,
+      dataAvailabilityRatePercent:
+        100,
+      dataAvailabilityTargetPercent:
+        90,
+      profitRetentionPercent:
+        100,
+      profitRetentionTargetPercent:
+        50,
+    },
+  );
 
   const runtimeBlocked =
     await new PaperTradingReadinessService(
@@ -394,6 +457,99 @@ async function main(): Promise<void> {
           "7/20",
         ),
     ),
+  );
+
+  const cachedDependencies =
+    dependencies();
+  const readPaperShadow =
+    cachedDependencies
+      .paperShadowReadiness;
+  let paperShadowReads =
+    0;
+  cachedDependencies.paperShadowReadiness =
+    async () => {
+      paperShadowReads +=
+        1;
+
+      await Promise.resolve();
+
+      return readPaperShadow();
+    };
+
+  const cachedService =
+    new PaperTradingReadinessService(
+      cachedDependencies,
+      {
+        reportCacheTtlMs:
+          2_000,
+      },
+    );
+
+  const [
+    firstCached,
+    coalescedCached,
+  ] =
+    await Promise.all([
+      cachedService.getReport(
+        2_000,
+      ),
+      cachedService.getReport(
+        2_001,
+      ),
+    ]);
+
+  assert.equal(
+    paperShadowReads,
+    1,
+    "Concurrent read-only readiness requests must share one evidence build.",
+  );
+  assert.equal(
+    firstCached.stage,
+    coalescedCached.stage,
+  );
+
+  await cachedService.getReport(
+    2_500,
+  );
+  assert.equal(
+    paperShadowReads,
+    1,
+    "A readiness read inside the bounded TTL must reuse the immutable report.",
+  );
+
+  cachedService.invalidateCache();
+  await cachedService.getReport(
+    2_501,
+  );
+  assert.equal(
+    paperShadowReads,
+    2,
+    "Explicit invalidation must rebuild readiness evidence immediately.",
+  );
+  assert.deepEqual(
+    cachedService
+      .getCacheDiagnostics(),
+    {
+      ttlMs:
+        2_000,
+      cached:
+        true,
+      cachedAt:
+        2_501,
+      inFlight:
+        false,
+      hits:
+        1,
+      misses:
+        2,
+      coalescedReads:
+        1,
+      executionAdmissionUsesCache:
+        false,
+      liveAuthorizationUsesCache:
+        false,
+    },
+    "The cache must remain explicitly isolated from execution admission and LIVE authority.",
   );
 
   console.log(

@@ -33,6 +33,8 @@ export interface SpotMarketUniverseSelection {
 
   readonly selectedAnchorMarkets: number;
 
+  readonly selectedProtectedMarkets: number;
+
   readonly selectedExternalOverlapMarkets: number;
 
   readonly selectedWithActivityEvidence: number;
@@ -74,6 +76,7 @@ export class SpotMarketUniverseSelector {
     ],
     secondaryReserveRatio = 0.2,
     now = Date.now(),
+    rawProtectedMarkets: ReadonlySet<string> = new Set(),
   ): SpotMarketUniverseSelection {
     if (
       !Number.isSafeInteger(maximumMarkets) ||
@@ -152,6 +155,13 @@ export class SpotMarketUniverseSelector {
     const externalMarkets =
       new Set(
         Array.from(rawExternalMarkets)
+          .map((market) => this.normalizeSymbol(market))
+          .filter(Boolean),
+      );
+
+    const protectedMarkets =
+      new Set(
+        Array.from(rawProtectedMarkets)
           .map((market) => this.normalizeSymbol(market))
           .filter(Boolean),
       );
@@ -248,6 +258,34 @@ export class SpotMarketUniverseSelector {
       }
     }
 
+    /*
+     * A bounded scanner may re-rank markets after every catalog refresh. Keep
+     * explicitly audited routes in the websocket universe even when their
+     * recent turnover is temporarily below the selection cut-off. Protection
+     * changes subscription membership only; it grants no execution authority
+     * and never changes freshness, fee, profit or risk policy.
+     */
+    const protectedEntries =
+      ranked.filter((entry) => protectedMarkets.has(entry.symbol));
+
+    const protectedFirst: RankedSpotMarket[] = [];
+    const protectedFirstSymbols = new Set<string>();
+
+    for (const entry of [...protectedEntries, ...selected]) {
+      if (
+        protectedFirst.length >= maximumMarkets ||
+        protectedFirstSymbols.has(entry.symbol)
+      ) {
+        continue;
+      }
+
+      protectedFirstSymbols.add(entry.symbol);
+      protectedFirst.push(entry);
+    }
+
+    selected.length = 0;
+    selected.push(...protectedFirst);
+
     const quoteDistribution: Record<string, number> = {};
 
     for (const entry of selected) {
@@ -266,7 +304,12 @@ export class SpotMarketUniverseSelector {
         selected.filter((entry) => entry.quoteAsset === primaryQuote).length,
       selectedSecondaryMarkets:
         selected.filter((entry) => entry.quoteAsset !== primaryQuote).length,
-      selectedAnchorMarkets: anchorPrimary.length,
+      selectedAnchorMarkets:
+        selected.filter((entry) =>
+          anchorPrimary.some((anchor) => anchor.symbol === entry.symbol),
+        ).length,
+      selectedProtectedMarkets:
+        selected.filter((entry) => protectedMarkets.has(entry.symbol)).length,
       selectedExternalOverlapMarkets:
         selected.filter((entry) => entry.externalOverlap).length,
       selectedWithActivityEvidence:

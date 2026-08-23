@@ -35,6 +35,10 @@ import {
   defaultTradingExecutionConfig,
 } from "../../trading/config/execution";
 
+import {
+  strategyOneExecutionPolicyService,
+} from "../../trading/policy/StrategyOneExecutionPolicyService";
+
 import type {
   OperatorSettingsReport,
 } from "../models/OperatorSettings";
@@ -235,6 +239,10 @@ export class OperatorSettingsService {
           false,
       },
 
+      strategyOnePolicy:
+        strategyOneExecutionPolicyService
+          .getReport(),
+
       paperControls: {
         minimumDailyAttemptLimit:
           1,
@@ -273,6 +281,10 @@ export class OperatorSettingsService {
         "Emergency-stop behavior is not weakened or overridden by this surface.",
 
         "Tiny-LIVE remains a separate preflight-only workflow with a hard ₹100–₹500 range.",
+
+        "Strategy #1 policy changes require a registered code version, an exact confirmation, a paused bot, and zero open execution exposure.",
+
+        "Policy activation cannot enable LIVE orders, automatic fund movement, or mid-trade mutation.",
       ],
     };
   }

@@ -99,17 +99,11 @@ export class UnoCoinReadOnlyHttpClient {
         this.baseUrl,
       );
 
-    const controller =
-      new AbortController();
-
-    const timeout =
-      setTimeout(
-        () =>
-          controller.abort(),
-        this.requestTimeoutMs,
-      );
-
-    try {
+    return this.runWithinDeadline(
+      url.pathname,
+      async (
+        signal,
+      ) => {
       const response =
         await this.fetchImplementation(
           url,
@@ -125,8 +119,7 @@ export class UnoCoinReadOnlyHttpClient {
                 `Bearer ${apiToken}`,
             },
 
-            signal:
-              controller.signal,
+            signal,
           },
         );
 
@@ -160,10 +153,67 @@ export class UnoCoinReadOnlyHttpClient {
        * logged by this client.
        */
       return payload as T;
-    } finally {
-      clearTimeout(
-        timeout,
+      },
+    );
+  }
+
+  private async runWithinDeadline<T>(
+    path: string,
+    operation: (
+      signal: AbortSignal,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const controller =
+      new AbortController();
+
+    let timeout:
+      NodeJS.Timeout | null =
+      null;
+
+    const request =
+      Promise.resolve()
+        .then(
+          () =>
+            operation(
+              controller.signal,
+            ),
+        );
+
+    const deadline =
+      new Promise<never>(
+        (
+          _resolve,
+          reject,
+        ) => {
+          timeout =
+            setTimeout(
+              () => {
+                reject(
+                  new Error(
+                    `UnoCoin authenticated GET ${path} exceeded ${this.requestTimeoutMs} ms.`,
+                  ),
+                );
+
+                controller.abort();
+              },
+              this.requestTimeoutMs,
+            );
+        },
       );
+
+    try {
+      return await Promise.race([
+        request,
+        deadline,
+      ]);
+    } finally {
+      if (
+        timeout
+      ) {
+        clearTimeout(
+          timeout,
+        );
+      }
     }
   }
 }

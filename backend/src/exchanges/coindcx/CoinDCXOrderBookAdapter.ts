@@ -1412,6 +1412,15 @@ export class CoinDCXOrderBookAdapter {
 
     return new Set([
       "BTCUSDT",
+      /*
+       * COTIUSDT is the explicitly audited Strategy #1 CoinDCX -> Binance
+       * Tiny-LIVE lane. Keep its public CoinDCX book in the base socket
+       * universe so action-time evidence does not depend on a temporary
+       * demand subscription opening after the opportunity is discovered.
+       * This changes public-data coverage only; it grants no account, order,
+       * transfer, withdrawal, threshold or LIVE authority.
+       */
+      "COTIUSDT",
       "USDTINR",
       ...configured,
     ]);

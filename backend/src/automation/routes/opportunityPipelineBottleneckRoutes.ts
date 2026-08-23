@@ -15,10 +15,6 @@ import {
 } from "../../arbitrage/services/OpportunityNearMissAnalyticsService";
 
 import {
-  opportunityService,
-} from "../../arbitrage/services/OpportunityService";
-
-import {
   websocketManager,
 } from "../../websocket/manager";
 
@@ -610,9 +606,9 @@ router.get(
  *
  * Current-scan opportunity near-miss analytics.
  *
- * A fresh authoritative opportunity scan is triggered
- * before the report is assembled so historical rejection
- * records cannot be mistaken for current market evidence.
+ * The event-driven diagnostics runner continuously owns the authoritative
+ * scan. This endpoint reads that current bounded snapshot/report and must not
+ * inject a second scan into the execution pipeline whenever the UI polls.
  *
  * Diagnostic only:
  * no thresholds or execution permissions are changed.
@@ -635,9 +631,6 @@ router.get(
               rawLimit,
             )
           : 20;
-
-      opportunityService
-        .getOpportunities();
 
       response.json({
         success:
@@ -680,9 +673,8 @@ router.get(
  *
  * Fee-aware strategy economics.
  *
- * Generates a fresh authoritative scan first, then
- * analyzes current near-miss routes under configured
- * taker/maker fee scenarios.
+ * Analyzes the current event-driven near-miss snapshot under configured
+ * taker/maker fee scenarios without forcing another execution-pipeline scan.
  *
  * Maker scenarios are diagnostic only and never cause
  * passive orders to be submitted.
@@ -705,9 +697,6 @@ router.get(
               rawLimit,
             )
           : 10;
-
-      opportunityService
-        .getOpportunities();
 
       response.json({
         success:

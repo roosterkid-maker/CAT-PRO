@@ -47,6 +47,42 @@ const STRATEGY_ID =
 const MAXIMUM_COMPLETED_GENERATION_CLAIMS =
   5_000;
 
+export interface UnifiedAutomatedExecutionControlState {
+  accountEnabled: boolean;
+  emergencyStop: boolean;
+  accountMode: string;
+  paperExecutionAllowed: boolean;
+}
+
+/**
+ * Keep collecting genuine SHADOW evidence until the complete PAPER admission
+ * gate passes. Operator arming alone must not switch the single execution
+ * owner to PAPER because the PAPER scheduler then rejects every candidate and
+ * no further SHADOW outcomes can be produced.
+ */
+export function resolveUnifiedAutomatedExecutionMode(
+  state:
+    UnifiedAutomatedExecutionControlState,
+): UnifiedAutomatedExecutionMode {
+  if (
+    !state.accountEnabled ||
+    state.emergencyStop
+  ) {
+    return "DISABLED";
+  }
+
+  if (
+    state.accountMode !==
+    "PAPER"
+  ) {
+    return "LIVE_BLOCKED";
+  }
+
+  return state.paperExecutionAllowed
+    ? "PAPER"
+    : "SHADOW";
+}
+
 export interface UnifiedAutomatedExecutionQueue {
   getReadyItems(
     now?: number,
@@ -112,24 +148,21 @@ const DEFAULT_DEPENDENCIES:
         tradingAccountService
           .getAccount();
 
-      if (
-        !account.enabled ||
-        account.emergencyStop
-      ) {
-        return "DISABLED";
-      }
+      const paperController =
+        automatedPaperExecutionControllerService
+          .getDiagnostics();
 
-      if (
-        account.mode !==
-        "PAPER"
-      ) {
-        return "LIVE_BLOCKED";
-      }
-
-      return automatedPaperExecutionControllerService
-        .isPaperExecutionArmed()
-        ? "PAPER"
-        : "SHADOW";
+      return resolveUnifiedAutomatedExecutionMode({
+        accountEnabled:
+          account.enabled,
+        emergencyStop:
+          account.emergencyStop,
+        accountMode:
+          account.mode,
+        paperExecutionAllowed:
+          paperController
+            .paperExecutionAllowed,
+      });
     },
 };
 

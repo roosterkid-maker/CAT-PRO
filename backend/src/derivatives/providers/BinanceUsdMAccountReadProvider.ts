@@ -2,10 +2,13 @@ import {
   sensitiveDataRedactor,
 } from "../../core/security/SensitiveDataRedactor";
 
-import {
-  binanceCredentialsProvider,
-  type BinanceCredentials,
+import type {
+  BinanceCredentials,
 } from "../../exchanges/binance/api/BinanceCredentialsProvider";
+
+import {
+  binanceUsdMCredentialsProvider,
+} from "./BinanceUsdMCredentialsProvider";
 
 import {
   binanceSigner,
@@ -49,6 +52,11 @@ export interface BinanceUsdMSignedGetPort {
     credentials: BinanceCredentials,
     serverTimestamp: number,
   ): Promise<T>;
+}
+
+interface BinanceUsdMCredentialsSource {
+  getCredentials(): BinanceCredentials;
+  isConfigured(): boolean;
 }
 
 class DefaultBinanceUsdMSignedGetPort
@@ -111,7 +119,7 @@ implements DerivativeAccountReadProvider {
 
   constructor(
     private readonly port: BinanceUsdMSignedGetPort = new DefaultBinanceUsdMSignedGetPort(),
-    private readonly credentialsSource = binanceCredentialsProvider,
+    private readonly credentialsSource: BinanceUsdMCredentialsSource = binanceUsdMCredentialsProvider,
     private readonly freshnessMs = 30_000,
   ) {}
 
@@ -237,7 +245,7 @@ function normalizeMarkets(markets: readonly string[]): string[] {
   return Array.from(new Set(markets.map(symbol).filter(Boolean))).sort();
 }
 function requireBoundedMarkets(markets: readonly string[]): void {
-  if (markets.length === 0 || markets.length > 10) throw new Error("Derivative account read requires one to ten bounded markets.");
+  if (markets.length === 0 || markets.length > 20) throw new Error("Derivative account read requires one to twenty bounded markets.");
 }
 function symbol(value: unknown): string { return typeof value === "string" ? value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "") : ""; }
 function finite(value: unknown, field: string): number { const parsed = Number(value); if (!Number.isFinite(parsed)) throw new Error(`${field} is invalid.`); return parsed; }

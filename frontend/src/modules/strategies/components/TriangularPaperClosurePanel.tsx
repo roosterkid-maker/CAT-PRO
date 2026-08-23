@@ -37,7 +37,7 @@ export function TriangularPaperClosurePanel() {
             <div className="flex items-center gap-2 text-brand">
               <Triangle className="size-5" />
               <p className="text-xs font-semibold uppercase tracking-[0.16em]">
-                V87 Triangular PAPER Conversion
+                V180 Adaptive Closed-Loop Arbitrage
               </p>
             </div>
             <h2 className="mt-2 text-xl font-bold text-text-primary">
@@ -71,6 +71,8 @@ export function TriangularPaperClosurePanel() {
       </div>
 
       <div className="grid gap-4 p-5 xl:grid-cols-[1.3fr_1fr]">
+        <AclaOperations report={report.acla} />
+
         <section className="rounded-lg border border-border-default bg-panel-light p-4">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs font-semibold uppercase tracking-[0.13em] text-text-muted">Best current path</p>
@@ -193,23 +195,81 @@ function BestPath({path}: {path: TriangularPathSummary}) {
       <p className="mt-1 text-xs uppercase tracking-[0.12em] text-text-muted">{path.exchange}</p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Fact label="Gross edge" value={formatPercent(path.grossProfitPercent)} />
-        <Fact label="Fee-only edge" value={nullablePercent(path.referenceFeeAdjustedProfitPercent)} />
-        <Fact label="Rounding drag" value={nullablePercent(path.quantizationDragPercent)} />
-        <Fact label="Fee-adjusted net edge" value={path.netProfitPercent === null ? "NO_DATA" : formatPercent(path.netProfitPercent)} />
+        <Fact label="Expected net" value={nullablePercent(path.expectedNetProfitPercent)} />
+        <Fact label="Stress net" value={nullablePercent(path.stressNetProfitPercent)} />
+        <Fact label="Absolute net" value={path.absoluteNetProfitInr === null ? "NO_DATA" : formatInr(path.absoluteNetProfitInr)} />
       </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      <div className="mt-3 grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
         <Fact label="Actual start traded" value={formatQuantity(path.initialInputQuantity)} />
         <Fact label="Start asset retained" value={formatQuantity(path.retainedStartQuantity)} />
         <Fact label="Capital utilized" value={formatPercent(path.capitalUtilizationPercent)} />
+        <Fact label="Reserve drag" value={formatPercent(path.reserveDragPercent)} />
+        <Fact label="TDS capital lock" value={path.tdsCapitalLockInr === null ? "NO_DATA" : formatInr(path.tdsCapitalLockInr)} />
+        <Fact label="Book skew" value={path.maximumBookSkewMs === null ? "NO_DATA" : `${path.maximumBookSkewMs} ms`} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {path.legs.map((leg, index) => (
           <span key={`${leg.market}:${index}`} className="rounded-md border border-border-default bg-panel px-2 py-1 font-mono text-[10px] text-text-muted">
-            L{index + 1} {leg.action === "BUY_BASE" ? "BUY" : "SELL"} {leg.market} @ {formatPercent(leg.feePercent)} fee
+            L{index + 1} {leg.action === "BUY_BASE" ? "BUY" : "SELL"} {leg.market} · VWAP {formatQuantity(leg.averageFillPrice)} · {leg.consumedDepthLevels} level(s) · {leg.orderBookAgeMs} ms
           </span>
         ))}
       </div>
     </div>
+  );
+}
+
+function AclaOperations({report}: {report: import("../types/TriangularPaperClosure").TriangularPaperClosureReport["acla"]}) {
+  const pool = report.capital?.pool;
+  const lifecycle = report.lifecycle;
+  const performance = report.performance;
+  const invariantHealthy = report.capital !== null && Object.values(report.capital.invariant).every(Boolean);
+  return (
+    <section className="xl:col-span-2 overflow-hidden rounded-lg border border-brand/30 bg-panel-light">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border-default px-4 py-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.13em] text-brand">ACLA capital loop · genuine SHADOW</p>
+          <p className="mt-1 text-xs text-text-muted">One strategy-scoped, restart-safe capital pool. PAPER is implemented but OFF; LIVE and order submission are OFF.</p>
+        </div>
+        <div className="flex gap-2">
+          <span className="rounded-full border border-success/30 bg-success/10 px-2 py-1 font-mono text-[10px] font-bold text-success">{report.rolloutStage}</span>
+          <span className={`rounded-full border px-2 py-1 font-mono text-[10px] font-bold ${invariantHealthy ? "border-success/30 bg-success/10 text-success" : "border-danger/30 bg-danger/10 text-danger"}`}>CAPITAL {invariantHealthy ? "BALANCED" : "NO DATA"}</span>
+        </div>
+      </div>
+      <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-6">
+        <Metric label="Pool allocation" value={pool ? formatInr(pool.totalAllocationInr) : "NO_DATA"} />
+        <Metric label="Active free" value={pool ? formatInr(pool.activeFreeInr) : "NO_DATA"} />
+        <Metric label="Reserved / in-flight" value={pool ? `${formatInr(pool.reservedInr)} / ${formatInr(pool.inFlightInr)}` : "NO_DATA"} />
+        <Metric label="Recovery reserve" value={pool ? `${formatInr(pool.recoveryReserveInr)} · ${formatInr(pool.recoveryReserveInUseInr)} in use` : "NO_DATA"} />
+        <Metric label="TDS / dust locked" value={pool ? `${formatInr(pool.tdsLockedInr)} / ${formatInr(pool.dustLedgerInr)}` : "NO_DATA"} />
+        <Metric label="Realized P&L" value={pool ? formatInr(pool.realizedPnlInr) : "NO_DATA"} tone={pool && pool.realizedPnlInr > 0 ? "success" : "neutral"} />
+      </div>
+      <div className="grid gap-3 border-t border-border-default p-4 sm:grid-cols-2 xl:grid-cols-6">
+        <Fact label="Circuit breaker" value={pool ? `${pool.circuitBreakerState}${pool.circuitBreakerReason ? ` · ${pool.circuitBreakerReason}` : ""}` : "NO_DATA"} />
+        <Fact label="Daily loss" value={pool ? `${formatInr(pool.dailyLossInr)} / ${formatInr(report.capital?.configuration.dailyLossLimitInr ?? 0)}` : "NO_DATA"} />
+        <Fact label="Consecutive failures" value={pool ? `${pool.consecutiveFailedCycles} / ${report.capital?.configuration.maximumConsecutiveFailedCycles ?? 0}` : "NO_DATA"} />
+        <Fact label="Dust assets" value={pool ? Object.keys(pool.dustByAsset).length : "NO_DATA"} />
+        <Fact label="Reinvested / sweepable" value={pool ? `${formatInr(pool.reinvestedProfitInr)} / ${formatInr(pool.sweepableProfitInr)}` : "NO_DATA"} />
+        <Fact label="TDS credits released" value={pool ? formatInr(pool.tdsCreditReleasedInr) : "NO_DATA"} />
+      </div>
+      <div className="grid gap-3 border-t border-border-default p-4 sm:grid-cols-2 xl:grid-cols-8">
+        <Fact label="Lifecycle" value={lifecycle?.running ? "RUNNING" : "NO_DATA"} />
+        <Fact label="Admitted" value={lifecycle?.admitted ?? 0} />
+        <Fact label="Completed" value={lifecycle?.completed ?? 0} />
+        <Fact label="Rejected / failed" value={`${lifecycle?.rejected ?? 0} / ${lifecycle?.failed ?? 0}`} />
+        <Fact label="Cycles / rolling hour" value={lifecycle?.cyclesInRollingHour ?? 0} />
+        <Fact label="Event route wakeups" value={performance?.affectedRouteWakeups ?? 0} />
+        <Fact label="Fast-screen avoided" value={performance?.affectedPathsFastScreened ?? 0} />
+        <Fact label="Last evaluation" value={performance ? `${performance.lastEvaluationDurationMs.toFixed(3)} ms` : "NO_DATA"} />
+      </div>
+      {lifecycle?.recentOutcomes.length ? (
+        <div className="border-t border-border-default px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-muted">Recent closed-loop outcomes</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {lifecycle.recentOutcomes.slice(0, 6).map((outcome) => <span key={`${outcome.signalId}:${outcome.generatedAt}`} className={`rounded-md border px-2 py-1 font-mono text-[10px] ${outcome.state === "COMPLETED" ? "border-success/20 bg-success/5 text-success" : "border-warning/20 bg-warning/5 text-warning"}`}>{outcome.state} · {outcome.reason}</span>)}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -252,4 +312,8 @@ function formatAge(value: number | null): string {
   if (value === null) return "NO_DATA";
   if (value < 1_000) return `${value} ms`;
   return `${(value / 1_000).toFixed(1)} s`;
+}
+
+function formatInr(value: number): string {
+  return `₹${value.toLocaleString("en-IN", {maximumFractionDigits: 2})}`;
 }

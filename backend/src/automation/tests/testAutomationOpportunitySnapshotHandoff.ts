@@ -418,6 +418,14 @@ function createExecutionQualification(
         freshnessScore,
         opportunityTimestamp:
           now,
+        buyQuoteTimestamp:
+          now,
+        sellQuoteTimestamp:
+          now,
+        quotesAreFresh:
+          true,
+        usedLastPriceFallback:
+          false,
       },
       best: {
         netProfit:

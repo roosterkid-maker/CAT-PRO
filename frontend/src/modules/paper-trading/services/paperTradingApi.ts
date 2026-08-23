@@ -1,6 +1,10 @@
 import axios from "axios";
 
 import {
+  api,
+} from "@/api/client";
+
+import {
   API_BASE_URL,
 } from "../../../config/runtimeUrls";
 
@@ -49,15 +53,28 @@ interface ApiErrorResponse {
   message?: string;
 }
 
-export async function fetchPaperTrades():
+export async function fetchPaperTrades(
+  input: {
+    cursor?: string | null;
+    limit?: number;
+  } = {},
+  signal?: AbortSignal,
+):
 Promise<PaperTradesResponse> {
   try {
     const response =
-      await axios.get<PaperTradesResponse>(
-        `${API_BASE_URL}/api/paper-trades`,
+      await api.get<PaperTradesResponse>(
+        "/api/paper-trades",
         {
-          timeout:
-            10_000,
+          params: {
+            limit:
+              input.limit ??
+              100,
+            cursor:
+              input.cursor ??
+              undefined,
+          },
+          signal,
         },
       );
 

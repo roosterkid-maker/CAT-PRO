@@ -70,5 +70,20 @@ export interface PaperTrade {
 export interface PaperTradesResponse {
   success: boolean;
   count: number;
+  returned: number;
+  limit: number;
+  cursor: string | null;
+  nextCursor: string | null;
+  hasMore: boolean;
+  revision: number;
+  view: "OPERATOR_COMPACT";
+  truncated: boolean;
+  summary: {
+    totalStoredRecords: number;
+    activeStoredRecords: number;
+    closedStoredRecords: number;
+    expectedProfitAcrossStoredRecords: number;
+    actualProfitAcrossClosedStoredRecords: number;
+  };
   data: PaperTrade[];
 }

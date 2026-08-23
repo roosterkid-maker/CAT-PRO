@@ -6,6 +6,11 @@ export type LiveOrderType =
   | "limit"
   | "market";
 
+export type LiveOrderTimeInForce =
+  | "GTC"
+  | "IOC"
+  | "FOK";
+
 export interface LiveExecutionRequest {
   exchange: string;
 
@@ -17,6 +22,12 @@ export interface LiveExecutionRequest {
   side: LiveOrderSide;
 
   orderType: LiveOrderType;
+
+  /**
+   * Strategy #1 supplies this explicitly at its final order-time gate.
+   * Adapters must reject unsupported values before signed network I/O.
+   */
+  timeInForce?: LiveOrderTimeInForce;
 
   /**
    * Requires maker-only exchange semantics. Adapters must reject this flag

@@ -16,6 +16,7 @@ function main(): void {
     {symbol: "ETHBTC", baseAsset: "ETH", quoteAsset: "BTC"},
     {symbol: "SOLBTC", baseAsset: "SOL", quoteAsset: "BTC"},
     {symbol: "ETHUSDC", baseAsset: "ETH", quoteAsset: "USDC"},
+    {symbol: "COTIUSDT", baseAsset: "COTI", quoteAsset: "USDT"},
   ];
 
   const activity = catalog.map((entry, index) => ({
@@ -44,6 +45,26 @@ function main(): void {
   assert.equal(selection.safety.liveExecutionAllowed, false);
   assert.equal(selection.safety.freshnessThresholdMutationAllowed, false);
 
+  const protectedSelection = selector.select(
+    catalog,
+    activity.map((entry) => ({
+      ...entry,
+      turnover24h: entry.symbol === "COTIUSDT" ? 0 : entry.turnover24h,
+    })),
+    new Set(),
+    3,
+    "USDT",
+    ["BTC"],
+    0,
+    1_500,
+    new Set(["coti-usdt"]),
+  );
+
+  assert.equal(protectedSelection.selected.length, 3);
+  assert.equal(protectedSelection.selected[0], "COTIUSDT");
+  assert.equal(protectedSelection.selectedProtectedMarkets, 1);
+  assert.equal(protectedSelection.safety.liveExecutionAllowed, false);
+
   const fallback = selector.select(
     catalog,
     [],
@@ -58,7 +79,7 @@ function main(): void {
   assert.deepEqual(fallback.selected, [
     "ADAUSDT",
     "BTCUSDT",
-    "ETHUSDT",
+    "COTIUSDT",
   ]);
 
   assert.throws(() =>

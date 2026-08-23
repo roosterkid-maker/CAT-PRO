@@ -74,6 +74,9 @@ export class ShadowTradeOutcomeTrackerService {
   private readonly trackedDispatchIds =
     new Set<string>();
 
+  private revision =
+    0;
+
   constructor(
     config:
       Partial<ShadowTradeOutcomeConfig> = {},
@@ -133,6 +136,10 @@ export class ShadowTradeOutcomeTrackerService {
     }
 
     this.trimHistory();
+  }
+
+  getRevision(): number {
+    return this.revision;
   }
 
   getRecord(
@@ -324,6 +331,28 @@ export class ShadowTradeOutcomeTrackerService {
   }
 
   /**
+   * Minimal immutable records for attribution/performance aggregation. Sample
+   * arrays can dominate the record size but are not consumed by those views.
+   */
+  getAnalyticsRecords():
+    ShadowTradeOutcomeRecord[] {
+    return Array.from(
+      this.records.values(),
+      (record) => ({
+        ...record,
+        strategyAttribution:
+          cloneStrategyAttribution(
+            record.strategyAttribution,
+          ),
+        predicted: {
+          ...record.predicted,
+        },
+        samples: [],
+      }),
+    );
+  }
+
+  /**
    * Internal zero-copy analytics traversal. The visitor must treat records as
    * immutable; mutation ownership remains in this tracker. This avoids cloning
    * hundreds of nested sample arrays merely to aggregate readiness counters.
@@ -389,6 +418,9 @@ export class ShadowTradeOutcomeTrackerService {
         .add(
           dispatch.id,
         );
+
+      this.revision +=
+        1;
     }
   }
 
@@ -1191,6 +1223,9 @@ export class ShadowTradeOutcomeTrackerService {
           12,
         );
     }
+
+    this.revision +=
+      1;
   }
 
   private finalize(
@@ -1200,6 +1235,9 @@ export class ShadowTradeOutcomeTrackerService {
     now:
       number,
   ): void {
+    this.revision +=
+      1;
+
     record.completedAt =
       now;
 
@@ -1308,6 +1346,9 @@ export class ShadowTradeOutcomeTrackerService {
         .delete(
           oldest.shadowDispatchId,
         );
+
+      this.revision +=
+        1;
     }
   }
 

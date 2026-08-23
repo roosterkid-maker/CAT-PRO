@@ -11,12 +11,42 @@ import {
   runSuccessfulDemoSimulation,
 } from "../services/paperTradingApi";
 
-export function usePaperTrades() {
+export function usePaperTrades(
+  cursor:
+    string | null =
+      null,
+
+  limit =
+    100,
+) {
   return useQuery({
-    queryKey: ["paper-trades"],
-    queryFn: fetchPaperTrades,
-    refetchInterval: 2_000,
-    staleTime: 1_000,
+    queryKey: [
+      "paper-trades",
+      {
+        cursor,
+        limit,
+      },
+    ],
+    queryFn: ({signal}) => fetchPaperTrades(
+      {
+        cursor,
+        limit,
+      },
+      signal,
+    ),
+    refetchInterval:
+      cursor ===
+        null
+        ? 5_000
+        : false,
+    refetchIntervalInBackground:
+      false,
+    staleTime: 4_000,
+    placeholderData:
+      (
+        previous,
+      ) =>
+        previous,
     retry: 2,
   });
 }
@@ -45,6 +75,8 @@ export function usePaperTradingReadiness() {
       fetchPaperTradingReadiness,
     refetchInterval:
       5_000,
+    refetchIntervalInBackground:
+      false,
     staleTime:
       3_000,
     retry:

@@ -7,6 +7,7 @@ export type ExecutionRestartRecoveryClassification =
 export type ExecutionRestartRecoveryEvidenceSource =
   | "SESSION_EVIDENCE"
   | "ORDER_EVIDENCE"
+  | "STRATEGY_ONE_TWO_LEG_EVIDENCE"
   | "PERSISTENCE_INTEGRITY";
 
 export interface ExecutionRestartRecoveryFinding {
@@ -65,6 +66,10 @@ export interface ExecutionRestartRecoveryReport {
     possibleOpenOrders: number;
 
     possibleExposureSessions: number;
+
+    unresolvedStrategyOneTwoLegSessions: number;
+
+    strategyOneTwoLegPossibleExposureSessions: number;
 
     persistenceIntegrityProblems: number;
 

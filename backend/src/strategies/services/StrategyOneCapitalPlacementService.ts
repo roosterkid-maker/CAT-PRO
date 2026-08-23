@@ -14,13 +14,14 @@ import {
   CROSS_EXCHANGE_ARBITRAGE_STRATEGY_ID,
 } from "../models/StrategyMetadata";
 
+import {
+  strategyOneExecutionPolicyService,
+} from "../../trading/policy/StrategyOneExecutionPolicyService";
+
 const MINIMUM_ROUTE_SAMPLE =
   20;
 
 const HIGH_CONFIDENCE_SAMPLE =
-  100;
-
-const TINY_LIVE_PILOT_PER_LEG_INR =
   100;
 
 export type StrategyOneCapitalPlacementConfidence =
@@ -95,8 +96,8 @@ export interface StrategyOneCapitalPlacementReport {
       | "NO_ADAPTER_READY_ROUTE"
       | "COLLECTING"
       | "CANDIDATE_FOR_PREFLIGHT";
-    readonly requestedPerLegInr: 100;
-    readonly minimumTwoLegInventoryInr: 200;
+    readonly requestedPerLegInr: number;
+    readonly minimumTwoLegInventoryInr: number;
     readonly recommendedRoute: StrategyOneCapitalPlacementRouteRank | null;
     readonly reasons: readonly string[];
     readonly preflightRequired: true;
@@ -137,6 +138,7 @@ interface MutablePlacementAggregate {
 
 export interface StrategyOneCapitalPlacementDependencies {
   getLiveAdapterExchanges(): readonly string[];
+  getTinyLiveCapitalPerLegInr(): number;
 }
 
 const DEFAULT_DEPENDENCIES:
@@ -155,6 +157,13 @@ const DEFAULT_DEPENDENCIES:
           (exchange) =>
             exchange.exchange,
         ),
+  getTinyLiveCapitalPerLegInr:
+    () =>
+      strategyOneExecutionPolicyService
+        .getActivePolicy()
+        .values
+        .tinyLive
+        .capitalPerLegInr,
 };
 
 /**
@@ -165,6 +174,22 @@ const DEFAULT_DEPENDENCIES:
 export class StrategyOneCapitalPlacementService {
   private readonly dependencies:
     StrategyOneCapitalPlacementDependencies;
+
+  private cachedTrades:
+    readonly PaperTrade[] | null =
+    null;
+
+  private cachedConfigurationKey:
+    string | null =
+    null;
+
+  private cachedSettledRevision:
+    number | null =
+    null;
+
+  private cachedReport:
+    StrategyOneCapitalPlacementReport | null =
+    null;
 
   constructor(
     dependencies:
@@ -181,7 +206,27 @@ export class StrategyOneCapitalPlacementService {
       readonly PaperTrade[],
     now =
       Date.now(),
+
+    settledRevision:
+      number | null =
+        null,
   ): StrategyOneCapitalPlacementReport {
+    if (
+      settledRevision !==
+        null &&
+      (
+        !Number.isSafeInteger(
+          settledRevision,
+        ) ||
+        settledRevision <
+          0
+      )
+    ) {
+      throw new Error(
+        "Strategy #1 settled-evidence revision must be a non-negative safe integer.",
+      );
+    }
+
     if (
       !Number.isSafeInteger(
         now,
@@ -192,6 +237,66 @@ export class StrategyOneCapitalPlacementService {
       throw new Error(
         "Strategy #1 capital-placement timestamp must be a positive safe integer.",
       );
+    }
+
+    const tinyLiveCapitalPerLegInr =
+      this.dependencies
+        .getTinyLiveCapitalPerLegInr();
+
+    if (
+      !Number.isSafeInteger(
+        tinyLiveCapitalPerLegInr,
+      ) ||
+      tinyLiveCapitalPerLegInr <
+        100 ||
+      tinyLiveCapitalPerLegInr >
+        500
+    ) {
+      throw new Error(
+        "Active Strategy #1 Tiny-LIVE capital per leg must remain between ₹100 and ₹500.",
+      );
+    }
+
+    const normalizedLiveAdapterExchanges =
+      [
+        ...new Set(
+          this.dependencies
+            .getLiveAdapterExchanges()
+            .map(
+              (exchange) =>
+                exchange
+                  .trim()
+                  .toLowerCase(),
+            )
+            .filter(
+              Boolean,
+            ),
+        ),
+      ].sort();
+    const configurationKey =
+      `${tinyLiveCapitalPerLegInr}|${normalizedLiveAdapterExchanges.join(",")}`;
+
+    if (
+      (
+        settledRevision ===
+          null
+          ? this.cachedSettledRevision ===
+              null &&
+            this.cachedTrades ===
+              trades
+          : this.cachedSettledRevision ===
+              settledRevision
+      ) &&
+      this.cachedConfigurationKey ===
+        configurationKey &&
+      this.cachedReport !==
+        null
+    ) {
+      return freeze({
+        ...this.cachedReport,
+        generatedAt:
+          now,
+      });
     }
 
     const storedStrategyOneSettlements =
@@ -247,17 +352,7 @@ export class StrategyOneCapitalPlacementService {
 
     const liveAdapterExchanges =
       new Set(
-        this.dependencies
-          .getLiveAdapterExchanges()
-          .map(
-            (exchange) =>
-              exchange
-                .trim()
-                .toLowerCase(),
-          )
-          .filter(
-            Boolean,
-          ),
+        normalizedLiveAdapterExchanges,
       );
 
     const buyVenueAggregates =
@@ -394,7 +489,7 @@ export class StrategyOneCapitalPlacementService {
             ? "COLLECTING"
             : "CANDIDATE_FOR_PREFLIGHT";
 
-    return freeze({
+    const report = freeze({
       version:
         "91.0" as const,
       generatedAt:
@@ -426,10 +521,10 @@ export class StrategyOneCapitalPlacementService {
         state:
           pilotState,
         requestedPerLegInr:
-          TINY_LIVE_PILOT_PER_LEG_INR,
+          tinyLiveCapitalPerLegInr,
         minimumTwoLegInventoryInr:
-          TINY_LIVE_PILOT_PER_LEG_INR *
-          2 as 200,
+          tinyLiveCapitalPerLegInr *
+          2,
         recommendedRoute,
         reasons:
           buildPilotReasons(
@@ -462,6 +557,18 @@ export class StrategyOneCapitalPlacementService {
           false as const,
       },
     });
+
+    this.cachedTrades =
+      trades;
+
+    this.cachedSettledRevision =
+      settledRevision;
+    this.cachedConfigurationKey =
+      configurationKey;
+    this.cachedReport =
+      report;
+
+    return report;
   }
 
   private addTrade(

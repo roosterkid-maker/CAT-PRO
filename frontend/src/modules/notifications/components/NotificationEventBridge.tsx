@@ -23,11 +23,23 @@ import {
 const INITIAL_LOAD_DELAY_MS =
   3_000;
 
+const OPPORTUNITY_ROUTE_ALERT_COOLDOWN_MS =
+  30_000;
+
+const OPPORTUNITY_ROUTE_ALERT_RETENTION_MS =
+  10 * 60_000;
+
 export function NotificationEventBridge() {
   const pushNotification =
     useNotificationStore(
       (state) =>
         state.pushNotification,
+    );
+
+  const dismissNotification =
+    useNotificationStore(
+      (state) =>
+        state.dismissNotification,
     );
 
   const opportunityAlerts =
@@ -55,14 +67,20 @@ export function NotificationEventBridge() {
     );
 
   const opportunityQuery =
-    useOpportunities();
+    useOpportunities(
+      opportunityAlerts,
+    );
 
   const healthQuery =
-    useExecutionHealth();
+    useExecutionHealth(
+      exchangeConnectionAlerts,
+    );
 
   const historyQuery =
     useRecentExecutions(
       20,
+      executionSuccessAlerts ||
+        executionFailureAlerts,
     );
 
   const initializedRef =
@@ -73,9 +91,19 @@ export function NotificationEventBridge() {
       null,
     );
 
-  const knownOpportunityIdsRef =
+  const activeOpportunityRouteKeysRef =
     useRef(
       new Set<string>(),
+    );
+
+  const opportunityToastIdsRef =
+    useRef(
+      new Map<string, string>(),
+    );
+
+  const lastOpportunityAlertAtRef =
+    useRef(
+      new Map<string, number>(),
     );
 
   const knownExecutionIdsRef =
@@ -115,35 +143,106 @@ export function NotificationEventBridge() {
       opportunityQuery.data?.data ??
       [];
 
+    const now =
+      Date.now();
+
+    const currentExecuteRouteKeys =
+      new Set<string>();
+
     for (
       const opportunity
       of opportunities
     ) {
-      const alreadyKnown =
-        knownOpportunityIdsRef.current.has(
-          opportunity.id,
-        );
-
-      knownOpportunityIdsRef.current.add(
-        opportunity.id,
-      );
-
       if (
-        !initializedRef.current ||
-        alreadyKnown ||
-        opportunity.decision !==
-          "EXECUTE" ||
-        !opportunityAlerts
+        opportunity.decision ===
+        "EXECUTE"
+      ) {
+        currentExecuteRouteKeys.add(
+          buildOpportunityRouteKey(
+            opportunity.market,
+            opportunity.buyExchange,
+            opportunity.sellExchange,
+          ),
+        );
+      }
+    }
+
+    for (
+      const previousRouteKey
+      of activeOpportunityRouteKeysRef.current
+    ) {
+      if (
+        currentExecuteRouteKeys.has(
+          previousRouteKey,
+        )
       ) {
         continue;
       }
 
-      pushNotification({
+      const toastId =
+        opportunityToastIdsRef.current.get(
+          previousRouteKey,
+        );
+
+      if (toastId) {
+        dismissNotification(
+          toastId,
+        );
+
+        opportunityToastIdsRef.current.delete(
+          previousRouteKey,
+        );
+      }
+    }
+
+    const notifiedThisCycle =
+      new Set<string>();
+
+    for (
+      const opportunity
+      of opportunities
+    ) {
+      const routeKey =
+        buildOpportunityRouteKey(
+          opportunity.market,
+          opportunity.buyExchange,
+          opportunity.sellExchange,
+        );
+
+      const alreadyActive =
+        activeOpportunityRouteKeysRef.current.has(
+          routeKey,
+        );
+
+      const lastAlertAt =
+        lastOpportunityAlertAtRef.current.get(
+          routeKey,
+        ) ?? 0;
+
+      if (
+        !initializedRef.current ||
+        opportunity.decision !==
+          "EXECUTE" ||
+        !opportunityAlerts ||
+        alreadyActive ||
+        notifiedThisCycle.has(
+          routeKey,
+        ) ||
+        now - lastAlertAt <
+          OPPORTUNITY_ROUTE_ALERT_COOLDOWN_MS
+      ) {
+        continue;
+      }
+
+      const toastId =
+        pushNotification({
         title:
-          `${opportunity.market} opportunity`,
+          `${opportunity.market} PAPER opportunity`,
 
         message:
-          `Buy on ${formatExchange(
+          `Observed ${formatSignalTime(
+            opportunity.timestamp,
+          )} IST. Buy on ${formatExchange(
             opportunity.buyExchange,
           )}, sell on ${formatExchange(
             opportunity.sellExchange,
@@ -157,8 +256,50 @@ export function NotificationEventBridge() {
         durationMs:
           8_000,
       });
+
+      notifiedThisCycle.add(
+        routeKey,
+      );
+
+      lastOpportunityAlertAtRef.current.set(
+        routeKey,
+        now,
+      );
+
+      opportunityToastIdsRef.current.set(
+        routeKey,
+        toastId,
+      );
+    }
+
+    activeOpportunityRouteKeysRef.current =
+      currentExecuteRouteKeys;
+
+    for (
+      const [
+        routeKey,
+        lastAlertAt,
+      ]
+      of lastOpportunityAlertAtRef.current
+    ) {
+      if (
+        !currentExecuteRouteKeys.has(
+          routeKey,
+        ) &&
+        now - lastAlertAt >
+          OPPORTUNITY_ROUTE_ALERT_RETENTION_MS
+      ) {
+        lastOpportunityAlertAtRef.current.delete(
+          routeKey,
+        );
+
+        opportunityToastIdsRef.current.delete(
+          routeKey,
+        );
+      }
     }
   }, [
+    dismissNotification,
     opportunityAlerts,
     opportunityQuery.data,
     pushNotification,
@@ -451,6 +592,47 @@ function formatExchange(
   }
 
   return exchange;
+}
+
+function buildOpportunityRouteKey(
+  market: string,
+  buyExchange: string,
+  sellExchange: string,
+): string {
+  return [
+    market,
+    buyExchange,
+    sellExchange,
+  ]
+    .map(
+      (value) =>
+        value
+          .trim()
+          .toLowerCase(),
+    )
+    .join("|");
+}
+
+function formatSignalTime(
+  timestamp: number,
+): string {
+  return new Date(
+    timestamp,
+  ).toLocaleTimeString(
+    "en-IN",
+    {
+      timeZone:
+        "Asia/Kolkata",
+      hour:
+        "2-digit",
+      minute:
+        "2-digit",
+      second:
+        "2-digit",
+      hour12:
+        false,
+    },
+  );
 }
 
 function formatNumber(

@@ -6,6 +6,10 @@ import type {
   LiveExecutionResult,
 } from "../models/LiveExecutionResult";
 
+import type {
+  ExecutionPolicyIdentity,
+} from "../../../trading/models/ExecutionPlan";
+
 export type OrderLifecycleLeg =
   | "BUY"
   | "SELL";
@@ -68,6 +72,9 @@ export interface OrderLifecycleRecord {
 
   planId:
     string;
+
+  policyIdentity?:
+    ExecutionPolicyIdentity;
 
   leg:
     OrderLifecycleLeg;

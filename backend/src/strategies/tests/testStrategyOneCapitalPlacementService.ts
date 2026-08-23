@@ -21,6 +21,9 @@ function main(): void {
           "bybit",
           "coinswitch",
         ],
+      getTinyLiveCapitalPerLegInr:
+        () =>
+          500,
     });
 
   const primaryRoute =
@@ -205,11 +208,11 @@ function main(): void {
   );
   assert.equal(
     report.pilot.requestedPerLegInr,
-    100,
+    500,
   );
   assert.equal(
     report.pilot.minimumTwoLegInventoryInr,
-    200,
+    1_000,
   );
   assert.equal(
     report.pilot.recommendedRoute?.routeKey,
@@ -234,6 +237,62 @@ function main(): void {
   assert.equal(
     report.safety.orderSubmissionAllowed,
     false,
+  );
+
+  const revisionCached =
+    service.getReport(
+      [
+        ...primaryRoute,
+        ...unsupportedRoute,
+        distorted,
+        primaryRoute[
+          0
+        ]!,
+      ],
+      NOW +
+        1,
+      31,
+    );
+  const sameRevisionDifferentWrapper =
+    service.getReport(
+      [
+        ...primaryRoute,
+        ...unsupportedRoute,
+        distorted,
+        primaryRoute[
+          0
+        ]!,
+      ],
+      NOW +
+        2,
+      31,
+    );
+
+  assert.strictEqual(
+    sameRevisionDifferentWrapper.routes,
+    revisionCached.routes,
+    "The same settled revision must reuse capital-ranking arrays even when a caller rebuilds its array wrapper.",
+  );
+  assert.equal(
+    sameRevisionDifferentWrapper.generatedAt,
+    NOW +
+      2,
+  );
+
+  const nextRevision =
+    service.getReport(
+      [
+        ...primaryRoute,
+      ],
+      NOW +
+        3,
+      32,
+    );
+
+  assert.notStrictEqual(
+    nextRevision.routes,
+    revisionCached.routes,
+    "A new settled revision must invalidate the ranking immediately.",
   );
 
   console.log(

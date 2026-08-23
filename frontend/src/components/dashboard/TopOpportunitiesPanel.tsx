@@ -14,7 +14,7 @@ export default function TopOpportunitiesPanel({
     opportunities.slice(0, 5);
 
   return (
-    <div className="mb-6 rounded-xl border border-border-default bg-panel p-5">
+    <div className="dashboard-opportunity-console mb-6 rounded-xl border border-border-default bg-panel p-5">
       <div className="mb-5 flex items-center justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.18em] text-text-muted">
@@ -41,7 +41,7 @@ export default function TopOpportunitiesPanel({
         {top.map((opportunity) => (
           <div
             key={`${opportunity.market}-${opportunity.buyExchange}-${opportunity.sellExchange}`}
-            className="rounded-lg border border-border-default bg-panel-light p-4 transition-all hover:border-brand/40"
+            className="dashboard-opportunity-row rounded-lg border border-border-default bg-panel-light p-4 transition-all hover:border-brand/40"
           >
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>

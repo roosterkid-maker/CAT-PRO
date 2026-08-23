@@ -1,5 +1,6 @@
 import {sensitiveDataRedactor} from "../../../core/security/SensitiveDataRedactor";
-import {binanceCredentialsProvider, type BinanceCredentials} from "../../../exchanges/binance/api/BinanceCredentialsProvider";
+import {binanceUsdMCredentialsProvider} from "../../../derivatives/providers/BinanceUsdMCredentialsProvider";
+import type {BinanceCredentials} from "../../../exchanges/binance/api/BinanceCredentialsProvider";
 import {binanceSigner, type BinanceRequestParameters} from "../../../exchanges/binance/api/BinanceSigner";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
 import type {DerivativeOrderApi, DerivativeVenueOrder} from "./DerivativeOrderContract";
@@ -58,7 +59,7 @@ export class DefaultBinanceUsdMOrderPort implements BinanceUsdMOrderPort {
 export class BinanceUsdMOrderApi implements DerivativeOrderApi {
   readonly exchange = "binance";
   constructor(private readonly port: BinanceUsdMOrderPort = new DefaultBinanceUsdMOrderPort(),
-    private readonly credentialsSource: BinanceCredentialsSource = binanceCredentialsProvider) {}
+    private readonly credentialsSource: BinanceCredentialsSource = binanceUsdMCredentialsProvider) {}
 
   async create(request: LiveExecutionRequest): Promise<DerivativeVenueOrder> {
     validateDerivativeRequest(request, this.exchange);

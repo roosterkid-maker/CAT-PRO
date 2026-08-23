@@ -456,6 +456,89 @@ export class ProductionAlertHistoryService {
     );
   }
 
+  resolveInactive(
+    resolutionNote:
+      string,
+
+    onlyCritical = false,
+  ):
+    ProductionAlertHistoryRecord[] {
+    this.capture();
+
+    const normalizedNote =
+      resolutionNote
+        .trim();
+
+    if (
+      !normalizedNote
+    ) {
+      throw new Error(
+        "resolutionNote is required.",
+      );
+    }
+
+    const now =
+      Date.now();
+
+    const resolved:
+      ProductionAlertHistoryRecord[] = [];
+
+    for (
+      const record
+      of this.latest.values()
+    ) {
+      if (
+        record.status ===
+        "RESOLVED"
+      ) {
+        continue;
+      }
+
+      if (
+        record.conditionActive
+      ) {
+        continue;
+      }
+
+      if (
+        onlyCritical &&
+        record.severity !==
+          "CRITICAL"
+      ) {
+        continue;
+      }
+
+      const updated:
+        ProductionAlertHistoryRecord = {
+        ...structuredClone(
+          record,
+        ),
+
+        status:
+          "RESOLVED",
+
+        resolvedAt:
+          now,
+
+        lastStateChangedAt:
+          now,
+
+        resolutionNote:
+          normalizedNote,
+      };
+
+      this.persist(
+        updated,
+      );
+
+      resolved.push(
+        updated,
+      );
+    }
+
+    return resolved;
+  }
+
   getAlert(
     key:
       string,

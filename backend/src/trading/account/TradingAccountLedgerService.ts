@@ -19,6 +19,8 @@ export type TradingAccountLedgerOperation =
   | "RESERVE_CAPITAL"
   | "RELEASE_CAPITAL"
   | "RECORD_PROFIT"
+  | "RECORD_SETTLEMENT_ECONOMICS"
+  | "RECONCILE_PAPER_TDS"
   | "EMERGENCY_STOP_ENABLED"
   | "EMERGENCY_STOP_DISABLED"
   | "RESET_DAILY_METRICS"
@@ -38,6 +40,10 @@ interface TradingAccountLedgerEntry {
     string | null;
 
   amount:
+    number | null;
+
+  /** Optional so pre-V135 append-only records remain readable. */
+  tdsWithheld?:
     number | null;
 
   before:
@@ -117,6 +123,27 @@ export class TradingAccountLedgerService {
     TradingAccountLedgerEntry[] =
     [];
 
+  /**
+   * Append-time IST-day index for read-only daily accounting views.
+   *
+   * The durable ledger grows for the lifetime of the bot. Re-scanning every
+   * historical entry on each BOT dashboard poll used to block the Node event
+   * loop for hundreds of milliseconds once the ledger reached tens of
+   * thousands of records. The index is rebuilt from the same validated
+   * entries during restore and updated atomically with every absorbed entry.
+   */
+  private readonly entriesByDateKey =
+    new Map<
+      string,
+      TradingAccountLedgerEntry[]
+    >();
+
+  private dailyCapitalReservationAttemptsCache: {
+    dateKey: string;
+    entryCount: number;
+    attempts: readonly TradingAccountCapitalReservationAttempt[];
+  } | null = null;
+
   private readonly appliedTransactions =
     new Set<string>();
 
@@ -171,6 +198,9 @@ export class TradingAccountLedgerService {
 
       amount?:
         number | null;
+
+      tdsWithheld?:
+        number | null;
     } = {},
   ): void {
     const transactionId =
@@ -210,6 +240,10 @@ export class TradingAccountLedgerService {
 
       amount:
         options.amount ??
+        null,
+
+      tdsWithheld:
+        options.tdsWithheld ??
         null,
 
       before:
@@ -377,6 +411,21 @@ export class TradingAccountLedgerService {
 
     const dateKey =
       this.toLocalDateKey(now);
+    const dailyEntries =
+      this.entriesByDateKey.get(
+        dateKey,
+      ) ??
+      [];
+
+    if (
+      this.dailyCapitalReservationAttemptsCache?.dateKey ===
+        dateKey &&
+      this.dailyCapitalReservationAttemptsCache.entryCount ===
+        dailyEntries.length
+    ) {
+      return this.dailyCapitalReservationAttemptsCache.attempts;
+    }
+
     const attempts: Array<
       TradingAccountCapitalReservationAttempt & {
         releasedAt: number | null;
@@ -392,9 +441,8 @@ export class TradingAccountLedgerService {
         }
       >();
 
-    for (const entry of this.entries) {
+    for (const entry of dailyEntries) {
       if (
-        this.toLocalDateKey(entry.timestamp) !== dateKey ||
         entry.amount === null ||
         !Number.isFinite(entry.amount) ||
         entry.amount <= 0
@@ -511,7 +559,25 @@ export class TradingAccountLedgerService {
       }
     }
 
-    return attempts.map((attempt) => ({...attempt}));
+    const result =
+      Object.freeze(
+        attempts.map(
+          (attempt) =>
+            Object.freeze({
+              ...attempt,
+            }),
+        ),
+      );
+
+    this.dailyCapitalReservationAttemptsCache = {
+      dateKey,
+      entryCount:
+        dailyEntries.length,
+      attempts:
+        result,
+    };
+
+    return result;
   }
 
   /**
@@ -564,6 +630,9 @@ export class TradingAccountLedgerService {
       amount:
         null,
 
+      tdsWithheld:
+        null,
+
       before:
         structuredClone(
           baseline,
@@ -583,6 +652,12 @@ export class TradingAccountLedgerService {
       0,
       this.entries.length,
     );
+
+    this.entriesByDateKey
+      .clear();
+
+    this.dailyCapitalReservationAttemptsCache =
+      null;
 
     this.appliedTransactions
       .clear();
@@ -731,11 +806,39 @@ export class TradingAccountLedgerService {
       return;
     }
 
-    this.entries.push(
+    const storedEntry =
       structuredClone(
         entry,
-      ),
+      );
+
+    this.entries.push(
+      storedEntry,
     );
+
+    const dateKey =
+      this.toLocalDateKey(
+        storedEntry.timestamp,
+      );
+    const dailyEntries =
+      this.entriesByDateKey.get(
+        dateKey,
+      );
+
+    if (
+      dailyEntries
+    ) {
+      dailyEntries.push(
+        storedEntry,
+      );
+    } else {
+      this.entriesByDateKey.set(
+        dateKey,
+        [storedEntry],
+      );
+    }
+
+    this.dailyCapitalReservationAttemptsCache =
+      null;
 
     if (
       entry.transactionId
@@ -787,6 +890,8 @@ export class TradingAccountLedgerService {
         "RESERVE_CAPITAL",
         "RELEASE_CAPITAL",
         "RECORD_PROFIT",
+        "RECORD_SETTLEMENT_ECONOMICS",
+        "RECONCILE_PAPER_TDS",
         "EMERGENCY_STOP_ENABLED",
         "EMERGENCY_STOP_DISABLED",
         "RESET_DAILY_METRICS",
@@ -820,6 +925,24 @@ export class TradingAccountLedgerService {
         !Number.isFinite(
           value.amount,
         )
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      value.tdsWithheld !==
+        undefined &&
+      value.tdsWithheld !==
+        null &&
+      (
+        typeof value.tdsWithheld !==
+          "number" ||
+        !Number.isFinite(
+          value.tdsWithheld,
+        ) ||
+        value.tdsWithheld <
+          0
       )
     ) {
       return false;
@@ -882,6 +1005,19 @@ export class TradingAccountLedgerService {
         "number" &&
       Number.isFinite(
         value.availableCapital,
+      ) &&
+      (
+        value.paperTdsReceivable ===
+          undefined ||
+        (
+          typeof value.paperTdsReceivable ===
+            "number" &&
+          Number.isFinite(
+            value.paperTdsReceivable,
+          ) &&
+          value.paperTdsReceivable >=
+            0
+        )
       ) &&
       typeof value.todayProfit ===
         "number" &&

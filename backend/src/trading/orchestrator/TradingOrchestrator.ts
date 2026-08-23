@@ -792,7 +792,7 @@ export class TradeOrchestrator {
 
     return (
       opportunityService
-        .getOpportunities()
+        .getLastOpportunities()
         .find(
           (
             item,
