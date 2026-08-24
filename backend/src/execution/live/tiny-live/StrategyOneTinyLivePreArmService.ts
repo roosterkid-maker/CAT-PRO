@@ -15,9 +15,9 @@ import {
 } from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 import type {ArbitrageLiveExecutionResult} from "../../../arbitrage/execution/models/ArbitrageLiveExecutionResult";
 import {
-  STRATEGY_ONE_TINY_LIVE_BASKET_ID,
-  STRATEGY_ONE_TINY_LIVE_BASKET_POLICY,
-  isStrategyOneTinyLiveBasketRoute,
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+  isStrategyOneTinyLiveDynamicRoute,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 import {JsonlSnapshotStore} from "../../../core/persistence/JsonlSnapshotStore";
 import {strategyOneExecutionPolicyService} from "../../../trading/policy/StrategyOneExecutionPolicyService";
@@ -66,7 +66,7 @@ export interface StrategyOneTinyLivePreArmAttempt {
 }
 
 export interface StrategyOneTinyLivePreArmRecord {
-  readonly schemaVersion: "125.0" | "150.0" | "182.0" | "183.0";
+  readonly schemaVersion: "125.0" | "150.0" | "182.0" | "188.0";
   readonly id: string;
   readonly state: StrategyOneTinyLivePreArmState;
   readonly market: string;
@@ -88,8 +88,8 @@ export interface StrategyOneTinyLivePreArmRecord {
   readonly attemptsUsed?: number;
   readonly attempts?: readonly StrategyOneTinyLivePreArmAttempt[];
   readonly nextAttemptNotBefore?: number | null;
-  readonly routeScope?: "EXACT_ROUTE" | "PILOT_BASKET";
-  readonly pilotBasketId?: typeof STRATEGY_ONE_TINY_LIVE_BASKET_ID;
+  readonly routeScope?: "EXACT_ROUTE" | "DYNAMIC_POOL";
+  readonly routePoolId?: typeof STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID;
 }
 
 export interface StrategyOneTinyLivePreArmDependencies {
@@ -141,7 +141,7 @@ export interface StrategyOneTinyLivePreArmRequest {
   readonly durationMinutes?: number;
   readonly maximumAttempts?: 1 | 2 | 10;
   readonly now?: number;
-  readonly pilotBasketId?: string;
+  readonly routePoolId?: string;
 }
 
 const DEFAULT_FILE = resolve(
@@ -219,6 +219,11 @@ export class StrategyOneTinyLivePreArmService {
     readonly outcome: "BLOCKED" | "CLAIMED" | "COMPLETED" | "FAILED_SAFE";
     readonly reason: string;
   } | null = null;
+  private candidatesEvaluated = 0;
+  private preflightBlocks = 0;
+  private refreshesRequested = 0;
+  private refreshesRecovered = 0;
+  private coordinatorStarts = 0;
 
   constructor(
     dependencies: Partial<StrategyOneTinyLivePreArmDependencies> = {},
@@ -239,7 +244,8 @@ export class StrategyOneTinyLivePreArmService {
       this.latest.set(record.id, freeze(clone(record)));
     }
 
-    const active = [...this.latest.values()].filter((record) => record.state === "ARMED");
+    const active = [...this.latest.values()].filter((record) =>
+      record.state === "ARMED");
 
     if (active.length > 1) {
       throw new Error("Multiple durable Strategy #1 Tiny-LIVE pre-arms are active.");
@@ -249,8 +255,8 @@ export class StrategyOneTinyLivePreArmService {
   }
 
   arm(input: StrategyOneTinyLivePreArmRequest): StrategyOneTinyLivePreArmRecord {
-    if (input.pilotBasketId !== undefined) {
-      return this.armBasket(input);
+    if (input.routePoolId !== undefined) {
+      return this.armDynamicPool(input);
     }
 
     const now = input.now ?? this.dependencies.now();
@@ -546,6 +552,13 @@ export class StrategyOneTinyLivePreArmService {
       activeArm,
       triggerInProgress: this.triggerInProgress,
       lastEvaluation: this.lastEvaluation ? clone(this.lastEvaluation) : null,
+      pipelineTelemetry: {
+        candidatesEvaluated: this.candidatesEvaluated,
+        preflightBlocks: this.preflightBlocks,
+        refreshesRequested: this.refreshesRequested,
+        refreshesRecovered: this.refreshesRecovered,
+        coordinatorStarts: this.coordinatorStarts,
+      },
       records,
       actionTimeBookRefresh:
         strategyOneActionTimeBookRefreshService.getDiagnostics(),
@@ -558,7 +571,8 @@ export class StrategyOneTinyLivePreArmService {
         maximumCapitalPerLegInr: 500,
         maximumAttemptsPerArm: MAXIMUM_BATCH_ATTEMPTS,
       },
-      pilotBasket: STRATEGY_ONE_TINY_LIVE_BASKET_POLICY,
+      routePool: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+      pilotBasket: null,
       safety: {
         exactRouteBound: true,
         freshActionTimePreflightRequired: true,
@@ -590,28 +604,32 @@ export class StrategyOneTinyLivePreArmService {
   }
 
   static requiredBasketArmPhrase(): string {
-    return basketArmPhrase();
+    return dynamicPoolArmPhrase();
   }
 
-  private armBasket(
+  static requiredRoutePoolArmPhrase(): string {
+    return dynamicPoolArmPhrase();
+  }
+
+  private armDynamicPool(
     input: StrategyOneTinyLivePreArmRequest,
   ): StrategyOneTinyLivePreArmRecord {
     const now = input.now ?? this.dependencies.now();
     validateTime(now);
     this.expireActiveArm(now);
 
-    const policy = STRATEGY_ONE_TINY_LIVE_BASKET_POLICY;
+    const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
     const durationMinutes = input.durationMinutes ?? policy.durationMinutes;
     const maximumAttempts = input.maximumAttempts ?? policy.maximumAttempts;
     const capitalPerLegInr = this.dependencies.getCapitalPerLegInr();
-    const requiredArmPhrase = basketArmPhrase();
+    const requiredArmPhrase = dynamicPoolArmPhrase();
 
-    if (input.pilotBasketId?.trim() !== policy.id) {
-      throw new Error("Unknown Strategy #1 pilot-basket policy.");
+    if (input.routePoolId?.trim() !== policy.id) {
+      throw new Error("Unknown Strategy #1 dynamic route-pool policy.");
     }
 
     if (!this.dependencies.runtimeGateEnabled()) {
-      throw new Error("Strategy #1 Tiny-LIVE runtime gate is disabled; basket pre-arm was not created.");
+      throw new Error("Strategy #1 Tiny-LIVE runtime gate is disabled; route-pool pre-arm was not created.");
     }
 
     if (this.activeArmId !== null) {
@@ -619,42 +637,42 @@ export class StrategyOneTinyLivePreArmService {
     }
 
     if (durationMinutes !== policy.durationMinutes || maximumAttempts !== policy.maximumAttempts) {
-      throw new Error("The pilot basket is immutable at 10 attempts over 180 minutes.");
+      throw new Error("The dynamic route pool is bounded at 10 attempts over 180 minutes.");
     }
 
     if (capitalPerLegInr !== policy.capitalPerLegInr) {
       throw new Error(
-        `The pilot basket requires the active policy capital to remain exactly ₹${policy.capitalPerLegInr}/leg so venue minimums are not bypassed.`,
+        `The dynamic route pool requires the active policy capital to remain exactly ₹${policy.capitalPerLegInr}/leg so venue minimums are not bypassed.`,
       );
     }
 
     if (input.confirmation.trim() !== requiredArmPhrase) {
-      throw new Error(`Exact basket confirmation is required: ${requiredArmPhrase}`);
+      throw new Error(`Exact route-pool confirmation is required: ${requiredArmPhrase}`);
     }
 
     const action = this.dependencies.getActionDiagnostics(now);
 
     if (action.blockingAuthorityPresent) {
-      throw new Error("An existing Tiny-LIVE authority or unresolved attempt blocks basket pre-arming.");
+      throw new Error("An existing Tiny-LIVE authority or unresolved attempt blocks route-pool pre-arming.");
     }
 
     if (action.attemptsToday + policy.maximumAttempts > action.maximumDailyAttempts) {
-      throw new Error("The 10-attempt basket exceeds the remaining Tiny-LIVE daily attempt cap.");
+      throw new Error("The 10-attempt route pool exceeds the remaining Tiny-LIVE daily attempt cap.");
     }
 
     const expiresAt = now + policy.durationMinutes * 60_000;
     const id = `tiny-live-prearm-${hash({
-      pilotBasketId: policy.id,
+      routePoolId: policy.id,
       capitalPerLegInr,
       maximumAttempts,
       armedAt: now,
       expiresAt,
     }).slice(0, 32)}`;
     const record = freeze({
-      schemaVersion: "183.0" as const,
+      schemaVersion: "188.0" as const,
       id,
       state: "ARMED" as const,
-      market: "PILOT_BASKET",
+      market: "DYNAMIC_POOL",
       buyExchange: "coindcx" as const,
       sellExchange: "binance" as const,
       capitalPerLegInr,
@@ -673,8 +691,8 @@ export class StrategyOneTinyLivePreArmService {
       attemptsUsed: 0,
       attempts: [],
       nextAttemptNotBefore: null,
-      routeScope: "PILOT_BASKET" as const,
-      pilotBasketId: policy.id,
+      routeScope: "DYNAMIC_POOL" as const,
+      routePoolId: policy.id,
     });
 
     this.persist(record);
@@ -693,6 +711,8 @@ export class StrategyOneTinyLivePreArmService {
       return null;
     }
 
+    this.candidatesEvaluated += 1;
+
     let preview: StrategyOneTinyLivePreview;
 
     try {
@@ -710,6 +730,7 @@ export class StrategyOneTinyLivePreArmService {
         actionCandidate,
       )
     ) {
+      this.refreshesRequested += 1;
       let refresh:
         StrategyOneActionTimeBookRefreshResult;
 
@@ -778,6 +799,7 @@ export class StrategyOneTinyLivePreArmService {
 
       actionCandidate =
         refresh.opportunity;
+      this.refreshesRecovered += 1;
 
       try {
         preview =
@@ -872,6 +894,7 @@ export class StrategyOneTinyLivePreArmService {
         throw new Error("Exact one-time action authority was not authorized.");
       }
 
+      this.coordinatorStarts += 1;
       const result = await this.dependencies.execute(currentOpportunity, authorized.id);
       const completedAt = this.dependencies.now();
       const attempt = summarizeAttempt({
@@ -979,6 +1002,7 @@ export class StrategyOneTinyLivePreArmService {
   }
 
   private recordBlocked(opportunityId: string, evaluatedAt: number, reason: string): void {
+    this.preflightBlocks += 1;
     this.nextEvaluationAt = evaluatedAt + BLOCKED_REEVALUATION_INTERVAL_MS;
     this.lastEvaluation = freeze({
       evaluatedAt,
@@ -1052,9 +1076,9 @@ function armAllowsRoute(
     readonly sellExchange: string;
   },
 ): boolean {
-  if (arm.routeScope === "PILOT_BASKET") {
-    return arm.pilotBasketId === STRATEGY_ONE_TINY_LIVE_BASKET_ID &&
-      isStrategyOneTinyLiveBasketRoute(route);
+  if (arm.routeScope === "DYNAMIC_POOL") {
+    return arm.routePoolId === STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID &&
+      isStrategyOneTinyLiveDynamicRoute(route);
   }
 
   return arm.market === normalizeMarket(route.market) &&
@@ -1078,11 +1102,7 @@ function shouldRefreshActionBooks(
 
   if (
     !armAllowsRoute(arm, route) ||
-    !isStrategyOneTinyLiveBasketRoute(route) ||
-    !(
-      (route.buyExchange === "coindcx" && route.sellExchange === "binance") ||
-      (route.buyExchange === "binance" && route.sellExchange === "coindcx")
-    )
+    !isStrategyOneTinyLiveDynamicRoute(route)
   ) {
     return false;
   }
@@ -1149,9 +1169,9 @@ function armPhrase(input: {
   return `ARM ${label} ${input.market} ${input.buyExchange.toUpperCase()} ${input.sellExchange.toUpperCase()} INR${input.capitalPerLegInr} ATTEMPTS${input.maximumAttempts} MINUTES${input.durationMinutes}`;
 }
 
-function basketArmPhrase(): string {
-  const policy = STRATEGY_ONE_TINY_LIVE_BASKET_POLICY;
-  return `ARM PILOT-BASKET SEVEN-COIN INR${policy.capitalPerLegInr} ATTEMPTS${policy.maximumAttempts} MINUTES${policy.durationMinutes}`;
+function dynamicPoolArmPhrase(): string {
+  const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
+  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} ATTEMPTS${policy.maximumAttempts} MINUTES${policy.durationMinutes}`;
 }
 
 function getAttemptsUsed(record: StrategyOneTinyLivePreArmRecord): number {
@@ -1278,11 +1298,11 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
   const legacy = item.schemaVersion === "125.0";
   const batch = item.schemaVersion === "150.0";
   const tenAttemptBatch = item.schemaVersion === "182.0";
-  const basketBatch = item.schemaVersion === "183.0";
+  const dynamicPoolBatch = item.schemaVersion === "188.0";
   const attempts = item.attempts ?? [];
   const attemptsUsed = item.attemptsUsed ?? (legacy ? undefined : 0);
 
-  const exactRouteRecord = item.routeScope !== "PILOT_BASKET" &&
+  const exactRouteRecord = (item.routeScope === undefined || item.routeScope === "EXACT_ROUTE") &&
     typeof item.market === "string" && item.market.endsWith("USDT") &&
     (item.buyExchange === "binance" || item.buyExchange === "bybit" || item.buyExchange === "coindcx") &&
     (item.sellExchange === "binance" || item.sellExchange === "bybit" || item.sellExchange === "coindcx") &&
@@ -1291,17 +1311,17 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
       buyExchange: item.buyExchange,
       sellExchange: item.sellExchange,
     });
-  const basketRecord = basketBatch &&
-    item.routeScope === "PILOT_BASKET" &&
-    item.pilotBasketId === STRATEGY_ONE_TINY_LIVE_BASKET_ID &&
-    item.market === "PILOT_BASKET" &&
+  const dynamicPoolRecord = dynamicPoolBatch &&
+    item.routeScope === "DYNAMIC_POOL" &&
+    item.routePoolId === STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID &&
+    item.market === "DYNAMIC_POOL" &&
     item.buyExchange === "coindcx" &&
     item.sellExchange === "binance";
 
-  return (legacy || batch || tenAttemptBatch || basketBatch) &&
+  return (legacy || batch || tenAttemptBatch || dynamicPoolBatch) &&
     typeof item.id === "string" && item.id.startsWith("tiny-live-prearm-") &&
     states.includes(item.state as StrategyOneTinyLivePreArmState) &&
-    (exactRouteRecord || basketRecord) &&
+    (exactRouteRecord || dynamicPoolRecord) &&
     item.buyExchange !== item.sellExchange &&
     Number.isSafeInteger(item.capitalPerLegInr) &&
     (item.capitalPerLegInr ?? 0) >= 100 &&
@@ -1383,7 +1403,7 @@ function isValidTransition(
     previous.requiredArmPhrase === next.requiredArmPhrase &&
     previous.maximumAttempts === next.maximumAttempts &&
     previous.routeScope === next.routeScope &&
-    previous.pilotBasketId === next.pilotBasketId &&
+    previous.routePoolId === next.routePoolId &&
     previous.schemaVersion === next.schemaVersion &&
     previous.armedAt === next.armedAt &&
     previous.expiresAt === next.expiresAt;
@@ -1394,7 +1414,7 @@ function isValidTransition(
 
   const allowed: Record<StrategyOneTinyLivePreArmState, readonly StrategyOneTinyLivePreArmState[]> = {
     ARMED: ["CLAIMED", "DISARMED", "EXPIRED"],
-    CLAIMED: next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "183.0"
+    CLAIMED: next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "188.0"
       ? ["ARMED", "COMPLETED", "FAILED_SAFE"]
       : ["COMPLETED", "FAILED_SAFE"],
     COMPLETED: [],
@@ -1416,7 +1436,7 @@ function isValidTransition(
   }
 
   if (
-    (next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "183.0") &&
+    (next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "188.0") &&
     previous.state === "CLAIMED"
   ) {
     const appended = next.attempts?.[next.attempts.length - 1] ?? null;

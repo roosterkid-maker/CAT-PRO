@@ -168,6 +168,7 @@ export function FundingRatePaperClosurePanel() {
 
         <div className="xl:col-span-2 flex flex-wrap gap-2 border-t border-border-default pt-4 text-[10px] font-semibold uppercase tracking-[0.1em] text-text-muted">
           <Safety label="Matched long / short only" passed={report.safety.matchedLongShortOnly} />
+          <Safety label="Intra: spot long / perp short only" passed={report.safety.intraRouteLongSpotShortPerpetualOnly === true} />
           <Safety label="Funding not guaranteed" passed={report.safety.expectedFundingNotGuaranteed} />
           <Safety label="Rate persistence required"
             passed={report.safety.projectedFundingRatePersistenceRequired} />

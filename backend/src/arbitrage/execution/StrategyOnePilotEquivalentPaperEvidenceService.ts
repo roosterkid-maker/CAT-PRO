@@ -454,7 +454,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     observedAt: number,
   ): void {
     if (!isStrategyOneTinyLiveBasketRoute(book)) {
-      throw new Error("Strategy #1 pilot timing book is outside the immutable basket.");
+      throw new Error("Strategy #1 pilot timing book is outside the dynamic USDT route pool.");
     }
     const market = normalizeMarket(book.market);
     const buyExchange = normalizePilotExchange(book.buyExchange);

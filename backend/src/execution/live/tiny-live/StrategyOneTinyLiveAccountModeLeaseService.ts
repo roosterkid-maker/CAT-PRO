@@ -14,7 +14,7 @@ import {
   isExactStrategyOnePilotRoute,
 } from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 import {
-  STRATEGY_ONE_TINY_LIVE_BASKET_ID,
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
 import {
@@ -52,7 +52,7 @@ export type StrategyOneTinyLiveAccountModeLeaseState =
   | "RESTORE_FAILED";
 
 export interface StrategyOneTinyLiveAccountModeLeaseRecord {
-  readonly schemaVersion: "151.0" | "182.1" | "183.1";
+  readonly schemaVersion: "151.0" | "182.1" | "188.1";
   readonly id: string;
   readonly state: StrategyOneTinyLiveAccountModeLeaseState;
   readonly preArmId: string;
@@ -74,8 +74,8 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   readonly automaticOrderAuthorityAllowed: false;
   readonly automaticTransferAllowed: false;
   readonly withdrawalAllowed: false;
-  readonly routeScope?: "EXACT_ROUTE" | "PILOT_BASKET";
-  readonly pilotBasketId?: typeof STRATEGY_ONE_TINY_LIVE_BASKET_ID;
+  readonly routeScope?: "EXACT_ROUTE" | "DYNAMIC_POOL";
+  readonly routePoolId?: typeof STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID;
 }
 
 export interface StrategyOneTinyLiveAccountModeLeaseDependencies {
@@ -457,9 +457,9 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
       );
     }
 
-    const basketArm = arm.routeScope === "PILOT_BASKET" &&
-      arm.pilotBasketId === STRATEGY_ONE_TINY_LIVE_BASKET_ID;
-    const calibration = basketArm
+    const dynamicPoolArm = arm.routeScope === "DYNAMIC_POOL" &&
+      arm.routePoolId === STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID;
+    const calibration = dynamicPoolArm
       ? null
       : this.dependencies
           .getCalibration({
@@ -470,7 +470,7 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
           });
 
     if (
-      !basketArm &&
+      !dynamicPoolArm &&
       !calibration
     ) {
       throw new Error(
@@ -478,7 +478,7 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
       );
     }
 
-    const expiresAt = basketArm
+    const expiresAt = dynamicPoolArm
       ? arm.expiresAt
       : Math.min(arm.expiresAt, calibration?.expiresAt ?? 0);
 
@@ -497,7 +497,7 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
         preArmId:
           arm.id,
         timingCalibrationId:
-          basketArm ? `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_BASKET_ID}` : calibration?.id,
+          dynamicPoolArm ? `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID}` : calibration?.id,
         requestedAt:
           now,
         expiresAt,
@@ -509,8 +509,8 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
     const activating =
       freeze({
         schemaVersion:
-          basketArm
-            ? "183.1" as const
+          dynamicPoolArm
+            ? "188.1" as const
             : arm.maximumAttempts === 10
             ? "182.1" as const
             : "151.0" as const,
@@ -534,7 +534,7 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
         leasedAccountMode:
           "LIVE" as const,
         timingCalibrationId:
-          basketArm ? `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_BASKET_ID}` : calibration?.id ?? "",
+          dynamicPoolArm ? `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID}` : calibration?.id ?? "",
         requiredActivationPhrase,
         requiredRestorePhrase,
         requestedAt:
@@ -554,8 +554,8 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
           false as const,
         routeScope:
           arm.routeScope ?? "EXACT_ROUTE" as const,
-        pilotBasketId:
-          arm.pilotBasketId,
+        routePoolId:
+          arm.routePoolId,
       });
 
     this.persist(
@@ -1460,8 +1460,8 @@ function isLeaseRecord(
 
   const legacy = item.schemaVersion === "151.0";
   const tenAttempt = item.schemaVersion === "182.1";
-  const basket = item.schemaVersion === "183.1";
-  const exactRouteRecord = item.routeScope !== "PILOT_BASKET" &&
+  const dynamicPool = item.schemaVersion === "188.1";
+  const exactRouteRecord = (item.routeScope === undefined || item.routeScope === "EXACT_ROUTE") &&
     typeof item.market === "string" && item.market.endsWith("USDT") &&
     typeof item.buyExchange === "string" &&
     typeof item.sellExchange === "string" &&
@@ -1470,15 +1470,15 @@ function isLeaseRecord(
       buyExchange: item.buyExchange,
       sellExchange: item.sellExchange,
     });
-  const basketRecord = basket &&
-    item.routeScope === "PILOT_BASKET" &&
-    item.pilotBasketId === STRATEGY_ONE_TINY_LIVE_BASKET_ID &&
-    item.market === "PILOT_BASKET" &&
+  const dynamicPoolRecord = dynamicPool &&
+    item.routeScope === "DYNAMIC_POOL" &&
+    item.routePoolId === STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID &&
+    item.market === "DYNAMIC_POOL" &&
     item.buyExchange === "coindcx" &&
     item.sellExchange === "binance" &&
-    item.timingCalibrationId === `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_BASKET_ID}`;
+    item.timingCalibrationId === `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID}`;
 
-  return (legacy || tenAttempt || basket) &&
+  return (legacy || tenAttempt || dynamicPool) &&
     typeof item.id ===
       "string" &&
     /^tiny-live-account-lease-[a-f0-9]{32}$/u.test(
@@ -1492,7 +1492,7 @@ function isLeaseRecord(
     /^tiny-live-prearm-[a-f0-9]{32}$/u.test(
       item.preArmId,
     ) &&
-    (exactRouteRecord || basketRecord) &&
+    (exactRouteRecord || dynamicPoolRecord) &&
     item.buyExchange !== item.sellExchange &&
     Number.isSafeInteger(
       item.capitalPerLegInr,
@@ -1580,8 +1580,8 @@ function isValidTransition(
       next.maximumAttempts &&
     previous.routeScope ===
       next.routeScope &&
-    previous.pilotBasketId ===
-      next.pilotBasketId &&
+    previous.routePoolId ===
+      next.routePoolId &&
     previous.priorAccountMode ===
       next.priorAccountMode &&
     previous.leasedAccountMode ===

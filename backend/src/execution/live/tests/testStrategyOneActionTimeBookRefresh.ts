@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   await testExactRejectionEvidenceIsPreserved();
 
   console.log(
-    "V183 action-time book refresh passed: approved CoinDCX/Binance basket routes use parallel public reads only on stale fallback, validated refreshed books must produce a new EXECUTE opportunity, failures stay blocked, and no threshold/order/fund authority exists.",
+    "V188 action-time book refresh passed: all approved dynamic-pool venues use parallel public reads only on stale fallback, validated refreshed books must produce a new EXECUTE opportunity, failures stay blocked, and no threshold/order/fund authority exists.",
   );
 }
 
@@ -547,9 +547,9 @@ async function testParallelRefreshAndFreshOpportunityReevaluation(): Promise<voi
         buyExchange:
           "binance",
         sellExchange:
-          "bybit",
+          "coinswitch",
       }),
-    /restricted to approved pilot-basket routes/iu,
+    /restricted to approved dynamic-pool routes/iu,
   );
 }
 

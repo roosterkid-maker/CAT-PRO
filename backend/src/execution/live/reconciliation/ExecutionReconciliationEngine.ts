@@ -69,7 +69,22 @@ export class ExecutionReconciliationEngine {
     this.timer =
       setInterval(
         () => {
-          void this.scan();
+          void this.scan()
+            .catch(
+              (
+                error:
+                  unknown,
+              ) => {
+                const message =
+                  error instanceof Error
+                    ? error.message
+                    : "Unknown reconciliation scan error.";
+
+                console.error(
+                  `[Reconciliation] Scan failed closed without stopping the runtime: ${message}`,
+                );
+              },
+            );
         },
         ExecutionReconciliationEngine
           .SCAN_INTERVAL_MS,
@@ -132,9 +147,28 @@ export class ExecutionReconciliationEngine {
         const order
         of orders
       ) {
-        await this.reconcileOrder(
-          order.id,
-        );
+        try {
+          await this.reconcileOrder(
+            order.id,
+          );
+        } catch (
+          error:
+            unknown
+        ) {
+          if (
+            error instanceof Error &&
+            error.message ===
+              "Order lifecycle record not found."
+          ) {
+            console.warn(
+              `[Reconciliation] Skipped lifecycle record removed during the bounded-history scan: ${order.id}`,
+            );
+
+            continue;
+          }
+
+          throw error;
+        }
 
         checked +=
           1;

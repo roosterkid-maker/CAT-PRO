@@ -59,7 +59,42 @@ function MatrixCursor() {
       smokeContext.fillRect(0, 0, 72, 72);
     }
 
-    let particles: MatrixCursorParticle[] = [];
+    const createHeadSprite = (glowRadius: number, coreRadius: number) => {
+      const size = glowRadius * 2 + 4;
+      const sprite = document.createElement("canvas");
+      sprite.width = size;
+      sprite.height = size;
+      const spriteContext = sprite.getContext("2d");
+      if (!spriteContext) return sprite;
+
+      const center = size / 2;
+      const glow = spriteContext.createRadialGradient(
+        center,
+        center,
+        0,
+        center,
+        center,
+        glowRadius,
+      );
+      glow.addColorStop(0, "rgba(236, 255, 242, 1)");
+      glow.addColorStop(0.1, "rgba(111, 255, 157, 0.98)");
+      glow.addColorStop(0.3, "rgba(28, 255, 103, 0.58)");
+      glow.addColorStop(0.62, "rgba(4, 178, 62, 0.2)");
+      glow.addColorStop(1, "rgba(0, 42, 14, 0)");
+      spriteContext.fillStyle = glow;
+      spriteContext.fillRect(0, 0, size, size);
+      spriteContext.fillStyle = "#d9ffe5";
+      spriteContext.beginPath();
+      spriteContext.arc(center, center, coreRadius, 0, Math.PI * 2);
+      spriteContext.fill();
+      return sprite;
+    };
+
+    const normalHeadSprite = createHeadSprite(16, 3.2);
+    const interactiveHeadSprite = createHeadSprite(20, 4.2);
+    const pressedHeadSprite = createHeadSprite(16, 2.2);
+
+    const particles: MatrixCursorParticle[] = [];
     const pointer = {
       x: -64,
       y: -64,
@@ -85,31 +120,17 @@ function MatrixCursor() {
         return;
       }
 
-      const coreRadius = pointer.pressed ? 2.2 : pointer.interactive ? 4.2 : 3.2;
-      const glowRadius = pointer.interactive ? 20 : 16;
-      const glow = context.createRadialGradient(
-        pointer.x,
-        pointer.y,
-        0,
-        pointer.x,
-        pointer.y,
-        glowRadius,
-      );
-      glow.addColorStop(0, "rgba(236, 255, 242, 1)");
-      glow.addColorStop(0.1, "rgba(111, 255, 157, 0.98)");
-      glow.addColorStop(0.3, "rgba(28, 255, 103, 0.58)");
-      glow.addColorStop(0.62, "rgba(4, 178, 62, 0.2)");
-      glow.addColorStop(1, "rgba(0, 42, 14, 0)");
-
+      const sprite = pointer.pressed
+        ? pressedHeadSprite
+        : pointer.interactive
+          ? interactiveHeadSprite
+          : normalHeadSprite;
       context.globalAlpha = 1;
-      context.fillStyle = glow;
-      context.beginPath();
-      context.arc(pointer.x, pointer.y, glowRadius, 0, Math.PI * 2);
-      context.fill();
-      context.fillStyle = "#d9ffe5";
-      context.beginPath();
-      context.arc(pointer.x, pointer.y, coreRadius, 0, Math.PI * 2);
-      context.fill();
+      context.drawImage(
+        sprite,
+        pointer.x - sprite.width / 2,
+        pointer.y - sprite.height / 2,
+      );
     };
 
     const render = (now: number) => {
@@ -119,10 +140,12 @@ function MatrixCursor() {
       context.clearRect(0, 0, window.innerWidth, window.innerHeight);
       context.globalCompositeOperation = "lighter";
 
-      particles = particles.filter((particle) => {
+      let liveParticleCount = 0;
+      for (let index = 0; index < particles.length; index += 1) {
+        const particle = particles[index];
         particle.lifeMs -= elapsedMs;
         if (particle.lifeMs <= 0) {
-          return false;
+          continue;
         }
 
         particle.x += particle.velocityX * frameScale;
@@ -140,8 +163,10 @@ function MatrixCursor() {
           particle.size,
           particle.size,
         );
-        return true;
-      });
+        particles[liveParticleCount] = particle;
+        liveParticleCount += 1;
+      }
+      particles.length = liveParticleCount;
 
       drawHead();
       context.globalAlpha = 1;
@@ -225,7 +250,7 @@ function MatrixCursor() {
       pointer.visible = false;
       pointer.previousX = -64;
       pointer.previousY = -64;
-      particles = [];
+      particles.length = 0;
       canvas.dataset.visible = "false";
       window.cancelAnimationFrame(animationFrame);
       animationFrame = 0;

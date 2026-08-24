@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 
 import {
@@ -23,6 +24,10 @@ import {
 import type {
   StrategyOnePolicyActivationGuard,
 } from "../../../trading/policy/StrategyOneExecutionPolicyService";
+
+import {
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+} from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
 import {
   StrategyOneTinyLiveAccountModeLeaseService,
@@ -72,7 +77,7 @@ function main(): void {
         "ten-attempt.jsonl",
       ),
     );
-    testBasketLease(join(directory, "basket.jsonl"));
+    testDynamicRoutePoolLease(join(directory, "route-pool.jsonl"));
   } finally {
     rmSync(
       directory,
@@ -90,20 +95,20 @@ function main(): void {
   );
 }
 
-function testBasketLease(filePath: string): void {
+function testDynamicRoutePoolLease(filePath: string): void {
   let account = accountFixture();
   const arm: StrategyOneTinyLivePreArmRecord = {
     ...armFixture(),
-    schemaVersion: "183.0",
-    market: "PILOT_BASKET",
+    schemaVersion: "188.0",
+    market: "DYNAMIC_POOL",
     buyExchange: "coindcx",
     sellExchange: "binance",
     requiredArmPhrase:
-      "ARM PILOT-BASKET SEVEN-COIN INR500 ATTEMPTS10 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 ATTEMPTS10 MINUTES180",
     expiresAt: NOW + 180 * 60_000,
     maximumAttempts: 10,
-    routeScope: "PILOT_BASKET",
-    pilotBasketId: "strategy-one-seven-coin-inventory-v1",
+    routeScope: "DYNAMIC_POOL",
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
   };
   const service = new StrategyOneTinyLiveAccountModeLeaseService({
     persistenceFilePath: filePath,
@@ -124,7 +129,7 @@ function testBasketLease(filePath: string): void {
         blockingAuthorityPresent: false,
       }),
       getCalibration: () => {
-        throw new Error("Basket activation must defer exact calibration to each attempt.");
+        throw new Error("Dynamic-pool activation must defer exact calibration to each attempt.");
       },
       now: () => NOW,
     },
@@ -135,12 +140,13 @@ function testBasketLease(filePath: string): void {
     NOW,
   );
 
-  assert.equal(active.schemaVersion, "183.1");
-  assert.equal(active.routeScope, "PILOT_BASKET");
+  assert.equal(active.schemaVersion, "188.1");
+  assert.equal(active.routeScope, "DYNAMIC_POOL");
+  assert.equal(active.routePoolId, STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID);
   assert.equal(active.maximumAttempts, 10);
   assert.equal(
     active.timingCalibrationId,
-    "PER_ATTEMPT:strategy-one-seven-coin-inventory-v1",
+    `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID}`,
   );
   assert.equal(active.expiresAt, arm.expiresAt);
   assert.equal(active.automaticOrderAuthorityAllowed, false);
@@ -148,9 +154,38 @@ function testBasketLease(filePath: string): void {
   assert.equal(active.withdrawalAllowed, false);
   assert.equal(account.mode, "LIVE");
 
+  verifyRetiredFixedBasketLeaseIsNotRestored(filePath);
+
   const restored = service.restore(active.id, active.requiredRestorePhrase, NOW + 1);
   assert.equal(restored.state, "RESTORED");
   assert.equal(account.mode, "PAPER");
+}
+
+function verifyRetiredFixedBasketLeaseIsNotRestored(
+  currentFilePath: string,
+): void {
+  const retiredFilePath = `${currentFilePath}.retired`;
+  const envelope = JSON.parse(
+    readFileSync(currentFilePath, "utf8").trim().split(/\r?\n/u)[0],
+  ) as {payload: Record<string, unknown>};
+
+  envelope.payload.schemaVersion = "183.1";
+  envelope.payload.routeScope = "PILOT_BASKET";
+  envelope.payload.pilotBasketId = "strategy-one-seven-coin-inventory-v1";
+  delete envelope.payload.routePoolId;
+  writeFileSync(retiredFilePath, `${JSON.stringify(envelope)}\n`, "utf8");
+
+  const restarted = new StrategyOneTinyLiveAccountModeLeaseService({
+    persistenceFilePath: retiredFilePath,
+    dependencies: {now: () => NOW},
+  });
+
+  assert.equal(
+    restarted.getDiagnostics().activeLease,
+    null,
+    "A retired fixed-basket V183 lease must never be restored after restart.",
+  );
+  assert.equal(restarted.getDiagnostics().records.length, 0);
 }
 
 function testTenAttemptLease(filePath: string): void {

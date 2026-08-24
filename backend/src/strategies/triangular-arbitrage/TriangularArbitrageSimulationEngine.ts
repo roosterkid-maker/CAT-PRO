@@ -130,9 +130,15 @@ export class TriangularArbitrageSimulationEngine {
   evaluate(snapshot: DynamicOpportunityDiscoverySnapshot, configuration: TriangularArbitrageConfiguration, now = Date.now()): TriangularArbitrageSimulationSnapshot {
     const startedAt = performance.now();
     const simulations = configuration.enabled
-      ? snapshot.triangularPaths.slice(0, configuration.maximumSignalsPerSnapshot * 10)
+      ? [...snapshot.triangularPaths]
+          .sort((first, second) =>
+            second.referenceGrossMultiplier - first.referenceGrossMultiplier ||
+            first.id.localeCompare(second.id),
+          )
+          .slice(0, configuration.maximumSignalsPerSnapshot * 10)
           .map((path) => this.evaluatePath(path, configuration, now, snapshot.generatedAt))
       : [];
+    simulations.sort(compareSimulationsByExpectedNet);
     return immutableClone({
       generatedAt: now,
       sourceSnapshotGeneratedAt: snapshot.generatedAt,
@@ -330,6 +336,19 @@ export class TriangularArbitrageSimulationEngine {
     return null;
   }
   private quantizeDown(value: number, increment: number): number { return Math.floor((value + Number.EPSILON) / increment) * increment; }
+}
+
+function compareSimulationsByExpectedNet(
+  first: TriangularArbitragePathSimulation,
+  second: TriangularArbitragePathSimulation,
+): number {
+  return Number(second.status === "QUALIFIED") - Number(first.status === "QUALIFIED") ||
+    (second.stressNetProfitPercent ?? Number.NEGATIVE_INFINITY) -
+      (first.stressNetProfitPercent ?? Number.NEGATIVE_INFINITY) ||
+    (second.expectedNetProfitPercent ?? Number.NEGATIVE_INFINITY) -
+      (first.expectedNetProfitPercent ?? Number.NEGATIVE_INFINITY) ||
+    second.referenceGrossMultiplier - first.referenceGrossMultiplier ||
+    first.pathId.localeCompare(second.pathId);
 }
 
 function normalize(value: number): number { return Number(value.toFixed(8)); }

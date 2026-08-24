@@ -685,8 +685,8 @@ router.post(
           : request.body?.maximumAttempts === 2
             ? 2
             : 1,
-        pilotBasketId: typeof request.body?.pilotBasketId === "string"
-          ? request.body.pilotBasketId
+        routePoolId: typeof request.body?.routePoolId === "string"
+          ? request.body.routePoolId
           : undefined,
       });
 

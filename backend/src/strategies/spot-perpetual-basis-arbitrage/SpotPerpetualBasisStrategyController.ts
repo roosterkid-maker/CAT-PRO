@@ -227,6 +227,13 @@ implements StrategyController {
         .filter((assessment) =>
           assessment.status === "QUALIFIED" && assessment.evidence !== null,
         )
+        .sort((first, second) =>
+          (second.economics?.expectedNetPercent ?? Number.NEGATIVE_INFINITY) -
+            (first.economics?.expectedNetPercent ?? Number.NEGATIVE_INFINITY) ||
+          (second.economics?.expectedNetQuote ?? Number.NEGATIVE_INFINITY) -
+            (first.economics?.expectedNetQuote ?? Number.NEGATIVE_INFINITY) ||
+          first.id.localeCompare(second.id),
+        )
         .slice(0, this.configuration.maximumSignalsPerSnapshot)
         .map((assessment) => immutableStrategySignal({
           id: `${SPOT_PERPETUAL_BASIS_ARBITRAGE_STRATEGY_ID}:${assessment.id}`,

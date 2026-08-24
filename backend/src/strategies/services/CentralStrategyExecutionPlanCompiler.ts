@@ -179,13 +179,19 @@ function compileSignal(signal: StrategySignal): Compilation {
       };
 
     case "FUNDING_RATE_ARBITRAGE_SHADOW_OPPORTUNITY": {
-      const fundingSchedule = compileFundingSchedule(signal.evidence);
-      const finalFundingWindow = fundingSchedule[fundingSchedule.length - 1]!;
+      const fundingLegSchedules = compileFundingLegSchedules(signal.evidence);
+      const fundingSchedule = compileFundingSchedule(fundingLegSchedules);
+      const finalFundingTimestamp = Math.max(
+        ...fundingLegSchedules.longTimestamps,
+        ...fundingLegSchedules.shortTimestamps,
+      );
+      const intraSpotPerpetual = signal.evidence.routeKind === "INTRA_SPOT_PERPETUAL" ||
+        signal.evidence.longProduct === "SPOT";
       return {
-        family: "PERPETUAL_TWO_VENUE",
+        family: intraSpotPerpetual ? "SPOT_PERPETUAL" : "PERPETUAL_TWO_VENUE",
         pattern: "PARALLEL_TWO_LEG",
         legs: [
-          leg(signal.id, 1, signal.evidence.longExchange, "PERPETUAL", signal.evidence.market, "BUY", "MARKET", signal.evidence.quantity, signal.evidence.longEntryVwap, "PARALLEL"),
+          leg(signal.id, 1, signal.evidence.longExchange, intraSpotPerpetual ? "SPOT" : "PERPETUAL", signal.evidence.market, "BUY", "MARKET", signal.evidence.quantity, signal.evidence.longEntryVwap, "PARALLEL"),
           leg(signal.id, 2, signal.evidence.shortExchange, "PERPETUAL", signal.evidence.market, "SELL", "MARKET", signal.evidence.quantity, signal.evidence.shortEntryVwap, "PARALLEL"),
         ],
         modeledNetValue: signal.evidence.expectedNetQuote,
@@ -194,12 +200,10 @@ function compileSignal(signal: StrategySignal): Compilation {
         settlementPolicy: {
           kind: "FUNDING_CAPTURE_THEN_EXIT",
           lifecycleOwner: "CENTRAL_SHARED_ORCHESTRATOR",
-          notBefore: Math.max(
-            finalFundingWindow.longTimestamp,
-            finalFundingWindow.shortTimestamp,
-          ) + 60_000,
+          notBefore: finalFundingTimestamp + 60_000,
           fundingTimestamps: [signal.evidence.nextFundingTimeLong, signal.evidence.nextFundingTimeShort],
-          fundingSchedule,
+          ...(fundingSchedule ? {fundingSchedule} : {}),
+          fundingLegSchedules,
           requiresFundingEvidence: true,
           forcedTimeExitAllowed: false,
         },
@@ -337,6 +341,7 @@ function validateSettlementPolicy(policy: CentralStrategySettlementPolicy): void
     case "FUNDING_CAPTURE_THEN_EXIT":
       if (!Number.isSafeInteger(policy.notBefore) || policy.notBefore <= 0 || policy.fundingTimestamps.length !== 2 ||
           policy.fundingTimestamps.some((item) => !Number.isSafeInteger(item) || item <= 0) ||
+          invalidFundingLegSchedules(policy) ||
           (policy.fundingSchedule !== undefined && (
             policy.fundingSchedule.length === 0 || policy.fundingSchedule.length > 6 ||
             policy.fundingSchedule.some((item, index) =>
@@ -369,11 +374,40 @@ function validateSettlementPolicy(policy: CentralStrategySettlementPolicy): void
   }
 }
 
+function invalidFundingLegSchedules(
+  policy: Extract<CentralStrategySettlementPolicy, {kind: "FUNDING_CAPTURE_THEN_EXIT"}>,
+): boolean {
+  const schedules = policy.fundingLegSchedules;
+  if (schedules === undefined) return false;
+  const combined = [...schedules.longTimestamps, ...schedules.shortTimestamps];
+  const invalidLeg = (timestamps: readonly number[]) =>
+    timestamps.length > 6 || timestamps.some((timestamp, index) =>
+      !Number.isSafeInteger(timestamp) || timestamp <= 0 ||
+      (index > 0 && timestamp <= timestamps[index - 1]!),
+    );
+  return combined.length === 0 || invalidLeg(schedules.longTimestamps) ||
+    invalidLeg(schedules.shortTimestamps) || policy.notBefore <= Math.max(...combined);
+}
+
 function compileFundingSchedule(
+  schedules: {
+    readonly longTimestamps: readonly number[];
+    readonly shortTimestamps: readonly number[];
+  },
+): readonly {readonly longTimestamp: number; readonly shortTimestamp: number}[] | null {
+  if (schedules.longTimestamps.length !== schedules.shortTimestamps.length ||
+      schedules.longTimestamps.length === 0) return null;
+  return schedules.longTimestamps.map((longTimestamp, index) => ({
+    longTimestamp,
+    shortTimestamp: schedules.shortTimestamps[index]!,
+  }));
+}
+
+function compileFundingLegSchedules(
   evidence: Extract<StrategySignal, {
     kind: "FUNDING_RATE_ARBITRAGE_SHADOW_OPPORTUNITY";
   }>["evidence"],
-): readonly {readonly longTimestamp: number; readonly shortTimestamp: number}[] {
+): {readonly longTimestamps: readonly number[]; readonly shortTimestamps: readonly number[]} {
   // The fallback preserves replay compatibility for V28/V70 signals persisted
   // before bounded multi-period funding carry evidence was introduced.
   const periods = Number.isSafeInteger(evidence.modeledFundingPeriods) &&
@@ -383,14 +417,27 @@ function compileFundingSchedule(
   if (periods > 6) {
     throw new Error("Funding settlement policy cannot exceed six funding periods.");
   }
-  const intervalMs = periods === 1 ? 0 : evidence.fundingIntervalMinutes * 60_000;
-  if (periods > 1 && (!Number.isSafeInteger(intervalMs) || intervalMs <= 0)) {
+  const longPeriods = evidence.modeledLongFundingPeriods ?? periods;
+  const shortPeriods = evidence.modeledShortFundingPeriods ?? periods;
+  if (!Number.isSafeInteger(longPeriods) || !Number.isSafeInteger(shortPeriods) ||
+      longPeriods < 0 || shortPeriods < 0 || longPeriods > 6 || shortPeriods > 6 ||
+      longPeriods + shortPeriods === 0) {
+    throw new Error("Funding settlement policy has invalid per-leg period counts.");
+  }
+  const longIntervalMs = (evidence.longFundingIntervalMinutes ?? evidence.fundingIntervalMinutes) * 60_000;
+  const shortIntervalMs = (evidence.shortFundingIntervalMinutes ?? evidence.fundingIntervalMinutes) * 60_000;
+  if ((longPeriods > 1 && (!Number.isSafeInteger(longIntervalMs) || longIntervalMs <= 0)) ||
+      (shortPeriods > 1 && (!Number.isSafeInteger(shortIntervalMs) || shortIntervalMs <= 0))) {
     throw new Error("Multi-period funding settlement requires a positive interval.");
   }
-  return Array.from({length: periods}, (_, index) => ({
-    longTimestamp: evidence.nextFundingTimeLong + index * intervalMs,
-    shortTimestamp: evidence.nextFundingTimeShort + index * intervalMs,
-  }));
+  return {
+    longTimestamps: Array.from({length: longPeriods}, (_, index) => index === 0
+      ? evidence.nextFundingTimeLong
+      : evidence.nextFundingTimeLong + index * longIntervalMs),
+    shortTimestamps: Array.from({length: shortPeriods}, (_, index) => index === 0
+      ? evidence.nextFundingTimeShort
+      : evidence.nextFundingTimeShort + index * shortIntervalMs),
+  };
 }
 
 function deepFreeze<T>(value: T): T {

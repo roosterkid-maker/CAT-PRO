@@ -10,10 +10,8 @@ export interface StrategyOneTinyLiveBasketRoute {
 }
 
 /**
- * Read-only top-of-book generation captured for one immutable pilot route.
- * It carries no prices, economics, balances or order authority; its only
- * purpose is to let timing calibration observe every configured route even
- * while that route has no positive arbitrage spread.
+ * Read-only top-of-book generation captured for one eligible dynamic route.
+ * It carries no prices, economics, balances or order authority.
  */
 export interface StrategyOneTinyLiveBasketBookObservation
   extends StrategyOneTinyLiveBasketRoute {
@@ -21,84 +19,62 @@ export interface StrategyOneTinyLiveBasketBookObservation
   readonly sellTimestamp: number;
 }
 
-export interface StrategyOneTinyLiveInventoryTarget {
-  readonly exchange: StrategyOneTinyLiveBasketExchange;
-  readonly asset: string;
-  readonly targetNotionalInr: number;
-}
-
-export const STRATEGY_ONE_TINY_LIVE_BASKET_ID =
-  "strategy-one-seven-coin-inventory-v1" as const;
-
-const ROUTES: readonly StrategyOneTinyLiveBasketRoute[] = [
-  {market: "COTIUSDT", buyExchange: "coindcx", sellExchange: "binance"},
-  {market: "BBUSDT", buyExchange: "coindcx", sellExchange: "binance"},
-  {market: "BBUSDT", buyExchange: "binance", sellExchange: "coindcx"},
-  {market: "BBUSDT", buyExchange: "bybit", sellExchange: "coindcx"},
-  {market: "HEMIUSDT", buyExchange: "coindcx", sellExchange: "binance"},
-  {market: "HEMIUSDT", buyExchange: "binance", sellExchange: "coindcx"},
-  {market: "TREEUSDT", buyExchange: "bybit", sellExchange: "coindcx"},
-  {market: "NEXOUSDT", buyExchange: "binance", sellExchange: "coindcx"},
-  {market: "NEXOUSDT", buyExchange: "bybit", sellExchange: "coindcx"},
-  {market: "PYBOBOUSDT", buyExchange: "coindcx", sellExchange: "bybit"},
-  {market: "GPSUSDT", buyExchange: "coindcx", sellExchange: "bybit"},
-] as const;
-
-const INVENTORY: readonly StrategyOneTinyLiveInventoryTarget[] = [
-  {exchange: "binance", asset: "COTI", targetNotionalInr: 1_000},
-  {exchange: "binance", asset: "BB", targetNotionalInr: 500},
-  {exchange: "binance", asset: "HEMI", targetNotionalInr: 500},
-  {exchange: "coindcx", asset: "BB", targetNotionalInr: 500},
-  {exchange: "coindcx", asset: "TREE", targetNotionalInr: 500},
-  {exchange: "coindcx", asset: "HEMI", targetNotionalInr: 500},
-  {exchange: "coindcx", asset: "NEXO", targetNotionalInr: 500},
-  {exchange: "bybit", asset: "PYBOBO", targetNotionalInr: 500},
-  {exchange: "bybit", asset: "GPS", targetNotionalInr: 500},
-] as const;
-
-const ROUTE_KEYS = new Set(
-  ROUTES.map((route) => strategyOneTinyLiveBasketRouteKey(route)),
-);
+export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID =
+  "strategy-one-dynamic-usdt-route-pool-v1" as const;
 
 /**
- * Immutable, report-driven boundary for the first multi-market Strategy #1
- * pilot. Inventory targets describe pre-positioned SELL inventory only. They
- * never authorize a transfer, withdrawal or order, and quote-side funding is
- * still proven independently at action time.
+ * Dynamic Strategy #1 Tiny-LIVE boundary.
+ *
+ * Markets are deliberately not pinned. A route enters the pool only while it
+ * is a current USDT spot direction between two audited venues. Existing
+ * evidence, action-time inventory, order rules, fees, depth, freshness,
+ * calibration and last-look gates still run for the exact route. This policy
+ * grants no order, transfer or withdrawal authority.
  */
-export const STRATEGY_ONE_TINY_LIVE_BASKET_POLICY = deepFreeze({
-  schemaVersion: "183.0" as const,
-  id: STRATEGY_ONE_TINY_LIVE_BASKET_ID,
-  label: "Seven-coin / three-exchange controlled pilot",
-  markets: [
-    "COTIUSDT",
-    "BBUSDT",
-    "HEMIUSDT",
-    "TREEUSDT",
-    "NEXOUSDT",
-    "PYBOBOUSDT",
-    "GPSUSDT",
-  ] as const,
+export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY = deepFreeze({
+  schemaVersion: "188.0" as const,
+  id: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+  label: "Dynamic inventory-qualified USDT route pool",
+  quoteAssets: ["USDT"] as const,
   venues: ["binance", "coindcx", "bybit"] as const,
-  routes: ROUTES,
-  inventoryTargets: INVENTORY,
+  markets: [] as const,
+  routes: [] as const,
+  inventoryTargets: [] as const,
   capitalPerLegInr: 500,
   maximumAttempts: 10 as const,
   durationMinutes: 180,
   stopOnFirstNonCleanResult: true,
   routeSelection: "HIGHEST_CURRENT_NET_THAT_PASSES_FRESH_EXACT_PREFLIGHT" as const,
+  eligibility: [
+    "CURRENT_EXECUTE",
+    "EXACT_ROUTE_CREDIBLE_HISTORY",
+    "ACTION_TIME_INVENTORY",
+    "ORDER_RULES_AND_FEES",
+    "DEPTH_AND_STRESS_NET",
+    "FRESH_BOOKS_AND_LAST_LOOK",
+  ] as const,
   excludedVenues: ["coinswitch", "unocoin", "zebpay"] as const,
   automaticTransfersAllowed: false,
   withdrawalsAllowed: false,
   liveOrderSubmissionAuthorized: false,
 });
 
-export function isStrategyOneTinyLiveBasketRoute(input: {
+export function isStrategyOneTinyLiveDynamicRoute(input: {
   readonly market: string;
   readonly buyExchange: string;
   readonly sellExchange: string;
 }): boolean {
-  return ROUTE_KEYS.has(strategyOneTinyLiveBasketRouteKey(input));
+  const market = normalizeMarket(input.market);
+  const buyExchange = normalizeExchange(input.buyExchange);
+  const sellExchange = normalizeExchange(input.sellExchange);
+  const venues = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.venues as readonly string[];
+
+  return market.endsWith("USDT") &&
+    market.length >= 6 &&
+    market.length <= 24 &&
+    buyExchange !== sellExchange &&
+    venues.includes(buyExchange) &&
+    venues.includes(sellExchange);
 }
 
 export function strategyOneTinyLiveBasketRouteKey(input: {
@@ -108,6 +84,17 @@ export function strategyOneTinyLiveBasketRouteKey(input: {
 }): string {
   return `${normalizeMarket(input.market)}:${normalizeExchange(input.buyExchange)}->${normalizeExchange(input.sellExchange)}`;
 }
+
+/*
+ * Compatibility aliases keep older imports safe while no new fixed-basket
+ * authority can be created. Their values are the dynamic route-pool policy.
+ */
+export const STRATEGY_ONE_TINY_LIVE_BASKET_ID =
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID;
+export const STRATEGY_ONE_TINY_LIVE_BASKET_POLICY =
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
+export const isStrategyOneTinyLiveBasketRoute =
+  isStrategyOneTinyLiveDynamicRoute;
 
 function normalizeMarket(value: string): string {
   return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");

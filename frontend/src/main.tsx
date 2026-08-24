@@ -16,6 +16,9 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
+      // The backend owns all continuous trading/monitoring work. A hidden UI
+      // tab does not need to keep waking the browser or polling read models.
+      refetchIntervalInBackground: false,
       retry: 2,
     },
   },

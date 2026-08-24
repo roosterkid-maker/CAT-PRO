@@ -73,11 +73,11 @@ export interface TriangularArbitrageMarketEventSource {
 /*
  * Strategy #3 is SHADOW-only. It shares the Node.js event loop with the
  * latency-sensitive Strategy #1 scanner, so a broad market fleet must not
- * turn every book tick into a new three-leg simulation batch. A quarter-second
- * coalescing window keeps affected-route observation responsive while giving
- * the execution owner deterministic priority.
+ * turn every book tick into a new three-leg simulation batch. A short bounded
+ * coalescing window keeps affected-route observation inside the configured
+ * freshness budget while giving the execution owner deterministic priority.
  */
-const DEFAULT_AFFECTED_ROUTE_REFRESH_INTERVAL_MS = 250;
+const DEFAULT_AFFECTED_ROUTE_REFRESH_INTERVAL_MS = 50;
 
 const METADATA: StrategyMetadata = {
   id: TRIANGULAR_ARBITRAGE_STRATEGY_ID,
@@ -162,11 +162,14 @@ implements StrategyController {
     private readonly marketEventSource: TriangularArbitrageMarketEventSource = marketCache,
     private readonly affectedRouteRefreshIntervalMs = DEFAULT_AFFECTED_ROUTE_REFRESH_INTERVAL_MS,
   ) {
+    this.configuration =
+      createTriangularArbitrageConfiguration(configuration);
     if (!Number.isSafeInteger(affectedRouteRefreshIntervalMs) || affectedRouteRefreshIntervalMs < 20) {
       throw new Error("ACLA affected-route refresh interval must be an integer of at least 20 ms.");
     }
-    this.configuration =
-      createTriangularArbitrageConfiguration(configuration);
+    if (affectedRouteRefreshIntervalMs >= this.configuration.maximumOpportunityAgeMs) {
+      throw new Error("ACLA affected-route refresh interval must remain below the opportunity freshness limit.");
+    }
   }
 
   getMetadata(): StrategyMetadata {
@@ -408,13 +411,14 @@ implements StrategyController {
     if (!this.running || this.pendingAffectedPathIds.size === 0) return;
     this.affectedRefreshRuns += 1;
     const ids = [...this.pendingAffectedPathIds];
+    const affectedPathIds = new Set(ids);
     this.pendingAffectedPathIds.clear();
     const refreshedPaths = ids.map((id) => this.pathsById.get(id)).filter((value): value is TriangularDiscoveryPath => Boolean(value))
       .map((path) => this.refreshPath(path)).filter((value): value is TriangularDiscoveryPath => Boolean(value));
     const paths = refreshedPaths.filter((path) => this.isFastLaneEligible(path));
     this.affectedPathsFastScreened += refreshedPaths.length - paths.length;
     if (paths.length === 0) {
-      this.currentSignals = this.currentSignals.filter((signal) => !ids.some((id) => signal.evidence.pathId === id));
+      this.currentSignals = this.currentSignals.filter((signal) => !affectedPathIds.has(signal.evidence.pathId));
       return;
     }
     const now = Date.now();
@@ -445,7 +449,7 @@ implements StrategyController {
       this.lastSnapshotReceivedAt = now;
       this.processedSnapshots += 1;
       this.lastError = null;
-      this.publishQualifiedSignals(simulation.simulations, sourceGeneratedAt, now, false, ids);
+      this.publishQualifiedSignals(simulation.simulations, sourceGeneratedAt, now, false, affectedPathIds);
     } catch (error: unknown) {
       this.lastError = error instanceof Error ? error.message : "Unknown ACLA affected-route simulation error.";
     }
@@ -469,7 +473,7 @@ implements StrategyController {
 
   private isFastLaneEligible(path: TriangularDiscoveryPath): boolean {
     const allowedExchange = this.configuration.allowedExchanges.length === 0 ||
-      this.configuration.allowedExchanges.includes(path.exchange.trim().toLowerCase());
+      this.configuration.allowedExchanges.includes(path.exchange.trim().toUpperCase());
     const allowedStart = this.configuration.allowedStartingAssets.includes(path.startAsset.trim().toUpperCase());
     const grossProfitPercent = (path.referenceGrossMultiplier - 1) * 100;
     return allowedExchange && allowedStart && Number.isFinite(grossProfitPercent) &&
@@ -478,7 +482,7 @@ implements StrategyController {
 
   private publishQualifiedSignals(
     simulations: readonly TriangularArbitragePathSimulation[], sourceSnapshotGeneratedAt: number, observedAt: number,
-    replace: boolean, affectedPathIds: readonly string[] = [],
+    replace: boolean, affectedPathIds: ReadonlySet<string> = new Set<string>(),
   ): void {
     const qualified = simulations.filter((result): result is TriangularArbitragePathSimulation & {
       finalOutputQuantity: number; expectedNetProfitQuantity: number; expectedNetProfitPercent: number;
@@ -491,10 +495,16 @@ implements StrategyController {
       result.stressNetProfitQuantity !== null && result.stressNetProfitPercent !== null &&
       result.absoluteNetProfitInr !== null && result.tdsCapitalLockInr !== null &&
       result.computedNetMultiplier !== null && result.maximumBookSkewMs !== null)
+      .sort((first, second) =>
+        second.stressNetProfitPercent - first.stressNetProfitPercent ||
+        second.netProfitPercent - first.netProfitPercent ||
+        second.absoluteNetProfitInr - first.absoluteNetProfitInr ||
+        first.pathId.localeCompare(second.pathId),
+      )
       .slice(0, this.configuration.maximumSignalsPerSnapshot);
     const signals = qualified.map((result) => this.toSignal(result, sourceSnapshotGeneratedAt, observedAt));
     this.currentSignals = replace ? signals : [
-      ...this.currentSignals.filter((signal) => !affectedPathIds.includes(signal.evidence.pathId) && signal.expiresAt >= observedAt),
+      ...this.currentSignals.filter((signal) => !affectedPathIds.has(signal.evidence.pathId) && signal.expiresAt >= observedAt),
       ...signals,
     ];
     for (let index = 0; index < signals.length; index += 1) {

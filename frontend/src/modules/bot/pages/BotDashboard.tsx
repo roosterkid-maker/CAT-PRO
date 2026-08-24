@@ -145,7 +145,7 @@ export default function BotDashboard() {
     : null;
   const suggestedPreArmRoute = toPreArmRoute(currentPilotRoute);
   const timingCalibrationDiagnostics = timingCalibrationQuery.data?.data ?? null;
-  const preArmCapitalPerLegInr = preArmDiagnostics?.pilotBasket?.capitalPerLegInr ??
+  const preArmCapitalPerLegInr = preArmDiagnostics?.routePool?.capitalPerLegInr ??
     pilotPreview?.requestedCapitalPerLegInr ??
     report.capitalPlacement.pilot.requestedPerLegInr;
 
@@ -197,8 +197,8 @@ export default function BotDashboard() {
         return;
       }
 
-      const basket = preArmDiagnostics?.pilotBasket;
-      if (!basket) {
+      const routePool = preArmDiagnostics?.routePool;
+      if (!routePool) {
         throw new Error("Tiny-LIVE status abhi available nahi hai. Refresh karke dobara try karein.");
       }
       if (preArmDiagnostics.runtimeGateEnabled !== true) {
@@ -211,13 +211,13 @@ export default function BotDashboard() {
       let preArmId = activePreArm?.id ?? null;
       if (!preArmId) {
         const armResult = await armPreArm.mutateAsync({
-          market: "PILOT_BASKET",
+          market: "DYNAMIC_POOL",
           buyExchange: "coindcx",
           sellExchange: "binance",
-          durationMinutes: basket.durationMinutes,
-          maximumAttempts: basket.maximumAttempts,
-          pilotBasketId: basket.id,
-          confirmation: basketArmPhrase(basket.capitalPerLegInr),
+          durationMinutes: routePool.durationMinutes,
+          maximumAttempts: routePool.maximumAttempts,
+          routePoolId: routePool.id,
+          confirmation: routePoolArmPhrase(routePool.capitalPerLegInr),
         });
         preArmId = armResult.data.id;
       }
@@ -254,10 +254,10 @@ export default function BotDashboard() {
   }
 
   function armOneShot(): void {
-    const basket = preArmDiagnostics?.pilotBasket;
+    const routePool = preArmDiagnostics?.routePool;
 
     if (
-      !basket ||
+      !routePool ||
       !preArmAcknowledged ||
       armPreArm.isPending
     ) {
@@ -265,13 +265,13 @@ export default function BotDashboard() {
     }
 
     armPreArm.mutate({
-      market: "PILOT_BASKET",
+      market: "DYNAMIC_POOL",
       buyExchange: "coindcx",
       sellExchange: "binance",
-      durationMinutes: basket.durationMinutes,
-      maximumAttempts: basket.maximumAttempts,
-      pilotBasketId: basket.id,
-      confirmation: basketArmPhrase(basket.capitalPerLegInr),
+      durationMinutes: routePool.durationMinutes,
+      maximumAttempts: routePool.maximumAttempts,
+      routePoolId: routePool.id,
+      confirmation: routePoolArmPhrase(routePool.capitalPerLegInr),
     });
   }
 
@@ -627,9 +627,9 @@ export default function BotDashboard() {
 
       {liveConfirmationOpen ? (
         <TinyLiveModeConfirmation
-          capitalPerLegInr={preArmDiagnostics?.pilotBasket?.capitalPerLegInr ?? 500}
-          maximumAttempts={preArmDiagnostics?.pilotBasket?.maximumAttempts ?? 10}
-          durationMinutes={preArmDiagnostics?.pilotBasket?.durationMinutes ?? 180}
+          capitalPerLegInr={preArmDiagnostics?.routePool?.capitalPerLegInr ?? 500}
+          maximumAttempts={preArmDiagnostics?.routePool?.maximumAttempts ?? 10}
+          durationMinutes={preArmDiagnostics?.routePool?.durationMinutes ?? 180}
           pending={modeTransition === "TINY_LIVE"}
           onCancel={() => setLiveConfirmationOpen(false)}
           onConfirm={() => void selectOperatingMode("TINY_LIVE")}
@@ -1970,7 +1970,7 @@ function StrategyOnePreArmedOneShotPanel({
   const active = diagnostics?.activeArm ?? null;
   const accountLease = diagnostics?.accountModeLease ?? null;
   const activeAccountLease = accountLease?.activeLease ?? null;
-  const route = active?.routeScope === "PILOT_BASKET" ? suggestedRoute : active ?? suggestedRoute;
+  const route = active?.routeScope === "DYNAMIC_POOL" ? suggestedRoute : active ?? suggestedRoute;
   const currentTimingApproval = findCurrentControlledBatchTimingApproval(
     timingDiagnostics,
     route,
@@ -1990,8 +1990,8 @@ function StrategyOnePreArmedOneShotPanel({
   const recent = diagnostics?.records[0] ?? null;
   const attempts = recent?.attempts ?? [];
   const candidateMatchesRoute = candidate !== null && (
-    active?.routeScope === "PILOT_BASKET"
-      ? isPilotBasketRoute(candidate)
+    active?.routeScope === "DYNAMIC_POOL"
+      ? isDynamicPoolRoute(candidate)
       : route !== null &&
         normalizedMarket(candidate.market) === normalizedMarket(route.market) &&
         candidate.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
@@ -2000,7 +2000,7 @@ function StrategyOnePreArmedOneShotPanel({
   const blockedChecks = candidate?.checks.filter((check) => check.state === "BLOCKED") ?? [];
   const canArm = diagnostics?.runtimeGateEnabled === true &&
     !active &&
-    diagnostics.pilotBasket !== null &&
+    diagnostics.routePool !== null &&
     !paperBotEnabled &&
     acknowledged &&
     !arming;
@@ -2036,8 +2036,8 @@ function StrategyOnePreArmedOneShotPanel({
     <article className={`overflow-hidden rounded-2xl border ${active ? "border-emerald-400/30 bg-emerald-400/[0.035] shadow-[0_0_34px_rgba(52,211,153,.08)]" : "border-border-default bg-panel"}`}>
       <PanelHeader
         icon={<Zap className="size-4" />}
-        eyebrow="V183 CONTROLLED PILOT BASKET"
-        title="Seven-coin inventory and controlled execution evidence"
+        eyebrow="V188 DYNAMIC ROUTE POOL"
+        title="Current USDT routes and controlled execution evidence"
         right={(
           <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${active ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : diagnostics?.runtimeGateEnabled ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-border-default bg-panel-light text-text-muted"}`}>
             {loading ? "LOADING" : status}
@@ -2048,8 +2048,8 @@ function StrategyOnePreArmedOneShotPanel({
       <div className="grid gap-px bg-border-default sm:grid-cols-2 xl:grid-cols-4">
         <ActivityMetric
           label="Route scope"
-          value="7-COIN BASKET"
-          detail={`${diagnostics?.pilotBasket.routes.length ?? 0} immutable report-driven directions`}
+          value="DYNAMIC USDT POOL"
+          detail="Current exact routes across Binance, Bybit and CoinDCX"
           tone="positive"
         />
         <ActivityMetric
@@ -2070,24 +2070,23 @@ function StrategyOnePreArmedOneShotPanel({
         />
       </div>
 
-      {diagnostics?.pilotBasket ? (
+      {diagnostics?.routePool ? (
         <div className="border-t border-border-default bg-[#07111d] px-5 py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">SELL INVENTORY TARGETS</p>
-              <p className="mt-1 text-xs text-text-muted">Pre-positioning plan only · quote-side funding is re-proven for every attempt</p>
+              <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">PER-ATTEMPT EXACT INVENTORY</p>
+              <p className="mt-1 text-xs text-text-muted">No coin is pinned. The selected BUY/SELL route must prove both live balances before every attempt.</p>
             </div>
-            <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[9px] font-bold text-emerald-300">₹5,000 TOTAL</span>
+            <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[9px] font-bold text-emerald-300">₹{formatInteger(diagnostics.routePool.capitalPerLegInr)} / LEG</span>
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {diagnostics.pilotBasket.inventoryTargets.map((target) => (
-              <div key={`${target.exchange}:${target.asset}`} className="flex items-center justify-between rounded-lg border border-white/7 bg-black/20 px-3 py-2">
-                <span className="font-mono text-[10px] font-bold text-text-primary">{target.exchange.toUpperCase()} · {target.asset}</span>
-                <span className="font-mono text-[10px] font-bold text-emerald-300">₹{formatInteger(target.targetNotionalInr)}</span>
+            {diagnostics.routePool.eligibility.map((gate) => (
+              <div key={gate} className="rounded-lg border border-white/7 bg-black/20 px-3 py-2 font-mono text-[10px] font-bold text-text-primary">
+                {gate.replaceAll("_", " ")}
               </div>
             ))}
           </div>
-          <p className="mt-3 font-mono text-[9px] leading-4 text-amber-300">CoinSwitch, UnoCoin and ZebPay are hard-excluded. No transfer or withdrawal is automatic.</p>
+          <p className="mt-3 font-mono text-[9px] leading-4 text-amber-300">CoinSwitch, UnoCoin and ZebPay remain excluded from this LIVE pool. No transfer or withdrawal is automatic.</p>
         </div>
       ) : null}
 
@@ -2157,7 +2156,7 @@ function StrategyOnePreArmedOneShotPanel({
             <div>
               <p className="font-mono text-[9px] font-bold tracking-[.16em] text-amber-300">TINY-LIVE ACCOUNT LEASE</p>
               <p className="mt-1 text-sm font-semibold text-text-primary">
-                {activeAccountLease ? "Restore PAPER mode" : active ? "Activate bounded basket lease" : "Arm the pilot basket first"}
+                {activeAccountLease ? "Restore PAPER mode" : active ? "Activate bounded route-pool lease" : "Arm the dynamic route pool first"}
               </p>
             </div>
             <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${activeAccountLease ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-border-default bg-panel-light text-text-muted"}`}>
@@ -2208,7 +2207,7 @@ function StrategyOnePreArmedOneShotPanel({
                   : "Generate a fresh selected-route timing review"}
             </p>
             <p className="mt-2 text-xs leading-5 text-text-muted">
-              Every basket route keeps its own genuine timing evidence. Approval for one route never approves another route and cannot submit an order by itself.
+              Every dynamic-pool route keeps its own genuine timing evidence. Approval for one route never approves another route and cannot submit an order by itself.
             </p>
           </div>
           <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${currentTimingApproval ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : pendingTimingProposal ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-red-400/25 bg-red-400/8 text-red-300"}`}>
@@ -2336,10 +2335,10 @@ function StrategyOnePreArmedOneShotPanel({
           {active ? (
             <>
               <p className="font-mono text-[10px] font-bold text-emerald-300">
-                ARMED {active.routeScope === "PILOT_BASKET" ? "SEVEN-COIN PILOT BASKET" : `${active.market} · ${active.buyExchange.toUpperCase()} → ${active.sellExchange.toUpperCase()}`}
+                ARMED {active.routeScope === "DYNAMIC_POOL" ? "DYNAMIC USDT ROUTE POOL" : `${active.market} · ${active.buyExchange.toUpperCase()} → ${active.sellExchange.toUpperCase()}`}
               </p>
               <p className="mt-1 text-xs leading-5 text-text-muted">
-                The highest-net current allowlisted route is considered, but it must independently pass fresh permissions, clocks, route calibration, balances, minimum order, depth, fees, stress profit and final last-look. CoinDCX uses its audited bounded-GTC contract; Binance/Bybit remain FOK.
+                The highest-net current eligible USDT route is considered, but its exact market and direction must independently pass credible history, permissions, clocks, balances, minimum order, depth, fees, stress profit and final last-look. CoinDCX uses its audited bounded-GTC contract; Binance/Bybit remain FOK.
               </p>
             </>
           ) : (
@@ -2351,7 +2350,7 @@ function StrategyOnePreArmedOneShotPanel({
                 className="mt-1 size-4 rounded border-border-default bg-panel-light accent-emerald-400"
               />
               <span>
-                I understand that arming submits no order now. During the next 3 hours, up to ten distinct fully-qualified opportunities from the immutable seven-coin basket can each submit one real ₹{formatInteger(diagnostics?.pilotBasket.capitalPerLegInr ?? capitalPerLegInr)}-per-leg attempt. Every slot gets fresh inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch.
+                I understand that arming submits no order now. During the next 3 hours, up to ten fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)}-per-leg attempt. Every exact route gets credible-history, inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch.
               </span>
             </label>
           )}
@@ -2381,6 +2380,15 @@ function StrategyOnePreArmedOneShotPanel({
               LAST ARM {recent.state}{recent.executionStatus ? ` · ${recent.executionStatus}` : ""}
             </p>
           ) : null}
+
+          {diagnostics?.pipelineTelemetry ? (
+            <div className="mt-3 flex flex-wrap gap-2 font-mono text-[9px] text-text-muted">
+              <span>CANDIDATES {diagnostics.pipelineTelemetry.candidatesEvaluated}</span>
+              <span>· FINAL BLOCKS {diagnostics.pipelineTelemetry.preflightBlocks}</span>
+              <span>· REFRESH {diagnostics.pipelineTelemetry.refreshesRecovered}/{diagnostics.pipelineTelemetry.refreshesRequested}</span>
+              <span>· COORDINATOR STARTS {diagnostics.pipelineTelemetry.coordinatorStarts}</span>
+            </div>
+          ) : null}
         </div>
 
         {active ? (
@@ -2399,7 +2407,7 @@ function StrategyOnePreArmedOneShotPanel({
             disabled={!canArm}
             className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-xs font-bold text-emerald-300 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
           >
-            {arming ? "Arming durably…" : "Arm 7-coin · 10 attempts / 3 hours"}
+            {arming ? "Arming durably…" : "Arm dynamic USDT pool · 10 attempts / 3 hours"}
           </button>
         )}
       </div>
@@ -2411,7 +2419,7 @@ function StrategyOnePreArmedOneShotPanel({
               <div>
             <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">LIVE AUDITED OPPORTUNITY</p>
                 <p className="mt-1 text-sm font-semibold text-text-primary">
-                  {candidateMatchesRoute && candidate ? `${candidate.market} · ${candidate.buyExchange.toUpperCase()} BUY → ${candidate.sellExchange.toUpperCase()} SELL` : "Waiting for an allowlisted basket route"}
+                  {candidateMatchesRoute && candidate ? `${candidate.market} · ${candidate.buyExchange.toUpperCase()} BUY → ${candidate.sellExchange.toUpperCase()} SELL` : "Waiting for a qualified dynamic route"}
                 </p>
               </div>
               <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${candidateMatchesRoute && candidate?.readyForOperatorPreflight ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-amber-400/30 bg-amber-400/10 text-amber-300"}`}>
@@ -2439,7 +2447,7 @@ function StrategyOnePreArmedOneShotPanel({
                 )}
               </>
             ) : (
-              <p className="mt-3 text-xs leading-5 text-text-muted">No current qualified candidate on the immutable basket. This is normal between genuine cross-exchange spreads; no order is created from stale or unrelated evidence.</p>
+              <p className="mt-3 text-xs leading-5 text-text-muted">No current qualified route in the dynamic USDT pool. This is normal between genuine cross-exchange spreads; no order is created from stale or unrelated evidence.</p>
             )}
           </div>
 
@@ -2526,16 +2534,16 @@ function StrategyOneTinyLiveOpportunityAuditPanel({
           <div className="grid gap-px bg-border-default sm:grid-cols-3">
             <ActivityMetric
               label="Current qualified routes"
-              value={`${formatInteger(audit.currentActionTime.fullyPreflightableMatches)} / ${PILOT_BASKET_ROUTE_KEYS.size}`}
-              detail="Across the full 7-coin / 11-direction basket"
+              value={formatInteger(audit.currentActionTime.fullyPreflightableMatches)}
+              detail="Current exact USDT routes passing the complete preflight"
               tone={actionableNow ? "positive" : "warning"}
             />
             <ActivityMetric
-              label="Basket candidate now"
+              label="Dynamic candidate now"
               value={currentRoute ? currentRoute.market : "NO QUALIFIED ROUTE"}
               detail={currentRoute
                 ? `${currentRoute.buyExchange.toUpperCase()} BUY → ${currentRoute.sellExchange.toUpperCase()} SELL`
-                : "Scanning every approved direction; COTI is not pinned"}
+                : "Scanning current USDT directions; no coin is pinned"}
               tone={currentRoute ? "positive" : "warning"}
             />
             <ActivityMetric
@@ -2547,17 +2555,10 @@ function StrategyOneTinyLiveOpportunityAuditPanel({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 border-t border-border-default bg-[#07111d] px-5 py-3">
-            <span className="mr-1 font-mono text-[9px] font-bold tracking-[0.12em] text-cyan-200">7-COIN SCOPE</span>
-            {PILOT_BASKET_MARKETS.map((market) => (
-              <span
-                key={market}
-                className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${
-                  currentRoute?.market === market
-                    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                    : "border-border-default bg-panel-light text-text-muted"
-                }`}
-              >
-                {market.replace(/USDT$/u, "")}
+            <span className="mr-1 font-mono text-[9px] font-bold tracking-[0.12em] text-cyan-200">DYNAMIC SCOPE</span>
+            {(["USDT markets", "Binance", "Bybit", "CoinDCX", "Exact-route history", "Fresh inventory"] as const).map((label) => (
+              <span key={label} className="rounded-full border border-border-default bg-panel-light px-2.5 py-1 font-mono text-[9px] font-bold text-text-muted">
+                {label}
               </span>
             ))}
           </div>
@@ -2910,16 +2911,21 @@ function ConfidenceBadge({confidence}: {confidence: "LOW" | "MEDIUM" | "HIGH"}) 
 
 function InventoryDeploymentPanel({plan}: {plan: PersonalStrategyOneBotData["inventoryPlan"]}) {
   const route = plan.recommendedRoute;
+  const minimumNotionalBlocked = plan.recommendationStatus === "MIN_NOTIONAL_BLOCKED";
   return (
     <article className="overflow-hidden rounded-2xl border border-border-default bg-panel">
       <PanelHeader
         icon={<Route className="size-4" />}
         eyebrow="V87 INVENTORY DEPLOYMENT"
-        title="Fund the best current Strategy #1 route"
+        title={minimumNotionalBlocked
+          ? "Wait for the next legal Strategy #1 route"
+          : "Fund the best current Strategy #1 route"}
         right={<span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${inventoryPlanStatusTone(plan.recommendationStatus)}`}>{plan.recommendationStatus.replaceAll("_", " ")}</span>}
       />
       <div className="border-b border-border-default px-5 py-3 text-xs leading-5 text-text-muted">
-        Ranked by modeled PAPER profit from current EXECUTE evidence. Advisory only: no transfer, withdrawal, balance mutation or LIVE order is initiated.
+        {minimumNotionalBlocked
+          ? "Current wallet balances are sufficient, but the top route cannot meet exchange minimum-order rules inside the configured hard cap. It will be skipped when a legal route appears."
+          : "Ranked by modeled PAPER profit from current EXECUTE evidence. Advisory only: no transfer, withdrawal, balance mutation or LIVE order is initiated."}
       </div>
 
       {route ? (
@@ -3397,7 +3403,7 @@ function stateAppearance(state: PersonalStrategyOneBotState): {label: string; te
 function capitalManagerStateTone(state: PersonalStrategyOneBotData["capitalManager"]["state"]): string {
   if (state === "READY_FOR_PREFLIGHT") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-300";
   if (state === "OPERATOR_ACTION_REQUIRED") return "border-amber-400/25 bg-amber-400/10 text-amber-300";
-  if (state === "EVIDENCE_INCOMPLETE") return "border-red-400/25 bg-red-400/10 text-red-300";
+  if (state === "EVIDENCE_INCOMPLETE" || state === "ORDER_RULE_BLOCKED") return "border-red-400/25 bg-red-400/10 text-red-300";
   return "border-cyan-300/25 bg-cyan-300/8 text-cyan-200";
 }
 
@@ -3422,6 +3428,7 @@ function capitalManagerActionTone(state: PersonalStrategyOneBotData["capitalMana
 function inventoryPlanStatusTone(status: PersonalStrategyOneBotData["inventoryPlan"]["recommendationStatus"]): string {
   if (status === "READY") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-300";
   if (status === "FUNDING_REQUIRED") return "border-amber-400/25 bg-amber-400/10 text-amber-300";
+  if (status === "MIN_NOTIONAL_BLOCKED") return "border-red-400/25 bg-red-400/10 text-red-300";
   if (status === "EVIDENCE_INCOMPLETE") return "border-red-400/25 bg-red-400/10 text-red-300";
   return "border-border-default bg-panel-light text-text-muted";
 }
@@ -3448,46 +3455,19 @@ function isSupportedPreArmRoute(route: {
   const market = normalizedMarket(route.market);
   const buy = route.buyExchange.trim().toLowerCase();
   const sell = route.sellExchange.trim().toLowerCase();
-  const binanceBybitLane = buy !== sell &&
-    (buy === "binance" || buy === "bybit") &&
-    (sell === "binance" || sell === "bybit");
+  const supportedVenues = new Set(["binance", "bybit", "coindcx"]);
 
   return market.endsWith("USDT") && market.length >= 7 &&
-    (binanceBybitLane || isPilotBasketRoute(route));
+    market.length <= 24 && buy !== sell && supportedVenues.has(buy) &&
+    supportedVenues.has(sell);
 }
 
-const PILOT_BASKET_ROUTE_KEYS = new Set([
-  "COTIUSDT:coindcx->binance",
-  "BBUSDT:coindcx->binance",
-  "BBUSDT:binance->coindcx",
-  "BBUSDT:bybit->coindcx",
-  "HEMIUSDT:coindcx->binance",
-  "HEMIUSDT:binance->coindcx",
-  "TREEUSDT:bybit->coindcx",
-  "NEXOUSDT:binance->coindcx",
-  "NEXOUSDT:bybit->coindcx",
-  "PYBOBOUSDT:coindcx->bybit",
-  "GPSUSDT:coindcx->bybit",
-]);
-
-const PILOT_BASKET_MARKETS = [
-  "COTIUSDT",
-  "BBUSDT",
-  "HEMIUSDT",
-  "TREEUSDT",
-  "NEXOUSDT",
-  "PYBOBOUSDT",
-  "GPSUSDT",
-] as const;
-
-function isPilotBasketRoute(route: {
+function isDynamicPoolRoute(route: {
   market: string;
   buyExchange: string;
   sellExchange: string;
 }): boolean {
-  return PILOT_BASKET_ROUTE_KEYS.has(
-    `${normalizedMarket(route.market)}:${route.buyExchange.trim().toLowerCase()}->${route.sellExchange.trim().toLowerCase()}`,
-  );
+  return isSupportedPreArmRoute(route);
 }
 
 function toPreArmRoute(route: {
@@ -3516,8 +3496,8 @@ function toPreArmRoute(route: {
   };
 }
 
-function basketArmPhrase(capitalPerLegInr: number): string {
-  return `ARM PILOT-BASKET SEVEN-COIN INR${capitalPerLegInr} ATTEMPTS10 MINUTES180`;
+function routePoolArmPhrase(capitalPerLegInr: number): string {
+  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} ATTEMPTS10 MINUTES180`;
 }
 
 function timingRouteKey(route: StrategyOnePreArmRoute): string {

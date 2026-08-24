@@ -243,6 +243,11 @@ function fundingTimestampsFor(
     kind: "FUNDING_CAPTURE_THEN_EXIT" | "BASIS_CONVERGENCE" | "SPREAD_CONVERGENCE" | "STATISTICAL_MEAN_REVERSION";
   }>,
 ): readonly number[] {
+  if (policy.kind === "FUNDING_CAPTURE_THEN_EXIT" && policy.fundingLegSchedules) {
+    return position.signedQuantity > 0
+      ? policy.fundingLegSchedules.longTimestamps
+      : policy.fundingLegSchedules.shortTimestamps;
+  }
   if (policy.kind === "FUNDING_CAPTURE_THEN_EXIT" && policy.fundingSchedule) {
     return policy.fundingSchedule.map((window) =>
       position.signedQuantity > 0 ? window.longTimestamp : window.shortTimestamp,

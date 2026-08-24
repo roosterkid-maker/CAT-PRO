@@ -239,6 +239,7 @@ async function main(): Promise<void> {
   const controller = new TriangularArbitrageStrategyController(
     {
       enabled: true,
+      allowedExchanges: ["binance"],
       minimumNetProfitPercent: 0.2,
       maximumInitialInputQuantity: 20,
       signalTtlMs: 5_000,
@@ -334,6 +335,30 @@ async function main(): Promise<void> {
   assert.equal(performance.coalescedMarketUpdates, 99);
   assert.equal(performance.affectedRefreshIntervalMs, 30);
 
+  const basePath = snapshot(now + 7).triangularPaths[0];
+  assert.ok(basePath);
+  const priorityPaths = Array.from({length: 10}, (_, index) => ({
+    ...structuredClone(basePath),
+    id: `low-reference-${index}`,
+    referenceGrossMultiplier: 1.001,
+  }));
+  priorityPaths.push({
+    ...structuredClone(basePath),
+    id: "highest-reference-last",
+    referenceGrossMultiplier: 1.05,
+  });
+  const prioritized = engine.evaluate({
+    ...snapshot(now + 7),
+    summary: {...snapshot(now + 7).summary, triangularPaths: priorityPaths.length},
+    triangularPaths: priorityPaths,
+  }, {
+    ...controller.getConfiguration(),
+    maximumSignalsPerSnapshot: 1,
+  }, now + 7);
+  assert.equal(prioritized.evaluatedPaths, 10);
+  assert.equal(prioritized.qualifiedPaths, 1);
+  assert.equal(prioritized.simulations[0]?.pathId, "highest-reference-last");
+
   capabilities.delete("ETHBTC");
   const blocked = engine.evaluate(
     snapshot(now + 10),
@@ -350,6 +375,14 @@ async function main(): Promise<void> {
   defaultDisabled.start();
   assert.equal(defaultDisabled.isRunning(), false);
   assert.equal(defaultDisabled.getSignals().length, 0);
+  assert.equal(defaultDisabled.getPerformanceSnapshot().affectedRefreshIntervalMs, 50);
+  assert.throws(
+    () => new TriangularArbitrageStrategyController({
+      enabled: true,
+      maximumOpportunityAgeMs: 50,
+    }),
+    /below the opportunity freshness limit/,
+  );
 
   controller.stop();
 

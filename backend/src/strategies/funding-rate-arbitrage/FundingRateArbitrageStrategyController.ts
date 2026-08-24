@@ -59,10 +59,10 @@ const METADATA: StrategyMetadata = {
   id: FUNDING_RATE_ARBITRAGE_STRATEGY_ID,
   strategyNumber: 5,
   displayName: "Funding-Rate Arbitrage",
-  version: "28.0",
+  version: "28.1",
   category: "FUNDING_RATE_ARBITRAGE",
   description:
-    "SHADOW-only matched perpetual long/short bounded funding-carry economics with full depth, round-trip fees, synchronized windows and exact settled PAPER evidence.",
+    "SHADOW-only matched cross-venue perpetual and intra-venue spot/perpetual funding-carry economics with full depth, round-trip fees, bounded funding windows and exact settled PAPER evidence.",
   controllerMode: "SHADOW_ONLY",
   signalSource: "DerivativeMarketData",
   legacyHistoryAttribution: "UNATTRIBUTED_LEGACY",
@@ -200,6 +200,13 @@ export class FundingRateArbitrageStrategyController implements StrategyControlle
       const economics = this.economicsEngine.evaluate(snapshot, this.configuration, receivedAt);
       const signals = economics.assessments
         .filter((assessment) => assessment.status === "QUALIFIED" && assessment.evidence !== null)
+        .sort((first, second) =>
+          (second.economics?.expectedNetPercent ?? Number.NEGATIVE_INFINITY) -
+            (first.economics?.expectedNetPercent ?? Number.NEGATIVE_INFINITY) ||
+          (second.economics?.expectedNetQuote ?? Number.NEGATIVE_INFINITY) -
+            (first.economics?.expectedNetQuote ?? Number.NEGATIVE_INFINITY) ||
+          first.id.localeCompare(second.id),
+        )
         .slice(0, this.configuration.maximumSignalsPerSnapshot)
         .map((assessment) => immutableStrategySignal({
           id: `${FUNDING_RATE_ARBITRAGE_STRATEGY_ID}:${assessment.id}`,

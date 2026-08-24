@@ -21,8 +21,8 @@ import type {
 } from "../models/ArbitrageOpportunity";
 
 import type {
-  MarketSnapshot,
-} from "../models/MarketSnapshot";
+  ExchangeQuote,
+} from "../models/ExchangeQuote";
 
 import {
   opportunityRejectionStore,
@@ -46,7 +46,7 @@ import {
 } from "../../config/Environment";
 
 import {
-  STRATEGY_ONE_TINY_LIVE_BASKET_POLICY,
+  isStrategyOneTinyLiveDynamicRoute,
   type StrategyOneTinyLiveBasketBookObservation,
   type StrategyOneTinyLiveBasketRoute,
 } from "../execution/StrategyOneTinyLiveBasketPolicy";
@@ -142,7 +142,7 @@ export interface OpportunitySnapshot {
     ArbitrageOpportunity[];
 
   /**
-   * Exact executable books for the immutable pilot basket. Timing observers
+   * Exact executable books for the dynamic Strategy #1 USDT route pool. Timing observers
    * use these independently from opportunity economics, so a zero/negative
    * spread cannot leave an otherwise healthy route stuck at NO DATA.
    */
@@ -174,16 +174,6 @@ export interface ExactRouteEvaluationResult {
   readonly rejection: OpportunityRejectionRecord | null;
   readonly evidence: ExactRouteEvaluationEvidence;
   readonly reason: string;
-}
-
-const PILOT_ROUTES_BY_MARKET = new Map<
-  string,
-  readonly StrategyOneTinyLiveBasketRoute[]
->();
-
-for (const route of STRATEGY_ONE_TINY_LIVE_BASKET_POLICY.routes) {
-  const existing = PILOT_ROUTES_BY_MARKET.get(route.market) ?? [];
-  PILOT_ROUTES_BY_MARKET.set(route.market, [...existing, route]);
 }
 
 export type OpportunitySnapshotListener = (
@@ -548,14 +538,8 @@ export class OpportunityService {
         .executableMarketEntries()
     ) {
       const quotes:
-        MarketSnapshot["quotes"] =
-        {};
-
-      let timestamp =
-        0;
-
-      let quoteCount =
-        0;
+        ExchangeQuote[] =
+        [];
 
       for (
         const quote
@@ -573,75 +557,56 @@ export class OpportunityService {
           continue;
         }
 
-        quotes[
-          quote.exchange
-        ] =
-          quote;
+        quotes.push(
+          quote,
+        );
 
         executionQualityEligibleQuoteCount +=
           1;
 
-        quoteCount +=
-          1;
-
-        if (
-          quote.timestamp >
-          timestamp
-        ) {
-          timestamp =
-            quote.timestamp;
-        }
       }
 
       if (
-        quoteCount ===
+        quotes.length ===
           0
       ) {
         continue;
       }
 
-      /*
-       * Timing calibration is deliberately independent from arbitrage
-       * economics. Capture only the two executable top-of-book timestamps for
-       * each configured pilot direction before the positive-spread filter.
-       * This bounded (maximum 11 records) read prevents rare or currently
-       * negative-spread routes from remaining permanently at NO DATA.
-       */
-      for (const route of PILOT_ROUTES_BY_MARKET.get(market) ?? []) {
-        const buyQuote = quotes[route.buyExchange];
-        const sellQuote = quotes[route.sellExchange];
+      marketSnapshotCount +=
+        1;
 
-        if (
-          !buyQuote?.executable ||
-          !sellQuote?.executable
-        ) {
+      const pairBatch =
+        exchangePairGenerator
+          .generatePositiveSpreadCandidatesFromQuotes(
+            market,
+            quotes,
+          );
+
+      /*
+       * Dynamic Tiny-LIVE timing evidence follows current positive-spread
+       * USDT directions instead of allocating work for a stale fixed basket.
+       * Exact economics and every action-time gate still run downstream.
+       */
+      for (const pair of pairBatch.pairs) {
+        const route = {
+          market: pair.market,
+          buyExchange: pair.buy.exchange,
+          sellExchange: pair.sell.exchange,
+        };
+
+        if (!isStrategyOneTinyLiveDynamicRoute(route)) {
           continue;
         }
 
         pilotRouteBooks.push({
-          market: route.market,
-          buyExchange: route.buyExchange,
-          sellExchange: route.sellExchange,
-          buyTimestamp: buyQuote.timestamp,
-          sellTimestamp: sellQuote.timestamp,
+          market: pair.market,
+          buyExchange: pair.buy.exchange as StrategyOneTinyLiveBasketRoute["buyExchange"],
+          sellExchange: pair.sell.exchange as StrategyOneTinyLiveBasketRoute["sellExchange"],
+          buyTimestamp: pair.buy.timestamp,
+          sellTimestamp: pair.sell.timestamp,
         });
       }
-
-      marketSnapshotCount +=
-        1;
-
-      const snapshot:
-        MarketSnapshot = {
-        market,
-        quotes,
-        timestamp,
-      };
-
-      const pairBatch =
-        exchangePairGenerator
-          .generatePositiveSpreadCandidates(
-            snapshot,
-          );
 
       exchangePairCount +=
         pairBatch
@@ -1133,15 +1098,51 @@ export class OpportunityService {
     snapshot:
       OpportunitySnapshot,
   ): void {
+    if (
+      this.snapshotListeners.size ===
+        0
+    ) {
+      return;
+    }
+
+    /*
+     * All subscribers are internal read-only pipeline consumers. Clone once
+     * at the service boundary, freeze the collections against accidental
+     * structural mutation, and share that isolated publication. Cloning the
+     * complete opportunity graph once per listener added avoidable latency to
+     * every event-driven market scan.
+     */
+    const publishedSnapshot =
+      structuredClone(
+        snapshot,
+      );
+
+    Object.freeze(
+      publishedSnapshot
+        .opportunities,
+    );
+
+    if (
+      publishedSnapshot
+        .pilotRouteBooks
+    ) {
+      Object.freeze(
+        publishedSnapshot
+          .pilotRouteBooks,
+      );
+    }
+
+    Object.freeze(
+      publishedSnapshot,
+    );
+
     for (
       const listener
       of this.snapshotListeners
     ) {
       try {
         listener(
-          structuredClone(
-            snapshot,
-          ),
+          publishedSnapshot,
         );
       } catch (
         error:

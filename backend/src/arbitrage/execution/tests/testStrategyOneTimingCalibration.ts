@@ -348,13 +348,8 @@ function main(): void {
     );
     assert.equal(
       diagnostics.pilotBasketHeadroom.length,
-      11,
-      "Diagnostics must expose every immutable seven-coin basket route instead of presenting COTI as the whole basket.",
-    );
-    assert.equal(
-      diagnostics.pilotBasketHeadroom.some((review) =>
-        review.routeKey === "GPSUSDT:coindcx->bybit"),
-      true,
+      0,
+      "The retired fixed basket must not manufacture route-level timing reviews.",
     );
     assert.equal(
       diagnostics.pilotBasketHeadroom.every((review) =>

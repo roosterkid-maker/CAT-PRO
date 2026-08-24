@@ -102,7 +102,9 @@ function main(): void {
       buyExchange: "coindcx", sellExchange: "binance"})), NOW + 3_005);
 
     const report = service.getReport(NOW + 3_100);
-    const route = report.routes[0]!;
+    const route = report.routes.find((item) =>
+      item.routeKey === "BTCUSDT:binance->bybit");
+    assert.ok(route, "The requested dynamic route must retain its own evidence bucket.");
     assert.equal(route.uniqueGenerations, 3);
     assert.equal(route.repeatedGenerationsIgnored, 1);
     assert.equal(route.executionGradeGenerations, 2);
@@ -120,7 +122,8 @@ function main(): void {
     assert.equal(route.economics.profitBands.liveEligible, 3);
     assert.equal(route.economics.dispatchReservedLiveEligibleGenerations, 2);
     assert.equal(route.economics.netProfitPercent.p95Percent, 1.8);
-    assert.equal(report.excludedVenueOpportunities, 1);
+    assert.equal(report.excludedVenueOpportunities, 0,
+      "CoinDCX is a supported venue in the dynamic route pool.");
     assert.equal(report.safety.evidenceDoesNotAuthorizeLiveOrOrders, true);
 
     const absoluteOnly = opportunity({
@@ -129,7 +132,9 @@ function main(): void {
       sellAgeMs: 20,
     });
     service.observeSnapshot(snapshot(absoluteOnly), NOW + 4_005);
-    const dispatchReport = service.getReport(NOW + 4_100).routes[0]!;
+    const dispatchReport = service.getReport(NOW + 4_100).routes.find((item) =>
+      item.routeKey === "BTCUSDT:binance->bybit");
+    assert.ok(dispatchReport);
     assert.equal(dispatchReport.executionGradeGenerations, 3,
       "A generation inside the immutable 250 ms ceiling remains in historical execution-grade evidence.");
     assert.equal(dispatchReport.dispatchReserved.generations, 2,
@@ -197,8 +202,8 @@ function main(): void {
     assert.equal(reviewableAudit.state, "READY_FOR_POLICY_REVIEW");
     assert.equal(reviewableAudit.observation.profitBands.qualified, 0,
       "No intermediate band remains when qualification and LIVE both start at 0.30%.");
-    assert.equal(reviewableAudit.observation.profitBands.liveEligible, 5,
-      "Persisted 0.30%-0.50% observations must be reported under the current 0.30% LIVE floor.");
+    assert.equal(reviewableAudit.observation.profitBands.liveEligible, 6,
+      "Every supported dynamic-route observation above 0.30% must be reported under the current LIVE floor.");
     assert.equal(reviewableAudit.blockerRanking.find(
       (blocker) => blocker.code === "PROFIT_BELOW_LIVE_MINIMUM")?.count, 1);
     assert.notEqual(reviewableAudit.routeRanking[0]?.dominantBlocker,
@@ -212,9 +217,11 @@ function main(): void {
       persistenceIntervalMs: 60_000, maximumGenerationKeysPerRoute: 8,
     });
     restored.observeSnapshot(snapshot(opportunity({generatedAt: NOW + 2_000})), NOW + 2_006);
-    assert.equal(restored.getReport(NOW + 3_200).routes[0]?.repeatedGenerationsIgnored, 2,
+    assert.equal(restored.getReport(NOW + 3_200).routes.find((item) =>
+      item.routeKey === "BTCUSDT:binance->bybit")?.repeatedGenerationsIgnored, 2,
       "Restart restore must preserve exact quote-generation deduplication.");
-    assert.equal(restored.getReport(NOW + 3_606_200).routes[0]?.economics.observedGenerations, 6,
+    assert.equal(restored.getReport(NOW + 3_606_200).routes.find((item) =>
+      item.routeKey === "BTCUSDT:binance->bybit")?.economics.observedGenerations, 6,
       "Restart restore must preserve economics counters without inventing observations.");
 
     const timingOnlyService = new StrategyOnePilotEquivalentPaperEvidenceService({

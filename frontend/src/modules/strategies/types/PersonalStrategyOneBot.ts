@@ -174,6 +174,7 @@ export interface PersonalBotCapitalPlacement {
 export type PersonalCapitalManagerState =
   | "EVIDENCE_INCOMPLETE"
   | "WAITING_FOR_ROUTE"
+  | "ORDER_RULE_BLOCKED"
   | "OPERATOR_ACTION_REQUIRED"
   | "READY_FOR_PREFLIGHT";
 
@@ -185,6 +186,7 @@ export interface PersonalCapitalManagerAction {
     | "REFRESH_BALANCE_EVIDENCE"
     | "PREPOSITION_ASSET"
     | "KEEP_POSITION"
+    | "WAIT_FOR_LEGAL_ORDER_SIZE"
     | "RUN_READ_ONLY_PREFLIGHT";
   state: "WAITING" | "BLOCKED" | "ACTION_REQUIRED" | "READY";
   exchange: string | null;
@@ -851,7 +853,7 @@ export interface PersonalStrategyOneBotData {
     mode: "ADVISORY_PREPOSITIONING";
     generatedAt: number;
     requestedCapitalInr: number;
-    recommendationStatus: "NO_CURRENT_EXECUTE_ROUTE" | "EVIDENCE_INCOMPLETE" | "FUNDING_REQUIRED" | "READY";
+    recommendationStatus: "NO_CURRENT_EXECUTE_ROUTE" | "EVIDENCE_INCOMPLETE" | "FUNDING_REQUIRED" | "MIN_NOTIONAL_BLOCKED" | "READY";
     recommendedRoute: PersonalBotInventoryRoute | null;
     alternatives: PersonalBotInventoryRoute[];
     safety: {

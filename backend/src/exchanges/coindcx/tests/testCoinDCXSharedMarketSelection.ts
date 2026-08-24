@@ -279,8 +279,8 @@ function main(): void {
     symbols.join(
       ",",
     ) ===
-      "BTCUSDT,COTIUSDT,BTCINR,XRPUSDT,ETHUSDT,SOLUSDT",
-    "CoinDCX base selection must retain the audited COTI pilot lane, then prioritize price-aligned UnoCoin markets including INR routes before the wider executable USDT universe.",
+      "BTCUSDT,BTCINR,XRPUSDT,ETHUSDT,SOLUSDT",
+    "CoinDCX base selection must not pin retired pilot coins; it should prioritize configured, price-aligned and currently shared markets.",
   );
 
   const aligned =

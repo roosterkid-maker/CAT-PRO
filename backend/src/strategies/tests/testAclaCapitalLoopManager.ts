@@ -90,6 +90,26 @@ function main(): void {
   /ACLA_CIRCUIT_BREAKER_TRIPPED/);
   assert.equal(restored.releaseTdsCredit(32, "verified-tax-credit-test", now + 402).tdsLockedInr, 0);
   for (const path of [file, previous]) if (existsSync(path)) unlinkSync(path);
+
+  const restartFile = join(process.cwd(), `acla-capital-loop-restart-test-${process.pid}.jsonl`);
+  for (const path of [restartFile, `${restartFile}.previous`]) if (existsSync(path)) unlinkSync(path);
+  const beforeRestart = new AclaCapitalLoopManager(configuration, restartFile, 20);
+  beforeRestart.reserveCycle({...reservation, cycleId: "cycle-restart", signalId: "signal-restart",
+    planId: "plan-restart", pathId: "path-restart"}, now + 500);
+  for (const sequence of [1, 2, 3] as const) {
+    beforeRestart.beginLeg("cycle-restart", sequence, now + 500 + sequence * 10);
+    beforeRestart.recordFilledLeg("cycle-restart", leg(sequence), now + 501 + sequence * 10);
+  }
+  assert.equal(beforeRestart.getCycle("cycle-restart")?.state, "LEG_3_FILLED");
+  const afterRestart = new AclaCapitalLoopManager(configuration, restartFile, 20);
+  const restartClosed = afterRestart.reconcileRestoredThreeLegShadowCycle(now + 600);
+  assert.equal(restartClosed?.state, "COMPLETED");
+  assert.equal(restartClosed?.realizedPnlInr, 0);
+  assert.equal(restartClosed?.dustInr, 2);
+  assert.equal(afterRestart.reconcileRestoredThreeLegShadowCycle(now + 601), null);
+  assert.equal(afterRestart.getReport(now + 602).pool.openCycleId, null);
+  assert.equal(afterRestart.getReport(now + 602).invariant.activeBalanced, true);
+  for (const path of [restartFile, `${restartFile}.previous`]) if (existsSync(path)) unlinkSync(path);
   console.log("ACLA CAPITAL LOOP MANAGER TEST PASSED.");
   console.log("Atomic reservation, closed-loop compounding, restart restore and bounded exposure recovery preserved the strategy-scoped capital invariant without account or order mutation.");
 }

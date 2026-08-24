@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import {mkdtempSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
 import {join} from "node:path";
 
 import type {TradingAccount} from "../../trading/account/TradingAccount";
@@ -8,6 +10,7 @@ import {CentralPaperSimulationJournalService} from "../services/CentralPaperSimu
 import {CentralPaperPositionLedgerService} from "../services/CentralPaperPositionLedgerService";
 import {CentralPaperPositionAccountingService, type CentralPaperAccountPort} from "../services/CentralPaperPositionAccountingService";
 import {CentralPaperExecutionWorkerService, type CentralPaperSimulationEvidenceProvider} from "../services/CentralPaperExecutionWorkerService";
+import {CentralPaperCapitalAllocationService} from "../services/CentralPaperCapitalAllocationService";
 import {CentralPaperSharedRecoveryBridgeService} from "../../recovery/adapters/CentralPaperSharedRecoveryBridgeService";
 import {SharedRecoveryIntentService} from "../../recovery/services/SharedRecoveryIntentService";
 import type {CentralPaperPlanAdmission} from "../services/CentralPaperPlanAdmissionService";
@@ -23,6 +26,18 @@ class Account implements CentralPaperAccountPort {
   getAccount(): TradingAccount { return structuredClone(this.account); }
   runWithAccountingTransaction<T>(id: string, operation: () => T): T { this.transaction = id; try { return operation(); } finally { this.transaction = null; } }
   hasAppliedAccountingTransaction(id: string): boolean { return this.applied.has(id); }
+  reserveCapital(value: number, transactionId: string): boolean {
+    if (this.applied.has(transactionId)) return true;
+    if (value > this.account.availableCapital) return false;
+    this.applied.add(transactionId);
+    this.account.availableCapital -= value;
+    return true;
+  }
+  releaseCapital(value: number, transactionId: string): void {
+    if (this.applied.has(transactionId)) return;
+    this.applied.add(transactionId);
+    this.account.availableCapital += value;
+  }
   recordProfit(value: number): void { if (!this.transaction || this.applied.has(this.transaction)) return; this.applied.add(this.transaction);
     this.account.currentCapital += value; this.account.availableCapital += value; }
 }
@@ -56,12 +71,13 @@ function admission(value: CentralStrategyExecutionPlan): CentralPaperPlanAdmissi
     executionHandoffAllowed: false, paperExecutionPerformed: false, liveExecutionAllowed: false, orderSubmissionAllowed: false};
 }
 
-function main(): void {
-  const queue = new CentralPaperExecutionQueueService(join(process.cwd(), "triangle-queue.jsonl"), 10);
-  const journal = new CentralPaperSimulationJournalService(join(process.cwd(), "triangle-journal.jsonl"), 10);
-  const positions = new CentralPaperPositionLedgerService(join(process.cwd(), "triangle-positions.jsonl"), 10);
+function run(testDirectory: string): void {
+  const queue = new CentralPaperExecutionQueueService(join(testDirectory, "triangle-queue.jsonl"), 10);
+  const journal = new CentralPaperSimulationJournalService(join(testDirectory, "triangle-journal.jsonl"), 10);
+  const positions = new CentralPaperPositionLedgerService(join(testDirectory, "triangle-positions.jsonl"), 10);
   const account = new Account();
-  const accounting = new CentralPaperPositionAccountingService(join(process.cwd(), "triangle-accounting.jsonl"), account);
+  const accounting = new CentralPaperPositionAccountingService(join(testDirectory, "triangle-accounting.jsonl"), account);
+  const capital = new CentralPaperCapitalAllocationService(account, join(testDirectory, "triangle-capital.jsonl"), 10);
   const recovery = new CentralPaperSharedRecoveryBridgeService(new SharedRecoveryIntentService({maximumIntents: 10}));
   const source = plan();
   queue.enqueue(source, admission(source), now);
@@ -76,7 +92,7 @@ function main(): void {
     targetQuantity: quantity * 85, path: [], generatedAt: observedAt, expiresAt: observedAt + 1_000,
     valuationOnly: true as const, orderSubmissionAllowed: false as const,
   })};
-  const worker = new CentralPaperExecutionWorkerService({enabled: true}, evidence, queue, undefined, journal, recovery, positions, accounting, conversion);
+  const worker = new CentralPaperExecutionWorkerService({enabled: true}, evidence, queue, undefined, journal, recovery, positions, accounting, conversion, capital);
   const result = worker.runOnce(now + 1);
   assert.equal(result.state, "POSITION_ACCOUNTED");
   assert.equal(result.accountPnlMutationPerformed, true);
@@ -92,6 +108,15 @@ function main(): void {
 
   console.log("CENTRAL PAPER TRIANGULAR CYCLE ACCOUNTING TEST PASSED.");
   console.log("Exact sequential fills and fees produced start-asset cycle P&L, then current INR conversion and journal-first accounting posted it exactly once; no LIVE adapter or exchange order was used.");
+}
+
+function main(): void {
+  const testDirectory = mkdtempSync(join(tmpdir(), "cat-pro-triangular-paper-"));
+  try {
+    run(testDirectory);
+  } finally {
+    rmSync(testDirectory, {recursive: true, force: true});
+  }
 }
 
 main();

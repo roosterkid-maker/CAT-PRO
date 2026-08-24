@@ -1,39 +1,20 @@
 import assert from "node:assert/strict";
 
 import {
-  STRATEGY_ONE_TINY_LIVE_BASKET_POLICY,
-  isStrategyOneTinyLiveBasketRoute,
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+  isStrategyOneTinyLiveDynamicRoute,
 } from "../StrategyOneTinyLiveBasketPolicy";
 
 function main(): void {
-  const policy = STRATEGY_ONE_TINY_LIVE_BASKET_POLICY;
+  const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
 
-  assert.equal(policy.id, "strategy-one-seven-coin-inventory-v1");
-  assert.deepEqual(policy.markets, [
-    "COTIUSDT",
-    "BBUSDT",
-    "HEMIUSDT",
-    "TREEUSDT",
-    "NEXOUSDT",
-    "PYBOBOUSDT",
-    "GPSUSDT",
-  ]);
-  assert.deepEqual(policy.inventoryTargets, [
-    {exchange: "binance", asset: "COTI", targetNotionalInr: 1_000},
-    {exchange: "binance", asset: "BB", targetNotionalInr: 500},
-    {exchange: "binance", asset: "HEMI", targetNotionalInr: 500},
-    {exchange: "coindcx", asset: "BB", targetNotionalInr: 500},
-    {exchange: "coindcx", asset: "TREE", targetNotionalInr: 500},
-    {exchange: "coindcx", asset: "HEMI", targetNotionalInr: 500},
-    {exchange: "coindcx", asset: "NEXO", targetNotionalInr: 500},
-    {exchange: "bybit", asset: "PYBOBO", targetNotionalInr: 500},
-    {exchange: "bybit", asset: "GPS", targetNotionalInr: 500},
-  ]);
-  assert.equal(
-    policy.inventoryTargets.reduce((total, target) => total + target.targetNotionalInr, 0),
-    5_000,
-  );
-  assert.equal(policy.routes.length, 11);
+  assert.equal(policy.schemaVersion, "188.0");
+  assert.equal(policy.id, "strategy-one-dynamic-usdt-route-pool-v1");
+  assert.deepEqual(policy.quoteAssets, ["USDT"]);
+  assert.deepEqual(policy.venues, ["binance", "coindcx", "bybit"]);
+  assert.deepEqual(policy.markets, []);
+  assert.deepEqual(policy.routes, []);
+  assert.deepEqual(policy.inventoryTargets, []);
   assert.equal(policy.capitalPerLegInr, 500);
   assert.equal(policy.maximumAttempts, 10);
   assert.equal(policy.durationMinutes, 180);
@@ -42,23 +23,34 @@ function main(): void {
   assert.equal(policy.withdrawalsAllowed, false);
   assert.equal(policy.liveOrderSubmissionAuthorized, false);
 
-  for (const route of policy.routes) {
-    assert.equal(isStrategyOneTinyLiveBasketRoute(route), true);
-  }
-
-  assert.equal(isStrategyOneTinyLiveBasketRoute({
+  assert.equal(isStrategyOneTinyLiveDynamicRoute({
     market: "coti/usdt",
     buyExchange: " COINDCX ",
     sellExchange: "BINANCE",
   }), true);
-  assert.equal(isStrategyOneTinyLiveBasketRoute({
-    market: "COTIUSDT",
-    buyExchange: "binance",
-    sellExchange: "coindcx",
-  }), false);
-  assert.equal(isStrategyOneTinyLiveBasketRoute({
-    market: "BTCUSDT",
+  assert.equal(isStrategyOneTinyLiveDynamicRoute({
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "binance",
+  }), true);
+  assert.equal(isStrategyOneTinyLiveDynamicRoute({
+    market: "BBUSDT",
     buyExchange: "coindcx",
+    sellExchange: "binance",
+  }), true, "Two-character base assets must remain eligible in the dynamic pool.");
+  assert.equal(isStrategyOneTinyLiveDynamicRoute({
+    market: "BTCUSDT",
+    buyExchange: "binance",
+    sellExchange: "binance",
+  }), false);
+  assert.equal(isStrategyOneTinyLiveDynamicRoute({
+    market: "BTCINR",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+  }), false);
+  assert.equal(isStrategyOneTinyLiveDynamicRoute({
+    market: "BTCUSDT",
+    buyExchange: "zebpay",
     sellExchange: "binance",
   }), false);
   assert.equal(Object.isFrozen(policy), true);
@@ -66,7 +58,7 @@ function main(): void {
   assert.equal(Object.isFrozen(policy.inventoryTargets), true);
 
   console.log(
-    "V183 seven-coin Tiny-LIVE basket policy passed: exact ₹5,000 sell inventory, 11 immutable route directions, ₹500/leg, 10 attempts/180 minutes, excluded venues, and no transfer/withdraw/order authority.",
+    "V188 dynamic Tiny-LIVE route-pool policy passed: current USDT routes across three audited venues, ₹500/leg, 10 attempts/180 minutes, excluded venues, and no transfer/withdraw/order authority.",
   );
 }
 

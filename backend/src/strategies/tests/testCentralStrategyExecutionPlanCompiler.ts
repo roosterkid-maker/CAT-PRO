@@ -98,6 +98,38 @@ async function main(): Promise<void> {
     assert.equal(basisPlan.settlementPolicy.nextOpeningDelayMs, 120_000);
     assert.equal(basisPlan.settlementPolicy.perpetualLeverage, 1);
   }
+  const intraFundingPlan = compiler.compile(base(
+    "FUNDING_RATE_ARBITRAGE_SHADOW_OPPORTUNITY",
+    "funding-rate-arbitrage",
+    {routeKind: "INTRA_SPOT_PERPETUAL", longProduct: "SPOT", market: "BTCUSDT",
+      longExchange: "binance", shortExchange: "binance", quantity: 1,
+      longEntryVwap: 100, shortEntryVwap: 100.3,
+      nextFundingTimeLong: now + 10_000, nextFundingTimeShort: now + 10_000,
+      expectedNetQuote: 1, executionReadinessBlockers: ["POSITION_EVIDENCE_MISSING"]},
+  ), now);
+  assert.equal(intraFundingPlan.routeFamily, "SPOT_PERPETUAL");
+  assert.deepEqual(intraFundingPlan.legs.map((item) => [item.exchange, item.product, item.side]), [
+    ["binance", "SPOT", "BUY"], ["binance", "PERPETUAL", "SELL"],
+  ]);
+  const unequalIntervalFundingPlan = compiler.compile(base(
+    "FUNDING_RATE_ARBITRAGE_SHADOW_OPPORTUNITY",
+    "funding-rate-arbitrage",
+    {routeKind: "CROSS_PERPETUAL", market: "BTCUSDT", longExchange: "binance",
+      shortExchange: "bybit", quantity: 1, longEntryVwap: 100, shortEntryVwap: 101,
+      nextFundingTimeLong: now + 10_000, nextFundingTimeShort: now + 12_000,
+      fundingIntervalMinutes: 480, longFundingIntervalMinutes: 480,
+      shortFundingIntervalMinutes: 240, modeledFundingPeriods: 3,
+      modeledLongFundingPeriods: 2, modeledShortFundingPeriods: 3,
+      expectedNetQuote: 1, executionReadinessBlockers: ["MARGIN_EVIDENCE_MISSING"]},
+  ), now);
+  assert.equal(unequalIntervalFundingPlan.settlementPolicy.kind, "FUNDING_CAPTURE_THEN_EXIT");
+  if (unequalIntervalFundingPlan.settlementPolicy.kind === "FUNDING_CAPTURE_THEN_EXIT") {
+    assert.equal(unequalIntervalFundingPlan.settlementPolicy.fundingSchedule, undefined);
+    assert.equal(unequalIntervalFundingPlan.settlementPolicy.fundingLegSchedules?.longTimestamps.length, 2);
+    assert.equal(unequalIntervalFundingPlan.settlementPolicy.fundingLegSchedules?.shortTimestamps.length, 3);
+    assert.ok(unequalIntervalFundingPlan.settlementPolicy.notBefore >
+      Math.max(...unequalIntervalFundingPlan.settlementPolicy.fundingLegSchedules!.shortTimestamps));
+  }
   const routePositions = basisPlan.legs.map((item) => ({
     exchange: item.exchange, product: item.product, market: item.market,
   }));
@@ -128,4 +160,7 @@ async function main(): Promise<void> {
   console.log("All eight strategy signal families compiled into one immutable leg model; Strategy #1 retained its existing owner and no PAPER, LIVE, capital or order action occurred.");
 }
 
-void main().catch((error: unknown) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });
+void main().catch((error: unknown) => {
+  console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+  process.exitCode = 1;
+});

@@ -414,6 +414,10 @@ export interface SpotPerpetualBasisStrategySignal {
 }
 
 export interface FundingRateArbitrageSignalEvidence {
+  /** Missing on pre-V28.1 persisted signals; those replay as CROSS_PERPETUAL. */
+  readonly routeKind?: "CROSS_PERPETUAL" | "INTRA_SPOT_PERPETUAL";
+  /** Missing on pre-V28.1 persisted signals; those replay with a perpetual long leg. */
+  readonly longProduct?: "PERPETUAL" | "SPOT";
   readonly market: string;
   readonly longExchange: string;
   readonly shortExchange: string;
@@ -427,6 +431,9 @@ export interface FundingRateArbitrageSignalEvidence {
   readonly expectedFundingGuaranteed: false;
   readonly projectedFundingRatePersistenceRequired: true;
   readonly modeledFundingPeriods: number;
+  /** Exact per-leg counts for unequal funding clocks; absent on legacy signals. */
+  readonly modeledLongFundingPeriods?: number;
+  readonly modeledShortFundingPeriods?: number;
   readonly minimumQualifyingFundingPeriods: number;
   readonly maximumFundingPeriodsToCapture: number;
   readonly projectedHoldingTimeMs: number;
@@ -438,10 +445,14 @@ export interface FundingRateArbitrageSignalEvidence {
   readonly favorableEntryBasisExcluded: true;
   readonly roundTripFeeQuote: number;
   readonly safetyBufferQuote: number;
+  readonly slippageReserveQuote?: number;
   readonly expectedNetQuote: number;
   readonly expectedNetPercent: number;
   readonly minimumExpectedNetPercent: number;
   readonly fundingIntervalMinutes: number;
+  /** Per-venue intervals; legacy signals use fundingIntervalMinutes for both. */
+  readonly longFundingIntervalMinutes?: number;
+  readonly shortFundingIntervalMinutes?: number;
   readonly nextFundingTimeLong: number;
   readonly nextFundingTimeShort: number;
   readonly fundingTimeSkewMs: number;

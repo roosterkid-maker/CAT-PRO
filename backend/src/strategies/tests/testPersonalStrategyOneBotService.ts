@@ -24,6 +24,7 @@ function main(): void {
   let acceptance = createAcceptance("PASSED");
   let trades: PaperTrade[] = [];
   let fundingBlocked = false;
+  let minimumNotionalBlockedOpportunityId: string | null = null;
   let balanceStale = false;
   let fundingEvaluations = 0;
   const accountReservationAttempts: TradingAccountCapitalReservationAttempt[] = [
@@ -69,12 +70,20 @@ function main(): void {
     evaluateFunding: (opportunity, requestedCapitalInr, now, fundingBoundary) => {
       fundingEvaluations += 1;
 
+      const blocker = fundingBoundary === "AUTHENTICATED_LIVE_READINESS"
+        ? fundingBlocked
+          ? "FUNDING" as const
+          : opportunity.id === minimumNotionalBlockedOpportunityId
+            ? "MIN_NOTIONAL" as const
+            : null
+        : null;
+
       return createFunding(
         opportunity,
         requestedCapitalInr,
         now,
         fundingBoundary,
-        fundingBlocked && fundingBoundary === "AUTHENTICATED_LIVE_READINESS",
+        blocker,
       );
     },
   });
@@ -251,6 +260,39 @@ function main(): void {
   assert.ok(inventoryRequired.capitalManager.actions.every((action) => !action.automaticExecutionAllowed));
   fundingBlocked = false;
 
+  opportunities = [createOpportunity("EXECUTE", "minimum-notional-route", "SANDUSDT")];
+  minimumNotionalBlockedOpportunityId = "minimum-notional-route";
+  const minimumNotionalBlocked = service.getReport(NOW + 4_001);
+  assert.equal(minimumNotionalBlocked.inventoryPlan.recommendationStatus, "MIN_NOTIONAL_BLOCKED");
+  assert.equal(minimumNotionalBlocked.inventoryPlan.recommendedRoute?.requirements[0].deficitAmount, 0);
+  assert.equal(minimumNotionalBlocked.inventoryPlan.recommendedRoute?.requirements[1].deficitAmount, 0);
+  assert.match(
+    minimumNotionalBlocked.inventoryPlan.recommendedRoute?.blockers[0] ?? "",
+    /normalized order notional is below minimum/,
+  );
+  assert.equal(minimumNotionalBlocked.capitalManager.state, "ORDER_RULE_BLOCKED");
+  assert.equal(minimumNotionalBlocked.capitalManager.actions.at(-1)?.kind, "WAIT_FOR_LEGAL_ORDER_SIZE");
+  assert.equal(
+    minimumNotionalBlocked.capitalManager.actions.some((action) => action.kind === "PREPOSITION_ASSET"),
+    false,
+  );
+
+  opportunities = [
+    createOpportunity("EXECUTE", "minimum-notional-route", "SANDUSDT", 2.5),
+    createOpportunity("EXECUTE", "legal-alternate-route", "PYBOBOUSDT", 1.5),
+  ];
+  const dynamicallySelected = service.getReport(NOW + 4_002);
+  assert.equal(dynamicallySelected.inventoryPlan.recommendationStatus, "READY");
+  assert.equal(dynamicallySelected.inventoryPlan.recommendedRoute?.opportunityId, "legal-alternate-route");
+  assert.equal(
+    dynamicallySelected.inventoryPlan.alternatives.some((route) =>
+      route.opportunityId === "minimum-notional-route" &&
+      route.blockers.some((blocker) => blocker.includes("normalized order notional is below minimum"))),
+    true,
+  );
+  minimumNotionalBlockedOpportunityId = null;
+  opportunities = [createOpportunity("EXECUTE")];
+
   trades = [
     createTrade(
       "credible",
@@ -408,8 +450,10 @@ function createFunding(
   requestedCapitalInr: number,
   now: number,
   fundingBoundary: StrategyOneFundingBoundary,
-  blocked = false,
+  blocker: "FUNDING" | "MIN_NOTIONAL" | null = null,
 ): StrategyOneFundedRouteReport {
+  const blocked = blocker !== null;
+  const fundingEvidenceBlocked = blocker === "FUNDING";
   const quantity = Math.min(opportunity.executableQty, requestedCapitalInr / opportunity.buyPrice);
   return {
     version: "86.0",
@@ -426,7 +470,7 @@ function createFunding(
     capitalQuantity: requestedCapitalInr / opportunity.buyPrice,
     depthQuantity: opportunity.executableQty,
     preFundingQuantity: quantity,
-    balanceCappedQuantity: blocked ? null : quantity,
+    balanceCappedQuantity: fundingEvidenceBlocked ? null : quantity,
     executableQuantity: blocked ? null : quantity,
     estimatedExecutableCapitalInr: blocked ? null : requestedCapitalInr,
     reductionPercent: blocked ? null : 0,
@@ -438,11 +482,11 @@ function createFunding(
       synchronizationStatus: fundingBoundary === "ISOLATED_PAPER"
         ? "NOT_REQUIRED_PAPER"
         : "SYNCHRONIZED",
-      availableBalance: fundingBoundary === "ISOLATED_PAPER" || blocked ? null : 10_000,
+      availableBalance: fundingBoundary === "ISOLATED_PAPER" || fundingEvidenceBlocked ? null : 10_000,
       requiredBalance: quantity * opportunity.buyPrice,
       snapshotAgeMs: 0,
       maximumSnapshotAgeMs: fundingBoundary === "ISOLATED_PAPER" ? 0 : 15_000,
-      sufficient: !blocked,
+      sufficient: !fundingEvidenceBlocked,
     },
     sellFunding: {
       exchange: opportunity.pair.sell.exchange,
@@ -450,14 +494,18 @@ function createFunding(
       synchronizationStatus: fundingBoundary === "ISOLATED_PAPER"
         ? "NOT_REQUIRED_PAPER"
         : "SYNCHRONIZED",
-      availableBalance: fundingBoundary === "ISOLATED_PAPER" || blocked ? null : 100,
+      availableBalance: fundingBoundary === "ISOLATED_PAPER" || fundingEvidenceBlocked ? null : 100,
       requiredBalance: quantity,
       snapshotAgeMs: 0,
       maximumSnapshotAgeMs: fundingBoundary === "ISOLATED_PAPER" ? 0 : 15_000,
-      sufficient: !blocked,
+      sufficient: !fundingEvidenceBlocked,
     },
     quantityNormalization: null,
-    blockers: blocked ? ["Authenticated route inventory is insufficient."] : [],
+    blockers: blocker === "FUNDING"
+      ? ["Authenticated route inventory is insufficient."]
+      : blocker === "MIN_NOTIONAL"
+        ? ["bybit normalized order notional is below minimum 5."]
+        : [],
     authenticatedBalancesRequired: fundingBoundary === "AUTHENTICATED_LIVE_READINESS",
     isolatedPaperCapital: fundingBoundary === "ISOLATED_PAPER",
     staleBalanceAllowed: false,
@@ -467,20 +515,25 @@ function createFunding(
   };
 }
 
-function createOpportunity(decision: ArbitrageOpportunity["decision"]): ArbitrageOpportunity {
+function createOpportunity(
+  decision: ArbitrageOpportunity["decision"],
+  id = `personal-${decision.toLowerCase()}`,
+  market = "BTCUSDT",
+  netProfitPercent = 1.8,
+): ArbitrageOpportunity {
   return {
-    id: `personal-${decision.toLowerCase()}`,
+    id,
     pair: {
-      market: "BTCUSDT",
-      buy: {exchange: "coindcx", market: "BTCUSDT", lastPrice: 100, bestBidPrice: 99, bestBidQty: 2,
+      market,
+      buy: {exchange: "coindcx", market, lastPrice: 100, bestBidPrice: 99, bestBidQty: 2,
         bestAskPrice: 100, bestAskQty: 2, spread: 1, timestamp: NOW, source: "orderBook", executable: true},
-      sell: {exchange: "binance", market: "BTCUSDT", lastPrice: 102, bestBidPrice: 102, bestBidQty: 2,
+      sell: {exchange: "binance", market, lastPrice: 102, bestBidPrice: 102, bestBidQty: 2,
         bestAskPrice: 103, bestAskQty: 2, spread: 1, timestamp: NOW, source: "orderBook", executable: true},
     },
     buyPrice: 100, sellPrice: 102, buyAvailableQty: 2, sellAvailableQty: 2, requiredQty: 1,
     availableExecutableQty: 1, executableQty: 1, liquidityScore: 100, enoughLiquidity: true,
     freshnessScore: 100, feeScore: 100, spreadScore: 100, decision, analysisSummary: [], rawSpread: 2,
-    rawSpreadPercent: 2, estimatedFees: 0.2, netProfit: 1.8, netProfitPercent: 1.8,
+    rawSpreadPercent: 2, estimatedFees: 0.2, netProfit: netProfitPercent, netProfitPercent,
     usedLastPriceFallback: false, quotesAreFresh: true, score: 95, timestamp: NOW,
   };
 }

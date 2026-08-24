@@ -58,6 +58,14 @@ export type CentralStrategySettlementPolicy =
         readonly longTimestamp: number;
         readonly shortTimestamp: number;
       }[];
+      /**
+       * Exact per-leg settlement clocks for venues with different funding
+       * intervals. When present this is authoritative over fundingSchedule.
+       */
+      readonly fundingLegSchedules?: {
+        readonly longTimestamps: readonly number[];
+        readonly shortTimestamps: readonly number[];
+      };
       readonly requiresFundingEvidence: true;
       readonly forcedTimeExitAllowed: false;
     }

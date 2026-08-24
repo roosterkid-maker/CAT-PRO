@@ -305,6 +305,37 @@ export class AclaCapitalLoopManager {
   }
 
   getCycle(cycleId: string): AclaCycleRecord | null { const item = this.cycles.get(cycleId); return item ? clone(item) : null; }
+  /**
+   * A process can stop after the third SHADOW fill was durably recorded but
+   * before the final capital snapshot was written.  All three legs are
+   * simulated and contain the final start-asset quantity, so the cycle can be
+   * closed on restart without touching an exchange account.  Legacy records
+   * do not retain rounding-dust valuation; any unverified positive P&L is
+   * therefore booked as dust so restart recovery can never invent profit.
+   */
+  reconcileRestoredThreeLegShadowCycle(now = Date.now()): AclaCycleRecord | null {
+    validateTime(now);
+    const cycleId = this.pool.openCycleId;
+    if (cycleId === null) return null;
+    const current = this.cycles.get(cycleId);
+    if (!current || current.state !== "LEG_3_FILLED" || current.legs.length !== 3 ||
+        current.legs.some((leg) => !leg.simulated || leg.exchangeOrderId !== null)) return null;
+    const finalQuantity = current.legs.find((leg) => leg.sequence === 3)?.outputAfterFee;
+    if (finalQuantity === undefined || !positive(finalQuantity) || !positive(current.initialQuantity) ||
+        !positive(current.reservedCapitalInr)) return null;
+    const assetInrValue = current.reservedCapitalInr / current.initialQuantity;
+    const unverifiedPositivePnlInr = money(Math.max(
+      0,
+      (finalQuantity - current.initialQuantity) * assetInrValue,
+    ));
+    return this.settleCycle(
+      cycleId,
+      finalQuantity,
+      assetInrValue,
+      unverifiedPositivePnlInr,
+      now,
+    );
+  }
   getReport(now = Date.now()) {
     validateTime(now); const values = [...this.cycles.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     return freeze({version: "180.0" as const, generatedAt: now, restoredAt: this.restoredAt, pool: clone(this.pool),

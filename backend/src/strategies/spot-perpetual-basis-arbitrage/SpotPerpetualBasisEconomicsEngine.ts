@@ -48,6 +48,11 @@ import {
   orderBookService,
 } from "../../orderbook/services/OrderBookService";
 
+import {
+  commonExecutableQuantityIncrement,
+  roundDownToExecutableIncrement,
+} from "../../trading/execution/ExecutableQuantityIncrement";
+
 import type {
   SpotPerpetualBasisSignalEvidence,
 } from "../models/StrategySignal";
@@ -207,6 +212,8 @@ export class SpotPerpetualBasisEconomicsEngine {
       }
     }
 
+    assessments.sort(compareAssessmentsByExpectedNet);
+
     return deepFreeze({
       generatedAt: now,
       sourceSnapshotGeneratedAt: snapshot.generatedAt,
@@ -311,17 +318,21 @@ export class SpotPerpetualBasisEconomicsEngine {
 
     const spotStep = this.quantityStep(spotCapability);
     const derivativeStep = derivative.rules.quantityStep;
+    const commonQuantityStep = spotStep === null
+      ? null
+      : commonExecutableQuantityIncrement([spotStep, derivativeStep]);
 
     if (
       spotStep === null ||
       !Number.isFinite(derivativeStep) || derivativeStep <= 0 ||
+      commonQuantityStep === null ||
       spotCapability.notional.minimumNotional === null ||
       !Number.isFinite(derivative.rules.minimumNotional) || derivative.rules.minimumNotional <= 0
     ) {
       blockers.add("MARKET_RULES_INCOMPLETE");
     }
 
-    if (blockers.size > 0 || spotStep === null) {
+    if (blockers.size > 0 || spotStep === null || commonQuantityStep === null) {
       return this.blocked(spotExchange, derivative, blockers);
     }
 
@@ -333,10 +344,10 @@ export class SpotPerpetualBasisEconomicsEngine {
       return this.blocked(spotExchange, derivative, blockers);
     }
 
-    let quantity = configuration.targetQuoteCapital / spotBestAsk;
-    quantity = quantizeDown(quantity, derivativeStep);
-    quantity = quantizeDown(quantity, spotStep);
-    quantity = quantizeDown(quantity, derivativeStep);
+    const quantity = roundDownToExecutableIncrement(
+      configuration.targetQuoteCapital / spotBestAsk,
+      commonQuantityStep,
+    );
 
     if (
       !Number.isFinite(quantity) || quantity <= 0 ||
@@ -561,8 +572,15 @@ export class SpotPerpetualBasisEconomicsEngine {
   }
 }
 
-function quantizeDown(quantity: number, increment: number): number {
-  return Math.floor((quantity + Number.EPSILON) / increment) * increment;
+function compareAssessmentsByExpectedNet(
+  first: SpotPerpetualBasisAssessment,
+  second: SpotPerpetualBasisAssessment,
+): number {
+  return (second.economics?.expectedNetPercent ?? Number.NEGATIVE_INFINITY) -
+      (first.economics?.expectedNetPercent ?? Number.NEGATIVE_INFINITY) ||
+    (second.economics?.expectedNetQuote ?? Number.NEGATIVE_INFINITY) -
+      (first.economics?.expectedNetQuote ?? Number.NEGATIVE_INFINITY) ||
+    first.id.localeCompare(second.id);
 }
 
 function isIncrementMultiple(quantity: number, increment: number): boolean {

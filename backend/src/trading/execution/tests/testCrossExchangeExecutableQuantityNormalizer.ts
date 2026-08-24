@@ -301,6 +301,45 @@ function main(): void {
     ),
   );
 
+  const minimumNotionalFloatingBoundary =
+    crossExchangeExecutableQuantityNormalizer
+      .normalize({
+        rawQuantity:
+          0.3,
+        buyPrice:
+          33.33333333333333,
+        sellPrice:
+          33.33333333333333,
+        buyCapability:
+          capability({
+            exchange:
+              "floating-boundary-buy",
+            quantityStep:
+              0.1,
+            quantityPrecision:
+              1,
+            minimumNotional:
+              10,
+          }),
+        sellCapability:
+          capability({
+            exchange:
+              "floating-boundary-sell",
+            quantityStep:
+              0.1,
+            quantityPrecision:
+              1,
+            minimumNotional:
+              10,
+          }),
+      });
+
+  assert.notEqual(
+    minimumNotionalFloatingBoundary.state,
+    "BLOCKED",
+    "IEEE-754 residue at the exact exchange minimum must not create a false blocker.",
+  );
+
   const missingCapability =
     crossExchangeExecutableQuantityNormalizer
       .normalize({

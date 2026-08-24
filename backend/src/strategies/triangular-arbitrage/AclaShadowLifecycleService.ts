@@ -37,6 +37,7 @@ export class AclaShadowLifecycleService {
   private completed = 0;
   private rejected = 0;
   private failed = 0;
+  private restartReconciliations = 0;
   private lastError: string | null = null;
 
   constructor(
@@ -51,6 +52,7 @@ export class AclaShadowLifecycleService {
   start(): void {
     if (this.unsubscribe) return;
     this.unsubscribe = this.admissions.subscribeToAdmissions((record) => this.accept(record));
+    this.reconcileRestartedCycle();
   }
   stop(): void { this.unsubscribe?.(); this.unsubscribe = null; }
   isRunning(): boolean { return this.unsubscribe !== null; }
@@ -61,6 +63,7 @@ export class AclaShadowLifecycleService {
     for (const outcome of this.outcomes.filter((item) => item.state !== "COMPLETED")) blockers.set(outcome.reason, (blockers.get(outcome.reason) ?? 0) + 1);
     return freeze({version: "180.0" as const, generatedAt: now, running: this.isRunning(), admissionsObserved: this.admissionsObserved,
       admitted: this.admitted, completed: this.completed, rejected: this.rejected, failed: this.failed,
+      restartReconciliations: this.restartReconciliations,
       cyclesInRollingHour: this.recentCycleTimes.length, lastError: this.lastError,
       dominantBlockers: [...blockers.entries()].map(([code, count]) => ({code, count})).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)).slice(0, 10),
       recentOutcomes: [...this.outcomes].reverse().slice(0, 50).map(clone),
@@ -68,6 +71,37 @@ export class AclaShadowLifecycleService {
         freshDepthRequalificationAtBothLastLooks: true, sequentialLegs: true,
         exposedRecoveryOwnedByCapitalLoop: true, simulatedOnly: true,
         accountMutationPerformed: false, paperExecutionAllowed: false, liveExecutionAllowed: false, orderSubmissionAllowed: false}});
+  }
+
+  private reconcileRestartedCycle(): void {
+    const now = Date.now();
+    try {
+      const reconciled = this.capital.reconcileRestoredThreeLegShadowCycle(now);
+      if (!reconciled) return;
+      this.restartReconciliations += 1;
+      this.completed += 1;
+      this.recentCycleTimes.push(now);
+      this.lastRouteAt.set(`${reconciled.exchange}:${reconciled.pathId}`, now);
+      this.outcomes.push(freeze({
+        admissionId: `restart:${reconciled.id}`,
+        signalId: reconciled.signalId,
+        pathId: reconciled.pathId,
+        state: "COMPLETED" as const,
+        reason: "RESTART_RECONCILED_PERSISTED_THREE_LEG_SHADOW_CYCLE_CONSERVATIVELY",
+        cycleId: reconciled.id,
+        generatedAt: now,
+        executionMode: "SHADOW" as const,
+        accountMutationPerformed: false as const,
+        liveExecutionAllowed: false as const,
+        orderSubmissionAllowed: false as const,
+      }));
+      this.lastError = null;
+    } catch (error: unknown) {
+      this.failed += 1;
+      this.lastError = error instanceof Error
+        ? `RESTART_RECONCILIATION_FAILED:${error.message}`
+        : "RESTART_RECONCILIATION_FAILED:UNKNOWN";
+    }
   }
 
   private accept(record: CentralStrategyAdmissionRecord): void {

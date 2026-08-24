@@ -30,6 +30,7 @@ const MAXIMUM_VISIBLE_ASSETS_PER_EXCHANGE = 8;
 export type PersonalCapitalManagerState =
   | "EVIDENCE_INCOMPLETE"
   | "WAITING_FOR_ROUTE"
+  | "ORDER_RULE_BLOCKED"
   | "OPERATOR_ACTION_REQUIRED"
   | "READY_FOR_PREFLIGHT";
 
@@ -67,6 +68,7 @@ export interface PersonalCapitalManagerInput {
       | "NO_CURRENT_EXECUTE_ROUTE"
       | "EVIDENCE_INCOMPLETE"
       | "FUNDING_REQUIRED"
+      | "MIN_NOTIONAL_BLOCKED"
       | "READY";
     readonly recommendedRoute: PersonalCapitalManagerInventoryRouteInput | null;
   };
@@ -169,6 +171,7 @@ export interface PersonalCapitalManagerAction {
     | "REFRESH_BALANCE_EVIDENCE"
     | "PREPOSITION_ASSET"
     | "KEEP_POSITION"
+    | "WAIT_FOR_LEGAL_ORDER_SIZE"
     | "RUN_READ_ONLY_PREFLIGHT";
   readonly state: "WAITING" | "BLOCKED" | "ACTION_REQUIRED" | "READY";
   readonly exchange: string | null;
@@ -360,16 +363,24 @@ export class PersonalCapitalManagerService {
     const fundingActionRequired = routeEvidenceComplete && route.requirements.some(
       (requirement) => (requirement.deficitAmount ?? 0) > 0,
     );
+    const orderRuleBlocked = input.inventoryPlan.recommendationStatus === "MIN_NOTIONAL_BLOCKED";
     const state: PersonalCapitalManagerState = !allExchangeBalancesFresh ||
       input.inventoryPlan.recommendationStatus === "EVIDENCE_INCOMPLETE" ||
       (route !== null && !routeEvidenceComplete)
       ? "EVIDENCE_INCOMPLETE"
       : route === null
         ? "WAITING_FOR_ROUTE"
+        : orderRuleBlocked
+          ? "ORDER_RULE_BLOCKED"
         : fundingActionRequired
           ? "OPERATOR_ACTION_REQUIRED"
           : "READY_FOR_PREFLIGHT";
-    const actions = buildActions(route, routeEvidenceComplete, fundingActionRequired);
+    const actions = buildActions(
+      route,
+      routeEvidenceComplete,
+      fundingActionRequired,
+      orderRuleBlocked,
+    );
     const capitalTruth = buildCapitalTruth(input);
     const allocation = buildAllocation(
       route,
@@ -904,6 +915,7 @@ function buildActions(
   route: PersonalCapitalManagerInventoryRouteInput | null,
   routeEvidenceComplete: boolean,
   fundingActionRequired: boolean,
+  orderRuleBlocked: boolean,
 ): PersonalCapitalManagerAction[] {
   const actions: PersonalCapitalManagerAction[] = [{
     priority: 1,
@@ -928,6 +940,22 @@ function buildActions(
       amount: null,
       unit: null,
       instruction: "Wait for a fresh Strategy #1 EXECUTE route before positioning exchange capital.",
+      operatorApprovalRequired: false,
+      automaticExecutionAllowed: false,
+    });
+    return actions;
+  }
+
+  if (orderRuleBlocked) {
+    actions.push({
+      priority: 2,
+      kind: "WAIT_FOR_LEGAL_ORDER_SIZE",
+      state: "BLOCKED",
+      exchange: route.buyExchange,
+      asset: route.quoteAsset,
+      amount: null,
+      unit: null,
+      instruction: "Do not add funds for this route: its normalized order is below the exchange minimum within the configured hard cap. Wait for the next dynamically selected legal route.",
       operatorApprovalRequired: false,
       automaticExecutionAllowed: false,
     });

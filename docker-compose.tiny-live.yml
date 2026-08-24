@@ -5,6 +5,9 @@ services:
       TRADING_EXECUTION_MODE: live
       AUTOMATED_PAPER_TRADING_CONFIRMATION: ""
       LIVE_TRADING_ENABLED: "true"
+      # Observation-only controllers. This does not opt any strategy into the
+      # central PAPER worker and grants no LIVE/order authority.
+      CAT_PRO_SHADOW_STRATEGIES: spot-perpetual-basis-arbitrage,triangular-arbitrage,funding-rate-arbitrage
       ARBITRAGE_LIVE_CONFIRMATION: ENABLE_CONFIRMED_ARBITRAGE_EXECUTION
       STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION: ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME
       LIVE_TRADING_CONFIRMATION: ENABLE_CONFIRMED_LIVE_EXECUTION

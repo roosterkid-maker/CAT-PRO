@@ -557,10 +557,11 @@ export interface StrategyOneTinyLivePreArmAttempt {
   sellExchange?: string;
 }
 
-export interface StrategyOneTinyLiveBasketPolicy {
-  schemaVersion: "183.0";
-  id: "strategy-one-seven-coin-inventory-v1";
+export interface StrategyOneTinyLiveRoutePoolPolicy {
+  schemaVersion: "188.0";
+  id: "strategy-one-dynamic-usdt-route-pool-v1";
   label: string;
+  quoteAssets: ["USDT"];
   markets: string[];
   venues: Array<"binance" | "coindcx" | "bybit">;
   routes: Array<{
@@ -568,16 +569,13 @@ export interface StrategyOneTinyLiveBasketPolicy {
     buyExchange: "binance" | "coindcx" | "bybit";
     sellExchange: "binance" | "coindcx" | "bybit";
   }>;
-  inventoryTargets: Array<{
-    exchange: "binance" | "coindcx" | "bybit";
-    asset: string;
-    targetNotionalInr: number;
-  }>;
+  inventoryTargets: [];
   capitalPerLegInr: 500;
   maximumAttempts: 10;
   durationMinutes: 180;
   stopOnFirstNonCleanResult: true;
   routeSelection: string;
+  eligibility: string[];
   excludedVenues: string[];
   automaticTransfersAllowed: false;
   withdrawalsAllowed: false;
@@ -585,7 +583,7 @@ export interface StrategyOneTinyLiveBasketPolicy {
 }
 
 export interface StrategyOneTinyLivePreArmRecord {
-  schemaVersion: "125.0" | "150.0" | "182.0" | "183.0";
+  schemaVersion: "125.0" | "150.0" | "182.0" | "188.0";
   id: string;
   state: StrategyOneTinyLivePreArmState;
   market: string;
@@ -607,8 +605,8 @@ export interface StrategyOneTinyLivePreArmRecord {
   attemptsUsed?: number;
   attempts?: StrategyOneTinyLivePreArmAttempt[];
   nextAttemptNotBefore?: number | null;
-  routeScope?: "EXACT_ROUTE" | "PILOT_BASKET";
-  pilotBasketId?: "strategy-one-seven-coin-inventory-v1";
+  routeScope?: "EXACT_ROUTE" | "DYNAMIC_POOL";
+  routePoolId?: "strategy-one-dynamic-usdt-route-pool-v1";
 }
 
 export type StrategyOneTinyLiveAccountModeLeaseState =
@@ -620,7 +618,7 @@ export type StrategyOneTinyLiveAccountModeLeaseState =
   | "RESTORE_FAILED";
 
 export interface StrategyOneTinyLiveAccountModeLeaseRecord {
-  schemaVersion: "151.0" | "182.1" | "183.1";
+  schemaVersion: "151.0" | "182.1" | "188.1";
   id: string;
   state: StrategyOneTinyLiveAccountModeLeaseState;
   preArmId: string;
@@ -642,8 +640,8 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   automaticOrderAuthorityAllowed: false;
   automaticTransferAllowed: false;
   withdrawalAllowed: false;
-  routeScope?: "EXACT_ROUTE" | "PILOT_BASKET";
-  pilotBasketId?: "strategy-one-seven-coin-inventory-v1";
+  routeScope?: "EXACT_ROUTE" | "DYNAMIC_POOL";
+  routePoolId?: "strategy-one-dynamic-usdt-route-pool-v1";
 }
 
 export interface StrategyOneTinyLiveAccountModeLeaseDiagnostics {
@@ -679,9 +677,17 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
     outcome: "BLOCKED" | "CLAIMED" | "COMPLETED" | "FAILED_SAFE";
     reason: string;
   } | null;
+  pipelineTelemetry: {
+    candidatesEvaluated: number;
+    preflightBlocks: number;
+    refreshesRequested: number;
+    refreshesRecovered: number;
+    coordinatorStarts: number;
+  };
   records: StrategyOneTinyLivePreArmRecord[];
   accountModeLease: StrategyOneTinyLiveAccountModeLeaseDiagnostics;
-  pilotBasket: StrategyOneTinyLiveBasketPolicy;
+  routePool: StrategyOneTinyLiveRoutePoolPolicy;
+  pilotBasket: null;
   limits: {
     minimumDurationMinutes: number;
     defaultDurationMinutes: number;

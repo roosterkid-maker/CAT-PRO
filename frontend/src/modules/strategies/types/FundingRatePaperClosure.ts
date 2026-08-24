@@ -124,6 +124,7 @@ export interface FundingRatePaperClosureReport {
   safety: {
     readOnlyAggregation: true;
     sameMarketTwoVenueOnly: true;
+    intraRouteLongSpotShortPerpetualOnly?: true;
     matchedLongShortOnly: true;
     expectedFundingNotGuaranteed: true;
     projectedFundingRatePersistenceRequired: true;

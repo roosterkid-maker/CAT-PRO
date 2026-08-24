@@ -353,6 +353,39 @@ async function main(): Promise<void> {
   assert.equal(crossVenue.qualifiedRoutes, 1);
   assert.equal(crossVenue.assessments[0]?.spotExchange, "coindcx");
   assert.equal(crossVenue.assessments[0]?.perpetualExchange, "binance");
+
+  const nonDivisibleStepEngine = new SpotPerpetualBasisEconomicsEngine({
+    getSpotBook: () => spotBook(now),
+    getDerivativeDepth: () => derivativeDepth("BTCUSDT", now),
+    getSpotCapability: () => ({
+      ...spotCapability(now),
+      quantity: {...spotCapability(now).quantity, quantityStep: 0.01, quantityPrecision: 2},
+    }),
+    getSpotFee: (exchange, market) => ({exchange, market, makerPercent: 0.1, takerPercent: 0.1,
+      source: "STATIC_CONFIG", synchronizedAt: null, expiresAt: null}),
+    getDerivativeFee: (exchange) => fees.get(exchange),
+  });
+  const baseNonDivisibleSnapshot = derivativeSnapshot(now);
+  const nonDivisibleSnapshot = {
+    ...baseNonDivisibleSnapshot,
+    markets: baseNonDivisibleSnapshot.markets.map((market) => ({
+      ...market,
+      rules: {...market.rules, quantityStep: 0.003},
+    })),
+  };
+  const nonDivisibleStep = nonDivisibleStepEngine.evaluate(
+    nonDivisibleSnapshot,
+    createSpotPerpetualBasisConfiguration({enabled: true, exchanges: ["binance"],
+      markets: ["BTCUSDT"], targetQuoteCapital: 1_000, minimumExpectedNetPercent: 0.2,
+      maximumEvidenceAgeMs: 5_000, maximumTimestampSkewMs: 1_000}),
+    now,
+  );
+  assert.equal(nonDivisibleStep.qualifiedRoutes, 1);
+  assert.equal(
+    Math.abs((nonDivisibleStep.assessments[0]?.economics?.quantity ?? 0) / 0.03 -
+      Math.round((nonDivisibleStep.assessments[0]?.economics?.quantity ?? 0) / 0.03)) < 1e-7,
+    true,
+  );
   assert.throws(() => createSpotPerpetualBasisConfiguration({perpetualLeverage: 2}), /restricted to 1x/);
 
   const cacheReads = {

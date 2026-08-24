@@ -516,12 +516,12 @@ function main(): void {
       },
     },
   }];
-  const nonPilot = service.getPreview(NOW);
-  assert.equal(nonPilot.state, "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY");
-  assert.equal(nonPilot.evidence.currentFreshExecuteOpportunities, 0);
-  assert.equal(nonPilot.evidence.excludedNonPilotCurrentOpportunities, 1);
-  assert.equal(nonPilot.selected, null,
-    "A registered-but-unaudited CoinDCX route must never appear in the Strategy #1 LIVE pilot preview.");
+  const dynamicCoinDcxRoute = service.getPreview(NOW);
+  assert.equal(dynamicCoinDcxRoute.state, "WAITING_FOR_HISTORICAL_MATCH");
+  assert.equal(dynamicCoinDcxRoute.evidence.currentFreshExecuteOpportunities, 1);
+  assert.equal(dynamicCoinDcxRoute.evidence.excludedNonPilotCurrentOpportunities, 0);
+  assert.equal(dynamicCoinDcxRoute.selected, null,
+    "A dynamic CoinDCX route without credible route history must remain fail-closed.");
 
   console.log(
     "Strategy #1 pilot preflight service test passed.",

@@ -4,6 +4,10 @@ import type {
   DerivativeDepthEvidence,
 } from "../../derivatives/models/DerivativeDepthEvidence";
 
+import type {ExchangeFeeEvidence} from "../../arbitrage/models/FeeModel";
+import type {ExchangeMarketCapability} from "../../execution/capabilities/models/ExchangeCapability";
+import type {OrderBook} from "../../orderbook/models/OrderBook";
+
 import type {
   DerivativeMarketDataSnapshot,
   DerivativeMarketEvidence,
@@ -279,8 +283,10 @@ async function main(): Promise<void> {
     })),
   }, controller.getConfiguration(), now);
   assert.equal(boundedCarry.qualifiedRoutes, 1);
-  assert.equal(boundedCarry.assessments[0]?.economics?.modeledFundingPeriods, 3);
-  assert.equal(boundedCarry.assessments[0]?.economics?.minimumQualifyingFundingPeriods, 3);
+  // Four settlements are required once both perpetual legs reserve adverse
+  // entry/exit slippage in addition to fees, basis and the safety buffer.
+  assert.equal(boundedCarry.assessments[0]?.economics?.modeledFundingPeriods, 4);
+  assert.equal(boundedCarry.assessments[0]?.economics?.minimumQualifyingFundingPeriods, 4);
   assert.ok((boundedCarry.assessments[0]?.economics?.expectedNetPercent ?? 0) >= 0.2);
   assert.equal(
     boundedCarry.assessments[0]?.blockers.includes("FUNDING_CARRY_HORIZON_EXCEEDED"),
@@ -319,9 +325,94 @@ async function main(): Promise<void> {
   assert.ok(noFeeResult.assessments[0]?.blockers.includes("DERIVATIVE_FEE_EVIDENCE_MISSING"));
   assert.equal(noFeeResult.assessments[0]?.economics, null);
 
+  const intraDepth: DerivativeDepthEvidence = {
+    ...depth("binance", now),
+    bids: [{price: 100.3, quantity: 20}],
+    asks: [{price: 100.4, quantity: 20}],
+  };
+  const spotBook: OrderBook = {
+    exchange: "binance", market: "BTCUSDT", timestamp: now,
+    bids: [{price: 99.9, quantity: 20}], asks: [{price: 100, quantity: 20}],
+  };
+  const spotCapability: ExchangeMarketCapability = {
+    exchange: "binance", market: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT",
+    product: "spot", tradingEnabled: true, maintenanceMode: false,
+    order: {supportedOrderTypes: ["market", "limit"], supportedTimeInForce: ["GTC", "IOC"],
+      supportsPostOnly: true, supportsClientOrderId: true, supportsOrderCancellation: true,
+      supportsOrderStatusPolling: true},
+    price: {minimumPrice: 0.1, maximumPrice: null, priceStep: 0.1, pricePrecision: 1},
+    quantity: {minimumQuantity: 0.001, maximumQuantity: 500, quantityStep: 0.001, quantityPrecision: 3},
+    notional: {minimumNotional: 5, maximumNotional: null},
+    fees: {makerFeeRate: 0.005, takerFeeRate: 0.01, feeAsset: "USDT"},
+    sourceUpdatedAt: now, synchronizedAt: now,
+  };
+  const spotFee: ExchangeFeeEvidence = {
+    exchange: "binance", market: "BTCUSDT", makerPercent: 0.005, takerPercent: 0.01,
+    source: "ACCOUNT_API", synchronizedAt: now, expiresAt: now + 60_000,
+  };
+  const intraEngine = new FundingRateArbitrageEconomicsEngine({
+    getDerivativeDepth: () => intraDepth,
+    getDerivativeFee: (exchange) => fees.get(exchange),
+    getSpotBook: () => spotBook,
+    getSpotCapability: () => spotCapability,
+    getSpotFee: () => spotFee,
+  });
+  const intraSnapshot = snapshot(now);
+  const intraResult = intraEngine.evaluate({
+    ...intraSnapshot,
+    markets: [derivativeMarket("binance", 0.004, 100.3, 100.4, now)],
+  }, createFundingRateArbitrageConfiguration({
+    enabled: true,
+    exchanges: ["binance"],
+    spotExchanges: ["binance"],
+    routeModes: ["INTRA_SPOT_PERPETUAL"],
+    markets: ["BTCUSDT"],
+    targetQuoteNotional: 1_000,
+    minimumFundingDifferentialPercent: 0.1,
+    minimumExpectedNetPercent: 0.15,
+    maximumFundingPeriodsToCapture: 2,
+    maximumEvidenceAgeMs: 5_000,
+    maximumEvidenceSkewMs: 1_000,
+  }), now);
+  assert.equal(intraResult.evaluatedRoutes, 1);
+  assert.equal(intraResult.qualifiedRoutes, 1);
+  const intraAssessment = intraResult.assessments[0]!;
+  assert.equal(intraAssessment.routeKind, "INTRA_SPOT_PERPETUAL");
+  assert.equal(intraAssessment.evidence?.routeKind, "INTRA_SPOT_PERPETUAL");
+  assert.equal(intraAssessment.evidence?.longProduct, "SPOT");
+  assert.equal(intraAssessment.evidence?.longExchange, "binance");
+  assert.equal(intraAssessment.evidence?.shortExchange, "binance");
+  assert.ok((intraAssessment.economics?.expectedNetPercent ?? 0) >= 0.15);
+
   const intervalResult = engine.evaluate(snapshot(now, true), controller.getConfiguration(), now);
-  assert.equal(intervalResult.qualifiedRoutes, 0);
-  assert.ok(intervalResult.assessments[0]?.blockers.includes("FUNDING_INTERVAL_MISMATCH"));
+  assert.equal(intervalResult.qualifiedRoutes, 1);
+  assert.ok(!intervalResult.assessments[0]?.blockers.includes("FUNDING_INTERVAL_INVALID"));
+  assert.equal(intervalResult.assessments[0]?.differential.longFundingIntervalMinutes, 480);
+  assert.equal(intervalResult.assessments[0]?.differential.shortFundingIntervalMinutes, 240);
+  assert.ok(
+    (intervalResult.assessments[0]?.differential.shortNormalizedDailyFundingRate ?? 0) >
+    (intervalResult.assessments[0]?.differential.longNormalizedDailyFundingRate ?? 0),
+  );
+
+  const offsetSettlementSnapshot = snapshot(now);
+  const offsetSettlementResult = engine.evaluate({
+    ...offsetSettlementSnapshot,
+    markets: offsetSettlementSnapshot.markets.map((market) => ({
+      ...market,
+      nextFundingTime: market.exchange === "binance"
+        ? now + 30 * 60_000
+        : now + 4 * 60 * 60_000,
+    })),
+  }, controller.getConfiguration(), now);
+  assert.equal(offsetSettlementResult.qualifiedRoutes, 1);
+  assert.ok(
+    (offsetSettlementResult.assessments[0]?.differential.fundingTimeSkewMs ?? 0) >
+      controller.getConfiguration().maximumFundingTimeSkewMs,
+  );
+  assert.equal(
+    offsetSettlementResult.assessments[0]?.blockers.includes("FUNDING_TIME_SKEW_EXCEEDED"),
+    false,
+  );
 
   const defaultDisabled = new FundingRateArbitrageStrategyController();
   defaultDisabled.start();

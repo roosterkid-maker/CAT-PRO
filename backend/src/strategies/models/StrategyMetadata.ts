@@ -74,6 +74,7 @@ export interface StrategyMetadata {
     | "25.0"
     | "27.0"
     | "28.0"
+    | "28.1"
     | "29.0"
     | "30.0"
     | "31.0"

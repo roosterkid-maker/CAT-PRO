@@ -190,6 +190,7 @@ export interface PersonalStrategyOneBotReport {
       | "NO_CURRENT_EXECUTE_ROUTE"
       | "EVIDENCE_INCOMPLETE"
       | "FUNDING_REQUIRED"
+      | "MIN_NOTIONAL_BLOCKED"
       | "READY";
     readonly recommendedRoute: PersonalStrategyOneInventoryRoute | null;
     readonly alternatives: readonly PersonalStrategyOneInventoryRoute[];
@@ -1612,15 +1613,23 @@ function buildInventoryPlan(
   const readyRoute = rankedRoutes.find((route) =>
     route.fundingState !== "BLOCKED" && route.requirements.every((requirement) =>
       requirement.deficitAmount === 0));
-  const fundableRoute = rankedRoutes.find((route) => route.fullySpecified);
-  const recommendedRoute = readyRoute ?? fundableRoute ?? null;
+  const fundingRequiredRoute = rankedRoutes.find((route) =>
+    route.fullySpecified && hasInventoryDeficit(route) &&
+    !hasMinimumNotionalBlocker(route));
+  const minimumNotionalBlockedRoute = rankedRoutes.find((route) =>
+    route.fullySpecified && hasMinimumNotionalBlocker(route));
+  const evidenceIncompleteRoute = rankedRoutes.find((route) => route.fullySpecified) ?? null;
+  const recommendedRoute = readyRoute ?? fundingRequiredRoute ??
+    minimumNotionalBlockedRoute ?? evidenceIncompleteRoute;
   const recommendationStatus = executableOpportunities.length === 0
     ? "NO_CURRENT_EXECUTE_ROUTE" as const
     : readyRoute
       ? "READY" as const
-      : fundableRoute
+      : fundingRequiredRoute
         ? "FUNDING_REQUIRED" as const
-        : "EVIDENCE_INCOMPLETE" as const;
+        : minimumNotionalBlockedRoute
+          ? "MIN_NOTIONAL_BLOCKED" as const
+          : "EVIDENCE_INCOMPLETE" as const;
 
   return {
     mode: "ADVISORY_PREPOSITIONING" as const,
@@ -1639,6 +1648,16 @@ function buildInventoryPlan(
       orderSubmissionAllowed: false as const,
     },
   };
+}
+
+function hasInventoryDeficit(route: PersonalStrategyOneInventoryRoute): boolean {
+  return route.requirements.some((requirement) =>
+    requirement.deficitAmount !== null && requirement.deficitAmount > 0);
+}
+
+function hasMinimumNotionalBlocker(route: PersonalStrategyOneInventoryRoute): boolean {
+  return route.blockers.some((blocker) =>
+    blocker.toLowerCase().includes("normalized order notional is below minimum"));
 }
 
 function buildInventoryRequirement(

@@ -110,9 +110,11 @@ function main(): void {
         sellExchange: "coindcx",
       },
       1_786_812_800_000,
-    );
+  );
   assert.ok(reverseCoinDCX);
-  assert.equal(reverseCoinDCX.classification, "EXCLUDED_FROM_STRATEGY_ONE_LIVE");
+  assert.equal(reverseCoinDCX.classification, "SAFE_PILOT_CANDIDATE");
+  assert.equal(reverseCoinDCX.requiredTimeInForce, "GTC");
+  assert.deepEqual(reverseCoinDCX.blockers, []);
 
   const coinswitch =
     requiredVenue(report, "coinswitch");
@@ -160,7 +162,7 @@ function main(): void {
   );
 
   console.log(
-    "Strategy #1 five-venue SPOT contracts are immutable and fail closed: Binance/Bybit are FOK pilot venues, approved basket routes use CoinDCX bounded GTC in either leg direction, and CoinSwitch/UnoCoin remain excluded; no order authority exists.",
+    "Strategy #1 five-venue SPOT contracts are fail closed: Binance/Bybit use FOK, approved dynamic-pool routes use CoinDCX bounded GTC in either leg direction, and CoinSwitch/UnoCoin remain excluded; no order authority exists.",
   );
 }
 

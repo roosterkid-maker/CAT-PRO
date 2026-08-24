@@ -590,8 +590,10 @@ export class CrossExchangeExecutableQuantityNormalizer {
       (
         leg.normalizedNotional ===
           null ||
-        leg.normalizedNotional <
-          leg.minimumNotional
+        isMateriallyBelowMinimumNotional(
+          leg.normalizedNotional,
+          leg.minimumNotional,
+        )
       )
     ) {
       blockers.push(
@@ -954,6 +956,18 @@ export class CrossExchangeExecutableQuantityNormalizer {
         exponent,
     );
   }
+}
+
+function isMateriallyBelowMinimumNotional(
+  normalizedNotional: number,
+  minimumNotional: number,
+): boolean {
+  const floatingPointTolerance = Math.max(
+    1e-12,
+    Math.abs(minimumNotional) * 1e-12,
+  );
+
+  return normalizedNotional + floatingPointTolerance < minimumNotional;
 }
 
 export const crossExchangeExecutableQuantityNormalizer =

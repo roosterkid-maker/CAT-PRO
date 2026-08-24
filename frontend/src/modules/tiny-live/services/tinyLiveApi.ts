@@ -175,7 +175,7 @@ export async function armStrategyOneTinyLive(input: {
   confirmation: string;
   durationMinutes: number;
   maximumAttempts: 1 | 2 | 10;
-  pilotBasketId?: "strategy-one-seven-coin-inventory-v1";
+  routePoolId?: "strategy-one-dynamic-usdt-route-pool-v1";
 }): Promise<StrategyOneTinyLivePreArmRecordResponse> {
   const response = await api.post<StrategyOneTinyLivePreArmRecordResponse>(
     "/api/execution/tiny-live/strategy-one-pre-arm",

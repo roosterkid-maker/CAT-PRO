@@ -62,10 +62,25 @@ export class ExchangePairGenerator {
     snapshot:
       MarketSnapshot,
   ): PositiveSpreadPairBatch {
-    const quotes =
-      Object.values(
-        snapshot.quotes,
+    return this
+      .generatePositiveSpreadCandidatesFromQuotes(
+        snapshot.market,
+        Object.values(
+          snapshot.quotes,
+        ),
       );
+  }
+
+  /**
+   * Allocation-light variant for the event-driven opportunity hot path.
+   * Callers that already hold a compact quote array avoid constructing a
+   * temporary market snapshot and immediately converting it back with
+   * Object.values().
+   */
+  generatePositiveSpreadCandidatesFromQuotes(
+    market: string,
+    quotes: readonly ExchangeQuote[],
+  ): PositiveSpreadPairBatch {
 
     const pairs:
       ExchangePair[] =
@@ -137,7 +152,7 @@ export class ExchangePairGenerator {
 
         pairs.push({
           market:
-            snapshot.market,
+            market,
           buy,
           sell,
         });

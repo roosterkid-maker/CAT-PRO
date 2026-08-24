@@ -193,7 +193,7 @@ async function testInvalidVenueRejectedBeforeGateway(
         exchange: "coindcx",
       },
     }),
-    /Binance\/Bybit SPOT limit-FOK lane or an immutable pilot-basket route/u,
+    /Binance\/Bybit SPOT limit-FOK lane or an approved dynamic-pool route/u,
   );
   assert.equal(calls, 0);
 }
@@ -279,12 +279,16 @@ async function testExactCoinDCXBinanceCOTILane(
     2,
   );
 
+  let reverseCalls = 0;
   const reverse =
     new StrategyOneTwoLegLiveExecutionService(
       {
-        executeOrReconcile: async () => {
-          throw new Error(
-            "Reverse route must never reach gateway.",
+        executeOrReconcile: async (gatewayInput) => {
+          reverseCalls += 1;
+          return ready(
+            gatewayInput.request,
+            gatewayInput.idempotencyKey,
+            gatewayInput.request.quantity,
           );
         },
       },
@@ -294,8 +298,7 @@ async function testExactCoinDCXBinanceCOTILane(
       ),
     );
 
-  await assert.rejects(
-    reverse.executeOrReconcile({
+  const reverseResult = await reverse.executeOrReconcile({
       ...input,
       sessionId:
         "strategy-one:coti:reverse",
@@ -309,9 +312,9 @@ async function testExactCoinDCXBinanceCOTILane(
         side:
           "sell",
       },
-    }),
-    /immutable pilot-basket route/u,
-  );
+    });
+  assert.equal(reverseResult.session.state, "COMPLETED");
+  assert.equal(reverseCalls, 2);
 }
 
 async function testApprovedReverseBBCoinDCXLane(
