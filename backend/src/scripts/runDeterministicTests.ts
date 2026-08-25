@@ -39,6 +39,7 @@ const DETERMINISTIC_TESTS = [
   "workflows/cross-exchange-arbitrage/tests/testUnifiedAutomatedExecutionOrchestrator.js",
   "workflows/cross-exchange-arbitrage/tests/testStrategyOnePaperRuntimeAcceptance.js",
   "core/persistence/tests/testJsonlArchiveStore.js",
+  "core/persistence/tests/testJsonlSnapshotStoreTailRestore.js",
   "core/persistence/tests/testJsonlTailReader.js",
   "discovery/tests/testDynamicOpportunityDiscoveryService.js",
   "derivatives/tests/testDerivativeMarketDataService.js",

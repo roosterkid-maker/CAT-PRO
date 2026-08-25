@@ -424,25 +424,25 @@ export class LivePerformanceEvidencePersistenceService {
 
   private restore():
     void {
-    const records =
+    const latest =
       this.store
-        .readAll();
+        .readLatest();
 
     if (
-      records.length ===
-      0
+      !latest
     ) {
       return;
     }
 
-    for (
-      const record
-      of records
-    ) {
-      this.absorb(
-        record,
-      );
-    }
+    /*
+     * Each persisted payload is a complete metrics/settlement snapshot.
+     * Reading only the newest valid record preserves current truth while
+     * preventing a multi-gigabyte historical journal from being allocated
+     * at process startup. The append-only evidence file remains untouched.
+     */
+    this.absorb(
+      latest,
+    );
 
     this.restored =
       true;

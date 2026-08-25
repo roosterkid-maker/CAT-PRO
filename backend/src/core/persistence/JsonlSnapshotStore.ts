@@ -10,6 +10,10 @@ import {
   dirname,
 } from "node:path";
 
+import {
+  readLatestValidJsonlRecord,
+} from "./JsonlTailReader";
+
 export interface JsonlSnapshotEnvelope<T> {
   storeVersion: 1;
 
@@ -415,6 +419,137 @@ export class JsonlSnapshotStore<T> {
           : "Unknown JSONL snapshot read error.";
 
       return [];
+    }
+  }
+
+  /**
+   * Restore only the newest valid snapshot without loading an unbounded
+   * append-only journal into memory. This is the correct startup path for
+   * stores whose payload already contains the complete current snapshot.
+   */
+  readLatest():
+    T | null {
+    this.resetReadDiagnostics();
+
+    if (
+      !existsSync(
+        this.options
+          .filePath,
+      )
+    ) {
+      this.lastReadAt =
+        Date.now();
+
+      return null;
+    }
+
+    try {
+      const result =
+        readLatestValidJsonlRecord<
+          JsonlSnapshotEnvelope<T> | T
+        >(
+          this.options
+            .filePath,
+          (
+            value,
+          ): value is
+            JsonlSnapshotEnvelope<T> | T =>
+            this.decodeEnvelope(
+              value,
+            ) !==
+              null ||
+            (
+              this.options
+                .decodeLegacy?.(
+                  value,
+                ) ??
+              null
+            ) !==
+              null,
+          {
+            onComplete:
+              (
+                diagnostics,
+              ) => {
+                this.linesRead =
+                  diagnostics
+                    .linesInspected;
+
+                this.malformedRecordsIgnored =
+                  diagnostics
+                    .malformedLinesIgnored +
+                  diagnostics
+                    .oversizedLinesIgnored;
+              },
+          },
+        );
+
+      this.lastReadAt =
+        Date.now();
+
+      if (
+        !result
+      ) {
+        return null;
+      }
+
+      const envelope =
+        this.decodeEnvelope(
+          result.value,
+        );
+
+      if (
+        envelope
+      ) {
+        this.validRecordsRead =
+          1;
+
+        this.sequence =
+          Math.max(
+            this.sequence,
+            envelope.sequence,
+          );
+
+        return structuredClone(
+          envelope.payload,
+        );
+      }
+
+      const legacy =
+        this.options
+          .decodeLegacy?.(
+            result.value,
+          ) ??
+        null;
+
+      if (
+        legacy
+      ) {
+        this.validRecordsRead =
+          1;
+
+        this.legacyRecordsRead =
+          1;
+
+        return structuredClone(
+          legacy,
+        );
+      }
+
+      return null;
+    } catch (
+      error:
+        unknown
+    ) {
+      this.lastError =
+        error instanceof Error
+          ? error.message
+          : "Unknown JSONL latest snapshot read error.";
+
+      this.lastReadAt =
+        Date.now();
+
+      throw error;
     }
   }
 
