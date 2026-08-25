@@ -244,10 +244,108 @@ function main(): void {
   assert.equal(cushionFunded.buyFunding.sufficient, true);
   assert.equal(cushionFunded.sellFunding.sufficient, true);
 
+  const liveSandCushion = cushionService.evaluate({
+    opportunity: {
+      ...sandLike,
+      id: "live-sand-capital-capped-candidate",
+      pair: {
+        ...sandLike.pair,
+        buy: {
+          ...sandLike.pair.buy,
+          bestAskPrice: 0.04166,
+          bestAskQty: 2_000,
+        },
+        sell: {
+          ...sandLike.pair.sell,
+          bestBidPrice: 0.042,
+          bestBidQty: 2_147,
+        },
+      },
+      buyPrice: 0.04166,
+      sellPrice: 0.042,
+      buyAvailableQty: 2_000,
+      sellAvailableQty: 2_147,
+      executableQty: 120.07924269383102,
+      availableExecutableQty: 2_000,
+    },
+    requestedCapitalInr: 500,
+    maximumCapitalPerLegInr: 505,
+    allowSingleIncrementMinimumOrderRoundUp: true,
+    now: NOW,
+  });
+  assert.equal(
+    liveSandCushion.state,
+    "FUNDED",
+    `Capital-capped SAND candidate should use actual depth for the bounded cushion: ${JSON.stringify(liveSandCushion.blockers)}`,
+  );
+  assert.equal(liveSandCushion.depthQuantity, 120.07924269383102);
+  assert.equal(liveSandCushion.executableQuantity, 121);
+  assert.equal(liveSandCushion.minimumOrderCushionUsed, true);
+  assert.equal(
+    liveSandCushion.quantityNormalization?.legs[0]?.normalizedNotional,
+    5.04086,
+  );
+  assert.ok((liveSandCushion.estimatedBuyRequirementInr ?? 0) > 500);
+  assert.ok((liveSandCushion.estimatedBuyRequirementInr ?? Number.POSITIVE_INFINITY) <= 505);
+
+  const insufficientActualDepth = cushionService.evaluate({
+    opportunity: {
+      ...liveSandCushionOpportunity(sandLike),
+      id: "live-sand-insufficient-actual-depth",
+      buyAvailableQty: 120.5,
+      sellAvailableQty: 120.5,
+      availableExecutableQty: 120.5,
+    },
+    requestedCapitalInr: 500,
+    maximumCapitalPerLegInr: 505,
+    allowSingleIncrementMinimumOrderRoundUp: true,
+    now: NOW,
+  });
+  assert.equal(insufficientActualDepth.state, "BLOCKED");
+  assert.match(insufficientActualDepth.blockers.join(" "), /below minimum 5/i);
+
+  const insufficientHardCap = cushionService.evaluate({
+    opportunity: liveSandCushionOpportunity(sandLike),
+    requestedCapitalInr: 500,
+    maximumCapitalPerLegInr: 500.5,
+    allowSingleIncrementMinimumOrderRoundUp: true,
+    now: NOW,
+  });
+  assert.equal(insufficientHardCap.state, "BLOCKED");
+  assert.match(insufficientHardCap.blockers.join(" "), /below minimum 5/i);
+
   testFinalPaperStressGate();
 
   console.log("STRATEGY #1 FUNDED ROUTE SERVICE TEST PASSED.");
   console.log("Capital, depth, fee reserve, fresh two-leg balances, market rules and post-stress economics bounded quantity without enabling LIVE orders.");
+}
+
+function liveSandCushionOpportunity(
+  base: ArbitrageOpportunity,
+): ArbitrageOpportunity {
+  return {
+    ...base,
+    id: "live-sand-cushion",
+    pair: {
+      ...base.pair,
+      buy: {
+        ...base.pair.buy,
+        bestAskPrice: 0.04166,
+        bestAskQty: 2_000,
+      },
+      sell: {
+        ...base.pair.sell,
+        bestBidPrice: 0.042,
+        bestBidQty: 2_147,
+      },
+    },
+    buyPrice: 0.04166,
+    sellPrice: 0.042,
+    buyAvailableQty: 2_000,
+    sellAvailableQty: 2_147,
+    executableQty: 120.07924269383102,
+    availableExecutableQty: 2_000,
+  };
 }
 
 function testFinalPaperStressGate(): void {

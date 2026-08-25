@@ -214,6 +214,7 @@ export class StrategyOneFundedRouteService {
 
     const depthInputs = [
       opportunity.executableQty,
+      opportunity.availableExecutableQty,
       opportunity.buyAvailableQty,
       opportunity.sellAvailableQty,
     ];
@@ -221,6 +222,24 @@ export class StrategyOneFundedRouteService {
       ? Math.min(...depthInputs)
       : null;
     if (depthQuantity === null) blockers.push("Fresh positive two-leg executable depth is unavailable.");
+
+    /*
+     * executableQty is already capped to the scanner's target capital. Keep it
+     * in depthQuantity so ordinary sizing never grows beyond the candidate.
+     * The separately consented one-step minimum-order cushion may use the
+     * genuinely available top-of-book depth, but remains bounded below by the
+     * hard capital cap, authenticated balances and any explicit quantity cap.
+     */
+    const availableDepthInputs = [
+      opportunity.availableExecutableQty,
+      opportunity.buyAvailableQty,
+      opportunity.sellAvailableQty,
+    ];
+    const availableDepthQuantity = availableDepthInputs.every(
+      (quantity) => Number.isFinite(quantity) && quantity > 0,
+    )
+      ? Math.min(...availableDepthInputs)
+      : null;
 
     const requestedQuantity = request.requestedQuantity ?? capitalQuantity;
     if (requestedQuantity === null || !Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
@@ -301,12 +320,12 @@ export class StrategyOneFundedRouteService {
           : null;
       const maximumNormalizationQuantity =
         maximumQuantityFromCapital !== null &&
-        depthQuantity !== null &&
+        availableDepthQuantity !== null &&
         buyCapacity !== null &&
         sellCapacity !== null
           ? Math.min(
               maximumQuantityFromCapital,
-              depthQuantity,
+              availableDepthQuantity,
               buyCapacity,
               sellCapacity,
               request.requestedQuantity ?? Number.POSITIVE_INFINITY,
