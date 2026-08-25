@@ -201,6 +201,7 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     perRouteOperatorApprovalRequired: false,
     liveOrderSubmissionAuthorized: false,
   };
+  const calibrationHeadrooms: Array<unknown> = [];
   const service = new StrategyOneTinyLiveActionAuthorityService({
     getOpportunity: (id) => byId.get(id) ?? null,
     runPreflight: (input: {now?: number; expectedOpportunityId: string}) =>
@@ -209,7 +210,10 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
         input.expectedOpportunityId,
         route,
       ),
-    getCalibration: () => qualification,
+    getCalibration: (_input, headroom) => {
+      calibrationHeadrooms.push(headroom);
+      return qualification;
+    },
     getVenueContract: (exchange: string) => ({
       exchange,
       maximumOrderBookAgeMs: 245,
@@ -246,6 +250,10 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     3,
     "Pool-scoped timing qualification must not reintroduce per-route bootstrap approval quotas.",
   );
+  assert.equal(calibrationHeadrooms.length, 6,
+    "Preview and authorization must each bind qualification to their complete action-time preflight.");
+  assert.equal(calibrationHeadrooms.every(Boolean), true,
+    "The already-computed action-time headroom must be forwarded without a second evidence rebuild.");
 }
 
 function testBasketBootstrapQuotaIsRouteScoped(

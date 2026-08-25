@@ -6,6 +6,7 @@ import {opportunityService} from "../../../arbitrage/services/OpportunityService
 import {
   strategyOneTimingCalibrationService,
   type StrategyOneExecutionTimingQualification,
+  type StrategyOneTimingHeadroomReview,
 } from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
 import {JsonlSnapshotStore} from "../../../core/persistence/JsonlSnapshotStore";
 import {
@@ -97,7 +98,8 @@ export interface StrategyOneTinyLiveActionAuthorityDependencies {
     buyExchange: string;
     sellExchange: string;
     now?: number;
-  }): StrategyOneExecutionTimingQualification | null;
+  }, headroom?: StrategyOneTimingHeadroomReview):
+    StrategyOneExecutionTimingQualification | null;
   getVenueContract(
     exchange: string,
     route: {
@@ -123,8 +125,18 @@ const DEFAULT_FILE = resolve(
 const DEFAULT_DEPENDENCIES: StrategyOneTinyLiveActionAuthorityDependencies = {
   getOpportunity: (id) => opportunityService.getOpportunityById(id),
   runPreflight: (input) => strategyOnePilotPreflightService.run(input),
-  getCalibration: (input) =>
-    strategyOneTimingCalibrationService.getDynamicPoolRouteQualification(input),
+  getCalibration: (input, headroom) =>
+    headroom && input.now !== undefined
+      ? strategyOneTimingCalibrationService
+          .getDynamicPoolRouteQualificationFromHeadroom(
+            {
+              ...input,
+              now: input.now,
+            },
+            headroom,
+          )
+      : strategyOneTimingCalibrationService
+          .getDynamicPoolRouteQualification(input),
   getVenueContract: (exchange, route, now) =>
     strategyOneLiveVenueContractRegistry.getOrderTimeSafetyContract(
       exchange,
@@ -301,7 +313,10 @@ export class StrategyOneTinyLiveActionAuthorityService {
     }
 
     const calibration = route
-      ? this.dependencies.getCalibration({...route, now})
+      ? this.dependencies.getCalibration(
+          {...route, now},
+          selected?.timing,
+        )
       : null;
     const dynamicPoolQualification = calibration?.scope === "DYNAMIC_POOL";
     if (
@@ -658,12 +673,15 @@ export class StrategyOneTinyLiveActionAuthorityService {
       throw new Error(`Tiny-LIVE preflight changed: ${preflight.blockers.join(" | ")}`);
     }
 
-    const calibration = this.dependencies.getCalibration({
-      market: selected.market,
-      buyExchange: selected.buyExchange,
-      sellExchange: selected.sellExchange,
-      now,
-    });
+    const calibration = this.dependencies.getCalibration(
+      {
+        market: selected.market,
+        buyExchange: selected.buyExchange,
+        sellExchange: selected.sellExchange,
+        now,
+      },
+      selected.timing,
+    );
     const exactQuantity = selected.funding.executableQuantity;
     const route = {
       market: selected.market,

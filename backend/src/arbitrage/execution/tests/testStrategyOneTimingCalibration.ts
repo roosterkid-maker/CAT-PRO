@@ -254,6 +254,61 @@ function main(): void {
     assert.equal(review.maximumBookAgeMs, 245);
     assert.equal(review.residualOperationalHeadroomMs, 220);
     assert.equal(review.safety.thresholdRelaxationAllowed, false);
+    let timingReportReads = 0;
+    let pilotReportReads = 0;
+    const countedService = new StrategyOneTimingCalibrationService(
+      {
+        getReport: (now) => {
+          timingReportReads += 1;
+          return evidence.getReport(now);
+        },
+      },
+      join(directory, "counted-calibrations.jsonl"),
+      1_000,
+      {
+        getReport: (now) => {
+          pilotReportReads += 1;
+          return pilotEvidence.getReport(now);
+        },
+      },
+    );
+    const countedReview = countedService.reviewDynamicPoolHeadroom({
+      market: "BTCUSDT",
+      buyExchange: "binance",
+      sellExchange: "bybit",
+    }, NOW + 1_500);
+    assert.equal(timingReportReads, 1,
+      "One dynamic headroom review must build the timing report only once.");
+    assert.equal(pilotReportReads, 1,
+      "One dynamic headroom review must build the pilot report only once.");
+    const qualificationFromReview =
+      countedService.getDynamicPoolRouteQualificationFromHeadroom(
+        {
+          market: "BTCUSDT",
+          buyExchange: "binance",
+          sellExchange: "bybit",
+          now: NOW + 1_500,
+        },
+        countedReview,
+      );
+    assert.ok(qualificationFromReview);
+    assert.equal(timingReportReads, 1,
+      "Qualification must reuse the exact action-time timing review without rebuilding evidence.");
+    assert.equal(pilotReportReads, 1,
+      "Qualification must reuse the exact action-time pilot review without rebuilding evidence.");
+    assert.equal(
+      countedService.getDynamicPoolRouteQualificationFromHeadroom(
+        {
+          market: "BTCUSDT",
+          buyExchange: "binance",
+          sellExchange: "bybit",
+          now: NOW + 1_501,
+        },
+        countedReview,
+      ),
+      null,
+      "A headroom review from another action-time instant must fail closed.",
+    );
     const dynamicQualification = service.getDynamicPoolRouteQualification({
       market: "BTCUSDT",
       buyExchange: "binance",

@@ -218,6 +218,12 @@ export class StrategyOneTimingCalibrationService {
       );
     }
 
+    /*
+     * Build each authoritative evidence report once for this review. Both
+     * reports calculate bounded percentile distributions; rebuilding them
+     * again in reviewHeadroomAgainstEvidence adds action-time latency while
+     * reading the same synchronous in-memory evidence revision.
+     */
     const timingReport = this.evidence.getReport(now);
     const pilotReport = this.pilotEquivalentEvidence.getReport(now);
     const pilotByRoute = new Map(
@@ -256,6 +262,8 @@ export class StrategyOneTimingCalibrationService {
       reference ?? requested,
       now,
       "VENUE_DIRECTION_POOL",
+      timingReport,
+      pilotReport,
     );
   }
 
@@ -272,6 +280,8 @@ export class StrategyOneTimingCalibrationService {
     },
     now: number,
     qualificationScope: "EXACT_ROUTE" | "VENUE_DIRECTION_POOL",
+    timingReport = this.evidence.getReport(now),
+    pilotReport = this.pilotEquivalentEvidence.getReport(now),
   ): StrategyOneTimingHeadroomReview {
     validateTime(now);
     const market = normalizeMarket(input.market);
@@ -292,8 +302,7 @@ export class StrategyOneTimingCalibrationService {
       );
     }
 
-    const report = this.evidence.getReport(now);
-    const pilotReport = this.pilotEquivalentEvidence.getReport(now);
+    const report = timingReport;
     const route = report.routes.find((item) =>
       item.market === evidenceMarket &&
       item.buyExchange === evidenceBuyExchange &&
@@ -455,6 +464,53 @@ export class StrategyOneTimingCalibrationService {
     }
 
     const headroom = this.reviewDynamicPoolHeadroom(route, now);
+
+    return this.getDynamicPoolRouteQualificationFromHeadroom(
+      {
+        ...route,
+        now,
+      },
+      headroom,
+    );
+  }
+
+  /**
+   * Converts the exact headroom review produced by the current action-time
+   * preflight into its ephemeral dynamic-pool qualification. The strict
+   * timestamp and route binding prevents a review from another request,
+   * route, or evidence instant from being reused. This avoids rebuilding the
+   * same percentile reports twice inside one complete preflight; preview and
+   * authorization still perform independent complete preflights.
+   */
+  getDynamicPoolRouteQualificationFromHeadroom(
+    input: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+      readonly now: number;
+    },
+    headroom: StrategyOneTimingHeadroomReview,
+  ): StrategyOneDynamicPoolTimingQualification | null {
+    const now = input.now;
+    validateTime(now);
+    const route = {
+      market: normalizeMarket(input.market),
+      buyExchange: normalizeExchange(input.buyExchange),
+      sellExchange: normalizeExchange(input.sellExchange),
+    };
+
+    if (
+      !isStrategyOneTinyLiveDynamicRoute(route) ||
+      headroom.generatedAt !== now ||
+      headroom.market !== route.market ||
+      headroom.buyExchange !== route.buyExchange ||
+      headroom.sellExchange !== route.sellExchange ||
+      headroom.routeKey !==
+        `${route.market}:${route.buyExchange}->${route.sellExchange}` ||
+      headroom.qualificationScope !== "VENUE_DIRECTION_POOL"
+    ) {
+      return null;
+    }
 
     if (
       headroom.state !== "READY" ||
