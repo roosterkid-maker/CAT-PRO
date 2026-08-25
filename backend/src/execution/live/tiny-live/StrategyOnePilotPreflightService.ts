@@ -183,6 +183,7 @@ export interface StrategyOnePilotPreflightDependencies {
     opportunity: ArbitrageOpportunity,
     requestedCapitalInr: number,
     now: number,
+    requestedQuoteCapital?: number,
   ): StrategyOneFundedRouteReport;
   reviewTiming(
     input: {
@@ -259,12 +260,14 @@ const DEFAULT_DEPENDENCIES:
       opportunity,
       requestedCapitalInr,
       now,
+      requestedQuoteCapital,
     ) =>
       strategyOneFundedRouteService
         .evaluate({
           opportunity,
           requestedCapitalInr:
             requestedCapitalInr,
+          requestedQuoteCapital,
           maximumCapitalPerLegInr:
             STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
           allowSingleIncrementMinimumOrderRoundUp:
@@ -770,6 +773,13 @@ export class StrategyOnePilotPreflightService {
           opportunity,
           tinyLivePolicy.capitalPerLegInr,
           now,
+          Number.isFinite(
+            opportunity.requestedQuoteCapital,
+          ) &&
+          (opportunity.requestedQuoteCapital ?? 0) >
+            0
+            ? opportunity.requestedQuoteCapital
+            : undefined,
         );
 
     const exactPilotFunded =

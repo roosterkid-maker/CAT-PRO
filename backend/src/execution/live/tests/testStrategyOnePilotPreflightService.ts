@@ -79,6 +79,9 @@ function main(): void {
   let fundingCapitalInr =
     0;
 
+  let fundingQuoteCapital:
+    number | undefined;
+
   const service =
     new StrategyOnePilotPreflightService({
       getTinyLivePolicy:
@@ -109,9 +112,13 @@ function main(): void {
         (
           _opportunity,
           requestedCapitalInr,
+          _now,
+          requestedQuoteCapital,
         ) => {
           fundingCapitalInr =
             requestedCapitalInr;
+          fundingQuoteCapital =
+            requestedQuoteCapital;
           return funding;
         },
       reviewTiming:
@@ -181,6 +188,11 @@ function main(): void {
   assert.equal(
     fundingCapitalInr,
     500,
+  );
+  assert.equal(
+    fundingQuoteCapital,
+    100,
+    "Action-time funding must reuse the immutable opportunity's already-validated quote capital instead of rescanning every conversion book.",
   );
   assert.equal(
     stressCalls,
