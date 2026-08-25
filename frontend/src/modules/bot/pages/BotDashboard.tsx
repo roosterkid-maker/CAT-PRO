@@ -98,6 +98,8 @@ export default function BotDashboard() {
   const pilotPreview = pilotQuery.data?.data ?? null;
   const preArmDiagnostics = preArmQuery.data?.data ?? null;
   const tinyLiveStatus = tinyLiveAuthorityStatus(preArmDiagnostics);
+  const routePoolArmAttempts =
+    preArmDiagnostics?.dailyAttemptBudget.routePoolArmAttempts ?? null;
 
   useEffect(() => {
     if (!missionOpen) return;
@@ -165,6 +167,17 @@ export default function BotDashboard() {
     }
   }
 
+  function resetTinyLiveUiState(): void {
+    setPreArmAcknowledged(false);
+    setLeaseConfirmation("");
+    setLiveConfirmationOpen(false);
+    setModeTransitionError(null);
+    armPreArm.reset();
+    disarmPreArm.reset();
+    activateAccountLease.reset();
+    restorePaperAccountMode.reset();
+  }
+
   async function selectOperatingMode(target: SimpleOperatingMode): Promise<void> {
     if (modeTransition || target === operatingMode) return;
 
@@ -175,14 +188,14 @@ export default function BotDashboard() {
       if (target === "PAPER") {
         await stopTinyLiveAuthority();
         if (!paperExecutionEnabled) await control.mutateAsync(true);
-        setLiveConfirmationOpen(false);
+        resetTinyLiveUiState();
         return;
       }
 
       if (target === "OFF") {
         await stopTinyLiveAuthority();
         if (paperExecutionEnabled) await control.mutateAsync(false);
-        setLiveConfirmationOpen(false);
+        resetTinyLiveUiState();
         return;
       }
 
@@ -192,6 +205,12 @@ export default function BotDashboard() {
       }
       if (preArmDiagnostics.runtimeGateEnabled !== true) {
         throw new Error("Tiny-LIVE runtime AWS par enabled nahi hai. DEEP AUDIT mein exact runtime blocker dekhein.");
+      }
+      if (routePoolArmAttempts === null) {
+        throw new Error(
+          `Dynamic Tiny-LIVE route pool ke liye kam-se-kam 9 daily slots chahiye. ` +
+          `${preArmDiagnostics.dailyAttemptBudget.remainingDailyAttempts} bache hain; next IST day ka wait karein.`,
+        );
       }
 
       // PAPER and LIVE execution are intentionally mutually exclusive.
@@ -204,9 +223,12 @@ export default function BotDashboard() {
           buyExchange: "coindcx",
           sellExchange: "binance",
           durationMinutes: routePool.durationMinutes,
-          maximumAttempts: routePool.maximumAttempts,
+          maximumAttempts: routePoolArmAttempts,
           routePoolId: routePool.id,
-          confirmation: routePoolArmPhrase(routePool.capitalPerLegInr),
+          confirmation: routePoolArmPhrase(
+            routePool.capitalPerLegInr,
+            routePoolArmAttempts,
+          ),
         });
         preArmId = armResult.data.id;
       }
@@ -247,6 +269,7 @@ export default function BotDashboard() {
 
     if (
       !routePool ||
+      routePoolArmAttempts === null ||
       !preArmAcknowledged ||
       armPreArm.isPending
     ) {
@@ -258,9 +281,12 @@ export default function BotDashboard() {
       buyExchange: "coindcx",
       sellExchange: "binance",
       durationMinutes: routePool.durationMinutes,
-      maximumAttempts: routePool.maximumAttempts,
+      maximumAttempts: routePoolArmAttempts,
       routePoolId: routePool.id,
-      confirmation: routePoolArmPhrase(routePool.capitalPerLegInr),
+      confirmation: routePoolArmPhrase(
+        routePool.capitalPerLegInr,
+        routePoolArmAttempts,
+      ),
     });
   }
 
@@ -1903,6 +1929,8 @@ function StrategyOnePreArmedOneShotPanel({
   const accountLease = diagnostics?.accountModeLease ?? null;
   const activeAccountLease = accountLease?.activeLease ?? null;
   const readinessWaterfall = diagnostics?.readinessWaterfall ?? null;
+  const dailyAttemptBudget = diagnostics?.dailyAttemptBudget ?? null;
+  const armAttempts = dailyAttemptBudget?.routePoolArmAttempts ?? null;
   const route = active?.routeScope === "DYNAMIC_POOL" ? suggestedRoute : active ?? suggestedRoute;
   const recent = diagnostics?.records[0] ?? null;
   const attempts = recent?.attempts ?? [];
@@ -1918,6 +1946,7 @@ function StrategyOnePreArmedOneShotPanel({
   const canArm = diagnostics?.runtimeGateEnabled === true &&
     !active &&
     diagnostics.routePool !== null &&
+    armAttempts !== null &&
     !paperBotEnabled &&
     acknowledged &&
     !arming;
@@ -2190,7 +2219,11 @@ function StrategyOnePreArmedOneShotPanel({
                 className="mt-1 size-4 rounded border-border-default bg-panel-light accent-emerald-400"
               />
               <span>
-                I understand that arming submits no order now. During the next 3 hours, up to ten fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)}-per-leg attempt. Every exact route gets credible-history, inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch.
+                I understand that arming submits no order now. {armAttempts !== null ? (
+                  <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)}-per-leg attempt.</>
+                ) : (
+                  <>Only {dailyAttemptBudget?.remainingDailyAttempts ?? 0} daily slots remain; the controlled dynamic pool requires 9 or 10 and stays unavailable until {formatIstTime(dailyAttemptBudget?.resetsAt ?? 0)} IST.</>
+                )} Every exact route gets credible-history, inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch. LIVE OFF never resets consumed daily attempts.
               </span>
             </label>
           )}
@@ -2205,9 +2238,13 @@ function StrategyOnePreArmedOneShotPanel({
             <p className="mt-2 font-mono text-[10px] text-amber-300">
               Arm locked: turn PAPER OFF, then tick the acknowledgment.
             </p>
+          ) : !active && !paperBotEnabled && armAttempts === null ? (
+            <p className="mt-2 font-mono text-[10px] text-amber-300">
+              Daily route-pool budget: {dailyAttemptBudget?.remainingDailyAttempts ?? 0} remaining · next reset {formatIstTime(dailyAttemptBudget?.resetsAt ?? 0)} IST. LIVE OFF does not reset consumed attempts.
+            </p>
           ) : !active && !paperBotEnabled && !acknowledged ? (
             <p className="mt-2 font-mono text-[10px] text-amber-300">
-              Arm locked: tick the acknowledgment to enable the 10-attempt batch.
+              Arm locked: tick the acknowledgment to enable the {armAttempts}-attempt batch.
             </p>
           ) : null}
 
@@ -2247,7 +2284,11 @@ function StrategyOnePreArmedOneShotPanel({
             disabled={!canArm}
             className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-xs font-bold text-emerald-300 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
           >
-            {arming ? "Arming durably…" : "Arm dynamic USDT pool · 10 attempts / 3 hours"}
+            {arming
+              ? "Arming durably…"
+              : armAttempts !== null
+                ? `Arm dynamic USDT pool · ${armAttempts} attempts / 3 hours`
+                : `Route pool unavailable · ${dailyAttemptBudget?.remainingDailyAttempts ?? 0} daily slots remain`}
           </button>
         )}
       </div>
@@ -3343,8 +3384,26 @@ function toPreArmRoute(route: {
   };
 }
 
-function routePoolArmPhrase(capitalPerLegInr: number): string {
-  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} ATTEMPTS10 MINUTES180`;
+function routePoolArmPhrase(
+  capitalPerLegInr: number,
+  maximumAttempts: 9 | 10,
+): string {
+  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES180`;
+}
+
+function formatIstTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return "next IST day";
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(timestamp);
 }
 
 function apiErrorMessage(error: Error): string {

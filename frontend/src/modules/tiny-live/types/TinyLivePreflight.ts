@@ -749,6 +749,15 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
     refreshesRecovered: number;
     coordinatorStarts: number;
   };
+  dailyAttemptBudget: {
+    maximumDailyAttempts: number;
+    attemptsToday: number;
+    remainingDailyAttempts: number;
+    routePoolArmAttempts: 9 | 10 | null;
+    resetsAt: number;
+    resetPolicy: "NEXT_IST_DAY_ONLY";
+    liveOffResetsConsumedAttempts: false;
+  };
   records: StrategyOneTinyLivePreArmRecord[];
   accountModeLease: StrategyOneTinyLiveAccountModeLeaseDiagnostics;
   readinessWaterfall: StrategyOneTinyLiveReadinessWaterfall;

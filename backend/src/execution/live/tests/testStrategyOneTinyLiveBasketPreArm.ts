@@ -58,6 +58,18 @@ async function main(): Promise<void> {
       }),
       now: () => NOW,
     }, reducedFilePath);
+    assert.deepEqual(
+      reducedService.getDiagnostics(NOW).dailyAttemptBudget,
+      {
+        maximumDailyAttempts: 10,
+        attemptsToday: 1,
+        remainingDailyAttempts: 9,
+        routePoolArmAttempts: 9,
+        resetsAt: 1_787_250_600_000,
+        resetPolicy: "NEXT_IST_DAY_ONLY",
+        liveOffResetsConsumedAttempts: false,
+      },
+    );
     assert.throws(() => reducedService.arm({
       market: "DYNAMIC_POOL",
       buyExchange: "coindcx",
@@ -122,11 +134,40 @@ async function main(): Promise<void> {
     const restored = new StrategyOneTinyLivePreArmService({
       runtimeGateEnabled: () => true,
       getCapitalPerLegInr: () => 500,
+      getActionDiagnostics: () => ({
+        maximumDailyAttempts: 10,
+        attemptsToday: 0,
+        blockingAuthorityPresent: false,
+      }),
       now: () => NOW,
     }, filePath);
     assert.equal(restored.getActiveArm(NOW)?.id, arm.id);
     assert.equal(restored.getDiagnostics(NOW).routePool.id, STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID);
     assert.equal(restored.getDiagnostics(NOW).pilotBasket, null);
+    assert.equal(service.getDiagnostics(NOW).dailyAttemptBudget.routePoolArmAttempts, 10);
+
+    const belowRoutePoolMinimum = new StrategyOneTinyLivePreArmService({
+      runtimeGateEnabled: () => true,
+      getCapitalPerLegInr: () => 500,
+      getActionDiagnostics: () => ({
+        maximumDailyAttempts: 10,
+        attemptsToday: 2,
+        blockingAuthorityPresent: false,
+      }),
+      now: () => NOW,
+    }, join(directory, "below-route-pool-minimum.jsonl"));
+    assert.deepEqual(
+      belowRoutePoolMinimum.getDiagnostics(NOW).dailyAttemptBudget,
+      {
+        maximumDailyAttempts: 10,
+        attemptsToday: 2,
+        remainingDailyAttempts: 8,
+        routePoolArmAttempts: null,
+        resetsAt: 1_787_250_600_000,
+        resetPolicy: "NEXT_IST_DAY_ONLY",
+        liveOffResetsConsumedAttempts: false,
+      },
+    );
 
     verifyRetiredFixedBasketArmIsNotRestored(filePath, directory);
 

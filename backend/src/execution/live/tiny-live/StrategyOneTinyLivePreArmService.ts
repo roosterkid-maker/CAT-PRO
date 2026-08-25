@@ -170,6 +170,8 @@ const MAXIMUM_BATCH_DURATION_MINUTES = 180;
 const LEGACY_BATCH_ATTEMPTS = 2;
 const REDUCED_DYNAMIC_POOL_ATTEMPTS = 9;
 const MAXIMUM_BATCH_ATTEMPTS = 10;
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const KOLKATA_UTC_OFFSET_MS = 5.5 * 60 * 60 * 1_000;
 const BETWEEN_ATTEMPTS_COOLDOWN_MS = 5_000;
 const BLOCKED_REEVALUATION_INTERVAL_MS = 250;
 
@@ -557,6 +559,16 @@ export class StrategyOneTinyLivePreArmService {
   getDiagnostics(now = this.dependencies.now()) {
     validateTime(now);
     const activeArm = this.getActiveArm(now);
+    const action = this.dependencies.getActionDiagnostics(now);
+    const remainingDailyAttempts = Math.max(
+      0,
+      action.maximumDailyAttempts - action.attemptsToday,
+    );
+    const routePoolArmAttempts = remainingDailyAttempts >= MAXIMUM_BATCH_ATTEMPTS
+      ? MAXIMUM_BATCH_ATTEMPTS
+      : remainingDailyAttempts >= REDUCED_DYNAMIC_POOL_ATTEMPTS
+        ? REDUCED_DYNAMIC_POOL_ATTEMPTS
+        : null;
     const records = [...this.latest.values()]
       .sort((first, second) => second.armedAt - first.armedAt)
       .slice(0, 20)
@@ -575,6 +587,15 @@ export class StrategyOneTinyLivePreArmService {
         refreshesRequested: this.refreshesRequested,
         refreshesRecovered: this.refreshesRecovered,
         coordinatorStarts: this.coordinatorStarts,
+      },
+      dailyAttemptBudget: {
+        maximumDailyAttempts: action.maximumDailyAttempts,
+        attemptsToday: action.attemptsToday,
+        remainingDailyAttempts,
+        routePoolArmAttempts,
+        resetsAt: nextKolkataMidnight(now),
+        resetPolicy: "NEXT_IST_DAY_ONLY" as const,
+        liveOffResetsConsumedAttempts: false as const,
       },
       records,
       actionTimeBookRefresh:
@@ -1103,6 +1124,12 @@ export class StrategyOneTinyLivePreArmService {
     this.activeArmId = record.state === "ARMED" ? record.id :
       this.activeArmId === record.id ? null : this.activeArmId;
   }
+}
+
+function nextKolkataMidnight(now: number): number {
+  return (
+    Math.floor((now + KOLKATA_UTC_OFFSET_MS) / DAY_MS) + 1
+  ) * DAY_MS - KOLKATA_UTC_OFFSET_MS;
 }
 
 function routeMatches(
