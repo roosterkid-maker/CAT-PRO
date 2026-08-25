@@ -46,6 +46,11 @@ function main(): void {
     ),
   ];
 
+  let exactOpportunity:
+    ArbitrageOpportunity | null =
+    opportunities[0] ??
+    null;
+
   let placement =
     placementReport();
 
@@ -88,6 +93,12 @@ function main(): void {
       getOpportunities:
         () =>
           opportunities,
+      getOpportunityById:
+        (id) =>
+          exactOpportunity?.id ===
+            id
+            ? exactOpportunity
+            : null,
       getCapitalPlacement:
         () =>
           placement,
@@ -350,6 +361,94 @@ function main(): void {
   assertSafety(
     run.safety,
   );
+
+  const priorOpportunities =
+    opportunities;
+  const priorExactOpportunity =
+    exactOpportunity;
+  const staleSharedSnapshot = {
+    ...opportunity(
+      NOW -
+        499,
+    ),
+    id:
+      "opportunity-stale-shared-snapshot",
+  };
+  const refreshedExactOpportunity = {
+    ...opportunity(
+      NOW -
+        1,
+    ),
+    id:
+      "opportunity-action-time-refresh",
+    pair: {
+      ...opportunity(
+        NOW -
+          1,
+      ).pair,
+      buy: {
+        ...opportunity(
+          NOW -
+            1,
+        ).pair.buy,
+        timestamp:
+          NOW -
+            1,
+      },
+      sell: {
+        ...opportunity(
+          NOW -
+            1,
+        ).pair.sell,
+        timestamp:
+          NOW -
+            60,
+      },
+    },
+  };
+
+  opportunities = [
+    staleSharedSnapshot,
+  ];
+  exactOpportunity =
+    refreshedExactOpportunity;
+
+  const exactRefreshBoundRun =
+    service.run({
+      confirmationToken:
+        "RUN_STRATEGY_ONE_PILOT_PREFLIGHT_ONLY",
+      expectedOpportunityId:
+        refreshedExactOpportunity.id,
+      now:
+        NOW,
+    });
+
+  assert.equal(
+    exactRefreshBoundRun.preview.selected?.opportunityId,
+    refreshedExactOpportunity.id,
+    "Action-time preflight must bind the exact refreshed ID instead of selecting the stale shared snapshot.",
+  );
+  assert.equal(
+    exactRefreshBoundRun.preview.selected?.checks.find(
+      (item) =>
+        item.key ===
+        "CURRENT_DISPATCH_RESERVED_FRESHNESS",
+    )?.state,
+    "PASS",
+    "The exact refreshed BUY/SELL timestamps must drive dispatch-reserved freshness.",
+  );
+  assert.equal(
+    exactRefreshBoundRun.decision,
+    "CORE_PREFLIGHT_BLOCKED",
+    "Binding fresh public books must not bypass the independent core Tiny-LIVE gate.",
+  );
+
+  opportunities =
+    priorOpportunities;
+  exactOpportunity =
+    priorExactOpportunity;
+  coreCalls =
+    1;
 
   apiPermissionBoundary = {
     ...readyApiPermissionBoundary(),

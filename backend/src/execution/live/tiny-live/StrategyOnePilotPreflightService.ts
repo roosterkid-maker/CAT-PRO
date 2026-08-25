@@ -169,6 +169,7 @@ export interface StrategyOnePilotPreflightRunReport {
 export interface StrategyOnePilotPreflightDependencies {
   getTinyLivePolicy(): StrategyOnePilotRuntimePolicy;
   getOpportunities(): readonly ArbitrageOpportunity[];
+  getOpportunityById(id: string): ArbitrageOpportunity | null;
   getCapitalPlacement(now: number): StrategyOneCapitalPlacementReport;
   getApiPermissionBoundary(
     now: number,
@@ -218,6 +219,12 @@ const DEFAULT_DEPENDENCIES:
     () =>
       opportunityService
         .getLastOpportunities(),
+  getOpportunityById:
+    (id) =>
+      opportunityService
+        .getOpportunityById(
+          id,
+        ),
   getCapitalPlacement:
     (now) =>
       strategyOneCapitalPlacementService
@@ -305,6 +312,8 @@ export class StrategyOnePilotPreflightService {
   getPreview(
     now =
       Date.now(),
+    expectedOpportunityId?:
+      string,
   ): StrategyOnePilotPreviewReport {
     assertTimestamp(
       now,
@@ -348,7 +357,26 @@ export class StrategyOnePilotPreflightService {
         ),
       );
 
-    const currentCandidates = this.dependencies.getOpportunities().filter(
+    const normalizedExpectedOpportunityId =
+      expectedOpportunityId
+        ?.trim() ??
+      "";
+    const requestedOpportunity =
+      normalizedExpectedOpportunityId
+        ? this.dependencies
+            .getOpportunityById(
+              normalizedExpectedOpportunityId,
+            )
+        : null;
+    const opportunitySource =
+      normalizedExpectedOpportunityId
+        ? requestedOpportunity
+          ? [requestedOpportunity]
+          : []
+        : this.dependencies
+            .getOpportunities();
+
+    const currentCandidates = opportunitySource.filter(
       (opportunity) => isCurrentExecuteOpportunity(
         opportunity,
         now,
@@ -515,17 +543,26 @@ export class StrategyOnePilotPreflightService {
       request.now ??
       Date.now();
 
+    const expectedOpportunityId =
+      request.expectedOpportunityId
+        .trim();
+
+    /*
+     * An action-time exact-route refresh is deliberately registered in the
+     * immutable ID store without replacing the scanner's shared snapshot.
+     * Bind operator preflight to that exact stored object; otherwise a prior
+     * snapshot for the same route can supply stale book timestamps while the
+     * refreshed opportunity ID is being authorized.
+     */
     const preview =
       this.getPreview(
         now,
+        expectedOpportunityId ||
+          undefined,
       );
 
     const selected =
       preview.selected;
-
-    const expectedOpportunityId =
-      request.expectedOpportunityId
-        .trim();
 
     const preCoreBlockers:
       string[] = [
