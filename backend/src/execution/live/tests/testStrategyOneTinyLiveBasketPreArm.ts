@@ -132,12 +132,88 @@ async function main(): Promise<void> {
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
     await verifyApprovedRouteCanSeedFreshBooks(directory);
+    await verifyApprovedSnapshotRouteIsPrioritized(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
 
   console.log(
     "V188 dynamic route-pool pre-arm passed: exact 9-or-10-attempt/180-minute consent, daily-cap enforcement, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
+  );
+}
+
+async function verifyApprovedSnapshotRouteIsPrioritized(
+  directory: string,
+): Promise<void> {
+  const approvedRoute: StrategyOneTinyLiveBasketRoute = {
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "binance",
+  };
+  const unapprovedRoute: StrategyOneTinyLiveBasketRoute = {
+    market: "COTIUSDT",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+  };
+  let clock = NOW + 60_000;
+  const previewed: string[] = [];
+  const approvedCandidate = opportunity(
+    "approved-lower-profit",
+    approvedRoute,
+    clock,
+  );
+  const unapprovedCandidate = {
+    ...opportunity("unapproved-higher-profit", unapprovedRoute, clock),
+    netProfitPercent: 2,
+  };
+  const service = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    getCurrentApprovedCalibrations: () => [{
+      market: approvedRoute.market,
+      buyExchange: approvedRoute.buyExchange,
+      sellExchange: approvedRoute.sellExchange,
+      status: "APPROVED",
+      scope: "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT",
+      expiresAt: clock + 60_000,
+    } as never],
+    previewAction: (opportunityId) => {
+      previewed.push(opportunityId);
+      return {
+        approvedForAuthorization: false,
+        authority: null,
+        blockers: ["Test fixture blocks before authority."],
+        preflight: null,
+        opportunityId,
+      } as never;
+    },
+    now: () => ++clock,
+  }, join(directory, "approved-route-priority.jsonl"));
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+
+  assert.equal(await service.observeSnapshot({
+    generatedAt: clock,
+    opportunities: [unapprovedCandidate, approvedCandidate],
+  }), null);
+  assert.deepEqual(
+    previewed,
+    [approvedCandidate.id, unapprovedCandidate.id],
+    "A current route with explicit timing approval must reach action-time preflight before a higher-profit route that cannot be authorized.",
   );
 }
 

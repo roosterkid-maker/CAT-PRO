@@ -487,17 +487,31 @@ export class StrategyOneTinyLivePreArmService {
       return null;
     }
 
+    const approvedCalibrations =
+      arm.routeScope === "DYNAMIC_POOL"
+        ? this.dependencies.getCurrentApprovedCalibrations(observedAt)
+        : [];
+    const approvedRouteKeys = new Set(
+      approvedCalibrations.map((calibration) => routeKey(calibration)),
+    );
     const opportunities = snapshot.opportunities
       .filter((item) =>
         routeMatches(arm, item) &&
         item.decision === "EXECUTE" &&
         !(arm.attempts ?? []).some((attempt) => attempt.opportunityId === item.id))
-      .sort((first, second) => second.netProfitPercent - first.netProfitPercent);
+      .sort((first, second) => {
+        const approvedPriority =
+          Number(approvedRouteKeys.has(routeKey(second))) -
+          Number(approvedRouteKeys.has(routeKey(first)));
+
+        return approvedPriority !== 0
+          ? approvedPriority
+          : second.netProfitPercent - first.netProfitPercent;
+      });
     const approvedRouteSeeds =
       arm.routeScope === "DYNAMIC_POOL" &&
       observedAt >= this.nextApprovedRouteSeedProbeAt
-        ? this.dependencies
-            .getCurrentApprovedCalibrations(observedAt)
+        ? approvedCalibrations
             .filter((calibration) =>
               armAllowsRoute(arm, calibration) &&
               !opportunities.some((opportunity) =>
@@ -1187,6 +1201,28 @@ function armAllowsRoute(
   return arm.market === normalizeMarket(route.market) &&
     arm.buyExchange === route.buyExchange.trim().toLowerCase() &&
     arm.sellExchange === route.sellExchange.trim().toLowerCase();
+}
+
+function routeKey(
+  route: ArbitrageOpportunity | {
+    readonly market: string;
+    readonly buyExchange: string;
+    readonly sellExchange: string;
+  },
+): string {
+  const market = "pair" in route ? route.pair.market : route.market;
+  const buyExchange = "pair" in route
+    ? route.pair.buy.exchange
+    : route.buyExchange;
+  const sellExchange = "pair" in route
+    ? route.pair.sell.exchange
+    : route.sellExchange;
+
+  return [
+    normalizeMarket(market),
+    buyExchange.trim().toLowerCase(),
+    sellExchange.trim().toLowerCase(),
+  ].join("|");
 }
 
 function shouldRefreshActionBooks(
