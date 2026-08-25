@@ -65,6 +65,43 @@ async function main(): Promise<void> {
     assert.equal(authorized.state, "AUTHORIZED");
     assert.equal(authorized.liveOrderSubmissionAuthorized, true);
 
+    let semanticNetProfitPercent = 0.8;
+    const semanticChangeService = new StrategyOneTinyLiveActionAuthorityService(
+      {
+        ...dependencies,
+        runPreflight: (input: {now?: number}) => {
+          const report = preflightFixture(input.now ?? NOW);
+          const selected = report.preview.selected;
+
+          assert.ok(selected);
+          return {
+            ...report,
+            preview: {
+              ...report.preview,
+              selected: {
+                ...selected,
+                currentNetProfitPercent: semanticNetProfitPercent,
+              },
+            },
+          };
+        },
+      },
+      join(directory, "semantic-change-authorities.jsonl"),
+    );
+    const semanticPreview = semanticChangeService.preview(opportunity.id, NOW + 10);
+
+    assert.ok(semanticPreview.authority);
+    semanticNetProfitPercent = 0.7;
+    assert.throws(
+      () => semanticChangeService.authorize(
+        semanticPreview.authority?.id ?? "",
+        semanticPreview.authority?.requiredAuthorizationPhrase ?? "",
+        NOW + 11,
+      ),
+      /evidence changed after preview/iu,
+      "A safety-relevant economics change must remain fingerprint-blocking.",
+    );
+
     const consumed = service.consume({
       authorityId: authorized.id,
       opportunity,
@@ -905,7 +942,15 @@ function preflightFixture(
         currentNetProfitPerBaseUnit: 800,
         currentScore: 100,
         historical: {} as never,
-        apiPermissionBoundary: {} as never,
+        apiPermissionBoundary: {
+          generatedAt: now,
+          venues: [
+            {
+              checkedAt: now - 10,
+              ageMs: 10,
+            },
+          ],
+        } as never,
         timing: {
           schemaVersion: "115.0",
           generatedAt: now,
@@ -939,8 +984,22 @@ function preflightFixture(
         funding: {
           state: "FUNDED",
           executableQuantity: 0.001,
+          evaluatedAt: now,
+          buyFunding: {
+            snapshotAgeMs: Math.max(0, now - NOW),
+          },
+          sellFunding: {
+            snapshotAgeMs: Math.max(0, now - NOW),
+          },
         } as never,
-        stress: {status: "PASSED", reasons: []} as never,
+        stress: {
+          status: "PASSED",
+          evaluatedAt: now,
+          sourceOpportunityAgeMs: Math.max(0, now - NOW),
+          buyBookTimestamp: NOW,
+          sellBookTimestamp: NOW,
+          reasons: [],
+        } as never,
         checks: [],
         readyForOperatorPreflight: true,
       },

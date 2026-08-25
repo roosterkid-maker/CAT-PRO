@@ -880,9 +880,26 @@ function hash(value: unknown): string {
 function preflightFingerprint(
   value: StrategyOnePilotPreflightRunReport,
 ): string {
+  /*
+   * Both preview and authorization run the complete fail-closed preflight.
+   * Their semantic evidence must match, but naturally increasing observation
+   * ages and evaluation timestamps are not evidence mutations.  Keep the
+   * underlying book/balance timestamps, thresholds, quantities, economics,
+   * gate states and blockers in the fingerprint.  If elapsed time crosses a
+   * safety boundary, the second preflight blocks before this comparison.
+   */
+  const volatileObservationFields = new Set([
+    "ageMs",
+    "checkedAt",
+    "evaluatedAt",
+    "generatedAt",
+    "snapshotAgeMs",
+    "sourceOpportunityAgeMs",
+  ]);
+
   return createHash("sha256")
     .update(JSON.stringify(value, (key, item) =>
-      key === "generatedAt" || key === "ageMs"
+      volatileObservationFields.has(key)
         ? undefined
         : item))
     .digest("hex");
