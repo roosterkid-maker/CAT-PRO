@@ -21,6 +21,7 @@ const NOW = 1_780_800_000_000;
 
 function opportunity(input: {
   readonly generatedAt: number;
+  readonly market?: string;
   readonly buyExchange?: string;
   readonly sellExchange?: string;
   readonly buyAgeMs?: number;
@@ -30,15 +31,16 @@ function opportunity(input: {
 }): ArbitrageOpportunity {
   const buyExchange = input.buyExchange ?? "binance";
   const sellExchange = input.sellExchange ?? "bybit";
+  const market = input.market ?? "BTCUSDT";
   const netProfitPercent = input.netProfitPercent ?? 1.8;
   return {
     id: `v112-${input.generatedAt}-${buyExchange}-${sellExchange}`,
     pair: {
-      market: "BTCUSDT",
-      buy: {exchange: buyExchange, market: "BTCUSDT", lastPrice: 100, bestBidPrice: 99,
+      market,
+      buy: {exchange: buyExchange, market, lastPrice: 100, bestBidPrice: 99,
         bestBidQty: 10, bestAskPrice: 100, bestAskQty: 10, spread: 1,
         timestamp: input.generatedAt - (input.buyAgeMs ?? 20), source: "orderBook", executable: true},
-      sell: {exchange: sellExchange, market: "BTCUSDT", lastPrice: 102, bestBidPrice: 102,
+      sell: {exchange: sellExchange, market, lastPrice: 102, bestBidPrice: 102,
         bestBidQty: 10, bestAskPrice: 103, bestAskQty: 10, spread: 1,
         timestamp: input.generatedAt - (input.sellAgeMs ?? 15), source: "orderBook", executable: true},
     },
@@ -243,6 +245,30 @@ function main(): void {
       "Timing-only books must never fabricate profitable opportunity economics.");
     assert.equal(timingOnlyReport.safety.timingEvidenceIsIndependentFromOpportunityEconomics, true);
     assert.equal(timingOnlyReport.safety.evidenceDoesNotAuthorizeLiveOrOrders, true);
+
+    const capacityService = new StrategyOnePilotEquivalentPaperEvidenceService({
+      filePath: join(directory, "pilot-capacity.jsonl"), maximumRoutes: 2,
+      minimumExecutionGradeGenerations: 2, minimumObservationSpanMs: 1_000,
+      persistenceIntervalMs: 60_000, maximumGenerationKeysPerRoute: 8,
+    });
+    capacityService.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 20_000, market: "BTCUSDT",
+    })), NOW + 20_005);
+    capacityService.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 21_000, market: "BTCUSDT",
+    })), NOW + 21_005);
+    capacityService.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 22_000, market: "ETHUSDT",
+    })), NOW + 22_005);
+    capacityService.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 23_000, market: "SOLUSDT",
+    })), NOW + 23_005);
+    const capacityRoutes = capacityService.getReport(NOW + 23_100).routes;
+    assert.equal(capacityRoutes.length, 2);
+    assert.equal(capacityRoutes.some((item) => item.market === "BTCUSDT"), true,
+      "Dispatch-reserved evidence approaching calibration must survive dynamic-route churn.");
+    assert.equal(capacityRoutes.some((item) => item.market === "ETHUSDT"), false,
+      "The least-progressed dispatch-reserved route must be evicted at hard capacity.");
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }

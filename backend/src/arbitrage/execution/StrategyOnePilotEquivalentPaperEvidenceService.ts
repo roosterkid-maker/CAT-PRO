@@ -543,11 +543,19 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     const existing = this.routes.get(routeKey);
     if (existing) return existing;
     if (this.routes.size >= this.maximumRoutes) {
-      const oldest = [...this.routes.values()].sort((first, second) =>
-        first.lastUniqueGenerationAt - second.lastUniqueGenerationAt)[0];
-      if (oldest) {
-        this.routes.delete(oldest.routeKey);
-        this.generationKeySets.delete(oldest.routeKey);
+      const leastProgressed = [...this.routes.values()].sort((first, second) => {
+        const dispatchProgress = Math.min(first.dispatchReservedGenerations,
+          this.minimumExecutionGradeGenerations) - Math.min(second.dispatchReservedGenerations,
+          this.minimumExecutionGradeGenerations);
+        const executionGradeProgress = Math.min(first.executionGradeGenerations,
+          this.minimumExecutionGradeGenerations) - Math.min(second.executionGradeGenerations,
+          this.minimumExecutionGradeGenerations);
+        return dispatchProgress || executionGradeProgress ||
+          first.lastUniqueGenerationAt - second.lastUniqueGenerationAt;
+      })[0];
+      if (leastProgressed) {
+        this.routes.delete(leastProgressed.routeKey);
+        this.generationKeySets.delete(leastProgressed.routeKey);
       }
     }
     const created: MutableRoute = {

@@ -113,8 +113,12 @@ function main(): void {
     restored.observePaperStage(snapshot(NOW + 2_000, second), "PIPELINE_START", NOW + 2_005);
     const third = opportunity("route-three", "SOLUSDT", "binance", "bybit", NOW + 3_000);
     restored.observePaperStage(snapshot(NOW + 3_000, third), "PIPELINE_START", NOW + 3_005);
-    assert.equal(restored.getReport(NOW + 3_100).routesRetained, 2,
-      "Route evidence must evict the least recently observed route at its hard capacity.");
+    const capacityReport = restored.getReport(NOW + 3_100);
+    assert.equal(capacityReport.routesRetained, 2);
+    assert.equal(capacityReport.routes.some((item) => item.market === "BTCUSDT"), true,
+      "A progressing calibration route must survive hard-cap churn from thin new routes.");
+    assert.equal(capacityReport.routes.some((item) => item.market === "ETHUSDT"), false,
+      "The least-progressed route must be evicted before stronger calibration evidence.");
 
     const rawFilePath = join(directory, "raw-route-timing.jsonl");
     const rawService = new StrategyOneExecutionTimingEvidenceService({filePath: rawFilePath,

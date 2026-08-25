@@ -541,8 +541,12 @@ export class StrategyOneExecutionTimingEvidenceService {
     const sellExchange = normalizeVenue(sellValue); const routeKey = `${market}:${buyExchange}->${sellExchange}`;
     const existing = this.routes.get(routeKey); if (existing) return existing;
     if (this.routes.size >= this.maximumRoutes) {
-      const oldest = [...this.routes.values()].sort((first, second) => first.lastObservedAt - second.lastObservedAt)[0];
-      if (oldest) this.routes.delete(oldest.routeKey);
+      const leastProgressed = [...this.routes.values()].sort((first, second) => {
+        const sampleProgress = Math.min(first.paperSnapshots, this.minimumPublicSamples) -
+          Math.min(second.paperSnapshots, this.minimumPublicSamples);
+        return sampleProgress || first.lastObservedAt - second.lastObservedAt;
+      })[0];
+      if (leastProgressed) this.routes.delete(leastProgressed.routeKey);
     }
     const created: MutableRoute = {routeKey, market, buyExchange, sellExchange, firstObservedAt: observedAt,
       lastObservedAt: observedAt, paperSnapshots: 0, liveLastLooks: 0, liveDispatches: 0,
