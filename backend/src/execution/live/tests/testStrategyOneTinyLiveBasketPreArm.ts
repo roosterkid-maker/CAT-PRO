@@ -84,12 +84,98 @@ async function main(): Promise<void> {
     verifyRetiredFixedBasketArmIsNotRestored(filePath, directory);
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
+    await verifyApprovedRouteCanSeedFreshBooks(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
 
   console.log(
     "V188 dynamic route-pool pre-arm passed: exact 10-attempt/180-minute consent, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
+  );
+}
+
+async function verifyApprovedRouteCanSeedFreshBooks(
+  directory: string,
+): Promise<void> {
+  const route: StrategyOneTinyLiveBasketRoute = {
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "coindcx",
+  };
+  let clock = NOW + 30_000;
+  let refreshCalls = 0;
+  const refreshed = opportunity("approved-route-seed-refreshed", route, clock + 20);
+  const service = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    getCurrentApprovedCalibrations: () => [{
+      market: route.market,
+      buyExchange: route.buyExchange,
+      sellExchange: route.sellExchange,
+      status: "APPROVED",
+      scope: "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT",
+      expiresAt: clock + 60_000,
+    } as never],
+    refreshActionCandidate: async (input) => {
+      refreshCalls += 1;
+      assert.deepEqual(input, route);
+      return {
+        state: "REFRESHED",
+        opportunity: refreshed,
+        blocker: null,
+      } as never;
+    },
+    previewAction: (opportunityId) => ({
+      approvedForAuthorization: false,
+      authority: null,
+      blockers: ["FRESH_TWO_LEG_FUNDING_AND_RULES: test fixture blocks before authority."],
+      preflight: null,
+      opportunityId,
+    } as never),
+    now: () => ++clock,
+  }, join(directory, "approved-route-seed.jsonl"));
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+
+  assert.equal(await service.observeSnapshot({
+    generatedAt: clock,
+    opportunities: [],
+  }), null);
+  assert.equal(
+    refreshCalls,
+    1,
+    "A current explicitly approved route must receive a bounded exact-book seed probe even when the scanner snapshot omits it.",
+  );
+  assert.deepEqual(service.getDiagnostics(clock).pipelineTelemetry, {
+    candidatesEvaluated: 1,
+    preflightBlocks: 1,
+    refreshesRequested: 1,
+    refreshesRecovered: 1,
+    coordinatorStarts: 0,
+  });
+
+  assert.equal(await service.observeSnapshot({
+    generatedAt: clock,
+    opportunities: [],
+  }), null);
+  assert.equal(
+    refreshCalls,
+    1,
+    "Approved-route seed probing must stay inside its service-owned interval.",
   );
 }
 

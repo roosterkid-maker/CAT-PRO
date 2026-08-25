@@ -546,6 +546,23 @@ export class StrategyOneTimingCalibrationService {
     return approved ? clone(approved) : null;
   }
 
+  getCurrentApprovedCalibrations(
+    now = Date.now(),
+  ): readonly StrategyOneTimingCalibrationRecord[] {
+    validateTime(now);
+
+    return [...this.latest.values()]
+      .filter((item) =>
+        item.status === "APPROVED" &&
+        item.timingPolicyRevision ===
+          CONTROLLED_PILOT_TIMING_POLICY_REVISION &&
+        item.expiresAt !== null &&
+        item.expiresAt >= now)
+      .sort((first, second) =>
+        (second.approvedAt ?? 0) - (first.approvedAt ?? 0))
+      .map(clone);
+  }
+
   getDiagnostics(
     now = Date.now(),
   ) {
