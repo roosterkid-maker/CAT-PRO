@@ -18,7 +18,13 @@ async function main(): Promise<void> {
       maximumEvidenceSkewMs: 1_000, minimumPersistenceIntervalMs: 0,
       rotationMaximumFileBytes: 1_000_000, rotationMaximumRecords: 100, maximumArchives: 2};
     const first = new StatisticalHistoricalDataService(file, configuration, new SilentSource());
-    const now = Date.now();
+    /*
+     * Keep fixture samples safely in the past. A fast CI runner can construct
+     * and restore the service within the same millisecond; using Date.now()+N
+     * made valid fixture samples look future-dated during the truthful restore
+     * guard.
+     */
+    const now = Date.now() - 1_000;
     for (let index = 0; index < 4; index += 1) {
       first.record(pair, {timestamp: now + index, leftMid: 100 + index, rightMid: 50 + index}, now + index);
     }
