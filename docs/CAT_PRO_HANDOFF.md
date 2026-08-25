@@ -6,6 +6,12 @@ Last updated: 2026-08-25 (Asia/Kolkata)
 
 This section is the current source of truth. The detailed build history below is retained for audit context; when an older statement conflicts with this section, use this section.
 
+### V198 Tiny-LIVE runtime profile enabled, still unarmed — 2026-08-25
+
+- After the operator explicitly paused PAPER automation and requested `Tiny-LIVE runtime switch kar do`, only `cat-pro-backend` was recreated from the same V198 image with the dedicated base + Tiny-LIVE + HTTPS Compose profiles. Runtime is now `live/live/true` and all seven process/runtime/order-submission confirmations pass; this profile switch alone did not create execution authority.
+- The V198 readiness waterfall is `READY_TO_ARM_DYNAMIC_POOL`: runtime and PAPER-pause stages both pass, while account mode remains `PAPER`, active dynamic arm and account lease are absent, blocking one-time authority is false and the trigger is idle. No arm, lease, authority, order, transfer or withdrawal was created by the switch.
+- Backend/frontend/gateway remain healthy with restart count `0` and OOM false; edge is running, recent fatal/uncaught/unhandled count is `0`, and the immutable AWS release worktree remains clean at `77b31e1c38bd3e8a3f50692cf24c0231adbff03b`.
+
 ### V198 staged Tiny-LIVE readiness observability deployed — 2026-08-25
 
 - The Strategy #1 pre-arm diagnostics now expose one read-only seven-stage execution waterfall: full process/runtime configuration, paused PAPER automation, dynamic-pool arm, bounded account-mode lease, current exact-route preflight, one-time action authority, and final order-time last-look/submission. It explicitly reports that dynamic routing needs no per-coin approval and that policy/settings do not grant order authority.
