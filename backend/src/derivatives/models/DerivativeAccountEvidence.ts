@@ -35,6 +35,7 @@ export interface DerivativeVenueAccountEvidence {
   readonly observedAt: number;
   readonly expiresAt: number;
   readonly authenticatedReadVerified: true;
+  readonly marginReadVerified: true;
   readonly positionReadVerified: true;
   readonly orderSubmissionAllowed: false;
   readonly liveExecutionAllowed: false;
@@ -65,6 +66,40 @@ export interface DerivativeAccountEvidenceSnapshot {
     readonly balanceInferenceAllowed: false;
     readonly positionInferenceAllowed: false;
     readonly orderSubmissionAllowed: false;
+    readonly liveExecutionAllowed: false;
+  };
+}
+
+export interface BinanceUsdMAccountVerificationReport {
+  readonly version: "49.1";
+  readonly mode: "BINANCE_USDM_SIGNED_GET_MARGIN_POSITION_VERIFICATION";
+  readonly exchange: "binance";
+  readonly requestedAt: number;
+  readonly attemptedAt: number;
+  readonly completedAt: number;
+  readonly outcome: "VERIFIED" | "FAILED";
+  readonly provider: DerivativeAccountProviderStatus;
+  readonly checks: {
+    readonly credentialsConfigured: boolean;
+    readonly currentAttemptSucceeded: boolean;
+    readonly freshEvidence: boolean;
+    readonly authenticatedReadVerified: boolean;
+    readonly marginReadVerified: boolean;
+    readonly positionReadVerified: boolean;
+    readonly configuredMarketsCovered: boolean;
+  };
+  readonly evidence: DerivativeVenueAccountEvidence | null;
+  readonly safety: {
+    readonly signedGetOnly: true;
+    readonly endpoints: readonly [
+      "GET /fapi/v3/balance",
+      "GET /fapi/v3/positionRisk",
+    ];
+    readonly credentialValuesExposed: false;
+    readonly orderSubmissionAllowed: false;
+    readonly transferAllowed: false;
+    readonly withdrawalAllowed: false;
+    readonly paperAuthorityChanged: false;
     readonly liveExecutionAllowed: false;
   };
 }

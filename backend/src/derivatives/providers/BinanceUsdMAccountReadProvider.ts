@@ -180,6 +180,7 @@ implements DerivativeAccountReadProvider {
       observedAt: now,
       expiresAt: now + this.freshnessMs,
       authenticatedReadVerified: true,
+      marginReadVerified: true,
       positionReadVerified: true,
       orderSubmissionAllowed: false,
       liveExecutionAllowed: false,

@@ -126,6 +126,7 @@ function venue(exchange: "binance" | "bybit", availableMargin: number): Derivati
     observedAt: now,
     expiresAt: now + 30_000,
     authenticatedReadVerified: true,
+    marginReadVerified: true,
     positionReadVerified: true,
     orderSubmissionAllowed: false,
     liveExecutionAllowed: false,

@@ -58,7 +58,8 @@ function account(): DerivativeAccountEvidenceSnapshot {
     providers: [{exchange: "binance", configured: true, state: derivativeReady ? "READY" : "NO_DATA",
       lastSuccessAt: derivativeReady ? now : null, lastError: derivativeReady ? null : "signed read unavailable"}],
     evidence: derivativeReady ? [{exchange: "binance", authenticatedReadVerified: true,
-      positionReadVerified: true, availableMargin: 1_000, availableMarginUnit: "USDT", positions: []}] : [],
+      marginReadVerified: true, positionReadVerified: true, availableMargin: 1_000,
+      availableMarginUnit: "USDT", positions: []}] : [],
   } as unknown as DerivativeAccountEvidenceSnapshot;
 }
 

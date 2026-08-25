@@ -39,6 +39,7 @@ export function summarizeDerivativePaperVenues(input: {
     const authenticatedReadReady = Boolean(
       status?.state === "READY" &&
       evidence?.authenticatedReadVerified &&
+      evidence.marginReadVerified &&
       evidence.positionReadVerified,
     );
     const targetMarginCovered = Boolean(

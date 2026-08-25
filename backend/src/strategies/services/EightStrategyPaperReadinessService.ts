@@ -580,10 +580,17 @@ export function buildEightStrategyBlockerRemediation(input: {
                 ? "AVAILABLE" as const
                 : "ZERO" as const;
 
+          const accountReadsVerified = Boolean(
+            evidence?.authenticatedReadVerified &&
+            evidence.marginReadVerified &&
+            evidence.positionReadVerified,
+          );
+
           const resolutionClass:
             EightStrategyRemediationClass =
             provider.state ===
                 "READY" &&
+              accountReadsVerified &&
               marginState ===
                 "AVAILABLE"
               ? "VERIFIED_HEALTHY"
@@ -598,12 +605,17 @@ export function buildEightStrategyBlockerRemediation(input: {
                 ? "Authenticated read credentials are not configured for this provider."
                 : provider.state ===
                     "READY" &&
+                  accountReadsVerified &&
                   marginState ===
                     "ZERO"
                   ? "Signed account and position reads are healthy, but no available derivative margin is evidenced."
                   : provider.state ===
-                      "READY"
+                      "READY" &&
+                    accountReadsVerified
                     ? "Signed account and position reads have current positive margin evidence."
+                    : provider.state ===
+                        "READY"
+                      ? "Derivative account evidence is current, but explicit margin or position read verification is incomplete."
                     : "Current authenticated derivative account evidence is unavailable.";
 
           return {
@@ -616,6 +628,10 @@ export function buildEightStrategyBlockerRemediation(input: {
             authenticatedReadVerified:
               evidence
                 ?.authenticatedReadVerified ??
+              false,
+            marginReadVerified:
+              evidence
+                ?.marginReadVerified ??
               false,
             positionReadVerified:
               evidence

@@ -179,6 +179,44 @@ function main(): void {
     preview.safety,
   );
 
+  placement = {
+    ...placementReport(),
+    routes: placementReport().routes.map((route) => ({
+      ...route,
+      deployableCashPnlInr: -2_000,
+      tdsWithheldInr: route.realizedPnlInr + 2_000,
+    })),
+  };
+  const profitableButCashLocked = service.getPreview(NOW);
+  assert.equal(
+    profitableButCashLocked.state,
+    "READY_FOR_OPERATOR_PREFLIGHT",
+    "Positive realized route evidence must not be erased by separately tracked TDS cash lock.",
+  );
+  assert.equal(
+    profitableButCashLocked.selected?.checks.find(
+      (item) => item.key === "HISTORICAL_ROUTE_EVIDENCE",
+    )?.state,
+    "PASS",
+  );
+
+  placement = {
+    ...placementReport(),
+    routes: placementReport().routes.map((route) => ({
+      ...route,
+      realizedPnlInr: -1,
+      deployableCashPnlInr: 8_000,
+    })),
+  };
+  const historicallyUnprofitable = service.getPreview(NOW);
+  assert.equal(
+    historicallyUnprofitable.state,
+    "WAITING_FOR_HISTORICAL_MATCH",
+    "Positive immediate cash after withholding must not manufacture profitable historical evidence.",
+  );
+
+  placement = placementReport();
+
   funding =
     oneLotRoundedFunding();
   const lotRounded =

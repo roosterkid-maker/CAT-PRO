@@ -325,10 +325,10 @@ export class StrategyOnePilotPreflightService {
         );
 
     const historicalCandidates = placement.routes.filter(
-      (route) =>
-        route.liveAdapterFoundationReady &&
-        route.uniqueSettlements >= placement.minimumRouteSample &&
-        route.deployableCashPnlInr > 0,
+      (route) => hasCredibleHistoricalRouteEvidence(
+        route,
+        placement.minimumRouteSample,
+      ),
     );
 
     const historicalRoutes =
@@ -808,12 +808,11 @@ export class StrategyOnePilotPreflightService {
       ),
       check(
         "HISTORICAL_ROUTE_EVIDENCE",
-        historical.liveAdapterFoundationReady &&
-          historical.uniqueSettlements >=
-            minimumHistoricalRouteSample &&
-          historical.deployableCashPnlInr >
-            0,
-        "The exact directional route has durable positive historical evidence and audited LIVE contracts.",
+        hasCredibleHistoricalRouteEvidence(
+          historical,
+          minimumHistoricalRouteSample,
+        ),
+        "The exact directional route has durable positive realized PAPER evidence and audited LIVE contracts; TDS cash lock remains separate funding evidence.",
         [],
       ),
       check(
@@ -1134,6 +1133,16 @@ function routeKeyFor(
     ArbitrageOpportunity,
 ): string {
   return `${opportunity.pair.market.trim().toUpperCase()}|${opportunity.pair.buy.exchange.trim().toLowerCase()}>${opportunity.pair.sell.exchange.trim().toLowerCase()}`;
+}
+
+function hasCredibleHistoricalRouteEvidence(
+  route: StrategyOneCapitalPlacementRouteRank,
+  minimumHistoricalRouteSample: number,
+): boolean {
+  return route.liveAdapterFoundationReady &&
+    route.uniqueSettlements >= minimumHistoricalRouteSample &&
+    Number.isFinite(route.realizedPnlInr) &&
+    route.realizedPnlInr > 0;
 }
 
 function compareCandidates(

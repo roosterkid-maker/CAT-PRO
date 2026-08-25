@@ -92,6 +92,7 @@ async function main(): Promise<void> {
   const binanceEvidence = await binance.fetch(markets, now);
   assert.equal(binanceEvidence.availableMargin, 750);
   assert.equal(binanceEvidence.availableMarginUnit, "USDT");
+  assert.equal(binanceEvidence.marginReadVerified, true);
   assert.equal(binanceEvidence.positions.length, 2);
   assert.equal(binanceEvidence.positions.every((item) => item.positionSide === "FLAT"), true);
   assert.deepEqual(binancePort.calls.map((item) => item.split(" ").slice(0, 2).join(" ")), [
@@ -124,6 +125,36 @@ async function main(): Promise<void> {
   assert.equal(ready.safety.signedGetOnly, true);
   assert.equal(ready.safety.orderSubmissionAllowed, false);
 
+  const verificationFixture = new FixtureProvider("binance", 500);
+  const verificationService = new DerivativeAccountEvidenceService([verificationFixture], {
+    markets,
+    refreshIntervalMs: 1_000,
+    freshnessThresholdMs: 30_000,
+    retentionMs: 60_000,
+  });
+  const verificationNow = Date.now();
+  const verified = await verificationService.verifyBinanceUsdM(verificationNow);
+  assert.equal(verified.outcome, "VERIFIED");
+  assert.equal(verified.checks.marginReadVerified, true);
+  assert.equal(verified.checks.positionReadVerified, true);
+  assert.equal(verified.checks.configuredMarketsCovered, true);
+  assert.equal(verified.evidence?.observedAt, verificationNow);
+  assert.deepEqual(verified.safety.endpoints, [
+    "GET /fapi/v3/balance",
+    "GET /fapi/v3/positionRisk",
+  ]);
+  assert.equal(verified.safety.orderSubmissionAllowed, false);
+  assert.equal(verified.safety.paperAuthorityChanged, false);
+
+  verificationFixture.failures = 1;
+  const failedVerification = await verificationService.verifyBinanceUsdM(verificationNow + 1);
+  assert.equal(failedVerification.outcome, "FAILED");
+  assert.equal(failedVerification.provider.state, "DEGRADED");
+  assert.equal(failedVerification.evidence, null);
+  assert.equal(failedVerification.checks.currentAttemptSucceeded, false);
+  assert.equal(failedVerification.checks.marginReadVerified, false);
+  assert.match(failedVerification.provider.lastError ?? "", /fixture unavailable/);
+
   fixture.failures = 1;
   const degraded = await service.refresh(now + 3_000);
   assert.equal(degraded.providers[0]?.state, "DEGRADED");
@@ -131,7 +162,7 @@ async function main(): Promise<void> {
   assert.equal(service.getSnapshot(now + 5_001).evidence.length, 0);
 
   console.log("DERIVATIVE AUTHENTICATED ACCOUNT EVIDENCE TEST PASSED.");
-  console.log("Binance USD-M and Bybit linear used signed GET-only balance/position contracts; bounded cached evidence expired fail-closed and exposed no order or LIVE path.");
+  console.log("Binance USD-M and Bybit linear used signed GET-only balance/position contracts; exact-attempt verification rejected retained evidence after failure, bounded cached evidence expired fail-closed, and no order or LIVE path was exposed.");
 }
 
 function evidence(
@@ -170,6 +201,7 @@ function evidence(
     observedAt,
     expiresAt: observedAt + 2_000,
     authenticatedReadVerified: true,
+    marginReadVerified: true,
     positionReadVerified: true,
     orderSubmissionAllowed: false,
     liveExecutionAllowed: false,

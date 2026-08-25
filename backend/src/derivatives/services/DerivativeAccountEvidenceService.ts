@@ -1,4 +1,5 @@
 import type {
+  BinanceUsdMAccountVerificationReport,
   DerivativeAccountEvidenceSnapshot,
   DerivativeAccountProviderStatus,
   DerivativeVenueAccountEvidence,
@@ -38,6 +39,7 @@ export class DerivativeAccountEvidenceService {
   private readonly configuration: DerivativeAccountEvidenceConfiguration;
   private readonly evidence = new Map<string, DerivativeVenueAccountEvidence>();
   private readonly statuses = new Map<string, DerivativeAccountProviderStatus>();
+  private readonly providerRefreshes = new Map<string, Promise<void>>();
   private timer: NodeJS.Timeout | null = null;
   private refreshing = false;
 
@@ -88,46 +90,89 @@ export class DerivativeAccountEvidenceService {
     if (this.refreshing) return this.getSnapshot(now);
     this.refreshing = true;
     try {
-      const results = await Promise.allSettled(
-        this.providers.map((provider) => provider.fetch(this.configuration.markets, now)),
+      await Promise.all(
+        this.providers.map((provider) => this.enqueueProviderRefresh(provider, now)),
       );
-      results.forEach((result, index) => {
-        const provider = this.providers[index];
-        if (!provider) return;
-        const previous = this.statuses.get(provider.exchange) ?? status(provider);
-        if (result.status === "fulfilled") {
-          validateEvidence(result.value, provider.exchange, this.configuration.markets, now);
-          this.evidence.set(provider.exchange, immutable(result.value));
-          this.statuses.set(provider.exchange, {
-            exchange: provider.exchange,
-            state: "READY",
-            configured: provider.isConfigured(),
-            lastAttemptAt: now,
-            lastSuccessAt: now,
-            retainedUntil: result.value.expiresAt,
-            positionMarkets: result.value.positions.length,
-            lastError: null,
-          });
-        } else {
-          const retained = this.evidence.get(provider.exchange);
-          const usable = Boolean(retained && retained.observedAt <= now && now - retained.observedAt <= this.configuration.retentionMs);
-          this.statuses.set(provider.exchange, {
-            exchange: provider.exchange,
-            state: usable ? "DEGRADED" : "NO_DATA",
-            configured: provider.isConfigured(),
-            lastAttemptAt: now,
-            lastSuccessAt: previous.lastSuccessAt,
-            retainedUntil: usable ? retained!.expiresAt : null,
-            positionMarkets: usable ? retained!.positions.length : 0,
-            lastError: safeMessage(result.reason),
-          });
-        }
-      });
       this.evict(now);
       return this.getSnapshot(now);
     } finally {
       this.refreshing = false;
     }
+  }
+
+  /**
+   * Performs a fresh, bounded Binance USD-M verification using only the
+   * provider's signed GET balance and position endpoints. The report is tied
+   * to this exact attempt, so retained evidence can never turn a failed
+   * re-verification into VERIFIED.
+   */
+  async verifyBinanceUsdM(
+    requestedAt = Date.now(),
+  ): Promise<BinanceUsdMAccountVerificationReport> {
+    const provider = this.providers.find((item) => item.exchange === "binance");
+    if (!provider) {
+      throw new Error("Binance USD-M account-read provider is not registered.");
+    }
+
+    const attemptedAt = requestedAt;
+    await this.enqueueProviderRefresh(provider, attemptedAt);
+    const completedAt = Math.max(attemptedAt, Date.now());
+    this.evict(completedAt);
+
+    const providerStatus = this.statuses.get("binance") ?? status(provider);
+    const candidate = this.evidence.get("binance") ?? null;
+    const currentAttemptSucceeded =
+      providerStatus.lastAttemptAt === attemptedAt &&
+      providerStatus.lastSuccessAt === attemptedAt &&
+      providerStatus.state === "READY";
+    const evidence = currentAttemptSucceeded && candidate?.observedAt === attemptedAt
+      ? candidate
+      : null;
+    const freshEvidence = Boolean(
+      evidence &&
+      evidence.observedAt <= completedAt &&
+      evidence.expiresAt >= completedAt &&
+      completedAt - evidence.observedAt <= this.configuration.freshnessThresholdMs,
+    );
+    const coveredMarkets = new Set(evidence?.positions.map((item) => item.market) ?? []);
+    const configuredMarketsCovered = this.configuration.markets.every((market) =>
+      coveredMarkets.has(market),
+    );
+    const checks = {
+      credentialsConfigured: providerStatus.configured,
+      currentAttemptSucceeded,
+      freshEvidence,
+      authenticatedReadVerified: evidence?.authenticatedReadVerified ?? false,
+      marginReadVerified: evidence?.marginReadVerified ?? false,
+      positionReadVerified: evidence?.positionReadVerified ?? false,
+      configuredMarketsCovered,
+    };
+    const outcome = Object.values(checks).every(Boolean)
+      ? "VERIFIED" as const
+      : "FAILED" as const;
+
+    return immutable({
+      version: "49.1",
+      mode: "BINANCE_USDM_SIGNED_GET_MARGIN_POSITION_VERIFICATION",
+      exchange: "binance",
+      requestedAt,
+      attemptedAt,
+      completedAt,
+      outcome,
+      provider: providerStatus,
+      checks,
+      evidence,
+      safety: {
+        signedGetOnly: true,
+        endpoints: ["GET /fapi/v3/balance", "GET /fapi/v3/positionRisk"],
+        credentialValuesExposed: false,
+        orderSubmissionAllowed: false,
+        transferAllowed: false,
+        withdrawalAllowed: false,
+        paperAuthorityChanged: false,
+        liveExecutionAllowed: false,
+      },
+    });
   }
 
   getMarketEvidence(
@@ -177,6 +222,63 @@ export class DerivativeAccountEvidenceService {
       if (record.observedAt > now || now - record.observedAt > this.configuration.retentionMs) this.evidence.delete(exchange);
     }
   }
+
+  private enqueueProviderRefresh(
+    provider: DerivativeAccountReadProvider,
+    now: number,
+  ): Promise<void> {
+    const previous = this.providerRefreshes.get(provider.exchange) ?? Promise.resolve();
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.refreshProvider(provider, now));
+    this.providerRefreshes.set(provider.exchange, current);
+    const cleanup = () => {
+      if (this.providerRefreshes.get(provider.exchange) === current) {
+        this.providerRefreshes.delete(provider.exchange);
+      }
+    };
+    void current.then(cleanup, cleanup);
+    return current;
+  }
+
+  private async refreshProvider(
+    provider: DerivativeAccountReadProvider,
+    now: number,
+  ): Promise<void> {
+    const previous = this.statuses.get(provider.exchange) ?? status(provider);
+    try {
+      const value = await provider.fetch(this.configuration.markets, now);
+      validateEvidence(value, provider.exchange, this.configuration.markets, now);
+      this.evidence.set(provider.exchange, immutable(value));
+      this.statuses.set(provider.exchange, {
+        exchange: provider.exchange,
+        state: "READY",
+        configured: provider.isConfigured(),
+        lastAttemptAt: now,
+        lastSuccessAt: now,
+        retainedUntil: value.expiresAt,
+        positionMarkets: value.positions.length,
+        lastError: null,
+      });
+    } catch (error: unknown) {
+      const retained = this.evidence.get(provider.exchange);
+      const usable = Boolean(
+        retained &&
+        retained.observedAt <= now &&
+        now - retained.observedAt <= this.configuration.retentionMs,
+      );
+      this.statuses.set(provider.exchange, {
+        exchange: provider.exchange,
+        state: usable ? "DEGRADED" : "NO_DATA",
+        configured: provider.isConfigured(),
+        lastAttemptAt: now,
+        lastSuccessAt: previous.lastSuccessAt,
+        retainedUntil: usable ? retained!.expiresAt : null,
+        positionMarkets: usable ? retained!.positions.length : 0,
+        lastError: safeMessage(error),
+      });
+    }
+  }
 }
 
 function validateEvidence(
@@ -185,7 +287,16 @@ function validateEvidence(
   markets: readonly string[],
   now: number,
 ): void {
-  if (value.exchange !== exchange || value.observedAt !== now || value.expiresAt <= now || !Number.isFinite(value.availableMargin) || value.availableMargin < 0) {
+  if (
+    value.exchange !== exchange ||
+    value.observedAt !== now ||
+    value.expiresAt <= now ||
+    !Number.isFinite(value.availableMargin) ||
+    value.availableMargin < 0 ||
+    !value.authenticatedReadVerified ||
+    !value.marginReadVerified ||
+    !value.positionReadVerified
+  ) {
     throw new Error(`Invalid derivative account evidence from ${exchange}.`);
   }
   for (const market of markets) {

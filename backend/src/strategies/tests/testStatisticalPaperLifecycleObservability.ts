@@ -108,7 +108,8 @@ function main(): void {
         modeledNetQuote: 1.5, modeledNetPercent: 0.3}}]} as unknown as StatisticalArbitrageSnapshot;
   const account = {providers: [{exchange: "binance", state: "READY", configured: true, lastSuccessAt: now}],
     evidence: [{exchange: "binance", availableMargin: 1_000, availableMarginUnit: "USDT",
-      authenticatedReadVerified: true, positionReadVerified: true, positions: []}]} as unknown as DerivativeAccountEvidenceSnapshot;
+      authenticatedReadVerified: true, marginReadVerified: true,
+      positionReadVerified: true, positions: []}]} as unknown as DerivativeAccountEvidenceSnapshot;
   const fees = {evidence: [{exchange: "binance"}]} as unknown as DerivativeFeeEvidenceSnapshot;
   const service = new StatisticalPaperLifecycleObservabilityService({
     getConfiguration: () => configuration,

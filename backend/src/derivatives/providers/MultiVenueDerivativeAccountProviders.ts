@@ -118,7 +118,8 @@ function venue(exchange: string, availableMargin: number, walletBalance: number 
     availableMarginUnit: unit, walletBalance, totalEquity, totalInitialMargin: null,
     totalMaintenanceMargin: null, positions, marginSourceEndpoint: marginEndpoint,
     positionSourceEndpoint: positionEndpoint, observedAt: now, expiresAt: now + FRESH_MS,
-    authenticatedReadVerified: true, positionReadVerified: true, orderSubmissionAllowed: false,
+    authenticatedReadVerified: true, marginReadVerified: true, positionReadVerified: true,
+    orderSubmissionAllowed: false,
     liveExecutionAllowed: false});
 }
 function records(value: unknown): Record<string, unknown>[] {
