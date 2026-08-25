@@ -43,6 +43,7 @@ import {
 } from "../../../arbitrage/services/OpportunityService";
 
 import {
+  isStrategyOneTinyLiveAttemptCount,
   strategyOneTinyLivePreArmService,
 } from "../tiny-live/StrategyOneTinyLivePreArmService";
 
@@ -695,13 +696,11 @@ router.post(
         durationMinutes: typeof request.body?.durationMinutes === "number"
           ? request.body.durationMinutes
           : undefined,
-        maximumAttempts: request.body?.maximumAttempts === 10
-          ? 10
-          : request.body?.maximumAttempts === 9
-            ? 9
-          : request.body?.maximumAttempts === 2
-            ? 2
-            : 1,
+        maximumAttempts: isStrategyOneTinyLiveAttemptCount(
+          request.body?.maximumAttempts,
+        )
+          ? request.body.maximumAttempts
+          : 1,
         routePoolId: typeof request.body?.routePoolId === "string"
           ? request.body.routePoolId
           : undefined,

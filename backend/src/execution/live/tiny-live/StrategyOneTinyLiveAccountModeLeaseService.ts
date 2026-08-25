@@ -41,6 +41,8 @@ import {
 
 import {
   strategyOneTinyLivePreArmService,
+  isStrategyOneTinyLiveAttemptCount,
+  type StrategyOneTinyLiveAttemptCount,
   type StrategyOneTinyLivePreArmRecord,
 } from "./StrategyOneTinyLivePreArmService";
 
@@ -62,7 +64,7 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   readonly sellExchange: string;
   readonly capitalPerLegInr: number;
   readonly maximumCapitalPerLegInr?: number;
-  readonly maximumAttempts: 1 | 2 | 9 | 10;
+  readonly maximumAttempts: StrategyOneTinyLiveAttemptCount;
   readonly priorAccountMode: "PAPER";
   readonly leasedAccountMode: "LIVE";
   readonly timingCalibrationId: string;
@@ -1517,10 +1519,10 @@ function isLeaseRecord(
       ? item.maximumAttempts === 1 || item.maximumAttempts === 2
       : tenAttempt
         ? item.maximumAttempts === 10
-        : (dynamicPool || minimumOrderCushionPool) && (
-          item.maximumAttempts === 9 ||
-          item.maximumAttempts === 10
-        )) &&
+        : dynamicPool
+          ? item.maximumAttempts === 9 || item.maximumAttempts === 10
+          : minimumOrderCushionPool &&
+            isStrategyOneTinyLiveAttemptCount(item.maximumAttempts)) &&
     item.priorAccountMode ===
       "PAPER" &&
     item.leasedAccountMode ===

@@ -47,6 +47,12 @@ async function main(): Promise<void> {
       reducedPhrase,
       "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS9 MINUTES180",
     );
+    const continuationPhrase =
+      StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(8);
+    assert.equal(
+      continuationPhrase,
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS8 MINUTES180",
+    );
     const reducedFilePath = join(directory, "reduced-route-pool.jsonl");
     const reducedService = new StrategyOneTinyLivePreArmService({
       runtimeGateEnabled: () => true,
@@ -163,12 +169,24 @@ async function main(): Promise<void> {
         maximumDailyAttempts: 10,
         attemptsToday: 2,
         remainingDailyAttempts: 8,
-        routePoolArmAttempts: null,
+        routePoolArmAttempts: 8,
         resetsAt: 1_787_250_600_000,
         resetPolicy: "NEXT_IST_DAY_ONLY",
         liveOffResetsConsumedAttempts: false,
       },
     );
+    const continuationArm = belowRoutePoolMinimum.arm({
+      market: "DYNAMIC_POOL",
+      buyExchange: "coindcx",
+      sellExchange: "binance",
+      confirmation: continuationPhrase,
+      durationMinutes: 180,
+      maximumAttempts: 8,
+      routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+      now: NOW,
+    });
+    assert.equal(continuationArm.maximumAttempts, 8);
+    assert.equal(continuationArm.attemptsUsed, 0);
 
     verifyRetiredFixedBasketArmIsNotRestored(filePath, directory);
     verifySupersededDynamicPoolArmExpires(filePath, directory);
@@ -182,7 +200,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V190 dynamic route-pool pre-arm passed: one pool consent, ₹500 target/₹505 hard cap, no per-coin timing approval, exact 9-or-10-attempt/180-minute limits, daily-cap enforcement, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
+    "V190 dynamic route-pool pre-arm passed: one pool consent, ₹500 target/₹505 hard cap, no per-coin timing approval, remaining-budget 1–10-attempt/180-minute limits, daily-cap continuation after failed-safe disarm, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
   );
 }
 
@@ -405,12 +423,13 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
     requiredAuthorizationPhrase: "AUTHORIZE tiny-live-durable-reasons",
   };
   const filePath = join(directory, "durable-last-look-reasons.jsonl");
+  let attemptsToday = 0;
   const dependencies = {
     runtimeGateEnabled: () => true,
     getCapitalPerLegInr: () => 500,
     getActionDiagnostics: () => ({
       maximumDailyAttempts: 10,
-      attemptsToday: 0,
+      attemptsToday,
       blockingAuthorityPresent: false,
     }),
     getOpportunity: (id: string) => id === candidate.id ? candidate : null,
@@ -478,8 +497,25 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
     "Post-stress net fell below the immutable 0.30% floor.",
   ]);
 
+  attemptsToday = 2;
   const restarted = new StrategyOneTinyLivePreArmService(dependencies, filePath);
   assert.deepEqual(restarted.getDiagnostics(clock).records[0]?.attempts?.[0]?.reasons, attempt?.reasons);
+  assert.equal(
+    restarted.getDiagnostics(clock).dailyAttemptBudget.routePoolArmAttempts,
+    8,
+  );
+  const continued = restarted.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(8),
+    durationMinutes: 180,
+    maximumAttempts: 8,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+  assert.equal(continued.state, "ARMED");
+  assert.equal(continued.maximumAttempts, 8);
 }
 
 async function verifyBookDependentBlocksCanRequestFreshBooks(

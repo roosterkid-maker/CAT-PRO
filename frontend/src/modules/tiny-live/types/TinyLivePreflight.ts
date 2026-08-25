@@ -536,6 +536,10 @@ export type StrategyOneTinyLivePreArmState =
   | "DISARMED"
   | "EXPIRED";
 
+export type StrategyOneTinyLiveAttemptCount =
+  | 1 | 2 | 3 | 4 | 5
+  | 6 | 7 | 8 | 9 | 10;
+
 export interface StrategyOneTinyLivePreArmAttempt {
   attemptNumber: number;
   opportunityId: string;
@@ -610,7 +614,7 @@ export interface StrategyOneTinyLivePreArmRecord {
   failureReason: string | null;
   automaticRetryAllowed: false;
   automaticFundMovementAllowed: false;
-  maximumAttempts: 1 | 2 | 9 | 10;
+  maximumAttempts: StrategyOneTinyLiveAttemptCount;
   attemptsUsed?: number;
   attempts?: StrategyOneTinyLivePreArmAttempt[];
   nextAttemptNotBefore?: number | null;
@@ -636,7 +640,7 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   sellExchange: "binance" | "bybit" | "coindcx";
   capitalPerLegInr: number;
   maximumCapitalPerLegInr?: number;
-  maximumAttempts: 1 | 2 | 9 | 10;
+  maximumAttempts: StrategyOneTinyLiveAttemptCount;
   priorAccountMode: "PAPER";
   leasedAccountMode: "LIVE";
   timingCalibrationId: string;
@@ -758,7 +762,7 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
     maximumDailyAttempts: number;
     attemptsToday: number;
     remainingDailyAttempts: number;
-    routePoolArmAttempts: 9 | 10 | null;
+    routePoolArmAttempts: StrategyOneTinyLiveAttemptCount | null;
     resetsAt: number;
     resetPolicy: "NEXT_IST_DAY_ONLY";
     liveOffResetsConsumedAttempts: false;

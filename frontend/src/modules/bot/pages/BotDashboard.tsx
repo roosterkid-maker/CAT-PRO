@@ -69,6 +69,7 @@ import type {
   StrategyOnePilotCandidate,
   StrategyOnePilotPreviewReport,
   StrategyOneTinyLiveOpportunityAuditReport,
+  StrategyOneTinyLiveAttemptCount,
   StrategyOneTinyLivePreArmDiagnostics,
 } from "@/modules/tiny-live/types/TinyLivePreflight";
 
@@ -77,8 +78,6 @@ interface StrategyOnePreArmRoute {
   buyExchange: "binance" | "bybit" | "coindcx";
   sellExchange: "binance" | "bybit" | "coindcx";
 }
-
-const CONTROLLED_BATCH_ATTEMPTS = 10;
 
 export default function BotDashboard() {
   const [pilotAcknowledged, setPilotAcknowledged] = useState(false);
@@ -217,8 +216,7 @@ export default function BotDashboard() {
       }
       if (routePoolArmAttempts === null) {
         throw new Error(
-          `Dynamic Tiny-LIVE route pool ke liye kam-se-kam 9 daily slots chahiye. ` +
-          `${preArmDiagnostics.dailyAttemptBudget.remainingDailyAttempts} bache hain; next IST day ka wait karein.`,
+          "Tiny-LIVE daily attempt cap exhausted hai; next IST reset ke baad arm karein.",
         );
       }
 
@@ -614,7 +612,8 @@ export default function BotDashboard() {
       {liveConfirmationOpen ? (
         <TinyLiveModeConfirmation
           capitalPerLegInr={preArmDiagnostics?.routePool?.capitalPerLegInr ?? 500}
-          maximumAttempts={preArmDiagnostics?.routePool?.maximumAttempts ?? 10}
+          maximumAttempts={routePoolArmAttempts ??
+            preArmDiagnostics?.dailyAttemptBudget.remainingDailyAttempts ?? 0}
           durationMinutes={preArmDiagnostics?.routePool?.durationMinutes ?? 180}
           pending={modeTransition === "TINY_LIVE"}
           onCancel={() => setLiveConfirmationOpen(false)}
@@ -2029,8 +2028,10 @@ function StrategyOnePreArmedOneShotPanel({
         />
         <ActivityMetric
           label="Attempts"
-          value={`${active?.attemptsUsed ?? attempts.length}/${active?.maximumAttempts ?? CONTROLLED_BATCH_ATTEMPTS}`}
-          detail="Ten sequential chances · first failed/exposed leg stops batch"
+          value={`${dailyAttemptBudget?.attemptsToday ?? 0}/${dailyAttemptBudget?.maximumDailyAttempts ?? 10}`}
+          detail={active
+            ? `Daily used · current batch ${active.attemptsUsed ?? 0}/${active.maximumAttempts} · ${dailyAttemptBudget?.remainingDailyAttempts ?? 0} remaining`
+            : `${dailyAttemptBudget?.remainingDailyAttempts ?? 0} daily attempts remaining · failed attempts stay counted`}
           tone="warning"
         />
       </div>
@@ -2241,7 +2242,7 @@ function StrategyOnePreArmedOneShotPanel({
                 I understand that arming submits no order now. {armAttempts !== null ? (
                   <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)} target attempt, with a hard ₹{formatInteger(diagnostics?.routePool.maximumCapitalPerLegInr ?? 505)} minimum-order ceiling per leg.</>
                 ) : (
-                  <>Only {dailyAttemptBudget?.remainingDailyAttempts ?? 0} daily slots remain; the controlled dynamic pool requires 9 or 10 and stays unavailable until {formatIstTime(dailyAttemptBudget?.resetsAt ?? 0)} IST.</>
+                  <>The daily Tiny-LIVE cap is exhausted and stays unavailable until {formatIstTime(dailyAttemptBudget?.resetsAt ?? 0)} IST.</>
                 )} Every exact route gets credible-history, inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch. LIVE OFF never resets consumed daily attempts.
               </span>
             </label>
@@ -3418,7 +3419,7 @@ function toPreArmRoute(route: {
 function routePoolArmPhrase(
   capitalPerLegInr: number,
   maximumCapitalPerLegInr: number,
-  maximumAttempts: 9 | 10,
+  maximumAttempts: StrategyOneTinyLiveAttemptCount,
 ): string {
   return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} MAXINR${maximumCapitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES180`;
 }

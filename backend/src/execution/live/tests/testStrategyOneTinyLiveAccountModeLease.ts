@@ -91,7 +91,7 @@ function main(): void {
   }
 
   console.log(
-    "V151/V190 bounded account-mode lease passed: exact confirmation, ₹505 hard-cap consent, 9-attempt dynamic-pool persistence, journal-first PAPER→LIVE, claimed in-flight protection, automatic PAPER restore, restart recovery and no order/fund authority.",
+    "V151/V190 bounded account-mode lease passed: exact confirmation, ₹505 hard-cap consent, remaining-budget dynamic-pool persistence, journal-first PAPER→LIVE, claimed in-flight protection, automatic PAPER restore, restart recovery and no order/fund authority.",
   );
 }
 
@@ -104,10 +104,10 @@ function testDynamicRoutePoolLease(filePath: string): void {
     buyExchange: "coindcx",
     sellExchange: "binance",
     requiredArmPhrase:
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS9 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS8 MINUTES180",
     maximumCapitalPerLegInr: 505,
     expiresAt: NOW + 180 * 60_000,
-    maximumAttempts: 9,
+    maximumAttempts: 8,
     routeScope: "DYNAMIC_POOL",
     routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
   };
@@ -145,7 +145,7 @@ function testDynamicRoutePoolLease(filePath: string): void {
   assert.equal(active.maximumCapitalPerLegInr, 505);
   assert.equal(active.routeScope, "DYNAMIC_POOL");
   assert.equal(active.routePoolId, STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID);
-  assert.equal(active.maximumAttempts, 9);
+  assert.equal(active.maximumAttempts, 8);
   assert.equal(
     active.timingCalibrationId,
     `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID}`,

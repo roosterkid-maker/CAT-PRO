@@ -43,6 +43,18 @@ export type StrategyOneTinyLivePreArmState =
   | "DISARMED"
   | "EXPIRED";
 
+export type StrategyOneTinyLiveAttemptCount =
+  | 1 | 2 | 3 | 4 | 5
+  | 6 | 7 | 8 | 9 | 10;
+
+export function isStrategyOneTinyLiveAttemptCount(
+  value: unknown,
+): value is StrategyOneTinyLiveAttemptCount {
+  return Number.isSafeInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= MAXIMUM_BATCH_ATTEMPTS;
+}
+
 export interface StrategyOneTinyLivePreArmAttempt {
   readonly attemptNumber: number;
   readonly opportunityId: string;
@@ -92,7 +104,7 @@ export interface StrategyOneTinyLivePreArmRecord {
   readonly failureReason: string | null;
   readonly automaticRetryAllowed: false;
   readonly automaticFundMovementAllowed: false;
-  readonly maximumAttempts: 1 | 2 | 9 | 10;
+  readonly maximumAttempts: StrategyOneTinyLiveAttemptCount;
   readonly attemptsUsed?: number;
   readonly attempts?: readonly StrategyOneTinyLivePreArmAttempt[];
   readonly nextAttemptNotBefore?: number | null;
@@ -152,7 +164,7 @@ export interface StrategyOneTinyLivePreArmRequest {
   readonly sellExchange: string;
   readonly confirmation: string;
   readonly durationMinutes?: number;
-  readonly maximumAttempts?: 1 | 2 | 9 | 10;
+  readonly maximumAttempts?: StrategyOneTinyLiveAttemptCount;
   readonly now?: number;
   readonly routePoolId?: string;
 }
@@ -592,11 +604,12 @@ export class StrategyOneTinyLivePreArmService {
       0,
       action.maximumDailyAttempts - action.attemptsToday,
     );
-    const routePoolArmAttempts = remainingDailyAttempts >= MAXIMUM_BATCH_ATTEMPTS
-      ? MAXIMUM_BATCH_ATTEMPTS
-      : remainingDailyAttempts >= REDUCED_DYNAMIC_POOL_ATTEMPTS
-        ? REDUCED_DYNAMIC_POOL_ATTEMPTS
-        : null;
+    const routePoolArmAttempts = remainingDailyAttempts > 0
+      ? Math.min(
+          MAXIMUM_BATCH_ATTEMPTS,
+          remainingDailyAttempts,
+        ) as StrategyOneTinyLiveAttemptCount
+      : null;
     const records = [...this.latest.values()]
       .sort((first, second) => second.armedAt - first.armedAt)
       .slice(0, 20)
@@ -656,7 +669,7 @@ export class StrategyOneTinyLivePreArmService {
     buyExchange: string;
     sellExchange: string;
     capitalPerLegInr: number;
-    maximumAttempts?: 1 | 2 | 9 | 10;
+    maximumAttempts?: StrategyOneTinyLiveAttemptCount;
     durationMinutes?: number;
   }): string {
     return armPhrase({
@@ -674,7 +687,8 @@ export class StrategyOneTinyLivePreArmService {
   }
 
   static requiredRoutePoolArmPhrase(
-    maximumAttempts: 9 | 10 = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
+    maximumAttempts: StrategyOneTinyLiveAttemptCount =
+      STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
   ): string {
     return dynamicPoolArmPhrase(maximumAttempts);
   }
@@ -707,11 +721,10 @@ export class StrategyOneTinyLivePreArmService {
     if (
       durationMinutes !== policy.durationMinutes ||
       (
-        maximumAttempts !== REDUCED_DYNAMIC_POOL_ATTEMPTS &&
-        maximumAttempts !== policy.maximumAttempts
+        !isStrategyOneTinyLiveAttemptCount(maximumAttempts)
       )
     ) {
-      throw new Error("The dynamic route pool supports only 9 or 10 attempts over exactly 180 minutes.");
+      throw new Error("The dynamic route pool supports 1–10 remaining daily attempts over exactly 180 minutes.");
     }
 
     const requiredArmPhrase = dynamicPoolArmPhrase(maximumAttempts);
@@ -1131,7 +1144,7 @@ export class StrategyOneTinyLivePreArmService {
         current.schemaVersion !== "190.0" ||
         current.maximumCapitalPerLegInr !==
           STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr ||
-        current.requiredArmPhrase !== dynamicPoolArmPhrase(current.maximumAttempts as 9 | 10)
+        current.requiredArmPhrase !== dynamicPoolArmPhrase(current.maximumAttempts)
       );
 
     if (current.expiresAt >= now && !supersededDynamicPoolPolicy) {
@@ -1301,7 +1314,7 @@ function armPhrase(input: {
   buyExchange: StrategyOnePilotExchange;
   sellExchange: StrategyOnePilotExchange;
   capitalPerLegInr: number;
-  maximumAttempts: 1 | 2 | 9 | 10;
+  maximumAttempts: StrategyOneTinyLiveAttemptCount;
   durationMinutes: number;
 }): string {
   if (input.maximumAttempts === 1) {
@@ -1315,7 +1328,8 @@ function armPhrase(input: {
 }
 
 function dynamicPoolArmPhrase(
-  maximumAttempts: 9 | 10 = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
+  maximumAttempts: StrategyOneTinyLiveAttemptCount =
+    STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
 ): string {
   const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
   return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} MAXINR${policy.maximumCapitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
@@ -1500,10 +1514,7 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
     item.automaticRetryAllowed === false &&
     item.automaticFundMovementAllowed === false &&
     (
-      item.maximumAttempts === 1 ||
-      item.maximumAttempts === 2 ||
-      item.maximumAttempts === 9 ||
-      item.maximumAttempts === 10
+      isStrategyOneTinyLiveAttemptCount(item.maximumAttempts)
     ) &&
     (legacy
       ? item.maximumAttempts === 1
@@ -1512,10 +1523,11 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
           ? item.maximumAttempts === LEGACY_BATCH_ATTEMPTS
           : tenAttemptBatch
             ? item.maximumAttempts === MAXIMUM_BATCH_ATTEMPTS
-            : (dynamicPoolBatch || minimumOrderCushionBatch) && (
-              item.maximumAttempts === REDUCED_DYNAMIC_POOL_ATTEMPTS ||
-              item.maximumAttempts === MAXIMUM_BATCH_ATTEMPTS
-            )
+            : dynamicPoolBatch
+              ? item.maximumAttempts === REDUCED_DYNAMIC_POOL_ATTEMPTS ||
+                item.maximumAttempts === MAXIMUM_BATCH_ATTEMPTS
+              : minimumOrderCushionBatch &&
+                isStrategyOneTinyLiveAttemptCount(item.maximumAttempts)
       ) &&
         Number.isSafeInteger(attemptsUsed) &&
         (attemptsUsed ?? -1) >= 0 &&

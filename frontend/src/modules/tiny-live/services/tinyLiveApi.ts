@@ -13,6 +13,7 @@ import type {
   StrategyOnePilotPreviewResponse,
   StrategyOneTinyLivePreArmDiagnosticsResponse,
   StrategyOneTinyLivePreArmRecordResponse,
+  StrategyOneTinyLiveAttemptCount,
   StrategyOneTinyLiveAccountModeLeaseRecordResponse,
   StrategyOneTinyLiveOpportunityAuditResponse,
 } from "../types/TinyLivePreflight";
@@ -140,7 +141,7 @@ export async function armStrategyOneTinyLive(input: {
   sellExchange: string;
   confirmation: string;
   durationMinutes: number;
-  maximumAttempts: 1 | 2 | 9 | 10;
+  maximumAttempts: StrategyOneTinyLiveAttemptCount;
   routePoolId?: "strategy-one-dynamic-usdt-route-pool-v1";
 }): Promise<StrategyOneTinyLivePreArmRecordResponse> {
   const response = await api.post<StrategyOneTinyLivePreArmRecordResponse>(
