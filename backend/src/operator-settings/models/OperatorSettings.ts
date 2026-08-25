@@ -141,6 +141,8 @@ export interface OperatorSettingsReport {
 
   tinyLive: {
     preflightOnly: true;
+    preflightOnlyScope: "OPERATOR_SETTINGS_SURFACE";
+    executionAuthorityModel: "STAGED_RUNTIME_ARM_LEASE_ONE_TIME_AUTHORITY";
     minimumCapital: 100;
     maximumCapital: 500;
     currency: "INR";

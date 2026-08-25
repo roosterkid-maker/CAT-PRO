@@ -54,6 +54,10 @@ import {
   strategyOneTinyLiveAccountModeLeaseService,
 } from "../tiny-live/StrategyOneTinyLiveAccountModeLeaseService";
 
+import {
+  strategyOneTinyLiveReadinessWaterfallService,
+} from "../tiny-live/StrategyOneTinyLiveReadinessWaterfallService";
+
 const router =
   Router();
 
@@ -91,6 +95,12 @@ router.get(
         preflightOnly:
           true,
 
+        preflightOnlyScope:
+          "THIS_CAPABILITY_ENDPOINT_ONLY",
+
+        stagedReadinessEndpoint:
+          "/api/execution/tiny-live/strategy-one-pre-arm",
+
         minimumCapital:
           100,
 
@@ -113,9 +123,11 @@ router.get(
           false,
 
         notes: [
-          "This endpoint describes Build 15 tiny-LIVE preflight capability only.",
+          "This endpoint describes Build 15 tiny-LIVE preflight capability only; it is not the staged Strategy #1 execution-authority report.",
 
-          "No exchange order is submitted from Build 15.",
+          "The Strategy #1 pre-arm diagnostics expose the separate runtime, PAPER pause, arm, lease, route, authority and final-last-look waterfall.",
+
+          "Reading either endpoint cannot create authority or submit an exchange order.",
         ],
       },
     });
@@ -570,6 +582,9 @@ router.get(
         accountModeLease:
           strategyOneTinyLiveAccountModeLeaseService
             .getDiagnostics(),
+        readinessWaterfall:
+          strategyOneTinyLiveReadinessWaterfallService
+            .getReport(),
       },
     });
   },

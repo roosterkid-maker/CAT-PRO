@@ -90,6 +90,8 @@ export interface TinyLiveCapability {
   mode: "TINY_LIVE_PREFLIGHT";
 
   preflightOnly: true;
+  preflightOnlyScope: "THIS_CAPABILITY_ENDPOINT_ONLY";
+  stagedReadinessEndpoint: "/api/execution/tiny-live/strategy-one-pre-arm";
 
   minimumCapital: 100;
   maximumCapital: 500;
@@ -550,6 +552,7 @@ export interface StrategyOneTinyLivePreArmAttempt {
   buyStatus: string | null;
   sellStatus: string | null;
   reason: string;
+  reasons?: string[];
   recoveryRequired: boolean;
   possibleExposure: boolean;
   market?: string;
@@ -667,6 +670,66 @@ export interface StrategyOneTinyLiveAccountModeLeaseDiagnostics {
   };
 }
 
+export type StrategyOneTinyLiveReadinessStageState =
+  | "PASS"
+  | "BLOCKED"
+  | "WAITING";
+
+export interface StrategyOneTinyLiveReadinessWaterfall {
+  schemaVersion: "198.0";
+  generatedAt: number;
+  mode: "READ_ONLY_STAGED_TINY_LIVE_AUTHORITY";
+  operationalState:
+    | "BLOCKED_RUNTIME_CONFIGURATION"
+    | "BLOCKED_PAPER_AUTOMATION_ACTIVE"
+    | "READY_TO_ARM_DYNAMIC_POOL"
+    | "ARMED_AWAITING_ACCOUNT_LEASE"
+    | "ARMED_AWAITING_CURRENT_ROUTE"
+    | "READY_FOR_ONE_TIME_AUTHORITY"
+    | "AWAITING_FINAL_LAST_LOOK";
+  firstIncompleteStage: string | null;
+  runtime: {
+    tradingModeLive: boolean;
+    tradingExecutionModeLive: boolean;
+    liveTradingEnabled: boolean;
+    arbitrageConfirmationPresent: boolean;
+    strategyOneRuntimeConfirmationPresent: boolean;
+    liveExecutionConfirmationPresent: boolean;
+    liveOrderSubmissionConfirmationPresent: boolean;
+  };
+  currentRoute: {
+    opportunityId: string;
+    market: string;
+    buyExchange: string;
+    sellExchange: string;
+    previewState: string;
+  } | null;
+  stages: Array<{
+    key: string;
+    state: StrategyOneTinyLiveReadinessStageState;
+    summary: string;
+    reasons: string[];
+  }>;
+  authorityModel: {
+    policyAndSettingsGrantOrderAuthority: false;
+    dynamicPoolRequiresPerCoinApproval: false;
+    armRequired: true;
+    accountLeaseRequired: true;
+    oneTimeAuthorityRequired: true;
+    finalLastLookRequired: true;
+  };
+  safety: {
+    readOnly: true;
+    modeMutationPerformed: false;
+    armCreated: false;
+    leaseActivated: false;
+    authorityCreated: false;
+    capitalReserved: false;
+    orderSubmissionAuthorized: false;
+    orderSubmissionPerformed: false;
+  };
+}
+
 export interface StrategyOneTinyLivePreArmDiagnostics {
   schemaVersion: "125.0";
   generatedAt: number;
@@ -688,6 +751,7 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
   };
   records: StrategyOneTinyLivePreArmRecord[];
   accountModeLease: StrategyOneTinyLiveAccountModeLeaseDiagnostics;
+  readinessWaterfall: StrategyOneTinyLiveReadinessWaterfall;
   routePool: StrategyOneTinyLiveRoutePoolPolicy;
   pilotBasket: null;
   limits: {

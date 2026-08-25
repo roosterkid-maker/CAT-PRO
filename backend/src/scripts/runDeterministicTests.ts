@@ -113,6 +113,7 @@ const DETERMINISTIC_TESTS = [
   "execution/live/tests/testStrategyOneTinyLiveActionAuthority.js",
   "execution/live/tests/testStrategyOneTinyLiveAccountModeLease.js",
   "execution/live/tests/testStrategyOneTinyLiveBasketPreArm.js",
+  "execution/live/tests/testStrategyOneTinyLiveReadinessWaterfall.js",
   "execution/live/tests/testStrategyOneActionTimeBookRefresh.js",
   "execution/live/tests/testCentralLiveLifecycleEvidenceStore.js",
   "execution/live/tests/testCentralLiveRuntimeEvidenceCollector.js",

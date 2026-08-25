@@ -226,6 +226,12 @@ export class OperatorSettingsService {
         preflightOnly:
           true,
 
+        preflightOnlyScope:
+          "OPERATOR_SETTINGS_SURFACE",
+
+        executionAuthorityModel:
+          "STAGED_RUNTIME_ARM_LEASE_ONE_TIME_AUTHORITY",
+
         minimumCapital:
           100,
 
@@ -280,7 +286,7 @@ export class OperatorSettingsService {
 
         "Emergency-stop behavior is not weakened or overridden by this surface.",
 
-        "Tiny-LIVE remains a separate preflight-only workflow with a hard ₹100–₹500 range.",
+        "This settings surface is preflight-only and cannot grant order authority; controlled Tiny-LIVE uses separate runtime, arm, account-lease, exact-route, one-time-authority and final-last-look gates with a hard ₹100–₹500 range.",
 
         "Strategy #1 policy changes require a registered code version, an exact confirmation, a paused bot, and zero open execution exposure.",
 

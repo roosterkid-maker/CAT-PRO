@@ -132,6 +132,7 @@ async function main(): Promise<void> {
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
     await verifyBookDependentBlocksCanRequestFreshBooks(directory);
+    await verifyCompleteCoordinatorReasonsRemainDurable(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
@@ -233,6 +234,103 @@ async function verifyChangingRoutesCanRequestFreshBooks(
       coordinatorStarts: 0,
     });
   }
+}
+
+async function verifyCompleteCoordinatorReasonsRemainDurable(
+  directory: string,
+): Promise<void> {
+  const route: StrategyOneTinyLiveBasketRoute = {
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "coindcx",
+  };
+  let clock = NOW + 30_000;
+  const candidate = opportunity("durable-last-look-reasons", route, clock);
+  const authority = {
+    id: "tiny-live-durable-reasons",
+    state: "PREVIEWED",
+    market: route.market,
+    buyExchange: route.buyExchange,
+    sellExchange: route.sellExchange,
+    capitalPerLegInr: 500,
+    requiredAuthorizationPhrase: "AUTHORIZE tiny-live-durable-reasons",
+  };
+  const filePath = join(directory, "durable-last-look-reasons.jsonl");
+  const dependencies = {
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    getOpportunity: (id: string) => id === candidate.id ? candidate : null,
+    previewAction: () => ({
+      approvedForAuthorization: true,
+      authority,
+      preflight: null,
+      blockers: [],
+    } as never),
+    authorizeAction: () => ({id: authority.id, state: "AUTHORIZED"}),
+    refreshAuthorizedFinalBooks: async () => ({
+      state: "REFRESHED",
+      blocker: null,
+    } as never),
+    execute: async () => ({
+      success: false,
+      status: "BLOCKED" as const,
+      opportunityId: candidate.id,
+      market: route.market,
+      requestedQuantity: 118,
+      buyExchange: route.buyExchange,
+      sellExchange: route.sellExchange,
+      buyResult: null,
+      sellResult: null,
+      matchedFilledQuantity: 0,
+      unmatchedBuyQuantity: 0,
+      unmatchedSellQuantity: 0,
+      startedAt: clock,
+      completedAt: clock + 1,
+      executionTimeMs: 1,
+      recoveryRequired: false,
+      possibleExposure: false,
+      reasons: [
+        "Strategy #1 order-time last-look blocked exchange submission.",
+        "SELL book exceeded the calibrated dispatch-reserved freshness ceiling.",
+        "Post-stress net fell below the immutable 0.30% floor.",
+      ],
+    }),
+    now: () => ++clock,
+  };
+  const service = new StrategyOneTinyLivePreArmService(dependencies, filePath);
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+
+  const completed = await service.observeSnapshot({
+    generatedAt: clock,
+    opportunities: [candidate],
+  });
+  const attempt = completed?.attempts?.[0];
+
+  assert.equal(completed?.state, "FAILED_SAFE");
+  assert.equal(attempt?.reason, "Strategy #1 order-time last-look blocked exchange submission.");
+  assert.deepEqual(attempt?.reasons, [
+    "Strategy #1 order-time last-look blocked exchange submission.",
+    "SELL book exceeded the calibrated dispatch-reserved freshness ceiling.",
+    "Post-stress net fell below the immutable 0.30% floor.",
+  ]);
+
+  const restarted = new StrategyOneTinyLivePreArmService(dependencies, filePath);
+  assert.deepEqual(restarted.getDiagnostics(clock).records[0]?.attempts?.[0]?.reasons, attempt?.reasons);
 }
 
 async function verifyBookDependentBlocksCanRequestFreshBooks(

@@ -256,9 +256,8 @@ async function main(): Promise<void> {
       initialBybit.adapterRegistered &&
       !initialBybit.liveExecutionEnabled &&
       !initialBybit.adapterConnected &&
-      initialBybit.status ===
-        "NO_DATA",
-    "Bybit V22.20 adapter must be registered while LIVE execution and strict connectivity remain disabled.",
+      !initialBybit.executionEvidenceAvailable,
+    "Bybit adapter must be registered while LIVE execution, strict connectivity and real execution evidence remain absent.",
   );
 
   /*
@@ -300,7 +299,7 @@ async function main(): Promise<void> {
     executionHealthService.getReport();
 
   printReport(
-    "SCENARIO 2 — SUCCESSFUL METRICS, CONNECTIVITY UNVERIFIED",
+    "SCENARIO 2 — SUCCESSFUL METRICS, CREDENTIALS ABSENT",
   );
 
   const healthyCoinDCX =
@@ -318,8 +317,8 @@ async function main(): Promise<void> {
 
   assertCondition(
     healthyCoinDCX.status ===
-      "DEGRADED",
-    "CoinDCX must remain DEGRADED until authenticated connectivity is verified.",
+      "UNHEALTHY",
+    "CoinDCX must remain UNHEALTHY while authenticated credentials are absent; synthetic execution metrics cannot substitute authenticated connectivity.",
   );
 
   assertCondition(
@@ -481,7 +480,7 @@ async function main(): Promise<void> {
     executionHealthService.getReport();
 
   printReport(
-    "SCENARIO 4 — DEGRADED COINDCX",
+    "SCENARIO 4 — TIMEOUT METRICS, CREDENTIALS ABSENT",
   );
 
   const degradedCoinDCX =
@@ -499,8 +498,8 @@ async function main(): Promise<void> {
 
   assertCondition(
     degradedCoinDCX.status ===
-      "DEGRADED",
-    "CoinDCX should be DEGRADED with a 20% timeout rate.",
+      "UNHEALTHY",
+    "CoinDCX must remain UNHEALTHY while authenticated credentials are absent, independently of its 20% synthetic timeout rate.",
   );
 
   assertCondition(

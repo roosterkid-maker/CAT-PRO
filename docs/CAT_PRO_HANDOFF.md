@@ -6,6 +6,14 @@ Last updated: 2026-08-25 (Asia/Kolkata)
 
 This section is the current source of truth. The detailed build history below is retained for audit context; when an older statement conflicts with this section, use this section.
 
+### V198 staged Tiny-LIVE readiness observability built locally — deployment pending — 2026-08-25
+
+- The Strategy #1 pre-arm diagnostics now expose one read-only seven-stage execution waterfall: full process/runtime configuration, paused PAPER automation, dynamic-pool arm, bounded account-mode lease, current exact-route preflight, one-time action authority, and final order-time last-look/submission. It explicitly reports that dynamic routing needs no per-coin approval and that policy/settings do not grant order authority.
+- Tiny-LIVE attempt evidence now durably preserves every ordered coordinator and final-last-look reason while retaining the legacy first `reason` field and restoring older records that do not yet contain the new `reasons` array. The BOT dashboard renders the waterfall and all durable attempt sub-reasons instead of hiding the actionable cause behind a generic first line.
+- Capability/settings labels were scoped so their historical `preflightOnly` metadata cannot be mistaken for the separate staged Strategy #1 authority path. The active policy values and policy hash were not changed.
+- No trading mode, LIVE authority, arm, account lease, one-time authority, credential, permission, balance, threshold, fee, depth, freshness, skew, capital, order, transfer, withdrawal, evidence, or history was changed. This build did not call an exchange or submit an order and does not guarantee a fill or profit.
+- Local verification passed backend and frontend production builds, frontend lint, architecture/runtime-readiness script checks, focused durable-reason/readiness/health regressions, and the complete deterministic suite `209/209`. Real exchange APIs and confirmation-sensitive order tests were not included. Deployment is pending; the running AWS state was not mutated by this build.
+
 ### V197 inventory-legality truth fix deployed — 2026-08-25
 
 - V87 Inventory Deployment no longer reports `FUNDING REQUIRED` when authenticated balances show zero deficit but the normalized order still violates an exchange minimum-notional rule. Such a route is now explicitly `MIN_NOTIONAL_BLOCKED`; Personal Capital Manager reports `ORDER_RULE_BLOCKED` with `WAIT_FOR_LEGAL_ORDER_SIZE` instead of recommending fund pre-positioning.

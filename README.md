@@ -181,14 +181,14 @@ same-origin traffic to the single backend listener.
 
 Before any VPS migration, back up `backend/logs` because it contains accounting, shadow-learning, readiness, lifecycle, alert and execution evidence. Never copy `.env` into an image or repository.
 
-VPS deployment is currently authorized only for continuous market-data, SHADOW and gated PAPER soak. It is not authorization for real orders. LIVE remains a separate evidence-based milestone requiring a clean production-safety decision, five-exchange operational evidence, genuine reconciled PAPER history, clock/balance/auth health, recovery validation and explicit future authorization.
+The base VPS Compose profile is authorized only for continuous market-data, SHADOW and gated PAPER soak. It is not authorization for real orders. Controlled Strategy #1 Tiny-LIVE is a separate staged boundary: the dedicated runtime overlay, paused PAPER automation, dynamic-pool arm, bounded account-mode lease, fresh exact-route preflight, one-time authority and final order-time last-look must all independently pass. Applying an overlay or reading a readiness report grants no order authority.
 
 ## Safety invariants
 
-- LIVE trading remains disabled and fail-closed.
+- LIVE trading remains disabled and fail-closed in the base Compose profile.
 - Market-data connectivity is not execution connectivity.
 - Credential presence is not proof of authenticated exchange health.
 - No fake balances, opportunities, fills, profit, readiness, or exchange health may be introduced.
 - API secret values must never be returned to the frontend or written to logs.
 - Risk, readiness, accounting, recovery, balance, clock, and production-safety gates must not be bypassed.
-- Tiny-LIVE remains a preflight-only workflow until a separately audited future authorization.
+- Settings, policy and preflight reports cannot authorize an order. Controlled Tiny-LIVE authority exists only through the staged runtime → arm → lease → exact-route preflight → one-time authority → final-last-look path.

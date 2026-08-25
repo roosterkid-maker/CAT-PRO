@@ -134,4 +134,4 @@ Never use `docker compose down -v`, delete `backend/logs`, or replace the eviden
 
 ## 8. LIVE boundary
 
-VPS deployment, a passing SHADOW verifier, or a passing PAPER verifier is not LIVE authorization. LIVE remains a separate audited build requiring the five-exchange adapter foundation, fresh authenticated-read and clock evidence, reconciled genuine PAPER history, clean recovery and alert state, Production Safety approval, Tiny-LIVE evidence, and explicit future authorization.
+VPS deployment, a passing SHADOW verifier, a passing PAPER verifier, or the dedicated Tiny-LIVE runtime overlay is not order authorization. Controlled Strategy #1 Tiny-LIVE remains fail-closed until PAPER automation is paused and the dynamic-pool arm, bounded account-mode lease, current exact-route evidence, one-time authority and final order-time last-look all independently pass. Settings and policy activation cannot substitute for any execution-authority stage.

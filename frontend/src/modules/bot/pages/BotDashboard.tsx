@@ -1902,6 +1902,7 @@ function StrategyOnePreArmedOneShotPanel({
   const active = diagnostics?.activeArm ?? null;
   const accountLease = diagnostics?.accountModeLease ?? null;
   const activeAccountLease = accountLease?.activeLease ?? null;
+  const readinessWaterfall = diagnostics?.readinessWaterfall ?? null;
   const route = active?.routeScope === "DYNAMIC_POOL" ? suggestedRoute : active ?? suggestedRoute;
   const recent = diagnostics?.records[0] ?? null;
   const attempts = recent?.attempts ?? [];
@@ -2003,6 +2004,39 @@ function StrategyOnePreArmedOneShotPanel({
             ))}
           </div>
           <p className="mt-3 font-mono text-[9px] leading-4 text-amber-300">CoinSwitch, UnoCoin and ZebPay remain excluded from this LIVE pool. No transfer or withdrawal is automatic.</p>
+        </div>
+      ) : null}
+
+      {readinessWaterfall ? (
+        <div className="border-t border-border-default bg-[#050d16] px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="max-w-3xl">
+              <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">REAL ORDER READINESS WATERFALL</p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">Every independent gate, in execution order</p>
+              <p className="mt-2 text-xs leading-5 text-text-muted">
+                Policy and settings never grant order authority. Runtime confirmations, paused PAPER, a dynamic arm, account lease, current exact-route preflight, one-time authority and final last-look are separate fail-closed stages.
+              </p>
+            </div>
+            <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${readinessWaterfall.operationalState.startsWith("BLOCKED") ? "border-red-400/30 bg-red-400/10 text-red-300" : "border-amber-400/30 bg-amber-400/10 text-amber-300"}`}>
+              {readinessWaterfall.operationalState.replaceAll("_", " ")}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {readinessWaterfall.stages.map((stage, index) => (
+              <div key={stage.key} className={`rounded-xl border p-3 ${stage.state === "PASS" ? "border-emerald-400/20 bg-emerald-400/[0.04]" : stage.state === "BLOCKED" ? "border-red-400/20 bg-red-400/[0.04]" : "border-amber-400/20 bg-amber-400/[0.04]"}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[9px] font-bold text-text-muted">{String(index + 1).padStart(2, "0")}</span>
+                  <span className={`font-mono text-[9px] font-bold ${stage.state === "PASS" ? "text-emerald-300" : stage.state === "BLOCKED" ? "text-red-300" : "text-amber-300"}`}>{stage.state}</span>
+                </div>
+                <p className="mt-2 font-mono text-[9px] font-bold leading-4 text-text-primary">{stage.key.replaceAll("_", " ")}</p>
+                <p className="mt-1 text-[10px] leading-4 text-text-muted">{stage.summary}</p>
+                {stage.reasons[0] ? <p className="mt-2 text-[9px] leading-4 text-amber-200/75">{stage.reasons[0]}</p> : null}
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 font-mono text-[9px] leading-4 text-text-muted">
+            FIRST INCOMPLETE: {readinessWaterfall.firstIncompleteStage?.replaceAll("_", " ") ?? "NONE"} · THIS REPORT IS READ-ONLY AND CANNOT ARM, LEASE, AUTHORIZE OR SUBMIT.
+          </p>
         </div>
       ) : null}
 
@@ -2268,6 +2302,13 @@ function StrategyOnePreArmedOneShotPanel({
                       <span className={`font-mono text-[9px] font-bold ${attempt.success ? "text-emerald-300" : "text-red-300"}`}>{attempt.success ? "SUCCESS" : "FAILED SAFE"} · {attempt.executionStatus}</span>
                     </div>
                     <p className="mt-1 text-[10px] leading-4 text-text-muted">{attempt.reason}</p>
+                    {(attempt.reasons?.length ?? 0) > 1 ? (
+                      <ul className="mt-2 space-y-1 border-l border-red-300/20 pl-3 text-[10px] leading-4 text-amber-200/80">
+                        {attempt.reasons?.slice(1).map((reason, index) => (
+                          <li key={`${attempt.attemptNumber}-reason-${index}`}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                     <p className="mt-1 font-mono text-[9px] text-text-muted">{attempt.buyExchange && attempt.sellExchange ? `${attempt.buyExchange.toUpperCase()} BUY → ${attempt.sellExchange.toUpperCase()} SELL · ` : ""}BUY {attempt.buyStatus ?? "—"} · SELL {attempt.sellStatus ?? "—"} · matched {attempt.matchedFilledQuantity === null ? "—" : formatNumber(attempt.matchedFilledQuantity)} · {attempt.executionTimeMs === null ? "—" : `${attempt.executionTimeMs} ms`}</p>
                   </div>
                 ))}

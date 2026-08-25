@@ -59,6 +59,12 @@ export interface StrategyOneTinyLivePreArmAttempt {
   readonly buyStatus: string | null;
   readonly sellStatus: string | null;
   readonly reason: string;
+  /**
+   * Complete ordered coordinator evidence for this attempt. Older records may
+   * contain only `reason`; new records retain every fail-closed sub-reason so
+   * an order-time rejection remains diagnosable after restart.
+   */
+  readonly reasons?: readonly string[];
   readonly recoveryRequired: boolean;
   readonly possibleExposure: boolean;
   readonly market?: string;
@@ -1262,11 +1268,18 @@ function summarizeAttempt(input: {
   completedAt: number;
   result: ArbitrageLiveExecutionResult;
 }): StrategyOneTinyLivePreArmAttempt {
-  const reason = input.result.reasons[0] ?? (
-    isCleanCompletion(input.result)
-      ? "Both exact legs completed with balanced terminal evidence."
-      : `Coordinator ended with ${input.result.status}.`
-  );
+  const reasons = input.result.reasons.length > 0
+    ? [...input.result.reasons]
+    : [
+        isCleanCompletion(input.result)
+          ? "Both exact legs completed with balanced terminal evidence."
+          : `Coordinator ended with ${input.result.status}.`,
+      ];
+  const reason = reasons[0];
+
+  if (reason === undefined) {
+    throw new Error("Tiny-LIVE attempt summary requires durable reason evidence.");
+  }
 
   return freeze({
     attemptNumber: input.attemptNumber,
@@ -1284,6 +1297,7 @@ function summarizeAttempt(input: {
     buyStatus: input.result.buyResult?.status ?? null,
     sellStatus: input.result.sellResult?.status ?? null,
     reason,
+    reasons,
     recoveryRequired: input.result.recoveryRequired,
     possibleExposure: input.result.possibleExposure === true,
     market: input.result.market,
@@ -1319,6 +1333,7 @@ function summarizeFailedAttempt(input: {
     buyStatus: null,
     sellStatus: null,
     reason: input.reason,
+    reasons: [input.reason],
     recoveryRequired: false,
     possibleExposure: false,
     market: input.market,
@@ -1449,6 +1464,15 @@ function isPreArmAttempt(value: unknown): value is StrategyOneTinyLivePreArmAtte
     (item.buyStatus === null || typeof item.buyStatus === "string") &&
     (item.sellStatus === null || typeof item.sellStatus === "string") &&
     typeof item.reason === "string" &&
+    (
+      item.reasons === undefined ||
+      (
+        Array.isArray(item.reasons) &&
+        item.reasons.length >= 1 &&
+        item.reasons.every((reason) => typeof reason === "string" && reason.length > 0) &&
+        item.reasons[0] === item.reason
+      )
+    ) &&
     typeof item.recoveryRequired === "boolean" &&
     typeof item.possibleExposure === "boolean";
 }
