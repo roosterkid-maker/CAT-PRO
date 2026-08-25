@@ -833,6 +833,31 @@ function main():
     ),
   ].map((filePath) => readFileSync(filePath, "utf8")).join("\n");
 
+  const tinyLiveComposeSource =
+    readFileSync(
+      resolve(
+        __dirname,
+        "..",
+        "..",
+        "..",
+        "..",
+        "docker-compose.tiny-live.yml",
+      ),
+      "utf8",
+    );
+
+  assert.match(
+    tinyLiveComposeSource,
+    /ARBITRAGE_LIVE_CONFIRMATION:\s*ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME/,
+    "The Tiny-LIVE Compose overlay must use the same exact consolidated confirmation as every runtime owner.",
+  );
+
+  assert.match(
+    tinyLiveComposeSource,
+    /STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION:\s*ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME/,
+    "The Tiny-LIVE Compose overlay must retain the separate Strategy #1 runtime confirmation gate.",
+  );
+
   assert.doesNotMatch(
     frontendControlledLiveSources,
     /strategy-one-pre-arm|preArm|PreArm/,
