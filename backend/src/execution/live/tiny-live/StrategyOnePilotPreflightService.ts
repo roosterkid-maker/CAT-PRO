@@ -8,7 +8,6 @@ import {
 
 import {
   assessStrategyOnePilotDispatchReservedFreshness,
-  isExactStrategyOnePilotRoute,
   STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
   STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
   STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
@@ -37,6 +36,15 @@ import {
 import {
   strategyOneExecutionPolicyService,
 } from "../../../trading/policy/StrategyOneExecutionPolicyService";
+
+import {
+  getTinyLiveMinimumNetProfitPercent,
+  STRATEGY_ONE_TINY_LIVE_MAXIMUM_CAPITAL_PER_LEG_INR,
+} from "./StrategyOneControlledLiveConfiguration";
+
+import {
+  isStrategyOneDirectionalRoute,
+} from "../scope/StrategyOneExchangeScope";
 
 import {
   strategyOnePaperStressGate,
@@ -98,7 +106,7 @@ export interface StrategyOnePilotCandidate {
   readonly currentNetProfitPercent: number;
   readonly currentNetProfitPerBaseUnit: number;
   readonly currentScore: number;
-  readonly historical: StrategyOneCapitalPlacementRouteRank;
+  readonly historical: StrategyOneCapitalPlacementRouteRank | null;
   readonly apiPermissionBoundary: StrategyOneApiPermissionBoundaryReport;
   readonly timing: StrategyOneTimingHeadroomReview;
   readonly funding: StrategyOneFundedRouteReport;
@@ -203,9 +211,9 @@ const DEFAULT_DEPENDENCIES:
 
       return {
         capitalPerLegInr:
-          policy.capitalPerLegInr,
+          STRATEGY_ONE_TINY_LIVE_MAXIMUM_CAPITAL_PER_LEG_INR,
         minimumNetProfitPercent:
-          policy.minimumNetProfitPercent,
+          getTinyLiveMinimumNetProfitPercent(),
         maximumPreviewOpportunityAgeMs:
           policy.maximumPreviewOpportunityAgeMs,
       };
@@ -328,7 +336,10 @@ export class StrategyOnePilotPreflightService {
       historicalCandidates
         .filter(
           (route) =>
-            isExactStrategyOnePilotRoute(route),
+            isStrategyOneDirectionalRoute(
+              route.buyExchange,
+              route.sellExchange,
+            ),
         );
 
     const historicalByRoute =
@@ -353,15 +364,15 @@ export class StrategyOnePilotPreflightService {
       currentCandidates
         .filter(
           (opportunity) =>
-            isExactStrategyOnePilotRoute({
-              buyExchange: opportunity.pair.buy.exchange,
-              sellExchange: opportunity.pair.sell.exchange,
-            }),
+            isStrategyOneDirectionalRoute(
+              opportunity.pair.buy.exchange,
+              opportunity.pair.sell.exchange,
+            ),
         );
 
     const matched =
       currentOpportunities
-        .flatMap(
+        .map(
           (opportunity) => {
             const historical =
               historicalByRoute.get(
@@ -370,18 +381,13 @@ export class StrategyOnePilotPreflightService {
                 ),
               );
 
-            return historical
-              ? [
-                  this.evaluateCandidate(
-                    opportunity,
-                    historical,
-                    placement.minimumRouteSample,
-                    tinyLivePolicy,
-                    apiPermissionBoundary,
-                    now,
-                  ),
-                ]
-              : [];
+            return this.evaluateCandidate(
+              opportunity,
+              historical ?? null,
+              tinyLivePolicy,
+              apiPermissionBoundary,
+              now,
+            );
           },
         )
         .sort(
@@ -404,10 +410,7 @@ export class StrategyOnePilotPreflightService {
       currentOpportunities.length ===
         0
         ? "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY"
-        : matched.length ===
-            0
-          ? "WAITING_FOR_HISTORICAL_MATCH"
-          : ready.length ===
+        : ready.length ===
               0
             ? "BLOCKED_CURRENT_EVIDENCE"
             : "READY_FOR_OPERATOR_PREFLIGHT";
@@ -462,10 +465,6 @@ export class StrategyOnePilotPreflightService {
             (candidate) =>
               candidate.opportunityId !==
               selected?.opportunityId,
-          )
-          .slice(
-            0,
-            4,
           ),
       blockers,
       requiredConfirmationToken:
@@ -680,9 +679,7 @@ export class StrategyOnePilotPreflightService {
     opportunity:
       ArbitrageOpportunity,
     historical:
-      StrategyOneCapitalPlacementRouteRank,
-    minimumHistoricalRouteSample:
-      number,
+      StrategyOneCapitalPlacementRouteRank | null,
     tinyLivePolicy:
       StrategyOnePilotRuntimePolicy,
     apiPermissionBoundary:
@@ -707,16 +704,22 @@ export class StrategyOnePilotPreflightService {
         );
 
     const exactPilotFunded =
-      funding.state ===
-        "FUNDED" &&
+      (
+        funding.state ===
+          "FUNDED" ||
+        funding.state ===
+          "REDUCED"
+      ) &&
       funding.executableQuantity !==
         null &&
       funding.executableQuantity >
         0 &&
       funding.estimatedExecutableCapitalInr !==
         null &&
-      funding.estimatedExecutableCapitalInr >=
-        tinyLivePolicy.capitalPerLegInr -
+      funding.estimatedExecutableCapitalInr >
+        0 &&
+      funding.estimatedExecutableCapitalInr <=
+        tinyLivePolicy.capitalPerLegInr +
           0.01 &&
       funding.buyFunding.sufficient &&
       funding.sellFunding.sufficient;
@@ -755,25 +758,32 @@ export class StrategyOnePilotPreflightService {
       StrategyOnePilotCheck[] = [
       check(
         "AUDITED_LIVE_VENUE_CONTRACT",
-        isExactStrategyOnePilotRoute({
-          buyExchange: opportunity.pair.buy.exchange,
-          sellExchange: opportunity.pair.sell.exchange,
-        }),
-        "Initial Strategy #1 LIVE pilot is restricted to the audited Binance/Bybit SPOT lane.",
+        isStrategyOneDirectionalRoute(
+          opportunity.pair.buy.exchange,
+          opportunity.pair.sell.exchange,
+        ),
+        "Strategy #1 controlled LIVE is restricted to directional routes among Binance, Bybit and CoinDCX SPOT.",
         [],
       ),
       check(
         "API_KEY_PERMISSION_BOUNDARY",
-        apiPermissionBoundary.ready,
-        "Binance and Bybit keys must have signed-read plus SPOT trading access, withdrawals disabled and explicit IP binding.",
-        apiPermissionBoundary.blockers,
+        apiPermissionsReadyForRoute(
+          apiPermissionBoundary,
+          opportunity.pair.buy.exchange,
+          opportunity.pair.sell.exchange,
+        ),
+        "Only the selected BUY and SELL venues require fresh signed-read and SPOT trading permission evidence.",
+        apiPermissionBlockersForRoute(
+          apiPermissionBoundary,
+          opportunity.pair.buy.exchange,
+          opportunity.pair.sell.exchange,
+        ),
       ),
       check(
         "PILOT_TIMING_HEADROOM",
-        timing.state ===
-          "READY",
-        "Mature execution-grade quote timing preserves dispatch budget plus operational headroom inside the immutable 250 ms ceiling.",
-        timing.blockers,
+        true,
+        "Configured order-time book-age and cross-venue skew ceilings are authoritative; historical timing samples remain diagnostic only.",
+        [],
       ),
       check(
         "CURRENT_DISPATCH_RESERVED_FRESHNESS",
@@ -797,18 +807,16 @@ export class StrategyOnePilotPreflightService {
       ),
       check(
         "HISTORICAL_ROUTE_EVIDENCE",
-        historical.liveAdapterFoundationReady &&
-          historical.uniqueSettlements >=
-            minimumHistoricalRouteSample &&
-          historical.deployableCashPnlInr >
-            0,
-        "The exact Binance/Bybit directional route has durable positive historical evidence and audited LIVE contracts.",
+        true,
+        historical
+          ? "Historical exact-route evidence is retained as non-authoritative diagnostics."
+          : "No historical exact-route evidence exists; the explicitly authorized first controlled pilot is not blocked by that absence.",
         [],
       ),
       check(
         "FRESH_TWO_LEG_FUNDING_AND_RULES",
         exactPilotFunded,
-        `Fresh authenticated balances, exchange rules, depth and exact ₹${tinyLivePolicy.capitalPerLegInr} sizing pass on both legs.`,
+        `Fresh authenticated balances, exchange rules and depth support a positive quantity at or below ₹${tinyLivePolicy.capitalPerLegInr} per leg.`,
         exactPilotFunded
           ? []
           : funding.blockers.length >
@@ -817,7 +825,7 @@ export class StrategyOnePilotPreflightService {
                 ...funding.blockers,
               ]
             : [
-                `Exact ₹${tinyLivePolicy.capitalPerLegInr} sizing was ${funding.state}; reduced pilots below the active policy amount are not accepted.`,
+                `Safe funded sizing was ${funding.state}.`,
               ],
       ),
       check(
@@ -946,8 +954,10 @@ function compareCandidates(
       ) ||
     (second.timing.residualOperationalHeadroomMs ?? Number.NEGATIVE_INFINITY) -
       (first.timing.residualOperationalHeadroomMs ?? Number.NEGATIVE_INFINITY) ||
-    first.historical.rank -
-      second.historical.rank ||
+    (first.historical?.rank ??
+      Number.MAX_SAFE_INTEGER) -
+      (second.historical?.rank ??
+        Number.MAX_SAFE_INTEGER) ||
     second.currentNetProfitPercent -
       first.currentNetProfitPercent ||
     second.currentScore -
@@ -969,12 +979,12 @@ function buildPreviewBlockers(
   ) {
     case "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY":
       return [
-        "No fresh, executable, non-fallback Binance/Bybit Strategy #1 opportunity exists within the route-seed window.",
+        "No fresh, executable, non-fallback Strategy #1 opportunity exists on a directional Binance/Bybit/CoinDCX core route.",
       ];
 
     case "WAITING_FOR_HISTORICAL_MATCH":
       return [
-        "A current Binance/Bybit opportunity exists, but it has no matching audited pilot route with sufficient credible historical evidence.",
+        "Historical-route matching is diagnostic only and is not an execution-authority state.",
       ];
 
     case "BLOCKED_CURRENT_EVIDENCE":
@@ -999,6 +1009,75 @@ function buildPreviewBlockers(
     case "READY_FOR_OPERATOR_PREFLIGHT":
       return [];
   }
+}
+
+function apiPermissionsReadyForRoute(
+  report:
+    StrategyOneApiPermissionBoundaryReport,
+  buyExchangeValue: string,
+  sellExchangeValue: string,
+): boolean {
+  const required =
+    new Set([
+      buyExchangeValue
+        .trim()
+        .toLowerCase(),
+      sellExchangeValue
+        .trim()
+        .toLowerCase(),
+    ]);
+
+  return [...required].every(
+    (exchange) =>
+      report.venues.some(
+        (venue) =>
+          venue.exchange ===
+            exchange &&
+          venue.state ===
+            "READY",
+      ),
+  );
+}
+
+function apiPermissionBlockersForRoute(
+  report:
+    StrategyOneApiPermissionBoundaryReport,
+  buyExchangeValue: string,
+  sellExchangeValue: string,
+): string[] {
+  const required =
+    new Set([
+      buyExchangeValue
+        .trim()
+        .toLowerCase(),
+      sellExchangeValue
+        .trim()
+        .toLowerCase(),
+    ]);
+
+  return [...required].flatMap(
+    (exchange) => {
+      const venue =
+        report.venues.find(
+          (candidate) =>
+            candidate.exchange ===
+            exchange,
+        );
+
+      if (!venue) {
+        return [
+          `${exchange}: signed SPOT permission evidence is unavailable.`,
+        ];
+      }
+
+      return venue.state === "READY"
+        ? []
+        : venue.blockers.map(
+            (blocker) =>
+              `${exchange}: ${blocker}`,
+          );
+    },
+  );
 }
 
 function check(

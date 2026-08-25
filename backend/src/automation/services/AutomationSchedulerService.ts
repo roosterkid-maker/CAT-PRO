@@ -71,10 +71,6 @@ import {
   strategyOnePilotEquivalentPaperEvidenceService,
 } from "../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 
-import {
-  strategyOneTinyLivePreArmService,
-} from "../../execution/live/tiny-live/StrategyOneTinyLivePreArmService";
-
 export interface AutomationSchedulerConfig {
   intervalMs: number;
 
@@ -1070,30 +1066,6 @@ export class AutomationSchedulerService {
         snapshot,
         "PIPELINE_START",
         pipelineStartedAt,
-      );
-
-    /*
-     * V125 one-shot Tiny-LIVE trigger. With no active arm this is an O(1)
-     * in-memory return. This scheduler already runs after the scanner snapshot
-     * callback; an armed exact route therefore receives priority over PAPER
-     * analytics without adding network/persistence work to market-data ingest.
-     */
-    void strategyOneTinyLivePreArmService
-      .observeSnapshot(
-        snapshot,
-      )
-      .catch(
-        (
-          error:
-            unknown,
-        ) => {
-          console.error(
-            "[AutomationScheduler] Strategy #1 one-shot pre-arm trigger failed closed:",
-            error instanceof Error
-              ? error.message
-              : "Unknown pre-arm trigger failure.",
-          );
-        },
       );
 
     const stageDurations:

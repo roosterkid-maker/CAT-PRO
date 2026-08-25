@@ -1,12 +1,18 @@
 import "dotenv/config";
 
 import {
+  ExecutionHealthService,
   executionHealthService,
 } from "../health/ExecutionHealthService";
 
 import {
+  ExecutionMetricsService,
   executionMetricsService,
 } from "../metrics/ExecutionMetricsService";
+
+import type {
+  LiveExecutionExchangeStatus,
+} from "../LiveExecutionService";
 
 import {
   executionAdapterVerificationService,
@@ -205,6 +211,100 @@ async function main(): Promise<void> {
 
   console.log(
     "====================================",
+  );
+
+  const isolatedMetrics =
+    new ExecutionMetricsService();
+
+  for (
+    const exchange
+    of [
+      "coinswitch",
+      "unocoin",
+      "zebpay",
+    ]
+  ) {
+    for (
+      let index = 0;
+      index < 5;
+      index += 1
+    ) {
+      isolatedMetrics.record(
+        createResult({
+          success:
+            false,
+          exchange,
+          orderId:
+            null,
+          status:
+            "FAILED",
+          filledQuantity:
+            0,
+          remainingQuantity:
+            10,
+          averageFillPrice:
+            0,
+          failureReason:
+            "Synthetic non-core failure.",
+        }),
+      );
+    }
+  }
+
+  const isolatedHealth =
+    new ExecutionHealthService({
+      getMetricsReport:
+        () =>
+          isolatedMetrics
+            .getReport(),
+      getMonitoredExchanges:
+        () => [
+          "binance",
+          "bybit",
+          "coindcx",
+          "coinswitch",
+          "unocoin",
+          "zebpay",
+        ],
+      getMonitoredExchangeStatus:
+        (exchange) =>
+          missingCredentialStatus(
+            exchange,
+          ),
+    });
+
+  const isolatedReport =
+    isolatedHealth.getReport();
+
+  assertCondition(
+    isolatedReport.coreStatus ===
+      "NO_DATA" &&
+      isolatedReport.status ===
+        "NO_DATA",
+    "Missing credentials must not rewrite absent execution evidence as failed execution health.",
+  );
+
+  assertCondition(
+    isolatedReport.coreExchanges.length ===
+      3 &&
+      isolatedReport.coreExchanges.every(
+        (exchange) =>
+          exchange.status ===
+            "NO_DATA" &&
+          !exchange.submissionReady,
+      ),
+    "All three core venues must remain submission-blocked without credentials while reporting NO_DATA execution evidence.",
+  );
+
+  assertCondition(
+    isolatedReport.nonCoreExchanges.length ===
+      3 &&
+      isolatedReport.nonCoreExchanges.every(
+        (exchange) =>
+          exchange.status ===
+            "UNHEALTHY",
+      ),
+    "CoinSwitch, UnoCoin and ZebPay failures must remain visible without changing core execution health.",
   );
 
   executionMetricsService.reset();
@@ -516,6 +616,48 @@ async function main(): Promise<void> {
   console.log(
     "No live order was placed.",
   );
+}
+
+function missingCredentialStatus(
+  exchange: string,
+): LiveExecutionExchangeStatus {
+  const normalized =
+    exchange
+      .trim()
+      .toLowerCase();
+
+  return {
+    exchange:
+      normalized,
+    adapterRegistered:
+      normalized !== "zebpay",
+    capabilities:
+      null,
+    credentialsConfigured:
+      false,
+    authenticationVerified:
+      false,
+    exchangeApiReachable:
+      false,
+    verificationState:
+      "NOT_CONFIGURED",
+    readOnlyVerificationFresh:
+      false,
+    lastVerifiedAt:
+      null,
+    lastVerificationAttemptAt:
+      null,
+    verificationExpiresAt:
+      null,
+    verificationMethod:
+      null,
+    lastVerificationError:
+      null,
+    liveExecutionEnabled:
+      false,
+    adapterConnected:
+      false,
+  };
 }
 
 void main().catch(

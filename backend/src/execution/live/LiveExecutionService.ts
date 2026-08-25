@@ -43,7 +43,7 @@ const LIVE_EXECUTION_ENABLED =
   process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
   process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
   process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
-    "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
+    "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME" &&
   process.env
     .STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION
     ?.trim() ===

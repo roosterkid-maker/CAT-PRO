@@ -2,18 +2,30 @@ import {
   liveExecutionService,
 } from "../LiveExecutionService";
 
+import type {
+  LiveExecutionExchangeStatus,
+} from "../LiveExecutionService";
+
 import {
   executionMetricsService,
 } from "../metrics/ExecutionMetricsService";
 
 import type {
   ExchangeExecutionMetrics,
+  ExecutionMetricsReport,
 } from "../metrics/ExecutionMetrics";
 
 import type {
   LiveExecutionAdapterVerificationMethod,
   LiveExecutionAdapterVerificationState,
 } from "../contracts/LiveExecutionAdapter";
+
+import {
+  STRATEGY_ONE_CORE_EXCHANGES,
+  STRATEGY_ONE_NON_CORE_EXCHANGES,
+  classifyStrategyOneExchange,
+  type StrategyOneExchangeScope,
+} from "../scope/StrategyOneExchangeScope";
 
 export type ExecutionHealthStatus =
   | "HEALTHY"
@@ -23,6 +35,9 @@ export type ExecutionHealthStatus =
 
 export interface ExchangeExecutionHealth {
   exchange: string;
+
+  strategyOneScope:
+    StrategyOneExchangeScope;
 
   adapterRegistered: boolean;
 
@@ -66,6 +81,9 @@ export interface ExchangeExecutionHealth {
   executionEvidenceAvailable:
     boolean;
 
+  submissionReady:
+    boolean;
+
   status: ExecutionHealthStatus;
 
   totalExecutions: number;
@@ -97,6 +115,15 @@ export interface ExecutionHealthReport {
   degradedExchanges: number;
 
   unhealthyExchanges: number;
+
+  coreStatus:
+    ExecutionHealthStatus;
+
+  coreExchanges:
+    ExchangeExecutionHealth[];
+
+  nonCoreExchanges:
+    ExchangeExecutionHealth[];
 
   exchanges:
     ExchangeExecutionHealth[];
@@ -134,7 +161,52 @@ const DEFAULT_THRESHOLDS:
     5,
 };
 
+export interface ExecutionHealthDependencies {
+  getMetricsReport():
+    ExecutionMetricsReport;
+
+  getMonitoredExchanges():
+    string[];
+
+  getMonitoredExchangeStatus(
+    exchange: string,
+  ): LiveExecutionExchangeStatus;
+}
+
+const DEFAULT_DEPENDENCIES:
+  ExecutionHealthDependencies = {
+  getMetricsReport:
+    () =>
+      executionMetricsService
+        .getReport(),
+
+  getMonitoredExchanges:
+    () =>
+      liveExecutionService
+        .getMonitoredExchanges(),
+
+  getMonitoredExchangeStatus:
+    (exchange) =>
+      liveExecutionService
+        .getMonitoredExchangeStatus(
+          exchange,
+        ),
+};
+
 export class ExecutionHealthService {
+  private readonly dependencies:
+    ExecutionHealthDependencies;
+
+  constructor(
+    dependencies:
+      Partial<ExecutionHealthDependencies> = {},
+  ) {
+    this.dependencies = {
+      ...DEFAULT_DEPENDENCIES,
+      ...dependencies,
+    };
+  }
+
   getReport(
     thresholds:
       Partial<ExecutionHealthThresholds> = {},
@@ -150,7 +222,8 @@ export class ExecutionHealthService {
     );
 
     const metricsReport =
-      executionMetricsService.getReport();
+      this.dependencies
+        .getMetricsReport();
 
     const exchangeNames =
       this.collectExchangeNames(
@@ -198,7 +271,25 @@ export class ExecutionHealthService {
 
     const status =
       this.calculateOverallStatus(
-        exchanges,
+        exchanges.filter(
+          (exchange) =>
+            exchange.strategyOneScope ===
+            "CORE",
+        ),
+      );
+
+    const coreExchanges =
+      exchanges.filter(
+        (exchange) =>
+          exchange.strategyOneScope ===
+          "CORE",
+      );
+
+    const nonCoreExchanges =
+      exchanges.filter(
+        (exchange) =>
+          exchange.strategyOneScope ===
+          "NON_CORE",
       );
 
     const reasons =
@@ -225,6 +316,13 @@ export class ExecutionHealthService {
 
       unhealthyExchanges,
 
+      coreStatus:
+        status,
+
+      coreExchanges,
+
+      nonCoreExchanges,
+
       exchanges,
 
       reasons,
@@ -241,9 +339,10 @@ export class ExecutionHealthService {
       ExecutionHealthThresholds,
   ): ExchangeExecutionHealth {
     const adapterStatus =
-      liveExecutionService.getMonitoredExchangeStatus(
-        exchange,
-      );
+      this.dependencies
+        .getMonitoredExchangeStatus(
+          exchange,
+        );
 
     const {
       adapterRegistered,
@@ -262,6 +361,21 @@ export class ExecutionHealthService {
     } = adapterStatus;
 
     const reasons: string[] = [];
+
+    const strategyOneScope =
+      classifyStrategyOneExchange(
+        exchange,
+      );
+
+    const submissionReady =
+      strategyOneScope === "CORE" &&
+      adapterRegistered &&
+      credentialsConfigured &&
+      authenticationVerified &&
+      exchangeApiReachable &&
+      readOnlyVerificationFresh &&
+      liveExecutionEnabled &&
+      adapterConnected;
 
     if (!adapterRegistered) {
       reasons.push(
@@ -326,6 +440,8 @@ export class ExecutionHealthService {
       return {
         exchange,
 
+        strategyOneScope,
+
         adapterRegistered,
 
         credentialsConfigured,
@@ -355,11 +471,10 @@ export class ExecutionHealthService {
         executionEvidenceAvailable:
           false,
 
+        submissionReady,
+
         status:
-          !adapterRegistered ||
-          credentialsConfigured
-            ? "NO_DATA"
-            : "UNHEALTHY",
+          "NO_DATA",
 
         totalExecutions:
           0,
@@ -385,11 +500,7 @@ export class ExecutionHealthService {
         reasons: [
           ...reasons,
 
-          ...(credentialsConfigured
-            ? [
-                "No execution metrics are available yet.",
-              ]
-            : []),
+          "No execution metrics are available yet.",
         ],
       };
     }
@@ -452,7 +563,6 @@ export class ExecutionHealthService {
     const status =
       this.calculateExchangeStatus(
         adapterRegistered,
-        credentialsConfigured,
         adapterConnected,
         metrics,
         reasons,
@@ -461,6 +571,8 @@ export class ExecutionHealthService {
 
     return {
       exchange,
+
+      strategyOneScope,
 
       adapterRegistered,
 
@@ -491,6 +603,8 @@ export class ExecutionHealthService {
       executionEvidenceAvailable:
         metrics.totalExecutions >
         0,
+
+      submissionReady,
 
       status,
 
@@ -528,8 +642,6 @@ export class ExecutionHealthService {
   private calculateExchangeStatus(
     adapterRegistered: boolean,
 
-    credentialsConfigured: boolean,
-
     adapterConnected: boolean,
 
     metrics:
@@ -541,8 +653,7 @@ export class ExecutionHealthService {
       ExecutionHealthThresholds,
   ): ExecutionHealthStatus {
     if (
-      !adapterRegistered ||
-      !credentialsConfigured
+      !adapterRegistered
     ) {
       return "UNHEALTHY";
     }
@@ -637,8 +748,12 @@ export class ExecutionHealthService {
   ): string[] {
     const exchangeNames =
       new Set<string>(
-        liveExecutionService
-          .getMonitoredExchanges(),
+        [
+          ...this.dependencies
+            .getMonitoredExchanges(),
+          ...STRATEGY_ONE_CORE_EXCHANGES,
+          ...STRATEGY_ONE_NON_CORE_EXCHANGES,
+        ],
       );
 
     for (

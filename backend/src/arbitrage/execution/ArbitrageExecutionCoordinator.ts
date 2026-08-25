@@ -73,7 +73,7 @@ import type {
 } from "../../trading/capital/CapitalReservation";
 
 const LIVE_CONFIRMATION =
-  "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION";
+  "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME";
 
 export interface ArbitrageExecutionOptions {
   timeoutMs?: number;

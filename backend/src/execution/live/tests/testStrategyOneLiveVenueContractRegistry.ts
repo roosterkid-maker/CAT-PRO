@@ -16,7 +16,7 @@ function main(): void {
   assert.equal(report.venues.length, 5);
   assert.equal(report.summary.targetVenues, 5);
   assert.equal(report.summary.safePilotCandidates, 2);
-  assert.equal(report.summary.excludedFromLive, 3);
+  assert.equal(report.summary.excludedFromLive, 2);
   assert.equal(report.summary.runtimeContractReady, 0);
   assert.equal(report.safety.documentationDoesNotGrantAuthority, true);
   assert.equal(report.safety.unsupportedTimeInForceNeverFallsBackToGtc, true);
@@ -39,19 +39,36 @@ function main(): void {
     assert.deepEqual(venue.blockers, ["CALIBRATED_ORDER_SUBMISSION_TTL_MISSING"]);
 
     const contract =
-      readyRegistry.getOrderTimeSafetyContract(venue.exchange);
+      readyRegistry.getOrderTimeSafetyContract(
+        venue.exchange,
+        {
+          market:
+            "BTCUSDT",
+          buyExchange:
+            "binance",
+          sellExchange:
+            "bybit",
+        },
+      );
     assert.ok(contract);
     assert.deepEqual(contract.supportedTimeInForce, ["IOC", "FOK"]);
     assert.equal(contract.authoritativeFillConfirmationReady, true);
-    assert.equal(contract.maximumOrderBookAgeMs, null);
+    assert.equal(contract.maximumOrderBookAgeMs, 250);
   }
 
   const coindcx =
     requiredVenue(report, "coindcx");
+  assert.equal(coindcx.classification, "CORE_CONTRACT_BLOCKED");
   assert.deepEqual(coindcx.documentedTimeInForce, ["GTC"]);
   assert.equal(coindcx.privateFillEvidence, "DOCUMENTED_NOT_IMPLEMENTED");
   assert.equal(
     coindcx.blockers.includes("AUDITED_SPOT_FOK_CONTRACT_UNAVAILABLE"),
+    true,
+  );
+  assert.equal(
+    coindcx.blockers.includes(
+      "CORE_VENUE_BOUNDED_SPOT_ORDER_CONTRACT_UNAVAILABLE",
+    ),
     true,
   );
   assert.deepEqual(
@@ -105,7 +122,7 @@ function main(): void {
   );
 
   console.log(
-    "Strategy #1 five-venue SPOT contracts are immutable and fail closed: Binance/Bybit are FOK pilot candidates pending TTL review, while CoinDCX/CoinSwitch/UnoCoin are explicitly excluded; no order authority exists.",
+    "Strategy #1 SPOT contracts are immutable and fail closed: Binance/Bybit use configured order-time bounds, CoinDCX is core but bounded-contract-blocked, and CoinSwitch/UnoCoin remain non-core; no order authority exists.",
   );
 }
 

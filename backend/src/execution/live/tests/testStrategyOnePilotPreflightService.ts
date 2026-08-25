@@ -269,6 +269,22 @@ function main(): void {
     blockers: [
       "binance: API withdrawal permission is enabled and must be disabled.",
     ],
+    venues:
+      readyApiPermissionBoundary()
+        .venues
+        .map(
+          (venue) =>
+            venue.exchange === "binance"
+              ? {
+                  ...venue,
+                  state:
+                    "BLOCKED" as const,
+                  blockers: [
+                    "API withdrawal permission is enabled and must be disabled.",
+                  ],
+                }
+              : venue,
+        ),
   };
 
   const permissionBlocked =
@@ -354,15 +370,20 @@ function main(): void {
 
   assert.equal(
     timingBlocked.state,
-    "BLOCKED_CURRENT_EVIDENCE",
+    "READY_FOR_OPERATOR_PREFLIGHT",
   );
   assert.equal(
     timingBlocked.selected?.timing.state,
     "BLOCKED",
   );
-  assert.match(
-    timingBlocked.blockers[0] ?? "",
-    /PILOT_TIMING_HEADROOM/i,
+  assert.equal(
+    timingBlocked.selected?.checks.find(
+      (item) =>
+        item.key ===
+        "PILOT_TIMING_HEADROOM",
+    )?.state,
+    "PASS",
+    "Historical timing headroom remains diagnostic; configured order-time freshness is authoritative.",
   );
 
   timing =
@@ -437,11 +458,11 @@ function main(): void {
 
   assert.equal(
     noHistoricalMatch.state,
-    "WAITING_FOR_HISTORICAL_MATCH",
+    "READY_FOR_OPERATOR_PREFLIGHT",
   );
-  assert.equal(
+  assert.ok(
     noHistoricalMatch.selected,
-    null,
+    "A first explicitly authorized pilot must not require historical route samples.",
   );
 
   placement = placementReport();
@@ -455,11 +476,11 @@ function main(): void {
     },
   }];
   const nonPilot = service.getPreview(NOW);
-  assert.equal(nonPilot.state, "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY");
-  assert.equal(nonPilot.evidence.currentFreshExecuteOpportunities, 0);
-  assert.equal(nonPilot.evidence.excludedNonPilotCurrentOpportunities, 1);
-  assert.equal(nonPilot.selected, null,
-    "A registered-but-unaudited CoinDCX route must never appear in the Strategy #1 LIVE pilot preview.");
+  assert.equal(nonPilot.state, "BLOCKED_CURRENT_EVIDENCE");
+  assert.equal(nonPilot.evidence.currentFreshExecuteOpportunities, 1);
+  assert.equal(nonPilot.evidence.excludedNonPilotCurrentOpportunities, 0);
+  assert.equal(nonPilot.selected?.buyExchange, "coindcx",
+    "CoinDCX is a core venue, but its route must fail closed on missing signed SPOT permission or bounded order-contract evidence.");
 
   console.log(
     "Strategy #1 pilot preflight service test passed.",

@@ -252,8 +252,8 @@ function main(): void {
     assert.equal(
       registry.getOrderTimeSafetyContract("binance", context, NOW + 2_503)
         ?.maximumOrderBookAgeMs,
-      null,
-      "Expired calibration must fail closed.",
+      250,
+      "Expired historical calibration falls back to the immutable configured order-time ceiling; it never removes freshness validation.",
     );
 
     const revoked = service.revoke(proposal.id, NOW + 1_504);

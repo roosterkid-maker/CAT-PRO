@@ -95,6 +95,13 @@ class MarketCache {
       ExecutableQuote
     >();
 
+  /* Aggregate-only process-lifetime observability for the execution funnel. */
+  private acceptedMarketUpdates =
+    0;
+
+  private executableMarketMutations =
+    0;
+
   private uiBatchTimer:
     NodeJS.Timeout | null =
     null;
@@ -182,6 +189,9 @@ class MarketCache {
         quote,
         incomingRefreshesExecutableState,
       );
+
+    this.acceptedMarketUpdates +=
+      1;
 
     this.markets.set(
       key,
@@ -316,6 +326,23 @@ class MarketCache {
     number {
     return this.executableMarkets
       .size;
+  }
+
+  getDiagnostics() {
+    return Object.freeze({
+      generatedAt:
+        Date.now(),
+      scope:
+        "PROCESS_LIFETIME" as const,
+      acceptedMarketUpdates:
+        this.acceptedMarketUpdates,
+      executableMarketMutations:
+        this.executableMarketMutations,
+      currentQuotes:
+        this.markets.size,
+      currentExecutableQuotes:
+        this.executableMarkets.size,
+    });
   }
 
   getExecutableExchangeCountForMarket(
@@ -570,6 +597,9 @@ class MarketCache {
     update:
       MarketCacheExecutableUpdate,
   ): void {
+    this.executableMarketMutations +=
+      1;
+
     for (
       const listener
       of this.executableUpdateListeners

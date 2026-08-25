@@ -22,6 +22,14 @@ export interface ExecutableProfitInput {
   safetyBufferPercent: number;
 
   minimumProfitPercent: number;
+
+  quantity?: number;
+
+  buyFeePercent?: number;
+
+  sellFeePercent?: number;
+
+  tdsWithholdingPercent?: number;
 }
 
 export interface ExecutableProfitResult {
@@ -49,6 +57,30 @@ export interface ExecutableProfitResult {
 
   executableProfitPercent: number;
 
+  buyCost: number;
+
+  sellProceeds: number;
+
+  buyFee: number;
+
+  sellFee: number;
+
+  buySlippageReserve: number;
+
+  sellSlippageReserve: number;
+
+  economicNetProfit: number;
+
+  economicNetProfitPercent: number;
+
+  tdsWithheld: number;
+
+  deployableCashProceeds: number;
+
+  deployableCashProfit: number;
+
+  postTradeCashBalanceImpact: number;
+
   reasons: string[];
 }
 
@@ -71,8 +103,9 @@ export class ExecutableProfitCalculator {
       );
 
     const quantity =
+      input.quantity ??
       input.capital /
-      input.buyPrice;
+        input.buyPrice;
 
     const effectiveBuyPrice =
       input.buyPrice *
@@ -90,33 +123,33 @@ export class ExecutableProfitCalculator {
           100
       );
 
-    const rawBuyNotional =
+    const buyCost =
       input.buyPrice *
       quantity;
 
-    const rawSellNotional =
+    const sellProceeds =
       input.sellPrice *
       quantity;
 
-    const buyNotional =
-      effectiveBuyPrice *
-      quantity;
+    const buyFeePercent =
+      input.buyFeePercent ??
+      buyFees.takerPercent;
 
-    const sellNotional =
-      effectiveSellPrice *
-      quantity;
+    const sellFeePercent =
+      input.sellFeePercent ??
+      sellFees.takerPercent;
 
     const buyFee =
-      buyNotional *
+      buyCost *
       (
-        buyFees.takerPercent /
+        buyFeePercent /
         100
       );
 
     const sellFee =
-      sellNotional *
+      sellProceeds *
       (
-        sellFees.takerPercent /
+        sellFeePercent /
         100
       );
 
@@ -124,34 +157,34 @@ export class ExecutableProfitCalculator {
       buyFee +
       sellFee;
 
-    const buySlippageCost =
-      Math.max(
-        0,
-        buyNotional -
-          rawBuyNotional,
+    const buySlippageReserve =
+      buyCost *
+      (
+        input.buySlippagePercent /
+        100
       );
 
-    const sellSlippageCost =
-      Math.max(
-        0,
-        rawSellNotional -
-          sellNotional,
+    const sellSlippageReserve =
+      sellProceeds *
+      (
+        input.sellSlippagePercent /
+        100
       );
 
     const slippageCost =
-      buySlippageCost +
-      sellSlippageCost;
+      buySlippageReserve +
+      sellSlippageReserve;
 
     const safetyBuffer =
-      input.capital *
+      buyCost *
       (
         input.safetyBufferPercent /
         100
       );
 
     const grossProfit =
-      rawSellNotional -
-      rawBuyNotional;
+      sellProceeds -
+      buyCost;
 
     const executableProfit =
       grossProfit -
@@ -160,12 +193,32 @@ export class ExecutableProfitCalculator {
       safetyBuffer;
 
     const executableProfitPercent =
-      buyNotional > 0
+      buyCost > 0
         ? (
             executableProfit /
-            buyNotional
+            buyCost
           ) * 100
         : 0;
+
+    const tdsWithholdingPercent =
+      input.tdsWithholdingPercent ??
+      0;
+
+    const tdsWithheld =
+      sellProceeds *
+      (
+        tdsWithholdingPercent /
+        100
+      );
+
+    const deployableCashProceeds =
+      sellProceeds -
+      sellFee -
+      tdsWithheld;
+
+    const deployableCashProfit =
+      executableProfit -
+      tdsWithheld;
 
     const reasons: string[] = [];
 
@@ -209,9 +262,11 @@ export class ExecutableProfitCalculator {
 
       effectiveSellPrice,
 
-      buyNotional,
+      buyNotional:
+        buyCost,
 
-      sellNotional,
+      sellNotional:
+        sellProceeds,
 
       grossProfit,
 
@@ -224,6 +279,33 @@ export class ExecutableProfitCalculator {
       executableProfit,
 
       executableProfitPercent,
+
+      buyCost,
+
+      sellProceeds,
+
+      buyFee,
+
+      sellFee,
+
+      buySlippageReserve,
+
+      sellSlippageReserve,
+
+      economicNetProfit:
+        executableProfit,
+
+      economicNetProfitPercent:
+        executableProfitPercent,
+
+      tdsWithheld,
+
+      deployableCashProceeds,
+
+      deployableCashProfit,
+
+      postTradeCashBalanceImpact:
+        deployableCashProfit,
 
       reasons,
     };
@@ -281,6 +363,57 @@ export class ExecutableProfitCalculator {
       input.minimumProfitPercent,
       "Minimum profit percent",
     );
+
+    if (
+      input.quantity !== undefined
+    ) {
+      this.requirePositive(
+        input.quantity,
+        "Quantity",
+      );
+
+      if (
+        input.quantity *
+          input.buyPrice >
+        input.capital +
+          Math.max(
+            1e-9,
+            input.capital *
+              1e-9,
+          )
+      ) {
+        throw new Error(
+          "Quantity exceeds the capital-bounded BUY notional.",
+        );
+      }
+    }
+
+    for (
+      const [
+        value,
+        name,
+      ] of [
+        [
+          input.buyFeePercent,
+          "Buy fee percent",
+        ],
+        [
+          input.sellFeePercent,
+          "Sell fee percent",
+        ],
+        [
+          input.tdsWithholdingPercent,
+          "TDS withholding percent",
+        ],
+      ] as const
+    ) {
+      if (value !== undefined) {
+        this.requireNonNegative(
+          value,
+          name,
+        );
+      }
+    }
   }
 
   private requirePositive(

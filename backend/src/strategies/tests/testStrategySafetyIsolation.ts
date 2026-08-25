@@ -796,7 +796,7 @@ function main():
     of [
       /TRADING_MODE[\s\S]*===\s*["']live["']/,
       /LIVE_TRADING_ENABLED[\s\S]*===\s*["']true["']/,
-      /ARBITRAGE_LIVE_CONFIRMATION[\s\S]*ENABLE_CONFIRMED_ARBITRAGE_EXECUTION/,
+      /ARBITRAGE_LIVE_CONFIRMATION[\s\S]*ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME/,
       /STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION[\s\S]*ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME/,
     ]
   ) {
@@ -811,7 +811,7 @@ function main():
     process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
       process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
       process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
-        "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
+        "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME" &&
       process.env.STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION?.trim() ===
         "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME",
     false,

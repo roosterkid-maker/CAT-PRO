@@ -6,6 +6,10 @@ import {
   strategyOneTimingCalibrationService,
 } from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
 
+import {
+  DEFAULT_STRATEGY_ONE_MAXIMUM_BOOK_AGE_MS,
+} from "../tiny-live/StrategyOneControlledLiveConfiguration";
+
 export type StrategyOneTimeInForce =
   | "IOC"
   | "FOK";
@@ -33,6 +37,7 @@ export interface StrategyOneVenueContractEvidence {
   readonly product: "SPOT";
   readonly classification:
     | "SAFE_PILOT_CANDIDATE"
+    | "CORE_CONTRACT_BLOCKED"
     | "EXCLUDED_FROM_STRATEGY_ONE_LIVE";
   readonly requiredTimeInForce: "FOK";
   readonly documentedTimeInForce:
@@ -170,7 +175,7 @@ const STATIC_EVIDENCE:
     coindcx: {
       exchange: "coindcx",
       product: "SPOT",
-      classification: "EXCLUDED_FROM_STRATEGY_ONE_LIVE",
+      classification: "CORE_CONTRACT_BLOCKED",
       requiredTimeInForce: "FOK",
       documentedTimeInForce: ["GTC"],
       exactFokAdapterMapping: false,
@@ -330,12 +335,15 @@ export class StrategyOneLiveVenueContractRegistry {
         ? this.dependencies.getApprovedRouteTtl({
             ...route,
             now,
-          })
+          }) ??
+          DEFAULT_STRATEGY_ONE_MAXIMUM_BOOK_AGE_MS
         : null;
     const blockers: string[] = [];
 
-    if (evidence.classification !== "SAFE_PILOT_CANDIDATE") {
+    if (evidence.classification === "EXCLUDED_FROM_STRATEGY_ONE_LIVE") {
       blockers.push("VENUE_EXCLUDED_FROM_STRATEGY_ONE_LIVE");
+    } else if (evidence.classification === "CORE_CONTRACT_BLOCKED") {
+      blockers.push("CORE_VENUE_BOUNDED_SPOT_ORDER_CONTRACT_UNAVAILABLE");
     }
 
     if (!supportsFok) {

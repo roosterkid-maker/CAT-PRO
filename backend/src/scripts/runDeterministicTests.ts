@@ -79,6 +79,8 @@ const DETERMINISTIC_TESTS = [
   "execution/live/tests/testTinyLiveReadinessClosureService.js",
   "execution/live/tests/testStrategyOneApiPermissionBoundaryService.js",
   "execution/live/tests/testStrategyOnePilotPreflightService.js",
+  "execution/live/tests/testStrategyOneControlledLiveDecision.js",
+  "execution/live/tests/testStrategyOneExecutionFunnelService.js",
   "execution/live/tests/testCentralStrategyLiveReadinessService.js",
   "execution/live/tests/testCentralSpotMakerLifecycleService.js",
   "execution/live/tests/testCentralLiveExecutionAdmissionQueue.js",

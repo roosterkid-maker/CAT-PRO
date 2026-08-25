@@ -4,16 +4,12 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 
 import type {ArbitrageOpportunity} from "../../../arbitrage/models/ArbitrageOpportunity";
-import type {OpportunitySnapshot} from "../../../arbitrage/services/OpportunityService";
 import type {ArbitrageLiveExecutionResult} from "../../../arbitrage/execution/models/ArbitrageLiveExecutionResult";
 import type {StrategyOneTimingCalibrationRecord} from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
 import type {StrategyOnePilotPreflightRunReport} from "../tiny-live/StrategyOnePilotPreflightService";
 import {
   StrategyOneTinyLiveActionAuthorityService,
 } from "../tiny-live/StrategyOneTinyLiveActionAuthorityService";
-import {
-  StrategyOneTinyLivePreArmService,
-} from "../tiny-live/StrategyOneTinyLivePreArmService";
 
 const NOW = 1_786_812_800_000;
 
@@ -27,6 +23,13 @@ async function main(): Promise<void> {
       getOpportunity: (id: string) => id === opportunity.id ? opportunity : null,
       runPreflight: (input: {now?: number}) =>
         preflightFixture(input.now ?? NOW),
+      runCanonicalPreflight: (input: {opportunityId: string}) => ({
+        approvedForOneTimeArm: true,
+        opportunityId: input.opportunityId,
+        recommendedQuantity: 0.001,
+        blockers: [],
+        fingerprintMaterial: "canonical-controlled-live-fixture-v1",
+      }),
       getCalibration: () => calibration,
       getVenueContract: (exchange: string) => ({
         exchange,
@@ -109,211 +112,315 @@ async function main(): Promise<void> {
       true,
     );
 
+    const continuousCalibration = {
+      ...calibration,
+      id:
+        "timing-continuous",
+      scope:
+        "CONTINUOUS_TINY_LIVE" as const,
+    };
+
+    const dailyLimited =
+      new StrategyOneTinyLiveActionAuthorityService(
+        {
+          ...dependencies,
+          getCalibration:
+            () =>
+              continuousCalibration,
+        },
+        join(
+          directory,
+          "daily-limited-authorities.jsonl",
+        ),
+      );
+    const firstDailyPreview =
+      dailyLimited.preview(
+        opportunity.id,
+        NOW + 10,
+      );
+    assert.ok(
+      firstDailyPreview.authority,
+    );
+    const firstDailyAuthority =
+      dailyLimited.authorize(
+        firstDailyPreview.authority.id,
+        firstDailyPreview.authority.requiredAuthorizationPhrase,
+        NOW + 11,
+      );
+    dailyLimited.consume({
+      authorityId:
+        firstDailyAuthority.id,
+      opportunity,
+      now:
+        NOW + 12,
+    });
+    dailyLimited.finalize(
+      firstDailyAuthority.id,
+      executionFixture(),
+      NOW + 13,
+    );
+    const secondDailyPreview =
+      dailyLimited.preview(
+        opportunity.id,
+        NOW + 14,
+      );
+    assert.equal(
+      secondDailyPreview.approvedForAuthorization,
+      false,
+    );
+    assert.equal(
+      secondDailyPreview.blockers.some(
+        (blocker) =>
+          blocker.includes(
+            "daily attempt cap 1",
+          ),
+      ),
+      true,
+    );
+
+    const concurrent =
+      new StrategyOneTinyLiveActionAuthorityService(
+        {
+          ...dependencies,
+          getCalibration:
+            () =>
+              continuousCalibration,
+        },
+        join(
+          directory,
+          "concurrent-authorities.jsonl",
+        ),
+        30_000,
+        60_000,
+        1,
+      );
+    const concurrentFirst =
+      concurrent.preview(
+        opportunity.id,
+        NOW + 20,
+      );
+    const concurrentSecond =
+      concurrent.preview(
+        opportunity.id,
+        NOW + 21,
+      );
+    assert.ok(
+      concurrentFirst.authority &&
+      concurrentSecond.authority,
+    );
+    concurrent.authorize(
+      concurrentFirst.authority.id,
+      concurrentFirst.authority.requiredAuthorizationPhrase,
+      NOW + 22,
+    );
+    assert.throws(
+      () =>
+        concurrent.authorize(
+          concurrentSecond.authority?.id ??
+            "",
+          concurrentSecond.authority?.requiredAuthorizationPhrase ??
+            "",
+          NOW + 23,
+        ),
+      /another Tiny-LIVE authority/iu,
+    );
+
+    let mutableOpportunity =
+      opportunity;
+    const materialChange =
+      new StrategyOneTinyLiveActionAuthorityService(
+        {
+          ...dependencies,
+          getOpportunity:
+            () =>
+              mutableOpportunity,
+          getCalibration:
+            () =>
+              continuousCalibration,
+        },
+        join(
+          directory,
+          "material-change-authorities.jsonl",
+        ),
+      );
+    const materialPreview =
+      materialChange.preview(
+        opportunity.id,
+        NOW + 30,
+      );
+    assert.ok(
+      materialPreview.authority,
+    );
+    const materialAuthorized =
+      materialChange.authorize(
+        materialPreview.authority.id,
+        materialPreview.authority.requiredAuthorizationPhrase,
+        NOW + 31,
+      );
+    mutableOpportunity = {
+      ...opportunity,
+      buyPrice:
+        opportunity.buyPrice +
+        1,
+    };
+    assert.throws(
+      () =>
+        materialChange.consume({
+          authorityId:
+            materialAuthorized.id,
+          opportunity:
+            mutableOpportunity,
+          now:
+            NOW + 32,
+        }),
+      /expired or not bound/iu,
+      "A material quote change must invalidate exact opportunity authority.",
+    );
+
+    const quoteExpiry =
+      new StrategyOneTinyLiveActionAuthorityService(
+        {
+          ...dependencies,
+          getOpportunity:
+            () =>
+              opportunity,
+          runPreflight:
+            (input: {now?: number}) => {
+              if (
+                (
+                  input.now ??
+                  NOW
+                ) >
+                NOW + 41
+              ) {
+                throw new Error(
+                  "Exact quote expired.",
+                );
+              }
+
+              return preflightFixture(
+                input.now ??
+                NOW,
+              );
+            },
+          getCalibration:
+            () =>
+              continuousCalibration,
+        },
+        join(
+          directory,
+          "quote-expiry-authorities.jsonl",
+        ),
+      );
+    const expiryPreview =
+      quoteExpiry.preview(
+        opportunity.id,
+        NOW + 40,
+      );
+    assert.ok(
+      expiryPreview.authority,
+    );
+    const expiryAuthorized =
+      quoteExpiry.authorize(
+        expiryPreview.authority.id,
+        expiryPreview.authority.requiredAuthorizationPhrase,
+        NOW + 41,
+      );
+    assert.throws(
+      () =>
+        quoteExpiry.consume({
+          authorityId:
+            expiryAuthorized.id,
+          opportunity,
+          now:
+            NOW + 42,
+        }),
+      /quote expired/iu,
+    );
+
     const disabled = new StrategyOneTinyLiveActionAuthorityService(
       {...dependencies, runtimeGateEnabled: () => false},
       join(directory, "disabled.jsonl"),
     );
     assert.equal(disabled.preview(opportunity.id, NOW).approvedForAuthorization, false);
     assert.equal(disabled.getDiagnostics(NOW).runtimeGateEnabled, false);
+    assert.equal(
+      disabled.getDiagnostics(NOW).safety.authorityTtlMs,
+      60_000,
+      "Production authority uses a reviewable one-minute window and still revalidates fresh evidence before consumption.",
+    );
 
-    await testPreArmedOneShot(directory, opportunity);
+    const canonicalBlocked =
+      new StrategyOneTinyLiveActionAuthorityService(
+        {
+          ...dependencies,
+          runCanonicalPreflight: (input: {opportunityId: string}) => ({
+            approvedForOneTimeArm: false,
+            opportunityId: input.opportunityId,
+            recommendedQuantity: null,
+            blockers: [
+              "DYNAMIC_RECOMMENDATION_EXECUTABLE",
+            ],
+            fingerprintMaterial: "canonical-blocked-fixture-v1",
+          }),
+        },
+        join(
+          directory,
+          "canonical-blocked-authorities.jsonl",
+        ),
+      );
+    const canonicalBlockedPreview =
+      canonicalBlocked.preview(
+        opportunity.id,
+        NOW,
+      );
+    assert.equal(
+      canonicalBlockedPreview.approvedForAuthorization,
+      false,
+      "A legacy pilot PASS must not bypass the canonical dynamic preflight.",
+    );
+    assert.equal(
+      canonicalBlockedPreview.authority,
+      null,
+    );
+
+    const cancellable =
+      new StrategyOneTinyLiveActionAuthorityService(
+        dependencies,
+        join(
+          directory,
+          "cancel-authorities.jsonl",
+        ),
+      );
+    const cancellablePreview =
+      cancellable.preview(
+        opportunity.id,
+        NOW,
+      );
+    assert.ok(
+      cancellablePreview.authority,
+    );
+    const cancelled =
+      cancellable.cancel(
+        cancellablePreview.authority.id,
+        `CANCEL ${cancellablePreview.authority.id}`,
+        NOW + 1,
+      );
+    assert.equal(
+      cancelled.state,
+      "CANCELLED",
+    );
+    assert.equal(
+      cancelled.liveOrderSubmissionAuthorized,
+      false,
+    );
+
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
 
   console.log(
-    "V111/V125 Tiny-LIVE authority passed: funded three-second authority plus durable exact-route pre-arm, claim-before-authority, expiry/disarm, one execution and no automatic retry; no exchange order occurred.",
-  );
-}
-
-async function testPreArmedOneShot(
-  directory: string,
-  opportunity: ArbitrageOpportunity,
-): Promise<void> {
-  let clock = NOW + 100_000;
-  let executionCalls = 0;
-  let service: StrategyOneTinyLivePreArmService;
-  const calibration = {
-    ...calibrationFixture(),
-    id: "timing-v125",
-    scope: "CONTINUOUS_TINY_LIVE" as const,
-    evidenceGeneratedAt: clock,
-    proposedAt: clock,
-    approvedAt: clock,
-    expiresAt: clock + 60 * 60_000,
-  };
-  const action = new StrategyOneTinyLiveActionAuthorityService(
-    {
-      getOpportunity: (id) => id === opportunity.id ? opportunity : null,
-      runPreflight: (input: {now?: number}) => preflightFixture(input.now ?? clock),
-      getCalibration: () => calibration,
-      getVenueContract: (exchange: string) => ({
-        exchange,
-        maximumOrderBookAgeMs: 25,
-        supportedTimeInForce: ["FOK" as const],
-        authoritativeFillConfirmationReady: true,
-      }),
-      isPairResolved: () => true,
-      runtimeGateEnabled: () => true,
-    },
-    join(directory, "prearm-authorities.jsonl"),
-  );
-  const dependencies = {
-    runtimeGateEnabled: () => true,
-    getCapitalPerLegInr: () => 500,
-    getActionDiagnostics: (now: number) => action.getDiagnostics(now),
-    getCalibration: () => calibration,
-    getVenueContract: (exchange: string) => ({
-      exchange,
-      maximumOrderBookAgeMs: 25,
-      supportedTimeInForce: ["FOK" as const],
-      authoritativeFillConfirmationReady: true,
-    }),
-    getOpportunity: (id: string) => id === opportunity.id ? opportunity : null,
-    previewAction: (id: string, now: number) => action.preview(id, now),
-    authorizeAction: (id: string, phrase: string, now: number) => {
-      assert.equal(
-        service.getDiagnostics(now).records[0]?.state,
-        "CLAIMED",
-        "The durable arm must be consumed before order authority is minted.",
-      );
-      return action.authorize(id, phrase, now);
-    },
-    execute: async (item: ArbitrageOpportunity, authorityId: string) => {
-      executionCalls += 1;
-      action.consume({authorityId, opportunity: item, now: ++clock});
-      const result = executionFixture();
-      action.finalize(authorityId, result, ++clock);
-      return result;
-    },
-    now: () => ++clock,
-  };
-  const filePath = join(directory, "prearms.jsonl");
-  service = new StrategyOneTinyLivePreArmService(dependencies, filePath);
-  const confirmation = StrategyOneTinyLivePreArmService.requiredArmPhrase({
-    market: "BTCUSDT",
-    buyExchange: "binance",
-    sellExchange: "bybit",
-    capitalPerLegInr: 500,
-  });
-
-  assert.throws(
-    () => service.arm({
-      market: "BTCUSDT",
-      buyExchange: "binance",
-      sellExchange: "bybit",
-      confirmation: "wrong",
-      now: ++clock,
-    }),
-    /exact pre-arm confirmation/iu,
-  );
-
-  const armed = service.arm({
-    market: "BTCUSDT",
-    buyExchange: "binance",
-    sellExchange: "bybit",
-    confirmation,
-    durationMinutes: 15,
-    now: ++clock,
-  });
-  assert.equal(armed.state, "ARMED");
-  assert.equal(armed.maximumAttempts, 1);
-  assert.equal(armed.automaticRetryAllowed, false);
-
-  const wrongRoute: OpportunitySnapshot = {
-    generatedAt: clock,
-    opportunities: [{
-      ...opportunity,
-      id: "wrong-route",
-      pair: {
-        ...opportunity.pair,
-        buy: {...opportunity.pair.buy, exchange: "bybit"},
-        sell: {...opportunity.pair.sell, exchange: "binance"},
-      },
-    }],
-  };
-  assert.equal(await service.observeSnapshot(wrongRoute), null);
-  assert.equal(executionCalls, 0);
-
-  const matching: OpportunitySnapshot = {
-    generatedAt: clock,
-    opportunities: [opportunity],
-  };
-  const concurrent = await Promise.all([
-    service.observeSnapshot(matching),
-    service.observeSnapshot(matching),
-  ]);
-  const completed = concurrent.find((record) => record?.state === "COMPLETED") ?? null;
-  assert.equal(completed?.executionStatus, "COMPLETED");
-  assert.equal(concurrent.filter((record) => record !== null).length, 1);
-  assert.equal(executionCalls, 1);
-  assert.equal(service.getActiveArm(clock), null);
-
-  assert.equal(await service.observeSnapshot(matching), null);
-  assert.equal(executionCalls, 1, "A consumed arm must never retry.");
-
-  const restored = new StrategyOneTinyLivePreArmService(dependencies, filePath);
-  assert.equal(restored.getDiagnostics(clock).records[0]?.state, "COMPLETED");
-  assert.equal(restored.getActiveArm(clock), null);
-
-  const disarmFile = join(directory, "disarm-prearms.jsonl");
-  const disarmService = new StrategyOneTinyLivePreArmService(
-    {...dependencies, getActionDiagnostics: () => ({
-      maximumDailyAttempts: 3,
-      attemptsToday: 0,
-      blockingAuthorityPresent: false,
-    })},
-    disarmFile,
-  );
-  const disarmRecord = disarmService.arm({
-    market: "BTCUSDT",
-    buyExchange: "binance",
-    sellExchange: "bybit",
-    confirmation,
-    durationMinutes: 1,
-    now: ++clock,
-  });
-  assert.throws(
-    () => disarmService.disarm(disarmRecord.id, "wrong", ++clock),
-    /exact disarm confirmation/iu,
-  );
-  assert.equal(
-    disarmService.disarm(disarmRecord.id, `DISARM ${disarmRecord.id}`, ++clock).state,
-    "DISARMED",
-  );
-
-  const expiryService = new StrategyOneTinyLivePreArmService(
-    {...dependencies, getActionDiagnostics: () => ({
-      maximumDailyAttempts: 3,
-      attemptsToday: 0,
-      blockingAuthorityPresent: false,
-    })},
-    join(directory, "expiry-prearms.jsonl"),
-  );
-  const expiring = expiryService.arm({
-    market: "BTCUSDT",
-    buyExchange: "binance",
-    sellExchange: "bybit",
-    confirmation,
-    durationMinutes: 1,
-    now: ++clock,
-  });
-  assert.equal(expiryService.getActiveArm(expiring.expiresAt + 1), null);
-  assert.equal(expiryService.getDiagnostics(expiring.expiresAt + 2).records[0]?.state, "EXPIRED");
-
-  const disabled = new StrategyOneTinyLivePreArmService(
-    {...dependencies, runtimeGateEnabled: () => false},
-    join(directory, "disabled-prearms.jsonl"),
-  );
-  assert.throws(
-    () => disabled.arm({
-      market: "BTCUSDT",
-      buyExchange: "binance",
-      sellExchange: "bybit",
-      confirmation,
-      now: ++clock,
-    }),
-    /runtime gate is disabled/iu,
+    "Strategy #1 exact-opportunity authority passed: preview, explicit authorization, fresh-evidence consumption, durable pair binding, one-time use and no automatic retry; no exchange order occurred.",
   );
 }
 

@@ -182,7 +182,7 @@ function validateTradingSafety(
     process.env
       .ARBITRAGE_LIVE_CONFIRMATION
       ?.trim() !==
-      "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION"
+      "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME"
   ) {
     throw new Error(
       "Production live trading requires ARBITRAGE_LIVE_CONFIRMATION.",

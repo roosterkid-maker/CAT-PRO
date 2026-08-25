@@ -39,15 +39,51 @@ import {
 } from "../../../arbitrage/services/OpportunityService";
 
 import {
-  strategyOneTinyLivePreArmService,
-} from "../tiny-live/StrategyOneTinyLivePreArmService";
-
-import {
   strategyOneTinyLiveOpportunityAuditService,
 } from "../tiny-live/StrategyOneTinyLiveOpportunityAuditService";
 
+import {
+  tradingAccountService,
+} from "../../../trading/account/TradingAccountService";
+
+import {
+  executionRecoveryEngine,
+} from "../recovery/ExecutionRecoveryEngine";
+
+import {
+  strategyOneRouteHealthService,
+} from "../readiness/StrategyOneRouteHealthService";
+
+import {
+  strategyOneControlledLiveRuntimeService,
+} from "../dynamic/StrategyOneControlledLiveRuntimeService";
+
+import {
+  strategyOneExecutionFunnelService,
+} from "../dynamic/StrategyOneExecutionFunnelService";
+
 const router =
   Router();
+
+router.get(
+  "/strategy-one-execution-funnel",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+    response.json({
+      success:
+        true,
+      data:
+        strategyOneExecutionFunnelService
+          .getReport(),
+    });
+  },
+);
 
 /*
  * VERSION 18 BUILD 15
@@ -226,6 +262,154 @@ router.get(
             error instanceof Error
               ? error.message
               : "Strategy #1 pilot preview failed.",
+        });
+    }
+  },
+);
+
+router.get(
+  "/strategy-one-route-health",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    try {
+      response.json({
+        success:
+          true,
+        data:
+          strategyOneRouteHealthService
+            .getReport(),
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      response
+        .status(
+          500,
+        )
+        .json({
+          success:
+            false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Strategy #1 route-health evaluation failed closed.",
+        });
+    }
+  },
+);
+
+router.get(
+  "/strategy-one-dynamic-recommendation",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    try {
+      const report =
+        strategyOneControlledLiveRuntimeService
+          .getRecommendation();
+
+      response
+        .status(
+          report.recommendation?.decision ===
+            "EXECUTE_NOW" ||
+          report.recommendation?.decision ===
+            "REDUCE_QUANTITY"
+            ? 200
+            : 409,
+        )
+        .json({
+          success:
+            report.recommendation !==
+            null,
+          data:
+            report,
+        });
+    } catch (
+      error:
+        unknown
+    ) {
+      response
+        .status(
+          500,
+        )
+        .json({
+          success:
+            false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Strategy #1 dynamic recommendation failed closed.",
+        });
+    }
+  },
+);
+
+router.post(
+  "/strategy-one-controlled-preflight",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    try {
+      const report =
+        strategyOneControlledLiveRuntimeService
+          .runCanonicalPreflight(
+            typeof request.body?.opportunityId ===
+              "string"
+              ? request.body.opportunityId
+              : "",
+            typeof request.body?.confirmation ===
+              "string"
+              ? request.body.confirmation
+              : "",
+          );
+
+      response
+        .status(
+          report.approvedForOneTimeArm
+            ? 200
+            : 409,
+        )
+        .json({
+          success:
+            report.approvedForOneTimeArm,
+          data:
+            report,
+        });
+    } catch (
+      error:
+        unknown
+    ) {
+      response
+        .status(
+          409,
+        )
+        .json({
+          success:
+            false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Strategy #1 canonical preflight failed closed.",
         });
     }
   },
@@ -412,6 +596,197 @@ router.get(
   },
 );
 
+router.get(
+  "/strategy-one-emergency-stop",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    const account =
+      tradingAccountService
+        .getAccount();
+    const authority =
+      strategyOneTinyLiveActionAuthorityService
+        .getDiagnostics();
+    const recovery =
+      executionRecoveryEngine
+        .getDiagnostics();
+
+    response.json({
+      success:
+        true,
+      data: {
+        generatedAt:
+          Date.now(),
+        active:
+          account.emergencyStop,
+        authoritativeSource:
+          "TRADING_ACCOUNT_DURABLE_LEDGER",
+        affectedAuthorities:
+          authority.records.filter(
+            (record) =>
+              record.state === "CONSUMED" ||
+              record.state === "PAIR_BOUND" ||
+              (
+                record.state === "FINALIZED" &&
+                record.requiresRecovery
+              ),
+          ),
+        openRecoveryIncidents:
+          recovery.openIncidents,
+        acknowledgedRecoveryIncidents:
+          recovery.acknowledgedIncidents,
+      },
+    });
+  },
+);
+
+router.post(
+  "/strategy-one-emergency-stop/activate",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    if (
+      request.body?.confirmation !==
+      "ACTIVATE STRATEGY_ONE EMERGENCY STOP"
+    ) {
+      response
+        .status(
+          400,
+        )
+        .json({
+          success:
+            false,
+          message:
+            "Exact emergency-stop activation confirmation is required.",
+        });
+      return;
+    }
+
+    tradingAccountService
+      .enableEmergencyStop();
+
+    const cancelledAuthorities =
+      strategyOneTinyLiveActionAuthorityService
+        .cancelUnusedForEmergencyStop();
+
+    response.json({
+      success:
+        true,
+      data: {
+        active:
+          true,
+        cancelledUnusedAuthorityIds:
+          cancelledAuthorities.map(
+            (authority) =>
+              authority.id,
+          ),
+        unresolvedExposurePreserved:
+          true,
+      },
+    });
+  },
+);
+
+router.post(
+  "/strategy-one-emergency-stop/clear",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    if (
+      request.body?.confirmation !==
+      "CLEAR STRATEGY_ONE EMERGENCY STOP"
+    ) {
+      response
+        .status(
+          400,
+        )
+        .json({
+          success:
+            false,
+          message:
+            "Exact emergency-stop clear confirmation is required.",
+        });
+      return;
+    }
+
+    const authority =
+      strategyOneTinyLiveActionAuthorityService
+        .getDiagnostics();
+    const recovery =
+      executionRecoveryEngine
+        .getDiagnostics();
+    const unresolvedAuthorities =
+      authority.records.filter(
+        (record) =>
+          record.state === "CONSUMED" ||
+          record.state === "PAIR_BOUND" ||
+          (
+            record.state === "FINALIZED" &&
+            record.requiresRecovery
+          ),
+      );
+
+    if (
+      unresolvedAuthorities.length > 0 ||
+      recovery.openIncidents > 0 ||
+      recovery.acknowledgedIncidents > 0
+    ) {
+      response
+        .status(
+          409,
+        )
+        .json({
+          success:
+            false,
+          message:
+            "Emergency stop cannot be cleared while exposure or recovery remains unresolved.",
+          data: {
+            unresolvedAuthorityIds:
+              unresolvedAuthorities.map(
+                (record) =>
+                  record.id,
+              ),
+            openRecoveryIncidents:
+              recovery.openIncidents,
+            acknowledgedRecoveryIncidents:
+              recovery.acknowledgedIncidents,
+          },
+        });
+      return;
+    }
+
+    tradingAccountService
+      .disableEmergencyStop();
+
+    response.json({
+      success:
+        true,
+      data: {
+        active:
+          false,
+      },
+    });
+  },
+);
+
 router.post(
   "/strategy-one-action/preview",
   (
@@ -462,6 +837,54 @@ router.post(
         success: false,
         message: error instanceof Error ? error.message : "Tiny-LIVE authorization failed closed.",
       });
+    }
+  },
+);
+
+router.post(
+  "/strategy-one-action/:authorityId/cancel",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    try {
+      const authority =
+        strategyOneTinyLiveActionAuthorityService
+          .cancel(
+            request.params.authorityId,
+            typeof request.body?.confirmation ===
+              "string"
+              ? request.body.confirmation
+              : "",
+          );
+
+      response.json({
+        success:
+          true,
+        data:
+          authority,
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      response
+        .status(
+          409,
+        )
+        .json({
+          success:
+            false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Tiny-LIVE authority cancellation failed closed.",
+        });
     }
   },
 );
@@ -535,95 +958,6 @@ router.post(
       response.status(409).json({
         success: false,
         message: error instanceof Error ? error.message : "Tiny-LIVE authority resolution failed closed.",
-      });
-    }
-  },
-);
-
-/*
- * V125 PRE-ARMED ONE-SHOT
- *
- * Arming stores exact route-bound consent only. It submits no order and moves
- * no funds. A later matching opportunity must still pass the complete fresh
- * action-time preflight before the existing three-second authority and sole
- * execution coordinator can be reached.
- */
-router.get(
-  "/strategy-one-pre-arm",
-  (
-    _request,
-    response,
-  ) => {
-    response.setHeader("Cache-Control", "no-store");
-    response.json({
-      success: true,
-      data: strategyOneTinyLivePreArmService.getDiagnostics(),
-    });
-  },
-);
-
-router.post(
-  "/strategy-one-pre-arm",
-  (
-    request,
-    response,
-  ) => {
-    response.setHeader("Cache-Control", "no-store");
-
-    try {
-      const record = strategyOneTinyLivePreArmService.arm({
-        market: typeof request.body?.market === "string"
-          ? request.body.market
-          : "",
-        buyExchange: typeof request.body?.buyExchange === "string"
-          ? request.body.buyExchange
-          : "",
-        sellExchange: typeof request.body?.sellExchange === "string"
-          ? request.body.sellExchange
-          : "",
-        confirmation: typeof request.body?.confirmation === "string"
-          ? request.body.confirmation
-          : "",
-        durationMinutes: typeof request.body?.durationMinutes === "number"
-          ? request.body.durationMinutes
-          : undefined,
-      });
-
-      response.status(201).json({success: true, data: record});
-    } catch (error: unknown) {
-      response.status(409).json({
-        success: false,
-        message: error instanceof Error
-          ? error.message
-          : "Strategy #1 one-shot pre-arm failed closed.",
-      });
-    }
-  },
-);
-
-router.post(
-  "/strategy-one-pre-arm/:preArmId/disarm",
-  (
-    request,
-    response,
-  ) => {
-    response.setHeader("Cache-Control", "no-store");
-
-    try {
-      const record = strategyOneTinyLivePreArmService.disarm(
-        request.params.preArmId,
-        typeof request.body?.confirmation === "string"
-          ? request.body.confirmation
-          : "",
-      );
-
-      response.json({success: true, data: record});
-    } catch (error: unknown) {
-      response.status(409).json({
-        success: false,
-        message: error instanceof Error
-          ? error.message
-          : "Strategy #1 one-shot disarm failed closed.",
       });
     }
   },

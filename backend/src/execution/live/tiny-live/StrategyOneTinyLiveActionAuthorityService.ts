@@ -18,8 +18,18 @@ import {
 } from "./StrategyOnePilotPreflightService";
 
 import {
-  strategyOneExecutionPolicyService,
-} from "../../../trading/policy/StrategyOneExecutionPolicyService";
+  DEFAULT_STRATEGY_ONE_AUTHORITY_TTL_MS,
+  getStrategyOneTinyLiveDailyAttemptCap,
+  getStrategyOneTinyLiveMaximumCapitalPerLegInr,
+} from "./StrategyOneControlledLiveConfiguration";
+
+import {
+  isStrategyOneDirectionalRoute,
+} from "../scope/StrategyOneExchangeScope";
+
+import {
+  strategyOneControlledLiveRuntimeService,
+} from "../dynamic/StrategyOneControlledLiveRuntimeService";
 
 export type StrategyOneTinyLiveAuthorityState =
   | "PREVIEWED"
@@ -27,7 +37,8 @@ export type StrategyOneTinyLiveAuthorityState =
   | "CONSUMED"
   | "PAIR_BOUND"
   | "FINALIZED"
-  | "RESOLVED";
+  | "RESOLVED"
+  | "CANCELLED";
 
 export interface StrategyOneTinyLiveAuthorityRecord {
   readonly schemaVersion: "111.0";
@@ -39,6 +50,10 @@ export interface StrategyOneTinyLiveAuthorityRecord {
   readonly sellExchange: string;
   readonly capitalPerLegInr: number;
   readonly exactQuantity: number;
+  readonly maximumBuyPrice?: number;
+  readonly minimumSellPrice?: number;
+  readonly buyQuoteTimestamp?: number;
+  readonly sellQuoteTimestamp?: number;
   readonly preflightHash: string;
   readonly calibrationId: string;
   readonly calibrationScope: StrategyOneTimingCalibrationRecord["scope"];
@@ -53,6 +68,7 @@ export interface StrategyOneTinyLiveAuthorityRecord {
   readonly finalOutcome: ArbitrageLiveExecutionResult["status"] | null;
   readonly requiresRecovery: boolean;
   readonly resolvedAt: number | null;
+  readonly cancelledAt?: number | null;
   readonly liveOrderSubmissionAuthorized: boolean;
   readonly automaticRetryAllowed: false;
   readonly automaticFundMovementAllowed: false;
@@ -99,6 +115,16 @@ export interface StrategyOneTinyLiveActionAuthorityDependencies {
   pairSessionExists(sessionId: string): boolean;
   runtimeGateEnabled(): boolean;
   getTinyLiveCapitalPerLegInr(): number;
+  runCanonicalPreflight(input: {
+    opportunityId: string;
+    now: number;
+  }): {
+    readonly approvedForOneTimeArm: boolean;
+    readonly opportunityId: string;
+    readonly recommendedQuantity: number | null;
+    readonly blockers: readonly string[];
+    readonly fingerprintMaterial: string;
+  };
 }
 
 const DEFAULT_FILE = resolve(
@@ -127,15 +153,61 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLiveActionAuthorityDependencies = {
     process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
     process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
     process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
-      "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
+      "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME" &&
     process.env.STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION?.trim() ===
       "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME",
   getTinyLiveCapitalPerLegInr: () =>
-    strategyOneExecutionPolicyService
-      .getActivePolicy()
-      .values
-      .tinyLive
-      .capitalPerLegInr,
+    getStrategyOneTinyLiveMaximumCapitalPerLegInr(),
+  runCanonicalPreflight: (input) => {
+    const report =
+      strategyOneControlledLiveRuntimeService
+        .runCanonicalPreflight(
+          input.opportunityId,
+          "RUN_STRATEGY_ONE_CONTROLLED_PREFLIGHT_ONLY",
+          input.now,
+        );
+
+    return {
+      approvedForOneTimeArm:
+        report.approvedForOneTimeArm,
+      opportunityId:
+        report.opportunityId,
+      recommendedQuantity:
+        report.dynamicRecommendation
+          .recommendedQuantity,
+      blockers:
+        report.blockers,
+      fingerprintMaterial:
+        JSON.stringify(
+          {
+            opportunityId:
+              report.opportunityId,
+            routeKey:
+              report.routeKey,
+            approvedForOneTimeArm:
+              report.approvedForOneTimeArm,
+            decision:
+              report.dynamicRecommendation
+                .decision,
+            recommendedQuantity:
+              report.dynamicRecommendation
+                .recommendedQuantity,
+            economics:
+              report.dynamicRecommendation
+                .economics,
+            gates:
+              report.gates.map(
+                (gate) => [
+                  gate.code,
+                  gate.passed,
+                ],
+              ),
+            blockers:
+              report.blockers,
+          },
+        ),
+    };
+  },
 };
 
 /**
@@ -155,8 +227,8 @@ export class StrategyOneTinyLiveActionAuthorityService {
     dependencies: Partial<StrategyOneTinyLiveActionAuthorityDependencies> = {},
     filePath = DEFAULT_FILE,
     private readonly previewTtlMs = 30_000,
-    private readonly authorityTtlMs = 3_000,
-    private readonly maximumDailyAttempts = 3,
+    private readonly authorityTtlMs = DEFAULT_STRATEGY_ONE_AUTHORITY_TTL_MS,
+    private readonly maximumDailyAttempts = getStrategyOneTinyLiveDailyAttemptCap(),
   ) {
     this.dependencies = {...DEFAULT_DEPENDENCIES, ...dependencies};
 
@@ -165,7 +237,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
       previewTtlMs <= 0 ||
       !Number.isSafeInteger(authorityTtlMs) ||
       authorityTtlMs <= 0 ||
-      authorityTtlMs > 10_000 ||
+      authorityTtlMs > 5 * 60_000 ||
       !Number.isSafeInteger(maximumDailyAttempts) ||
       maximumDailyAttempts <= 0 ||
       maximumDailyAttempts > 10
@@ -224,6 +296,48 @@ export class StrategyOneTinyLiveActionAuthorityService {
       blockers.push("The exact current opportunity is unavailable or stale.");
     }
 
+    let canonical:
+      ReturnType<
+        StrategyOneTinyLiveActionAuthorityDependencies["runCanonicalPreflight"]
+      > | null = null;
+
+    if (opportunity) {
+      try {
+        canonical =
+          this.dependencies
+            .runCanonicalPreflight({
+              opportunityId:
+                opportunity.id,
+              now,
+            });
+      } catch (error: unknown) {
+        blockers.push(
+          message(
+            error,
+          ),
+        );
+      }
+    }
+
+    if (
+      !canonical?.approvedForOneTimeArm ||
+      canonical.opportunityId !==
+        opportunityId ||
+      canonical.recommendedQuantity ===
+        null ||
+      canonical.recommendedQuantity <=
+        0
+    ) {
+      blockers.push(
+        ...(
+          canonical?.blockers ??
+          [
+            "Canonical controlled-live preflight did not approve one-time authority review.",
+          ]
+        ),
+      );
+    }
+
     let preflight: StrategyOnePilotPreflightRunReport | null = null;
 
     if (opportunity) {
@@ -243,7 +357,9 @@ export class StrategyOneTinyLiveActionAuthorityService {
     }
 
     const selected = preflight?.preview.selected ?? null;
-    const exactQuantity = selected?.funding.executableQuantity ?? null;
+    const exactQuantity =
+      canonical?.recommendedQuantity ??
+      null;
     const capitalPerLegInr =
       preflight?.preview.requestedCapitalPerLegInr ??
       null;
@@ -278,23 +394,20 @@ export class StrategyOneTinyLiveActionAuthorityService {
 
     if (
       route &&
-      !(
-        new Set([route.buyExchange, route.sellExchange]).size === 2 &&
-        [route.buyExchange, route.sellExchange].every((venue) =>
-          venue === "binance" || venue === "bybit")
+      !isStrategyOneDirectionalRoute(
+        route.buyExchange,
+        route.sellExchange,
       )
     ) {
-      blockers.push("Initial Strategy #1 LIVE lane is restricted to Binance and Bybit SPOT.");
+      blockers.push("Strategy #1 controlled LIVE requires a directional route among Binance, Bybit and CoinDCX SPOT.");
     }
 
-    const calibration = route
+    const observedCalibration = route
       ? this.dependencies.getCalibration({...route, now})
       : null;
 
-    if (!calibration) {
-      blockers.push("A current, explicitly approved route timing calibration is required.");
-    } else if (
-      calibration.scope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" &&
+    if (
+      observedCalibration?.scope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" &&
       dailyAttempts > 0
     ) {
       blockers.push(
@@ -323,20 +436,28 @@ export class StrategyOneTinyLiveActionAuthorityService {
       !preflight ||
       !selected ||
       !route ||
-      !calibration ||
       exactQuantity === null ||
       capitalPerLegInr === null
     ) {
       return previewResult(now, null, preflight, blockers);
     }
 
-    const preflightHash = preflightFingerprint(preflight);
+    const preflightHash =
+      createHash("sha256")
+        .update(
+          `${preflightFingerprint(preflight)}:${canonical?.fingerprintMaterial ?? "CANONICAL_PREFLIGHT_MISSING"}`,
+        )
+        .digest(
+          "hex",
+        );
     const id = `tiny-live-${hash({
       opportunityId,
       route,
       exactQuantity,
       preflightHash,
-      calibrationId: calibration.id,
+      calibrationId:
+        observedCalibration?.id ??
+        "configured-order-time-safety-v1",
       previewedAt: now,
     }).slice(0, 32)}`;
     const record = freeze({
@@ -347,9 +468,21 @@ export class StrategyOneTinyLiveActionAuthorityService {
       ...route,
       capitalPerLegInr,
       exactQuantity,
+      maximumBuyPrice:
+        opportunity.buyPrice,
+      minimumSellPrice:
+        opportunity.sellPrice,
+      buyQuoteTimestamp:
+        opportunity.pair.buy.timestamp,
+      sellQuoteTimestamp:
+        opportunity.pair.sell.timestamp,
       preflightHash,
-      calibrationId: calibration.id,
-      calibrationScope: calibration.scope,
+      calibrationId:
+        observedCalibration?.id ??
+        "configured-order-time-safety-v1",
+      calibrationScope:
+        observedCalibration?.scope ??
+        "CONTINUOUS_TINY_LIVE",
       requiredAuthorizationPhrase: `AUTHORIZE ${id}`,
       previewedAt: now,
       authorizedAt: null,
@@ -361,6 +494,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
       finalOutcome: null,
       requiresRecovery: false,
       resolvedAt: null,
+      cancelledAt: null,
       liveOrderSubmissionAuthorized: false,
       automaticRetryAllowed: false as const,
       automaticFundMovementAllowed: false as const,
@@ -407,7 +541,11 @@ export class StrategyOneTinyLiveActionAuthorityService {
       fresh.preflightHash !== current.preflightHash ||
       fresh.exactQuantity !== current.exactQuantity ||
       fresh.capitalPerLegInr !== current.capitalPerLegInr ||
-      fresh.calibrationId !== current.calibrationId
+      fresh.calibrationId !== current.calibrationId ||
+      fresh.maximumBuyPrice !== current.maximumBuyPrice ||
+      fresh.minimumSellPrice !== current.minimumSellPrice ||
+      fresh.buyQuoteTimestamp !== current.buyQuoteTimestamp ||
+      fresh.sellQuoteTimestamp !== current.sellQuoteTimestamp
     ) {
       throw new Error("Tiny-LIVE evidence changed after preview; refresh and review again.");
     }
@@ -433,13 +571,25 @@ export class StrategyOneTinyLiveActionAuthorityService {
     validateTime(now);
     const current = this.require(input.authorityId, "AUTHORIZED");
 
+    const fresh =
+      this.previewEvidence(
+        input.opportunity.id,
+        now,
+      );
+
     if (
       current.authorityExpiresAt === null ||
       current.authorityExpiresAt < now ||
       current.opportunityId !== input.opportunity.id ||
       current.market !== normalizeMarket(input.opportunity.pair.market) ||
       current.buyExchange !== normalizeExchange(input.opportunity.pair.buy.exchange) ||
-      current.sellExchange !== normalizeExchange(input.opportunity.pair.sell.exchange)
+      current.sellExchange !== normalizeExchange(input.opportunity.pair.sell.exchange) ||
+      fresh.preflightHash !== current.preflightHash ||
+      fresh.exactQuantity !== current.exactQuantity ||
+      fresh.maximumBuyPrice !== current.maximumBuyPrice ||
+      fresh.minimumSellPrice !== current.minimumSellPrice ||
+      fresh.buyQuoteTimestamp !== current.buyQuoteTimestamp ||
+      fresh.sellQuoteTimestamp !== current.sellQuoteTimestamp
     ) {
       throw new Error("Tiny-LIVE action authority is expired or not bound to this exact opportunity.");
     }
@@ -453,6 +603,104 @@ export class StrategyOneTinyLiveActionAuthorityService {
 
     this.persist(consumed);
     return clone(consumed);
+  }
+
+  cancel(
+    authorityId: string,
+    confirmationValue: string,
+    now = Date.now(),
+  ): StrategyOneTinyLiveAuthorityRecord {
+    validateTime(now);
+
+    const current =
+      this.latest.get(
+        authorityId.trim(),
+      );
+
+    if (
+      !current ||
+      (
+        current.state !== "PREVIEWED" &&
+        current.state !== "AUTHORIZED"
+      )
+    ) {
+      throw new Error(
+        "Only an unused PREVIEWED or AUTHORIZED Tiny-LIVE authority can be cancelled.",
+      );
+    }
+
+    if (
+      confirmationValue.trim() !==
+      `CANCEL ${current.id}`
+    ) {
+      throw new Error(
+        "Exact Tiny-LIVE authority cancellation phrase is required.",
+      );
+    }
+
+    const cancelled =
+      freeze({
+        ...clone(current),
+        state:
+          "CANCELLED" as const,
+        cancelledAt:
+          now,
+        liveOrderSubmissionAuthorized:
+          false,
+      });
+
+    this.persist(
+      cancelled,
+    );
+
+    return clone(
+      cancelled,
+    );
+  }
+
+  cancelUnusedForEmergencyStop(
+    now = Date.now(),
+  ): StrategyOneTinyLiveAuthorityRecord[] {
+    validateTime(
+      now,
+    );
+
+    const cancelled:
+      StrategyOneTinyLiveAuthorityRecord[] = [];
+
+    for (
+      const current
+      of this.latest.values()
+    ) {
+      if (
+        current.state !== "PREVIEWED" &&
+        current.state !== "AUTHORIZED"
+      ) {
+        continue;
+      }
+
+      const record =
+        freeze({
+          ...clone(current),
+          state:
+            "CANCELLED" as const,
+          cancelledAt:
+            now,
+          liveOrderSubmissionAuthorized:
+            false,
+        });
+
+      this.persist(
+        record,
+      );
+      cancelled.push(
+        clone(
+          record,
+        ),
+      );
+    }
+
+    return cancelled;
   }
 
   bindPair(
@@ -600,6 +848,27 @@ export class StrategyOneTinyLiveActionAuthorityService {
       throw new Error("The exact opportunity expired before authorization.");
     }
 
+    const canonical =
+      this.dependencies
+        .runCanonicalPreflight({
+          opportunityId,
+          now,
+        });
+
+    if (
+      !canonical.approvedForOneTimeArm ||
+      canonical.opportunityId !==
+        opportunityId ||
+      canonical.recommendedQuantity ===
+        null ||
+      canonical.recommendedQuantity <=
+        0
+    ) {
+      throw new Error(
+        `Canonical controlled-live preflight blocked one-time authority: ${canonical.blockers.join(" | ")}`,
+      );
+    }
+
     const preflight = this.dependencies.runPreflight({
       confirmationToken: "RUN_STRATEGY_ONE_PILOT_PREFLIGHT_ONLY",
       expectedOpportunityId: opportunityId,
@@ -611,21 +880,22 @@ export class StrategyOneTinyLiveActionAuthorityService {
       throw new Error(`Tiny-LIVE preflight changed: ${preflight.blockers.join(" | ")}`);
     }
 
-    const calibration = this.dependencies.getCalibration({
+    const observedCalibration = this.dependencies.getCalibration({
       market: selected.market,
       buyExchange: selected.buyExchange,
       sellExchange: selected.sellExchange,
       now,
     });
-    const exactQuantity = selected.funding.executableQuantity;
+    const exactQuantity =
+      canonical.recommendedQuantity;
 
-    if (!calibration || exactQuantity === null || exactQuantity <= 0) {
-      throw new Error("Fresh calibration or exact funded quantity is unavailable.");
+    if (exactQuantity === null || exactQuantity <= 0) {
+      throw new Error("Exact funded quantity is unavailable.");
     }
 
 
     if (
-      calibration.scope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" &&
+      observedCalibration?.scope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" &&
       this.dailyAttempts(now) > 0
     ) {
       throw new Error(
@@ -653,11 +923,28 @@ export class StrategyOneTinyLiveActionAuthorityService {
     }
 
     return {
-      preflightHash: preflightFingerprint(preflight),
+      preflightHash:
+        createHash("sha256")
+          .update(
+            `${preflightFingerprint(preflight)}:${canonical.fingerprintMaterial}`,
+          )
+          .digest(
+            "hex",
+          ),
       exactQuantity,
+      maximumBuyPrice:
+        opportunity.buyPrice,
+      minimumSellPrice:
+        opportunity.sellPrice,
+      buyQuoteTimestamp:
+        opportunity.pair.buy.timestamp,
+      sellQuoteTimestamp:
+        opportunity.pair.sell.timestamp,
       capitalPerLegInr:
         preflight.preview.requestedCapitalPerLegInr,
-      calibrationId: calibration.id,
+      calibrationId:
+        observedCalibration?.id ??
+        "configured-order-time-safety-v1",
     };
   }
 
@@ -732,6 +1019,7 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
     "PAIR_BOUND",
     "FINALIZED",
     "RESOLVED",
+    "CANCELLED",
   ];
   const nullableTimes = [
     item.authorizedAt,
@@ -740,6 +1028,7 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
     item.pairBoundAt,
     item.finalizedAt,
     item.resolvedAt,
+    item.cancelledAt ?? null,
   ];
 
   return item.schemaVersion === "111.0" &&
@@ -791,6 +1080,10 @@ function isValidRestoredTransition(
     previous.sellExchange === next.sellExchange &&
     previous.capitalPerLegInr === next.capitalPerLegInr &&
     previous.exactQuantity === next.exactQuantity &&
+    previous.maximumBuyPrice === next.maximumBuyPrice &&
+    previous.minimumSellPrice === next.minimumSellPrice &&
+    previous.buyQuoteTimestamp === next.buyQuoteTimestamp &&
+    previous.sellQuoteTimestamp === next.sellQuoteTimestamp &&
     previous.preflightHash === next.preflightHash &&
     previous.calibrationId === next.calibrationId &&
     previous.calibrationScope === next.calibrationScope &&
@@ -802,12 +1095,13 @@ function isValidRestoredTransition(
   }
 
   const allowed: Record<StrategyOneTinyLiveAuthorityState, readonly StrategyOneTinyLiveAuthorityState[]> = {
-    PREVIEWED: ["AUTHORIZED"],
-    AUTHORIZED: ["CONSUMED"],
+    PREVIEWED: ["AUTHORIZED", "CANCELLED"],
+    AUTHORIZED: ["CONSUMED", "CANCELLED"],
     CONSUMED: ["PAIR_BOUND", "FINALIZED", "RESOLVED"],
     PAIR_BOUND: ["FINALIZED", "RESOLVED"],
     FINALIZED: ["RESOLVED"],
     RESOLVED: [],
+    CANCELLED: [],
   };
 
   return allowed[previous.state].includes(next.state) &&
