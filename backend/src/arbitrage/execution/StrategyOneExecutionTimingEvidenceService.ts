@@ -270,8 +270,7 @@ export class StrategyOneExecutionTimingEvidenceService {
     }
 
     const observedRouteKeys = new Set<string>();
-    for (const book of (snapshot.pilotRouteBooks ?? [])
-      .slice(0, this.maximumOpportunitiesPerSnapshot)) {
+    for (const book of this.selectPaperStageBooks(snapshot, stage)) {
       try {
         const routeKey = timingRouteKey(
           book.market,
@@ -319,6 +318,61 @@ export class StrategyOneExecutionTimingEvidenceService {
         this.invalidSamplesRejected += 1;
       }
     }
+  }
+
+  private selectPaperStageBooks(
+    snapshot: OpportunitySnapshot,
+    stage: StrategyOnePaperTimingStage,
+  ): readonly NonNullable<OpportunitySnapshot["pilotRouteBooks"]>[number][] {
+    const books = [...(snapshot.pilotRouteBooks ?? [])];
+
+    if (stage !== "PIPELINE_START") {
+      const pipelineStarted = books.filter((book) => {
+        try {
+          const route = this.routes.get(timingRouteKey(
+            book.market,
+            book.buyExchange,
+            book.sellExchange,
+          ));
+          return (route?.lastStageCapturedAt.PIPELINE_START ?? 0) >= snapshot.generatedAt;
+        } catch {
+          return false;
+        }
+      });
+      if (pipelineStarted.length > 0) {
+        return pipelineStarted.slice(0, this.maximumOpportunitiesPerSnapshot);
+      }
+    }
+
+    return books
+      .map((book, index) => {
+        try {
+          const route = this.routes.get(timingRouteKey(
+            book.market,
+            book.buyExchange,
+            book.sellExchange,
+          ));
+          if (!route) return {book, index, tier: 1, progress: 0, lastObservedAt: 0};
+          const observationSpanMs = Math.max(0, route.lastObservedAt - route.firstObservedAt);
+          const ready = route.paperSnapshots >= this.minimumPublicSamples &&
+            observationSpanMs >= this.minimumObservationSpanMs;
+          const progress = Math.min(route.paperSnapshots / this.minimumPublicSamples, 1) +
+            Math.min(observationSpanMs / this.minimumObservationSpanMs, 1);
+          return {book, index, tier: ready ? 0 : 2, progress, lastObservedAt: route.lastObservedAt};
+        } catch {
+          return {book, index, tier: -1, progress: 0, lastObservedAt: 0};
+        }
+      })
+      .sort((first, second) =>
+        second.tier - first.tier ||
+        (first.tier === 2
+          ? second.progress - first.progress
+          : first.tier === 0
+            ? first.lastObservedAt - second.lastObservedAt
+            : first.index - second.index) ||
+        first.index - second.index)
+      .slice(0, this.maximumOpportunitiesPerSnapshot)
+      .map(({book}) => book);
   }
 
   observeLastLook(report: StrategyOneOrderTimeSafetyReport, observedAt = Date.now()): void {

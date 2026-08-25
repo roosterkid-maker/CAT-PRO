@@ -140,6 +140,61 @@ function main(): void {
     assert.equal(rawReport.routes[0]?.metrics.decisionToExecutionStartMs.p99Ms, 9);
     assert.equal(rawReport.routes[0]?.calibration.publicTimingReady, true);
 
+    const prioritizedFilePath = join(directory, "prioritized-route-timing.jsonl");
+    const prioritizedService = new StrategyOneExecutionTimingEvidenceService({
+      filePath: prioritizedFilePath,
+      maximumRoutes: 4,
+      maximumSamplesPerMetric: 4,
+      maximumOpportunitiesPerSnapshot: 1,
+      persistenceIntervalMs: 60_000,
+      maximumPersistedSnapshots: 2,
+      minimumRouteSampleIntervalMs: 1,
+      minimumPublicSamples: 3,
+      minimumPrivateFillSamplesPerVenue: 2,
+      minimumObservationSpanMs: 1_000,
+    });
+    for (const generatedAt of [NOW + 20_000, NOW + 21_000]) {
+      prioritizedService.observePaperStage({
+        generatedAt,
+        opportunities: [],
+        pilotRouteBooks: [{
+          market: "SANDUSDT",
+          buyExchange: "bybit",
+          sellExchange: "coindcx",
+          buyTimestamp: generatedAt - 20,
+          sellTimestamp: generatedAt - 15,
+        }],
+      }, "PIPELINE_START", generatedAt + 5);
+    }
+    const mixedGeneratedAt = NOW + 22_000;
+    prioritizedService.observePaperStage({
+      generatedAt: mixedGeneratedAt,
+      opportunities: [],
+      pilotRouteBooks: [{
+        market: "THINUSDT",
+        buyExchange: "binance",
+        sellExchange: "bybit",
+        buyTimestamp: mixedGeneratedAt - 20,
+        sellTimestamp: mixedGeneratedAt - 15,
+      }, {
+        market: "SANDUSDT",
+        buyExchange: "bybit",
+        sellExchange: "coindcx",
+        buyTimestamp: mixedGeneratedAt - 20,
+        sellTimestamp: mixedGeneratedAt - 15,
+      }],
+    }, "PIPELINE_START", mixedGeneratedAt + 5);
+    const prioritizedReport = prioritizedService.getReport(mixedGeneratedAt + 100);
+    assert.equal(
+      prioritizedReport.routes.find((route) => route.market === "SANDUSDT")?.paperSnapshots,
+      3,
+      "A progressing route must be sampled ahead of fixed-order thin-route churn.",
+    );
+    assert.equal(
+      prioritizedReport.routes.some((route) => route.market === "THINUSDT"),
+      false,
+    );
+
     console.log("V106 STRATEGY #1 EXECUTION TIMING EVIDENCE TEST PASSED.");
     console.log("Bounded route timing, WebSocket-only fill latency, advisory-only TTL calibration and restart restoration passed; no exchange I/O occurred.");
   } finally {

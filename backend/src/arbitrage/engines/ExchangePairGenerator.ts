@@ -8,6 +8,12 @@ export interface PositiveSpreadPairBatch {
   readonly nonPositiveSpreadPairs: number;
 }
 
+export type ExecutableDirectionObserver = (
+  market: string,
+  buy: ExchangeQuote,
+  sell: ExchangeQuote,
+) => void;
+
 export class ExchangePairGenerator {
   generate(snapshot: MarketSnapshot): ExchangePair[] {
     const quotes = Object.values(snapshot.quotes);
@@ -80,6 +86,7 @@ export class ExchangePairGenerator {
   generatePositiveSpreadCandidatesFromQuotes(
     market: string,
     quotes: readonly ExchangeQuote[],
+    observeExecutableDirection?: ExecutableDirectionObserver,
   ): PositiveSpreadPairBatch {
 
     const pairs:
@@ -139,6 +146,12 @@ export class ExchangePairGenerator {
 
         totalExecutablePairs +=
           1;
+
+        observeExecutableDirection?.(
+          market,
+          buy,
+          sell,
+        );
 
         if (
           sell.bestBidPrice! <=

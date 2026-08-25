@@ -581,32 +581,30 @@ export class OpportunityService {
           .generatePositiveSpreadCandidatesFromQuotes(
             market,
             quotes,
+            (
+              observedMarket,
+              buy,
+              sell,
+            ) => {
+              const route = {
+                market: observedMarket,
+                buyExchange: buy.exchange,
+                sellExchange: sell.exchange,
+              };
+
+              if (!isStrategyOneTinyLiveDynamicRoute(route)) {
+                return;
+              }
+
+              pilotRouteBooks.push({
+                market: observedMarket,
+                buyExchange: buy.exchange as StrategyOneTinyLiveBasketRoute["buyExchange"],
+                sellExchange: sell.exchange as StrategyOneTinyLiveBasketRoute["sellExchange"],
+                buyTimestamp: buy.timestamp,
+                sellTimestamp: sell.timestamp,
+              });
+            },
           );
-
-      /*
-       * Dynamic Tiny-LIVE timing evidence follows current positive-spread
-       * USDT directions instead of allocating work for a stale fixed basket.
-       * Exact economics and every action-time gate still run downstream.
-       */
-      for (const pair of pairBatch.pairs) {
-        const route = {
-          market: pair.market,
-          buyExchange: pair.buy.exchange,
-          sellExchange: pair.sell.exchange,
-        };
-
-        if (!isStrategyOneTinyLiveDynamicRoute(route)) {
-          continue;
-        }
-
-        pilotRouteBooks.push({
-          market: pair.market,
-          buyExchange: pair.buy.exchange as StrategyOneTinyLiveBasketRoute["buyExchange"],
-          sellExchange: pair.sell.exchange as StrategyOneTinyLiveBasketRoute["sellExchange"],
-          buyTimestamp: pair.buy.timestamp,
-          sellTimestamp: pair.sell.timestamp,
-        });
-      }
 
       exchangePairCount +=
         pairBatch

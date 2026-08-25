@@ -116,6 +116,52 @@ function verifyLatestRouteSnapshotBound(): void {
   }
 }
 
+function verifyPilotTimingDirectionsIndependentFromEconomics(): void {
+  marketCache.clear();
+
+  try {
+    const timestamp = Date.now();
+    for (const exchange of ["binance", "coindcx"]) {
+      marketCache.update({
+        exchange,
+        market: "BTCUSDT",
+        lastPrice: 100,
+        bestBidPrice: 99,
+        bestBidQty: 100,
+        bestAskPrice: 100,
+        bestAskQty: 100,
+        spread: 1,
+        timestamp,
+        source: "orderBook",
+        executable: true,
+      });
+    }
+
+    const service = new OpportunityService({
+      diagnosticsLogLevel: "silent",
+    });
+    assert.equal(
+      service.getOpportunities().length,
+      0,
+      "The fixture must not contain a positive-spread opportunity.",
+    );
+    assert.deepEqual(
+      service
+        .getLastOpportunitySnapshot()
+        ?.pilotRouteBooks
+        ?.map((book) => `${book.market}:${book.buyExchange}->${book.sellExchange}`)
+        .sort(),
+      [
+        "BTCUSDT:binance->coindcx",
+        "BTCUSDT:coindcx->binance",
+      ],
+      "Pilot timing must observe both executable directions independently from current spread economics.",
+    );
+  } finally {
+    marketCache.clear();
+  }
+}
+
 function createSpreadRejectedPair(
   timestamp:
     number,
@@ -472,6 +518,7 @@ function main():
   }
 
   verifyLatestRouteSnapshotBound();
+  verifyPilotTimingDirectionsIndependentFromEconomics();
 
   console.log(
     "Opportunity rejection log-volume test passed.",
