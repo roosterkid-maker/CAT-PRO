@@ -808,7 +808,25 @@ export class StrategyOneTinyLiveActionAuthorityService {
         record.authorityExpiresAt >= now) ||
       record.state === "CONSUMED" ||
       record.state === "PAIR_BOUND" ||
-      (record.state === "FINALIZED" && record.requiresRecovery));
+      this.hasUnresolvedFinalizedRecovery(record));
+  }
+
+  private hasUnresolvedFinalizedRecovery(
+    record: StrategyOneTinyLiveAuthorityRecord,
+  ): boolean {
+    if (record.state !== "FINALIZED" || !record.requiresRecovery) {
+      return false;
+    }
+
+    if (record.pairSessionId === null) {
+      return true;
+    }
+
+    try {
+      return !this.dependencies.isPairResolved(record.pairSessionId);
+    } catch {
+      return true;
+    }
   }
 
   private dailyAttempts(now: number): number {

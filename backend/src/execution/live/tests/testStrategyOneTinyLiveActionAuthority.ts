@@ -161,6 +161,7 @@ async function main(): Promise<void> {
     testRouteSpecificActionTimeContract(directory);
     testBasketBootstrapQuotaIsRouteScoped(directory);
     testDynamicPoolQualificationNeedsNoPerCoinApproval(directory);
+    testAuthoritativeRecoveryClearsFinalizedBlocker(directory);
     await testPreArmedOneShot(directory, opportunity);
     await testControlledTwoAttemptBatch(directory, opportunity);
     await testControlledTenAttemptBatch(directory, opportunity);
@@ -263,6 +264,92 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     ),
     true,
     "Every dynamic authority transition must durably preserve its exact qualified TTL.",
+  );
+}
+
+function testAuthoritativeRecoveryClearsFinalizedBlocker(
+  directory: string,
+): void {
+  const opportunity = opportunityFixture();
+  const calibration = calibrationFixture();
+  let recoveryResolved = false;
+  const filePath = join(directory, "resolved-recovery-authorities.jsonl");
+  const dependencies = {
+    getOpportunity: (id: string) => id === opportunity.id ? opportunity : null,
+    runPreflight: (input: {now?: number}) =>
+      preflightFixture(input.now ?? NOW),
+    getCalibration: () => calibration,
+    getVenueContract: (exchange: string) => ({
+      exchange,
+      maximumOrderBookAgeMs: 25,
+      requiredTimeInForce: "FOK" as const,
+      supportedTimeInForce: ["FOK" as const],
+      authoritativeFillConfirmationReady: true,
+    }),
+    isPairResolved: (sessionId: string) =>
+      recoveryResolved && sessionId === "strategy-one:resolved-recovery",
+    pairSessionExists: () => true,
+    runtimeGateEnabled: () => true,
+    getTinyLiveCapitalPerLegInr: () => 500,
+  };
+  const service = new StrategyOneTinyLiveActionAuthorityService(
+    dependencies,
+    filePath,
+  );
+  const preview = service.preview(opportunity.id, NOW + 100);
+  assert.ok(preview.authority);
+  const authorized = service.authorize(
+    preview.authority.id,
+    preview.authority.requiredAuthorizationPhrase,
+    NOW + 101,
+  );
+  service.consume({
+    authorityId: authorized.id,
+    opportunity,
+    now: NOW + 102,
+  });
+  service.bindPair(
+    authorized.id,
+    "strategy-one:resolved-recovery",
+    NOW + 103,
+  );
+  const finalized = service.finalize(
+    authorized.id,
+    {
+      ...executionFixture(opportunity),
+      success: false,
+      status: "POSSIBLE_EXPOSURE",
+      recoveryRequired: true,
+      possibleExposure: true,
+      reasons: ["Authoritative fee reconciliation was initially incomplete."],
+    },
+    NOW + 104,
+  );
+
+  assert.equal(finalized.state, "FINALIZED");
+  assert.equal(finalized.requiresRecovery, true);
+  assert.equal(service.getDiagnostics(NOW + 105).blockingAuthorityPresent, true);
+
+  recoveryResolved = true;
+  assert.equal(
+    service.getDiagnostics(NOW + 106).blockingAuthorityPresent,
+    false,
+    "A currently valid, evidence-fingerprinted pair recovery must clear only the redundant finalized-authority blocker.",
+  );
+  assert.equal(service.get(authorized.id)?.state, "FINALIZED");
+  assert.equal(service.get(authorized.id)?.requiresRecovery, true);
+
+  const restarted = new StrategyOneTinyLiveActionAuthorityService(
+    dependencies,
+    filePath,
+  );
+  assert.equal(restarted.getDiagnostics(NOW + 107).blockingAuthorityPresent, false);
+
+  recoveryResolved = false;
+  assert.equal(
+    restarted.getDiagnostics(NOW + 108).blockingAuthorityPresent,
+    true,
+    "Missing or invalidated recovery evidence must immediately fail closed again.",
   );
 }
 
