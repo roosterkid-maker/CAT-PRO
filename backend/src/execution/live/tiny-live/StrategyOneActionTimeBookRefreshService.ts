@@ -79,6 +79,34 @@ export interface StrategyOneActionTimeBookRefreshResult {
   };
 }
 
+export interface StrategyOneAuthorizedFinalBookRefreshResult {
+  readonly schemaVersion: "188.2";
+  readonly state:
+    | "REFRESHED"
+    | "BLOCKED";
+  readonly route: {
+    readonly market: string;
+    readonly buyExchange: StrategyOneTinyLiveBasketExchange;
+    readonly sellExchange: StrategyOneTinyLiveBasketExchange;
+  };
+  readonly startedAt: number;
+  readonly completedAt: number;
+  readonly durationMs: number;
+  readonly legs: readonly StrategyOneActionTimeBookRefreshLeg[];
+  readonly blocker: string | null;
+  readonly safety: {
+    readonly publicReadOnly: true;
+    readonly authorizedAttemptOnly: true;
+    readonly parallelReads: true;
+    readonly thresholdChanged: false;
+    readonly timestampFabricationAllowed: false;
+    readonly orderSubmissionAllowed: false;
+    readonly automaticRetryAllowed: false;
+    readonly transferAllowed: false;
+    readonly withdrawalAllowed: false;
+  };
+}
+
 export interface StrategyOneActionTimeBookRefreshDependencies {
   refreshCoinDCX(
     market: string,
@@ -237,8 +265,21 @@ export class StrategyOneActionTimeBookRefreshService {
   private coalesced =
     0;
 
+  private finalRefreshAttempts =
+    0;
+
+  private finalRefreshes =
+    0;
+
+  private finalRefreshBlocks =
+    0;
+
   private lastResult:
     StrategyOneActionTimeBookRefreshResult | null =
+    null;
+
+  private lastFinalRefresh:
+    StrategyOneAuthorizedFinalBookRefreshResult | null =
     null;
 
   constructor(
@@ -387,6 +428,126 @@ export class StrategyOneActionTimeBookRefreshService {
     return operation;
   }
 
+  /**
+   * One additional bounded public refresh after the one-time authority has
+   * been authorized and before the coordinator performs its synchronous final
+   * last-look. Durable preview/authorization work can legitimately consume
+   * most of a calibrated sub-250ms quote TTL. This refresh changes no
+   * threshold, authority, quantity or route and performs no exchange order.
+   */
+  async refreshForAuthorizedAttempt(
+    input:
+      StrategyOneActionTimeBookRefreshRoute,
+  ): Promise<StrategyOneAuthorizedFinalBookRefreshResult> {
+    const route =
+      normalizeRoute(
+        input,
+      );
+    const startedAt =
+      this.dependencies
+        .now();
+
+    this.finalRefreshAttempts +=
+      1;
+
+    let legs:
+      readonly StrategyOneActionTimeBookRefreshLeg[];
+
+    try {
+      legs = await this.refreshRouteLegs(
+        route,
+      );
+    } catch (
+      error:
+        unknown
+    ) {
+      const blocked =
+        finalRefreshReport({
+          state:
+            "BLOCKED",
+          route,
+          startedAt,
+          completedAt:
+            this.dependencies
+              .now(),
+          legs:
+            [],
+          blocker:
+            error instanceof Error
+              ? `Authorized final public book refresh failed closed: ${error.message}`
+              : "Authorized final public book refresh failed closed.",
+        });
+
+      this.finalRefreshBlocks +=
+        1;
+      this.lastFinalRefresh =
+        blocked;
+
+      return blocked;
+    }
+
+    const failedLegs =
+      legs.filter(
+        (
+          leg,
+        ) =>
+          !leg.accepted ||
+          leg.receivedAt ===
+            null,
+      );
+    const completedAt =
+      this.dependencies
+        .now();
+    const result =
+      failedLegs.length ===
+        0
+        ? finalRefreshReport({
+          state:
+            "REFRESHED",
+          route,
+          startedAt,
+          completedAt,
+          legs,
+          blocker:
+            null,
+        })
+        : finalRefreshReport({
+          state:
+            "BLOCKED",
+          route,
+          startedAt,
+          completedAt,
+          legs,
+          blocker:
+            failedLegs
+              .map(
+                (
+                  leg,
+                ) =>
+                  `${leg.exchange}: ${leg.error ?? "fresh public depth was unavailable"}`,
+              )
+              .join(
+                " | ",
+              ),
+        });
+
+    if (
+      result.state ===
+        "REFRESHED"
+    ) {
+      this.finalRefreshes +=
+        1;
+    } else {
+      this.finalRefreshBlocks +=
+        1;
+    }
+
+    this.lastFinalRefresh =
+      result;
+
+    return result;
+  }
+
   getDiagnostics() {
     return freeze({
       schemaVersion:
@@ -410,6 +571,12 @@ export class StrategyOneActionTimeBookRefreshService {
         this.cooldowns,
       coalesced:
         this.coalesced,
+      finalRefreshAttempts:
+        this.finalRefreshAttempts,
+      finalRefreshes:
+        this.finalRefreshes,
+      finalRefreshBlocks:
+        this.finalRefreshBlocks,
       inFlight:
         this.inFlight.size,
       lastResult:
@@ -418,9 +585,48 @@ export class StrategyOneActionTimeBookRefreshService {
               this.lastResult,
             )
           : null,
+      lastFinalRefresh:
+        this.lastFinalRefresh
+          ? clone(
+              this.lastFinalRefresh,
+            )
+          : null,
       safety:
         safety(),
     });
+  }
+
+  private async refreshRouteLegs(
+    route: {
+      readonly market: string;
+      readonly buyExchange: StrategyOneTinyLiveBasketExchange;
+      readonly sellExchange: StrategyOneTinyLiveBasketExchange;
+    },
+  ): Promise<readonly StrategyOneActionTimeBookRefreshLeg[]> {
+    return withDeadline(
+      Promise.all(
+        [route.buyExchange, route.sellExchange].map((exchange) => {
+          if (exchange === "coindcx") {
+            return this.dependencies.refreshCoinDCX(
+              route.market,
+              ACTION_TIME_READ_TIMEOUT_MS,
+            );
+          }
+          if (exchange === "binance") {
+            return this.dependencies.refreshBinance(
+              route.market,
+              ACTION_TIME_READ_TIMEOUT_MS,
+            );
+          }
+          return this.dependencies.refreshBybit(
+            route.market,
+            ACTION_TIME_READ_TIMEOUT_MS,
+          );
+        }),
+      ),
+      ACTION_TIME_REFRESH_DEADLINE_MS,
+      "Parallel action-time book refresh exceeded its service-owned deadline.",
+    );
   }
 
   private async run(
@@ -435,29 +641,8 @@ export class StrategyOneActionTimeBookRefreshService {
       readonly StrategyOneActionTimeBookRefreshLeg[];
 
     try {
-      legs = await withDeadline(
-        Promise.all(
-          [route.buyExchange, route.sellExchange].map((exchange) => {
-            if (exchange === "coindcx") {
-              return this.dependencies.refreshCoinDCX(
-                route.market,
-                ACTION_TIME_READ_TIMEOUT_MS,
-              );
-            }
-            if (exchange === "binance") {
-              return this.dependencies.refreshBinance(
-                route.market,
-                ACTION_TIME_READ_TIMEOUT_MS,
-              );
-            }
-            return this.dependencies.refreshBybit(
-              route.market,
-              ACTION_TIME_READ_TIMEOUT_MS,
-            );
-          }),
-        ),
-        ACTION_TIME_REFRESH_DEADLINE_MS,
-        "Parallel action-time book refresh exceeded its service-owned deadline.",
+      legs = await this.refreshRouteLegs(
+        route,
       );
     } catch (
       error:
@@ -759,6 +944,55 @@ function report(
         : null,
     safety:
       safety(),
+  });
+}
+
+function finalRefreshReport(
+  input: {
+    readonly state:
+      StrategyOneAuthorizedFinalBookRefreshResult["state"];
+    readonly route:
+      StrategyOneAuthorizedFinalBookRefreshResult["route"];
+    readonly startedAt: number;
+    readonly completedAt: number;
+    readonly legs: readonly StrategyOneActionTimeBookRefreshLeg[];
+    readonly blocker: string | null;
+  },
+): StrategyOneAuthorizedFinalBookRefreshResult {
+  return freeze({
+    schemaVersion:
+      "188.2" as const,
+    ...input,
+    durationMs:
+      Math.max(
+        0,
+        input.completedAt -
+          input.startedAt,
+      ),
+    legs:
+      input.legs.map(
+        clone,
+      ),
+    safety: {
+      publicReadOnly:
+        true as const,
+      authorizedAttemptOnly:
+        true as const,
+      parallelReads:
+        true as const,
+      thresholdChanged:
+        false as const,
+      timestampFabricationAllowed:
+        false as const,
+      orderSubmissionAllowed:
+        false as const,
+      automaticRetryAllowed:
+        false as const,
+      transferAllowed:
+        false as const,
+      withdrawalAllowed:
+        false as const,
+    },
   });
 }
 

@@ -32,6 +32,7 @@ import {
 import {
   strategyOneActionTimeBookRefreshService,
   type StrategyOneActionTimeBookRefreshResult,
+  type StrategyOneAuthorizedFinalBookRefreshResult,
 } from "./StrategyOneActionTimeBookRefreshService";
 
 export type StrategyOneTinyLivePreArmState =
@@ -125,6 +126,11 @@ export interface StrategyOneTinyLivePreArmDependencies {
     readonly buyExchange: string;
     readonly sellExchange: string;
   }): Promise<StrategyOneActionTimeBookRefreshResult>;
+  refreshAuthorizedFinalBooks(input: {
+    readonly market: string;
+    readonly buyExchange: string;
+    readonly sellExchange: string;
+  }): Promise<StrategyOneAuthorizedFinalBookRefreshResult>;
   authorizeAction(id: string, phrase: string, now: number): {
     readonly id: string;
     readonly state: string;
@@ -191,6 +197,9 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLivePreArmDependencies = {
     strategyOneTinyLiveActionAuthorityService.preview(opportunityId, now),
   refreshActionCandidate: (input) =>
     strategyOneActionTimeBookRefreshService.refresh(input),
+  refreshAuthorizedFinalBooks: (input) =>
+    strategyOneActionTimeBookRefreshService
+      .refreshForAuthorizedAttempt(input),
   authorizeAction: (id, phrase, now) =>
     strategyOneTinyLiveActionAuthorityService.authorize(id, phrase, now),
   execute: (opportunity, authorityId) =>
@@ -954,6 +963,26 @@ export class StrategyOneTinyLivePreArmService {
 
       if (authorized.state !== "AUTHORIZED") {
         throw new Error("Exact one-time action authority was not authorized.");
+      }
+
+      const finalBookRefresh =
+        await this.dependencies
+          .refreshAuthorizedFinalBooks({
+            market:
+              authority.market,
+            buyExchange:
+              authority.buyExchange,
+            sellExchange:
+              authority.sellExchange,
+          });
+
+      if (
+        finalBookRefresh.state !==
+          "REFRESHED"
+      ) {
+        throw new Error(
+          `AUTHORIZED_FINAL_BOOK_REFRESH: ${finalBookRefresh.blocker ?? "Fresh public depth is unavailable."}`,
+        );
       }
 
       this.coordinatorStarts += 1;

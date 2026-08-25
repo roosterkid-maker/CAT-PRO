@@ -31,10 +31,127 @@ async function main(): Promise<void> {
   await testFailedLegBlocksWithoutReevaluation();
   await testHungLegFailsClosedAndReleasesInFlight();
   await testExactRejectionEvidenceIsPreserved();
+  await testAuthorizedFinalRefreshIsParallelAndPublicOnly();
+  await testAuthorizedFinalRefreshFailsClosed();
 
   console.log(
     "V188 action-time book refresh passed: all approved dynamic-pool venues use parallel public reads only on stale fallback, validated refreshed books must produce a new EXECUTE opportunity, failures stay blocked, and no threshold/order/fund authority exists.",
   );
+}
+
+async function testAuthorizedFinalRefreshIsParallelAndPublicOnly(): Promise<void> {
+  let coinDCXStarted = false;
+  let bybitStarted = false;
+  let evaluations = 0;
+  let releaseReads: () => void = () => {
+    throw new Error("Authorized final read gate was not initialized.");
+  };
+  const readGate = new Promise<void>((resolve) => {
+    releaseReads = resolve;
+  });
+  const service = new StrategyOneActionTimeBookRefreshService({
+    refreshCoinDCX: async (market, timeoutMs) => {
+      coinDCXStarted = true;
+      assert.equal(market, "SANDUSDT");
+      assert.equal(timeoutMs, 190);
+      await readGate;
+      return {
+        exchange: "coindcx",
+        market,
+        accepted: true,
+        requestedAt: NOW,
+        receivedAt: NOW + 18,
+        roundTripMs: 18,
+        error: null,
+      };
+    },
+    refreshBybit: async (market, timeoutMs) => {
+      bybitStarted = true;
+      assert.equal(market, "SANDUSDT");
+      assert.equal(timeoutMs, 190);
+      await readGate;
+      return {
+        exchange: "bybit",
+        market,
+        accepted: true,
+        requestedAt: NOW,
+        receivedAt: NOW + 15,
+        roundTripMs: 15,
+        error: null,
+      };
+    },
+    evaluateExactRoute: () => {
+      evaluations += 1;
+      throw new Error("The authorized final refresh must not mint an opportunity.");
+    },
+    now: () => NOW + 18,
+  });
+
+  const pending = service.refreshForAuthorizedAttempt({
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "coindcx",
+  });
+
+  await Promise.resolve();
+  assert.equal(bybitStarted, true);
+  assert.equal(coinDCXStarted, true);
+  releaseReads();
+
+  const result = await pending;
+  assert.equal(result.state, "REFRESHED");
+  assert.equal(result.schemaVersion, "188.2");
+  assert.equal(result.legs.length, 2);
+  assert.equal(evaluations, 0);
+  assert.equal(result.safety.publicReadOnly, true);
+  assert.equal(result.safety.authorizedAttemptOnly, true);
+  assert.equal(result.safety.thresholdChanged, false);
+  assert.equal(result.safety.orderSubmissionAllowed, false);
+
+  const diagnostics = service.getDiagnostics();
+  assert.equal(diagnostics.finalRefreshAttempts, 1);
+  assert.equal(diagnostics.finalRefreshes, 1);
+  assert.equal(diagnostics.finalRefreshBlocks, 0);
+}
+
+async function testAuthorizedFinalRefreshFailsClosed(): Promise<void> {
+  let evaluations = 0;
+  const service = new StrategyOneActionTimeBookRefreshService({
+    refreshCoinDCX: async (market) => ({
+      exchange: "coindcx",
+      market,
+      accepted: false,
+      requestedAt: NOW,
+      receivedAt: null,
+      roundTripMs: 190,
+      error: "bounded timeout",
+    }),
+    refreshBybit: async (market) => ({
+      exchange: "bybit",
+      market,
+      accepted: true,
+      requestedAt: NOW,
+      receivedAt: NOW + 12,
+      roundTripMs: 12,
+      error: null,
+    }),
+    evaluateExactRoute: () => {
+      evaluations += 1;
+      throw new Error("A partial final refresh must never be evaluated.");
+    },
+    now: () => NOW + 190,
+  });
+
+  const result = await service.refreshForAuthorizedAttempt({
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "coindcx",
+  });
+
+  assert.equal(result.state, "BLOCKED");
+  assert.match(result.blocker ?? "", /coindcx.*bounded timeout/iu);
+  assert.equal(evaluations, 0);
+  assert.equal(service.getDiagnostics().finalRefreshBlocks, 1);
 }
 
 async function testHungLegFailsClosedAndReleasesInFlight(): Promise<void> {

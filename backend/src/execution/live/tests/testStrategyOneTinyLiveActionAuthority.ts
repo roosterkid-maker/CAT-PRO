@@ -341,6 +341,11 @@ async function testControlledTenAttemptBatch(
       assert.equal(service.getDiagnostics(now).records[0]?.state, "CLAIMED");
       return action.authorize(id, phrase, now);
     },
+    refreshAuthorizedFinalBooks: async (route: {
+      market: string;
+      buyExchange: string;
+      sellExchange: string;
+    }) => successfulAuthorizedFinalRefresh(route),
     execute: async (item: ArbitrageOpportunity, authorityId: string) => {
       executionCalls += 1;
       action.consume({authorityId, opportunity: item, now: ++clock});
@@ -531,6 +536,11 @@ async function testControlledTwoAttemptBatch(
       assert.equal(service.getDiagnostics(now).records[0]?.state, "CLAIMED");
       return action.authorize(id, phrase, now);
     },
+    refreshAuthorizedFinalBooks: async (route: {
+      market: string;
+      buyExchange: string;
+      sellExchange: string;
+    }) => successfulAuthorizedFinalRefresh(route),
     execute: async (item: ArbitrageOpportunity, authorityId: string) => {
       executionCalls += 1;
       action.consume({authorityId, opportunity: item, now: ++clock});
@@ -598,6 +608,7 @@ async function testPreArmedOneShot(
 ): Promise<void> {
   let clock = NOW + 100_000;
   let executionCalls = 0;
+  const executionStages: string[] = [];
   let service: StrategyOneTinyLivePreArmService;
   const calibration = {
     ...calibrationFixture(),
@@ -645,9 +656,24 @@ async function testPreArmedOneShot(
         "CLAIMED",
         "The durable arm must be consumed before order authority is minted.",
       );
+      executionStages.push("authorize");
       return action.authorize(id, phrase, now);
     },
+    refreshAuthorizedFinalBooks: async (route: {
+      market: string;
+      buyExchange: string;
+      sellExchange: string;
+    }) => {
+      executionStages.push("refresh");
+      assert.deepEqual(route, {
+        market: opportunity.pair.market,
+        buyExchange: opportunity.pair.buy.exchange,
+        sellExchange: opportunity.pair.sell.exchange,
+      });
+      return successfulAuthorizedFinalRefresh(route);
+    },
     execute: async (item: ArbitrageOpportunity, authorityId: string) => {
+      executionStages.push("execute");
       executionCalls += 1;
       action.consume({authorityId, opportunity: item, now: ++clock});
       const result = executionFixture();
@@ -715,6 +741,11 @@ async function testPreArmedOneShot(
   assert.equal(completed?.executionStatus, "COMPLETED");
   assert.equal(concurrent.filter((record) => record !== null).length, 1);
   assert.equal(executionCalls, 1);
+  assert.deepEqual(
+    executionStages,
+    ["authorize", "refresh", "execute"],
+    "A coordinator must only start after one-time authorization and the final bounded dual-book refresh.",
+  );
   assert.equal(service.getActiveArm(clock), null);
 
   assert.equal(await service.observeSnapshot(matching), null);
@@ -783,6 +814,34 @@ async function testPreArmedOneShot(
     }),
     /runtime gate is disabled/iu,
   );
+}
+
+function successfulAuthorizedFinalRefresh(route: {
+  readonly market: string;
+  readonly buyExchange: string;
+  readonly sellExchange: string;
+}) {
+  return {
+    schemaVersion: "188.2",
+    state: "REFRESHED",
+    route,
+    startedAt: NOW,
+    completedAt: NOW + 1,
+    durationMs: 1,
+    legs: [],
+    blocker: null,
+    safety: {
+      publicReadOnly: true,
+      authorizedAttemptOnly: true,
+      parallelReads: true,
+      thresholdChanged: false,
+      timestampFabricationAllowed: false,
+      orderSubmissionAllowed: false,
+      automaticRetryAllowed: false,
+      transferAllowed: false,
+      withdrawalAllowed: false,
+    },
+  } as never;
 }
 
 function opportunityFixture(): ArbitrageOpportunity {
