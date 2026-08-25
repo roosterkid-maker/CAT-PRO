@@ -107,9 +107,6 @@ export interface StrategyOneTinyLivePreArmDependencies {
     sellExchange: string;
     now?: number;
   }): StrategyOneTimingCalibrationRecord | null;
-  getCurrentApprovedCalibrations(
-    now: number,
-  ): readonly StrategyOneTimingCalibrationRecord[];
   getVenueContract(
     exchange: string,
     route: {
@@ -169,7 +166,6 @@ const REDUCED_DYNAMIC_POOL_ATTEMPTS = 9;
 const MAXIMUM_BATCH_ATTEMPTS = 10;
 const BETWEEN_ATTEMPTS_COOLDOWN_MS = 5_000;
 const BLOCKED_REEVALUATION_INTERVAL_MS = 250;
-const APPROVED_ROUTE_SEED_PROBE_INTERVAL_MS = 1_000;
 
 const DEFAULT_DEPENDENCIES: StrategyOneTinyLivePreArmDependencies = {
   runtimeGateEnabled: () =>
@@ -185,8 +181,6 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLivePreArmDependencies = {
     strategyOneTinyLiveActionAuthorityService.getDiagnostics(now),
   getCalibration: (input) =>
     strategyOneTimingCalibrationService.getApprovedRouteCalibration(input),
-  getCurrentApprovedCalibrations: (now) =>
-    strategyOneTimingCalibrationService.getCurrentApprovedCalibrations(now),
   getVenueContract: (exchange, route, now) =>
     strategyOneLiveVenueContractRegistry.getOrderTimeSafetyContract(
       exchange,
@@ -229,7 +223,6 @@ export class StrategyOneTinyLivePreArmService {
   private activeArmId: string | null = null;
   private triggerInProgress = false;
   private nextEvaluationAt = 0;
-  private nextApprovedRouteSeedProbeAt = 0;
   private lastEvaluation: {
     readonly evaluatedAt: number;
     readonly opportunityId: string;
@@ -487,41 +480,15 @@ export class StrategyOneTinyLivePreArmService {
       return null;
     }
 
-    const approvedCalibrations =
-      arm.routeScope === "DYNAMIC_POOL"
-        ? this.dependencies.getCurrentApprovedCalibrations(observedAt)
-        : [];
-    const approvedRouteKeys = new Set(
-      approvedCalibrations.map((calibration) => routeKey(calibration)),
-    );
     const opportunities = snapshot.opportunities
       .filter((item) =>
         routeMatches(arm, item) &&
         item.decision === "EXECUTE" &&
         !(arm.attempts ?? []).some((attempt) => attempt.opportunityId === item.id))
-      .sort((first, second) => {
-        const approvedPriority =
-          Number(approvedRouteKeys.has(routeKey(second))) -
-          Number(approvedRouteKeys.has(routeKey(first)));
+      .sort((first, second) =>
+        second.netProfitPercent - first.netProfitPercent);
 
-        return approvedPriority !== 0
-          ? approvedPriority
-          : second.netProfitPercent - first.netProfitPercent;
-      });
-    const approvedRouteSeeds =
-      arm.routeScope === "DYNAMIC_POOL" &&
-      observedAt >= this.nextApprovedRouteSeedProbeAt
-        ? approvedCalibrations
-            .filter((calibration) =>
-              armAllowsRoute(arm, calibration) &&
-              !opportunities.some((opportunity) =>
-                opportunity.pair.market === calibration.market &&
-                opportunity.pair.buy.exchange === calibration.buyExchange &&
-                opportunity.pair.sell.exchange === calibration.sellExchange))
-            .slice(0, 1)
-        : [];
-
-    if (opportunities.length === 0 && approvedRouteSeeds.length === 0) {
+    if (opportunities.length === 0) {
       return null;
     }
 
@@ -530,48 +497,6 @@ export class StrategyOneTinyLivePreArmService {
     try {
       for (const opportunity of opportunities) {
         const result = await this.trigger(arm, opportunity);
-
-        if (result || this.activeArmId === null) {
-          return result;
-        }
-      }
-
-      if (approvedRouteSeeds.length > 0) {
-        this.nextApprovedRouteSeedProbeAt =
-          this.dependencies.now() + APPROVED_ROUTE_SEED_PROBE_INTERVAL_MS;
-      }
-
-      for (const calibration of approvedRouteSeeds) {
-        const currentArm = this.getActiveArm(this.dependencies.now());
-
-        if (!currentArm || currentArm.id !== arm.id) {
-          return null;
-        }
-
-        this.refreshesRequested += 1;
-
-        let refresh: StrategyOneActionTimeBookRefreshResult;
-
-        try {
-          refresh = await this.dependencies.refreshActionCandidate({
-            market: calibration.market,
-            buyExchange: calibration.buyExchange,
-            sellExchange: calibration.sellExchange,
-          });
-        } catch {
-          continue;
-        }
-
-        if (
-          refresh.state !== "REFRESHED" ||
-          !refresh.opportunity ||
-          !routeMatches(currentArm, refresh.opportunity)
-        ) {
-          continue;
-        }
-
-        this.refreshesRecovered += 1;
-        const result = await this.trigger(currentArm, refresh.opportunity);
 
         if (result || this.activeArmId === null) {
           return result;
@@ -1201,28 +1126,6 @@ function armAllowsRoute(
   return arm.market === normalizeMarket(route.market) &&
     arm.buyExchange === route.buyExchange.trim().toLowerCase() &&
     arm.sellExchange === route.sellExchange.trim().toLowerCase();
-}
-
-function routeKey(
-  route: ArbitrageOpportunity | {
-    readonly market: string;
-    readonly buyExchange: string;
-    readonly sellExchange: string;
-  },
-): string {
-  const market = "pair" in route ? route.pair.market : route.market;
-  const buyExchange = "pair" in route
-    ? route.pair.buy.exchange
-    : route.buyExchange;
-  const sellExchange = "pair" in route
-    ? route.pair.sell.exchange
-    : route.sellExchange;
-
-  return [
-    normalizeMarket(market),
-    buyExchange.trim().toLowerCase(),
-    sellExchange.trim().toLowerCase(),
-  ].join("|");
 }
 
 function shouldRefreshActionBooks(

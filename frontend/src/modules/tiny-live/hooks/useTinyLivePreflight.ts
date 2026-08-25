@@ -13,12 +13,9 @@ import {
   fetchStrategyOnePilotPreview,
   fetchStrategyOneTinyLivePreArm,
   fetchStrategyOneTinyLiveOpportunityAudit,
-  fetchStrategyOneTimingCalibrations,
   armStrategyOneTinyLive,
-  approveStrategyOneTimingCalibration,
   activateStrategyOneTinyLiveAccountLease,
   disarmStrategyOneTinyLive,
-  proposeStrategyOneTimingCalibration,
   restoreStrategyOnePaperAccountMode,
   runStrategyOnePilotPreflight,
   sealTinyLiveEvidencePackage,
@@ -178,50 +175,6 @@ export function useStrategyOneTinyLiveOpportunityAudit(
     staleTime: 2_000,
     retry: 2,
     enabled,
-  });
-}
-
-export function useStrategyOneTimingCalibrations(
-  enabled = true,
-) {
-  return useQuery({
-    queryKey: ["tiny-live", "strategy-one-timing-calibration"],
-    queryFn: fetchStrategyOneTimingCalibrations,
-    refetchInterval: 5_000,
-    staleTime: 2_000,
-    retry: 2,
-    enabled,
-  });
-}
-
-export function useProposeStrategyOneTimingCalibration() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: proposeStrategyOneTimingCalibration,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["tiny-live", "strategy-one-timing-calibration"],
-      });
-    },
-  });
-}
-
-export function useApproveStrategyOneTimingCalibration() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: approveStrategyOneTimingCalibration,
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: ["tiny-live", "strategy-one-timing-calibration"],
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ["tiny-live", "strategy-one-pre-arm"],
-        }),
-      ]);
-    },
   });
 }
 

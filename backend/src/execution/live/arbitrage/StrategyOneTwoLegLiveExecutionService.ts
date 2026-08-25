@@ -535,7 +535,7 @@ export class StrategyOneTwoLegLiveExecutionService {
       buy.quantity !== sell.quantity
     ) {
       throw new Error(
-        "Strategy #1 two-leg LIVE pair requires either the audited Binance/Bybit SPOT limit-FOK lane or an approved dynamic-pool route with CoinDCX GTC bounded-cancel and Binance/Bybit FOK, with equal positive quantity and durable client IDs.",
+        "Strategy #1 two-leg LIVE pair requires either the audited Binance/Bybit SPOT limit-FOK lane or an evidence-qualified dynamic-pool route with CoinDCX GTC bounded-cancel and Binance/Bybit FOK, with equal positive quantity and durable client IDs.",
       );
     }
   }

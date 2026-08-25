@@ -347,61 +347,28 @@ router.get(
 router.post(
   "/strategy-one-timing-calibration/propose",
   (
-    request,
+    _request,
     response,
   ) => {
     response.setHeader("Cache-Control", "no-store");
-
-    try {
-      const proposal = strategyOneTimingCalibrationService.propose(
-        typeof request.body?.routeKey === "string"
-          ? request.body.routeKey
-          : "",
-        Date.now(),
-        request.body?.bootstrapAttempts === 2
-          ? 2
-          : 1,
-      );
-
-      response.json({success: true, data: proposal});
-    } catch (error: unknown) {
-      response.status(409).json({
-        success: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Strategy #1 timing proposal failed closed.",
-      });
-    }
+    response.status(410).json({
+      success: false,
+      message: "Per-route timing proposals are retired. The armed dynamic pool now qualifies exact-route timing evidence automatically at action time.",
+    });
   },
 );
 
 router.put(
   "/strategy-one-timing-calibration/:id/approve",
   (
-    request,
+    _request,
     response,
   ) => {
     response.setHeader("Cache-Control", "no-store");
-
-    try {
-      const approved = strategyOneTimingCalibrationService.approve(
-        request.params.id,
-        typeof request.body?.confirmation === "string"
-          ? request.body.confirmation
-          : "",
-      );
-
-      response.json({success: true, data: approved});
-    } catch (error: unknown) {
-      response.status(409).json({
-        success: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Strategy #1 timing approval failed closed.",
-      });
-    }
+    response.status(410).json({
+      success: false,
+      message: "Per-route timing approvals are retired. Dynamic-pool arm and account lease are the only operator confirmations.",
+    });
   },
 );
 

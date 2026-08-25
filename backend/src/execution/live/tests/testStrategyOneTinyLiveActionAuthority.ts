@@ -6,7 +6,10 @@ import {join} from "node:path";
 import type {ArbitrageOpportunity} from "../../../arbitrage/models/ArbitrageOpportunity";
 import type {OpportunitySnapshot} from "../../../arbitrage/services/OpportunityService";
 import type {ArbitrageLiveExecutionResult} from "../../../arbitrage/execution/models/ArbitrageLiveExecutionResult";
-import type {StrategyOneTimingCalibrationRecord} from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
+import type {
+  StrategyOneDynamicPoolTimingQualification,
+  StrategyOneTimingCalibrationRecord,
+} from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
 import type {StrategyOnePilotPreflightRunReport} from "../tiny-live/StrategyOnePilotPreflightService";
 import {
   StrategyOneTinyLiveActionAuthorityService,
@@ -157,6 +160,7 @@ async function main(): Promise<void> {
 
     testRouteSpecificActionTimeContract(directory);
     testBasketBootstrapQuotaIsRouteScoped(directory);
+    testDynamicPoolQualificationNeedsNoPerCoinApproval(directory);
     await testPreArmedOneShot(directory, opportunity);
     await testControlledTwoAttemptBatch(directory, opportunity);
     await testControlledTenAttemptBatch(directory, opportunity);
@@ -165,7 +169,80 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V111/V125 Tiny-LIVE authority passed: funded three-second authority plus durable exact-route pre-arm, claim-before-authority, expiry/disarm, one execution and no automatic retry; no exchange order occurred.",
+    "V111/V189 Tiny-LIVE authority passed: dynamic exact-route evidence needs no per-coin approval, while funded three-second authority, durable claim, expiry/disarm and no automatic retry remain enforced; no exchange order occurred.",
+  );
+}
+
+function testDynamicPoolQualificationNeedsNoPerCoinApproval(
+  directory: string,
+): void {
+  let clock = NOW + 900_000;
+  const route = {
+    market: "COTIUSDT",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+  };
+  const opportunities = [1, 2, 3].map((index) =>
+    routeOpportunityFixture(`dynamic-coti-${index}`, route));
+  const byId = new Map(opportunities.map((item) => [item.id, item]));
+  const qualification: StrategyOneDynamicPoolTimingQualification = {
+    schemaVersion: "189.0",
+    timingPolicyRevision: "STRATEGY_ONE_TRIGGER_SYNC_5MS_V2",
+    id: "dynamic-timing-coti",
+    routePoolId: "strategy-one-dynamic-usdt-route-pool-v1",
+    routeKey: "COTIUSDT:coindcx->binance",
+    ...route,
+    source: "DYNAMIC_POOL_EXACT_ROUTE_EVIDENCE",
+    scope: "DYNAMIC_POOL",
+    maximumBookAgeMs: 245,
+    evidenceGeneratedAt: clock,
+    perRouteOperatorApprovalRequired: false,
+    liveOrderSubmissionAuthorized: false,
+  };
+  const service = new StrategyOneTinyLiveActionAuthorityService({
+    getOpportunity: (id) => byId.get(id) ?? null,
+    runPreflight: (input: {now?: number; expectedOpportunityId: string}) =>
+      routePreflightFixture(
+        input.now ?? clock,
+        input.expectedOpportunityId,
+        route,
+      ),
+    getCalibration: () => qualification,
+    getVenueContract: (exchange: string) => ({
+      exchange,
+      maximumOrderBookAgeMs: 245,
+      requiredTimeInForce: exchange === "coindcx" ? "GTC" as const : "FOK" as const,
+      supportedTimeInForce: exchange === "coindcx"
+        ? ["GTC" as const]
+        : ["FOK" as const],
+      authoritativeFillConfirmationReady: true,
+    }),
+    isPairResolved: () => true,
+    pairSessionExists: () => false,
+    runtimeGateEnabled: () => true,
+    getTinyLiveCapitalPerLegInr: () => 500,
+  }, join(directory, "dynamic-no-per-coin-approval.jsonl"));
+
+  for (const opportunity of opportunities) {
+    const preview = service.preview(opportunity.id, ++clock);
+    assert.equal(preview.approvedForAuthorization, true);
+    assert.equal(preview.authority?.schemaVersion, "189.0");
+    assert.equal(preview.authority?.calibrationScope, "DYNAMIC_POOL");
+    const authority = preview.authority;
+    assert.ok(authority);
+    const authorized = service.authorize(
+      authority.id,
+      authority.requiredAuthorizationPhrase,
+      ++clock,
+    );
+    service.consume({authorityId: authorized.id, opportunity, now: ++clock});
+    service.finalize(authorized.id, executionFixture(opportunity), ++clock);
+  }
+
+  assert.equal(
+    service.getDiagnostics(++clock).attemptsToday,
+    3,
+    "Pool-scoped timing qualification must not reintroduce per-route bootstrap approval quotas.",
   );
 }
 

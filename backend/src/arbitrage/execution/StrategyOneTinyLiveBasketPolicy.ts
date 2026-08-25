@@ -45,6 +45,8 @@ export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY = deepFreeze({
   durationMinutes: 180,
   stopOnFirstNonCleanResult: true,
   routeSelection: "HIGHEST_CURRENT_NET_THAT_PASSES_FRESH_EXACT_PREFLIGHT" as const,
+  timingQualification: "AUTOMATIC_EXACT_ROUTE_EVIDENCE" as const,
+  perRouteOperatorApprovalRequired: false,
   eligibility: [
     "CURRENT_EXECUTE",
     "EXACT_ROUTE_CREDIBLE_HISTORY",

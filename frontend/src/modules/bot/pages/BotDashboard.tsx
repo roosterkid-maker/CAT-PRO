@@ -47,16 +47,13 @@ import type {
 
 import {
   useActivateStrategyOneTinyLiveAccountLease,
-  useApproveStrategyOneTimingCalibration,
   useArmStrategyOneTinyLive,
   useDisarmStrategyOneTinyLive,
-  useProposeStrategyOneTimingCalibration,
   useRestoreStrategyOnePaperAccountMode,
   useRunStrategyOnePilotPreflight,
   useStrategyOnePilotPreview,
   useStrategyOneTinyLiveOpportunityAudit,
   useStrategyOneTinyLivePreArm,
-  useStrategyOneTimingCalibrations,
 } from "@/modules/tiny-live/hooks/useTinyLivePreflight";
 
 import type {
@@ -65,8 +62,6 @@ import type {
   StrategyOnePilotPreviewReport,
   StrategyOneTinyLiveOpportunityAuditReport,
   StrategyOneTinyLivePreArmDiagnostics,
-  StrategyOneTimingCalibrationDiagnostics,
-  StrategyOneTimingCalibrationRecord,
 } from "@/modules/tiny-live/types/TinyLivePreflight";
 
 interface StrategyOnePreArmRoute {
@@ -76,12 +71,10 @@ interface StrategyOnePreArmRoute {
 }
 
 const CONTROLLED_BATCH_ATTEMPTS = 10;
-const TIMING_BOOTSTRAP_ATTEMPTS = 2;
 
 export default function BotDashboard() {
   const [pilotAcknowledged, setPilotAcknowledged] = useState(false);
   const [preArmAcknowledged, setPreArmAcknowledged] = useState(false);
-  const [timingApprovalConfirmation, setTimingApprovalConfirmation] = useState("");
   const [leaseConfirmation, setLeaseConfirmation] = useState("");
   const [modeTransition, setModeTransition] = useState<SimpleOperatingMode | null>(null);
   const [modeTransitionError, setModeTransitionError] = useState<string | null>(null);
@@ -96,10 +89,7 @@ export default function BotDashboard() {
   // This lightweight authority snapshot is the single source of truth for the
   // global PAPER / Tiny-LIVE selector, so it must remain available in every view.
   const preArmQuery = useStrategyOneTinyLivePreArm(true);
-  const timingCalibrationQuery = useStrategyOneTimingCalibrations(deepAuditEnabled);
   const opportunityAuditQuery = useStrategyOneTinyLiveOpportunityAudit(deepAuditEnabled);
-  const proposeTimingCalibration = useProposeStrategyOneTimingCalibration();
-  const approveTimingCalibration = useApproveStrategyOneTimingCalibration();
   const armPreArm = useArmStrategyOneTinyLive();
   const disarmPreArm = useDisarmStrategyOneTinyLive();
   const activateAccountLease = useActivateStrategyOneTinyLiveAccountLease();
@@ -144,7 +134,6 @@ export default function BotDashboard() {
     ? pilotPreview.selected
     : null;
   const suggestedPreArmRoute = toPreArmRoute(currentPilotRoute);
-  const timingCalibrationDiagnostics = timingCalibrationQuery.data?.data ?? null;
   const preArmCapitalPerLegInr = preArmDiagnostics?.routePool?.capitalPerLegInr ??
     pilotPreview?.requestedCapitalPerLegInr ??
     report.capitalPlacement.pilot.requestedPerLegInr;
@@ -272,39 +261,6 @@ export default function BotDashboard() {
       maximumAttempts: routePool.maximumAttempts,
       routePoolId: routePool.id,
       confirmation: routePoolArmPhrase(routePool.capitalPerLegInr),
-    });
-  }
-
-  function proposeTimingReview(): void {
-    if (
-      !suggestedPreArmRoute ||
-      report?.control.enabled !== false ||
-      proposeTimingCalibration.isPending
-    ) {
-      return;
-    }
-
-    proposeTimingCalibration.mutate({
-      routeKey: timingRouteKey(suggestedPreArmRoute),
-      bootstrapAttempts: TIMING_BOOTSTRAP_ATTEMPTS,
-    }, {
-      onSuccess: () => setTimingApprovalConfirmation(""),
-    });
-  }
-
-  function approveTimingReview(id: string, requiredPhrase: string): void {
-    if (
-      timingApprovalConfirmation !== requiredPhrase ||
-      approveTimingCalibration.isPending
-    ) {
-      return;
-    }
-
-    approveTimingCalibration.mutate({
-      id,
-      confirmation: timingApprovalConfirmation,
-    }, {
-      onSuccess: () => setTimingApprovalConfirmation(""),
     });
   }
 
@@ -446,7 +402,6 @@ export default function BotDashboard() {
 
       <StrategyOnePreArmedOneShotPanel
         diagnostics={preArmDiagnostics}
-        timingDiagnostics={timingCalibrationDiagnostics}
         candidate={currentPilotRoute}
         suggestedRoute={suggestedPreArmRoute}
         capitalPerLegInr={preArmCapitalPerLegInr}
@@ -459,16 +414,9 @@ export default function BotDashboard() {
         leaseConfirmation={leaseConfirmation}
         activatingLease={activateAccountLease.isPending}
         restoringPaper={restorePaperAccountMode.isPending}
-        timingApprovalConfirmation={timingApprovalConfirmation}
-        proposingTiming={proposeTimingCalibration.isPending}
-        approvingTiming={approveTimingCalibration.isPending}
-        timingError={timingCalibrationQuery.error ?? proposeTimingCalibration.error ?? approveTimingCalibration.error}
         error={preArmQuery.error ?? armPreArm.error ?? disarmPreArm.error ?? activateAccountLease.error ?? restorePaperAccountMode.error ?? control.error}
         onAcknowledgedChange={setPreArmAcknowledged}
         onLeaseConfirmationChange={setLeaseConfirmation}
-        onTimingApprovalConfirmationChange={setTimingApprovalConfirmation}
-        onProposeTiming={proposeTimingReview}
-        onApproveTiming={approveTimingReview}
         onArm={armOneShot}
         onDisarm={disarmOneShot}
         onActivateLease={activateTinyLiveLease}
@@ -1908,7 +1856,6 @@ function HistoricalCapitalPlacementPanel({placement}: {
 
 function StrategyOnePreArmedOneShotPanel({
   diagnostics,
-  timingDiagnostics,
   candidate,
   suggestedRoute,
   capitalPerLegInr,
@@ -1921,16 +1868,9 @@ function StrategyOnePreArmedOneShotPanel({
   leaseConfirmation,
   activatingLease,
   restoringPaper,
-  timingApprovalConfirmation,
-  proposingTiming,
-  approvingTiming,
-  timingError,
   error,
   onAcknowledgedChange,
   onLeaseConfirmationChange,
-  onTimingApprovalConfirmationChange,
-  onProposeTiming,
-  onApproveTiming,
   onArm,
   onDisarm,
   onActivateLease,
@@ -1938,7 +1878,6 @@ function StrategyOnePreArmedOneShotPanel({
   onPaperControlChange,
 }: {
   diagnostics: StrategyOneTinyLivePreArmDiagnostics | null;
-  timingDiagnostics: StrategyOneTimingCalibrationDiagnostics | null;
   candidate: StrategyOnePilotCandidate | null;
   suggestedRoute: StrategyOnePreArmRoute | null;
   capitalPerLegInr: number;
@@ -1951,16 +1890,9 @@ function StrategyOnePreArmedOneShotPanel({
   leaseConfirmation: string;
   activatingLease: boolean;
   restoringPaper: boolean;
-  timingApprovalConfirmation: string;
-  proposingTiming: boolean;
-  approvingTiming: boolean;
-  timingError: Error | null;
   error: Error | null;
   onAcknowledgedChange: (checked: boolean) => void;
   onLeaseConfirmationChange: (value: string) => void;
-  onTimingApprovalConfirmationChange: (value: string) => void;
-  onProposeTiming: () => void;
-  onApproveTiming: (id: string, requiredPhrase: string) => void;
   onArm: () => void;
   onDisarm: () => void;
   onActivateLease: () => void;
@@ -1971,22 +1903,6 @@ function StrategyOnePreArmedOneShotPanel({
   const accountLease = diagnostics?.accountModeLease ?? null;
   const activeAccountLease = accountLease?.activeLease ?? null;
   const route = active?.routeScope === "DYNAMIC_POOL" ? suggestedRoute : active ?? suggestedRoute;
-  const currentTimingApproval = findCurrentControlledBatchTimingApproval(
-    timingDiagnostics,
-    route,
-  );
-  const pendingTimingProposal = findPendingControlledBatchTimingProposal(
-    timingDiagnostics,
-    route,
-  );
-  const basketTimingHeadrooms = timingDiagnostics?.pilotBasketHeadroom ?? [];
-  const timingHeadroom = route
-    ? basketTimingHeadrooms.find((review) =>
-      normalizedMarket(review.market) === normalizedMarket(route.market) &&
-      review.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
-      review.sellExchange.toLowerCase() === route.sellExchange.toLowerCase()
-    ) ?? timingDiagnostics?.controlledBatchHeadroom ?? null
-    : timingDiagnostics?.controlledBatchHeadroom ?? null;
   const recent = diagnostics?.records[0] ?? null;
   const attempts = recent?.attempts ?? [];
   const candidateMatchesRoute = candidate !== null && (
@@ -2198,131 +2114,21 @@ function StrategyOnePreArmedOneShotPanel({
       <div className="border-t border-border-default bg-panel px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
-            <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">ACTION-TIME TIMING REVIEW</p>
-            <p className="mt-1 text-sm font-semibold text-text-primary">
-              {currentTimingApproval
-                ? "Fresh continuous timing approval is ready"
-                : pendingTimingProposal
-                  ? "Review and approve the fresh timing proposal"
-                  : "Generate a fresh selected-route timing review"}
-            </p>
+            <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">AUTOMATIC EXACT-ROUTE TIMING</p>
+            <p className="mt-1 text-sm font-semibold text-text-primary">No per-coin approval is required</p>
             <p className="mt-2 text-xs leading-5 text-text-muted">
-              Every dynamic-pool route keeps its own genuine timing evidence. Approval for one route never approves another route and cannot submit an order by itself.
+              The dynamic pool recomputes timing qualification from the selected route's genuine evidence during preview and again during final authorization. A route with immature timing remains blocked, but it never asks for a separate operator phrase.
             </p>
           </div>
-          <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${currentTimingApproval ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : pendingTimingProposal ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-red-400/25 bg-red-400/8 text-red-300"}`}>
-            {currentTimingApproval ? "APPROVED / CURRENT" : pendingTimingProposal ? "AWAITING APPROVAL" : "APPROVAL REQUIRED"}
+          <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 font-mono text-[9px] font-bold text-emerald-300">
+            POOL-SCOPED
           </span>
         </div>
-
-        {currentTimingApproval ? (
-          <div className="mt-4 grid gap-2 sm:grid-cols-4">
-            <MiniEvidence label="Route" value={`${currentTimingApproval.market} ${currentTimingApproval.buyExchange.toUpperCase()}→${currentTimingApproval.sellExchange.toUpperCase()}`} />
-            <MiniEvidence label="Maximum book age" value={`${currentTimingApproval.maximumBookAgeMs} ms`} />
-            <MiniEvidence label="Public samples" value={formatInteger(currentTimingApproval.publicSamples)} />
-            <MiniEvidence label="Approval expires" value={currentTimingApproval.expiresAt === null ? "NO EXPIRY" : formatTime(currentTimingApproval.expiresAt)} />
-          </div>
-        ) : pendingTimingProposal ? (
-          <div className="mt-4 rounded-xl border border-amber-400/20 bg-amber-400/[0.035] p-4">
-            <div className="grid gap-2 sm:grid-cols-3">
-              <MiniEvidence label="Maximum book age" value={`${pendingTimingProposal.maximumBookAgeMs} ms`} />
-              <MiniEvidence label="Public samples" value={formatInteger(pendingTimingProposal.publicSamples)} />
-              <MiniEvidence label="Evidence age" value={timeAgo(pendingTimingProposal.evidenceGeneratedAt)} />
-            </div>
-            <p className="mt-3 break-all font-mono text-[9px] leading-4 text-text-muted">TYPE EXACTLY: {pendingTimingProposal.requiredApprovalPhrase}</p>
-            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-              <input
-                type="text"
-                value={timingApprovalConfirmation}
-                onChange={(event) => onTimingApprovalConfirmationChange(event.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-                aria-label="Exact Strategy One timing approval confirmation"
-                className="min-w-0 flex-1 rounded-lg border border-border-default bg-panel-light px-3 py-2 font-mono text-[10px] text-text-primary outline-none transition focus:border-cyan-300/40"
-              />
-              <button
-                type="button"
-                onClick={() => onApproveTiming(pendingTimingProposal.id, pendingTimingProposal.requiredApprovalPhrase)}
-                disabled={approvingTiming || timingApprovalConfirmation !== pendingTimingProposal.requiredApprovalPhrase}
-                className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-xs font-bold text-amber-300 transition hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
-              >
-                {approvingTiming ? "Approving…" : "Approve timing for 3 hours"}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-4 rounded-xl border border-border-default bg-panel-light/40 p-4">
-            {basketTimingHeadrooms.length > 0 ? (
-              <div className="mb-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">ALL 11 PILOT ROUTES · INDEPENDENT TIMING</p>
-                  <p className="font-mono text-[9px] text-text-muted">{basketTimingHeadrooms.filter((review) => review.state === "READY").length}/11 timing-ready now</p>
-                </div>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {basketTimingHeadrooms.map((review) => {
-                    const selected = route !== null &&
-                      normalizedMarket(review.market) === normalizedMarket(route.market) &&
-                      review.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
-                      review.sellExchange.toLowerCase() === route.sellExchange.toLowerCase();
-                    return (
-                      <div
-                        key={review.routeKey}
-                        className={`rounded-lg border px-3 py-2 ${selected ? "border-cyan-300/35 bg-cyan-300/[0.07]" : "border-white/7 bg-black/20"}`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-[9px] font-bold text-text-primary">{review.market} · {review.buyExchange.toUpperCase()}→{review.sellExchange.toUpperCase()}</span>
-                          <span className={`font-mono text-[8px] font-bold ${review.state === "READY" ? "text-emerald-300" : "text-amber-300"}`}>{review.state === "READY" ? "TIMING READY" : "TIMING BLOCKED"}</span>
-                        </div>
-                        <p className="mt-1 font-mono text-[8px] text-text-muted">
-                          Trigger P99 {review.decisionToTinyLiveTriggerP99Ms === null ? "NO DATA" : `${review.decisionToTinyLiveTriggerP99Ms} ms`} · headroom {review.residualOperationalHeadroomMs === null ? "NO DATA" : `${review.residualOperationalHeadroomMs} ms`}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
-
-            {timingHeadroom ? (
-              <div className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <MiniEvidence label="Decision → LIVE trigger P99" value={timingHeadroom.decisionToTinyLiveTriggerP99Ms === null ? "NO DATA" : `${timingHeadroom.decisionToTinyLiveTriggerP99Ms} ms`} />
-                <MiniEvidence label="Worst fresh-book P99" value={timingHeadroom.executionGradeWorstAgeP99Ms === null ? "NO DATA" : `${timingHeadroom.executionGradeWorstAgeP99Ms} ms`} />
-                <MiniEvidence label="Operational headroom" value={timingHeadroom.residualOperationalHeadroomMs === null ? "NO DATA" : `${timingHeadroom.residualOperationalHeadroomMs} ms`} />
-                <MiniEvidence label="Required headroom" value={`${timingHeadroom.requiredOperationalHeadroomMs} ms`} />
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="max-w-4xl text-xs leading-5 text-text-muted">
-                {paperBotEnabled
-                  ? "Turn PAPER OFF first. Then generate the current route timing proposal."
-                  : !route
-                    ? "Waiting for an audited Strategy #1 route with current evidence."
-                    : timingHeadroom?.state === "BLOCKED"
-                      ? timingHeadroom.blockers.join(" | ")
-                      : "Current genuine timing evidence has enough fail-closed headroom for operator review."}
-              </p>
-              <button
-                type="button"
-                onClick={onProposeTiming}
-                disabled={paperBotEnabled || !route || proposingTiming || timingHeadroom?.state !== "READY"}
-                className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-xs font-bold text-cyan-200 transition hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
-              >
-                {proposingTiming
-                  ? "Reviewing evidence…"
-                  : timingHeadroom?.state === "BLOCKED"
-                    ? "Waiting for timing headroom"
-                    : "Generate fresh timing review"}
-              </button>
-            </div>
-
-            {timingError ? (
-              <p className="mt-3 rounded-lg border border-red-400/25 bg-red-400/8 px-3 py-2 text-xs leading-5 text-red-300">
-                Timing review failed closed: {apiErrorMessage(timingError)}
-              </p>
-            ) : null}
-          </div>
-        )}
+        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <MiniEvidence label="Operator approval" value="DYNAMIC ARM ONCE" />
+          <MiniEvidence label="Route qualification" value="AUTOMATIC / EXACT" />
+          <MiniEvidence label="Safety ceiling" value="≤ 250 ms" />
+        </div>
       </div>
 
       <div className="border-t border-cyan-300/15 bg-cyan-300/[0.025] px-5 py-3 text-xs leading-5 text-text-muted">
@@ -3498,50 +3304,6 @@ function toPreArmRoute(route: {
 
 function routePoolArmPhrase(capitalPerLegInr: number): string {
   return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} ATTEMPTS10 MINUTES180`;
-}
-
-function timingRouteKey(route: StrategyOnePreArmRoute): string {
-  return `${normalizedMarket(route.market)}:${route.buyExchange.toLowerCase()}->${route.sellExchange.toLowerCase()}`;
-}
-
-function findCurrentControlledBatchTimingApproval(
-  diagnostics: StrategyOneTimingCalibrationDiagnostics | null,
-  route: StrategyOnePreArmRoute | null,
-): StrategyOneTimingCalibrationRecord | null {
-  if (!diagnostics || !route) return null;
-
-  return diagnostics.records.find((record) =>
-    timingRecordMatchesRoute(record, route) &&
-    record.scope === "CONTINUOUS_TINY_LIVE" &&
-    record.status === "APPROVED" &&
-    record.expiresAt !== null &&
-    record.expiresAt >= diagnostics.generatedAt
-  ) ?? null;
-}
-
-function findPendingControlledBatchTimingProposal(
-  diagnostics: StrategyOneTimingCalibrationDiagnostics | null,
-  route: StrategyOnePreArmRoute | null,
-): StrategyOneTimingCalibrationRecord | null {
-  if (!diagnostics || !route) return null;
-  const maximumProposalAgeMs = 5 * 60 * 1_000;
-
-  return diagnostics.records.find((record) =>
-    timingRecordMatchesRoute(record, route) &&
-    (record.scope === "BOOTSTRAP_CONTROLLED_TWO_ATTEMPT_BATCH" ||
-      record.scope === "CONTINUOUS_TINY_LIVE") &&
-    record.status === "PROPOSED" &&
-    diagnostics.generatedAt - record.proposedAt <= maximumProposalAgeMs
-  ) ?? null;
-}
-
-function timingRecordMatchesRoute(
-  record: StrategyOneTimingCalibrationRecord,
-  route: StrategyOnePreArmRoute,
-): boolean {
-  return normalizedMarket(record.market) === normalizedMarket(route.market) &&
-    record.buyExchange.toLowerCase() === route.buyExchange.toLowerCase() &&
-    record.sellExchange.toLowerCase() === route.sellExchange.toLowerCase();
 }
 
 function apiErrorMessage(error: Error): string {

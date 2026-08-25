@@ -575,6 +575,8 @@ export interface StrategyOneTinyLiveRoutePoolPolicy {
   durationMinutes: 180;
   stopOnFirstNonCleanResult: true;
   routeSelection: string;
+  timingQualification: "AUTOMATIC_EXACT_ROUTE_EVIDENCE";
+  perRouteOperatorApprovalRequired: false;
   eligibility: string[];
   excludedVenues: string[];
   automaticTransfersAllowed: false;
@@ -601,7 +603,7 @@ export interface StrategyOneTinyLivePreArmRecord {
   failureReason: string | null;
   automaticRetryAllowed: false;
   automaticFundMovementAllowed: false;
-  maximumAttempts: 1 | 2 | 10;
+  maximumAttempts: 1 | 2 | 9 | 10;
   attemptsUsed?: number;
   attempts?: StrategyOneTinyLivePreArmAttempt[];
   nextAttemptNotBefore?: number | null;
@@ -626,7 +628,7 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   buyExchange: "binance" | "bybit" | "coindcx";
   sellExchange: "binance" | "bybit" | "coindcx";
   capitalPerLegInr: number;
-  maximumAttempts: 1 | 2 | 10;
+  maximumAttempts: 1 | 2 | 9 | 10;
   priorAccountMode: "PAPER";
   leasedAccountMode: "LIVE";
   timingCalibrationId: string;

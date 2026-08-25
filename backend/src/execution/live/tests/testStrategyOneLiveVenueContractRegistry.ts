@@ -162,7 +162,7 @@ function main(): void {
   );
 
   console.log(
-    "Strategy #1 five-venue SPOT contracts are fail closed: Binance/Bybit use FOK, approved dynamic-pool routes use CoinDCX bounded GTC in either leg direction, and CoinSwitch/UnoCoin remain excluded; no order authority exists.",
+    "Strategy #1 five-venue SPOT contracts are fail closed: Binance/Bybit use FOK, evidence-qualified dynamic-pool routes use CoinDCX bounded GTC in either leg direction, and CoinSwitch/UnoCoin remain excluded; no order authority exists.",
   );
 }
 

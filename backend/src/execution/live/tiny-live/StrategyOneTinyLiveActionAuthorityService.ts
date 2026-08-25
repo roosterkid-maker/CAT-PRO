@@ -5,7 +5,7 @@ import type {ArbitrageOpportunity} from "../../../arbitrage/models/ArbitrageOppo
 import {opportunityService} from "../../../arbitrage/services/OpportunityService";
 import {
   strategyOneTimingCalibrationService,
-  type StrategyOneTimingCalibrationRecord,
+  type StrategyOneExecutionTimingQualification,
 } from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
 import {JsonlSnapshotStore} from "../../../core/persistence/JsonlSnapshotStore";
 import {
@@ -37,7 +37,7 @@ export type StrategyOneTinyLiveAuthorityState =
   | "RESOLVED";
 
 export interface StrategyOneTinyLiveAuthorityRecord {
-  readonly schemaVersion: "111.0";
+  readonly schemaVersion: "111.0" | "189.0";
   readonly id: string;
   readonly state: StrategyOneTinyLiveAuthorityState;
   readonly opportunityId: string;
@@ -48,7 +48,7 @@ export interface StrategyOneTinyLiveAuthorityRecord {
   readonly exactQuantity: number;
   readonly preflightHash: string;
   readonly calibrationId: string;
-  readonly calibrationScope: StrategyOneTimingCalibrationRecord["scope"];
+  readonly calibrationScope: StrategyOneExecutionTimingQualification["scope"];
   readonly requiredAuthorizationPhrase: string;
   readonly previewedAt: number;
   readonly authorizedAt: number | null;
@@ -92,7 +92,7 @@ export interface StrategyOneTinyLiveActionAuthorityDependencies {
     buyExchange: string;
     sellExchange: string;
     now?: number;
-  }): StrategyOneTimingCalibrationRecord | null;
+  }): StrategyOneExecutionTimingQualification | null;
   getVenueContract(
     exchange: string,
     route: {
@@ -119,7 +119,7 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLiveActionAuthorityDependencies = {
   getOpportunity: (id) => opportunityService.getOpportunityById(id),
   runPreflight: (input) => strategyOnePilotPreflightService.run(input),
   getCalibration: (input) =>
-    strategyOneTimingCalibrationService.getApprovedRouteCalibration(input),
+    strategyOneTimingCalibrationService.getDynamicPoolRouteQualification(input),
   getVenueContract: (exchange, route, now) =>
     strategyOneLiveVenueContractRegistry.getOrderTimeSafetyContract(
       exchange,
@@ -300,7 +300,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
       : 0;
 
     if (!calibration) {
-      blockers.push("A current, explicitly approved route timing calibration is required.");
+      blockers.push("Current exact-route timing evidence is not qualified for the dynamic pool.");
     } else if (
       calibration.scope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" &&
       routeAttempts > 0
@@ -350,7 +350,9 @@ export class StrategyOneTinyLiveActionAuthorityService {
       previewedAt: now,
     }).slice(0, 32)}`;
     const record = freeze({
-      schemaVersion: "111.0" as const,
+      schemaVersion: calibration.scope === "DYNAMIC_POOL"
+        ? "189.0" as const
+        : "111.0" as const,
       id,
       state: "PREVIEWED" as const,
       opportunityId,
@@ -636,7 +638,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
     const routeAttempts = this.routeAttempts(route, now);
 
     if (!calibration || exactQuantity === null || exactQuantity <= 0) {
-      throw new Error("Fresh calibration or exact funded quantity is unavailable.");
+      throw new Error("Fresh dynamic timing qualification or exact funded quantity is unavailable.");
     }
 
 
@@ -777,7 +779,7 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
     item.resolvedAt,
   ];
 
-  return item.schemaVersion === "111.0" &&
+  return (item.schemaVersion === "111.0" || item.schemaVersion === "189.0") &&
     typeof item.id === "string" && item.id.startsWith("tiny-live-") &&
     states.includes(item.state as StrategyOneTinyLiveAuthorityState) &&
     typeof item.opportunityId === "string" && item.opportunityId.length > 0 &&
@@ -794,7 +796,8 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
     typeof item.calibrationId === "string" && item.calibrationId.length > 0 &&
     (item.calibrationScope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" ||
       item.calibrationScope === "BOOTSTRAP_CONTROLLED_TWO_ATTEMPT_BATCH" ||
-      item.calibrationScope === "CONTINUOUS_TINY_LIVE") &&
+      item.calibrationScope === "CONTINUOUS_TINY_LIVE" ||
+      item.calibrationScope === "DYNAMIC_POOL") &&
     item.requiredAuthorizationPhrase === `AUTHORIZE ${item.id}` &&
     isPositiveTime(item.previewedAt) &&
     nullableTimes.every((timestamp) => timestamp === null || isPositiveTime(timestamp)) &&

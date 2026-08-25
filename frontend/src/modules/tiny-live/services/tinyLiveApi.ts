@@ -15,8 +15,6 @@ import type {
   StrategyOneTinyLivePreArmRecordResponse,
   StrategyOneTinyLiveAccountModeLeaseRecordResponse,
   StrategyOneTinyLiveOpportunityAuditResponse,
-  StrategyOneTimingCalibrationDiagnosticsResponse,
-  StrategyOneTimingCalibrationRecordResponse,
 } from "../types/TinyLivePreflight";
 
 export async function fetchTinyLiveCapability(): Promise<TinyLiveCapabilityResponse> {
@@ -136,45 +134,13 @@ export async function fetchStrategyOneTinyLiveOpportunityAudit(): Promise<Strate
   return response.data;
 }
 
-export async function fetchStrategyOneTimingCalibrations(): Promise<StrategyOneTimingCalibrationDiagnosticsResponse> {
-  const response = await api.get<StrategyOneTimingCalibrationDiagnosticsResponse>(
-    "/api/operator-settings/strategy-one-timing-calibration",
-  );
-
-  return response.data;
-}
-
-export async function proposeStrategyOneTimingCalibration(input: {
-  routeKey: string;
-  bootstrapAttempts: 2;
-}): Promise<StrategyOneTimingCalibrationRecordResponse> {
-  const response = await api.post<StrategyOneTimingCalibrationRecordResponse>(
-    "/api/operator-settings/strategy-one-timing-calibration/propose",
-    input,
-  );
-
-  return response.data;
-}
-
-export async function approveStrategyOneTimingCalibration(input: {
-  id: string;
-  confirmation: string;
-}): Promise<StrategyOneTimingCalibrationRecordResponse> {
-  const response = await api.put<StrategyOneTimingCalibrationRecordResponse>(
-    `/api/operator-settings/strategy-one-timing-calibration/${encodeURIComponent(input.id)}/approve`,
-    {confirmation: input.confirmation},
-  );
-
-  return response.data;
-}
-
 export async function armStrategyOneTinyLive(input: {
   market: string;
   buyExchange: string;
   sellExchange: string;
   confirmation: string;
   durationMinutes: number;
-  maximumAttempts: 1 | 2 | 10;
+  maximumAttempts: 1 | 2 | 9 | 10;
   routePoolId?: "strategy-one-dynamic-usdt-route-pool-v1";
 }): Promise<StrategyOneTinyLivePreArmRecordResponse> {
   const response = await api.post<StrategyOneTinyLivePreArmRecordResponse>(

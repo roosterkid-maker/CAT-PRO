@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   await testAuthorizedFinalRefreshFailsClosed();
 
   console.log(
-    "V188 action-time book refresh passed: all approved dynamic-pool venues use parallel public reads only on stale fallback, validated refreshed books must produce a new EXECUTE opportunity, failures stay blocked, and no threshold/order/fund authority exists.",
+    "V189 action-time book refresh passed: all policy-qualified dynamic-pool venues use parallel public reads only on stale fallback, validated refreshed books must produce a new EXECUTE opportunity, failures stay blocked, and no threshold/order/fund authority exists.",
   );
 }
 
@@ -752,7 +752,7 @@ async function testParallelRefreshAndFreshOpportunityReevaluation(): Promise<voi
         sellExchange:
           "coinswitch",
       }),
-    /restricted to approved dynamic-pool routes/iu,
+    /restricted to policy-qualified dynamic-pool routes/iu,
   );
 }
 

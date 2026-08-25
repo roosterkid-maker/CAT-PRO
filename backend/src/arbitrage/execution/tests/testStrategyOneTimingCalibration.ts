@@ -254,6 +254,38 @@ function main(): void {
     assert.equal(review.maximumBookAgeMs, 245);
     assert.equal(review.residualOperationalHeadroomMs, 220);
     assert.equal(review.safety.thresholdRelaxationAllowed, false);
+    const dynamicQualification = service.getDynamicPoolRouteQualification({
+      market: "BTCUSDT",
+      buyExchange: "binance",
+      sellExchange: "bybit",
+      now: NOW + 1_500,
+    });
+    assert.ok(dynamicQualification);
+    assert.equal(dynamicQualification.schemaVersion, "189.0");
+    assert.equal(dynamicQualification.scope, "DYNAMIC_POOL");
+    assert.equal(dynamicQualification.maximumBookAgeMs, 245);
+    assert.equal(dynamicQualification.perRouteOperatorApprovalRequired, false);
+    assert.equal(dynamicQualification.liveOrderSubmissionAuthorized, false);
+    assert.equal(
+      service.getDynamicPoolRouteQualification({
+        market: "BTCUSDT",
+        buyExchange: "binance",
+        sellExchange: "bybit",
+        now: NOW + 1_501,
+      })?.id,
+      dynamicQualification.id,
+      "Dynamic timing identity must stay stable between preview and final authorization while evidence remains qualified.",
+    );
+    assert.equal(
+      blockedService.getDynamicPoolRouteQualification({
+        market: "BTCUSDT",
+        buyExchange: "binance",
+        sellExchange: "bybit",
+        now: NOW + 1_500,
+      }),
+      null,
+      "The pool must fail closed when exact-route dispatch evidence is immature.",
+    );
     const proposal = service.propose("BTCUSDT:BINANCE->BYBIT", NOW + 1_500);
 
     assert.equal(proposal.status, "PROPOSED");
@@ -361,7 +393,7 @@ function main(): void {
   }
 
   console.log(
-    "V110 Strategy #1 route timing calibration requires clean evidence, exact review, bounded expiry and explicit revocation; it never grants order authority.",
+    "V189 Strategy #1 dynamic timing qualification needs no per-coin approval, remains exact-route/evidence-bound and grants no order authority; legacy approval records stay auditable.",
   );
 }
 

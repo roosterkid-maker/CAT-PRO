@@ -856,7 +856,7 @@ function normalizeRoute(
 
   if (!isStrategyOneTinyLiveBasketRoute({market, buyExchange, sellExchange})) {
     throw new Error(
-      "Action-time parallel public book refresh is restricted to approved dynamic-pool routes.",
+      "Action-time parallel public book refresh is restricted to policy-qualified dynamic-pool routes.",
     );
   }
 

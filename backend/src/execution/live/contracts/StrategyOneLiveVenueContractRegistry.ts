@@ -269,7 +269,7 @@ const DEFAULT_DEPENDENCIES:
     authenticatedPrivateFillEventOwner.isVenueReady(exchange),
   getApprovedRouteTtl: (input) =>
     strategyOneTimingCalibrationService
-      .getApprovedRouteCalibration(input)
+      .getDynamicPoolRouteQualification(input)
       ?.maximumBookAgeMs ?? null,
   };
 

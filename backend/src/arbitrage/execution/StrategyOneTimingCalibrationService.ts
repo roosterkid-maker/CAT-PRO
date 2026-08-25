@@ -14,7 +14,9 @@ import {
   type StrategyOnePilotEquivalentPaperEvidenceReport,
 } from "./StrategyOnePilotEquivalentPaperEvidenceService";
 import {
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
   STRATEGY_ONE_TINY_LIVE_BASKET_POLICY,
+  isStrategyOneTinyLiveDynamicRoute,
 } from "./StrategyOneTinyLiveBasketPolicy";
 
 export type StrategyOneTimingCalibrationScope =
@@ -46,6 +48,33 @@ export interface StrategyOneTimingCalibrationRecord {
   readonly automaticActivationAllowed: false;
   readonly liveOrderSubmissionAuthorized: false;
 }
+
+/**
+ * Ephemeral action-time timing qualification for the operator-approved dynamic
+ * route pool. It is recomputed from exact-route evidence on every preview and
+ * authorization; it is not a per-market operator approval and grants no order
+ * authority by itself.
+ */
+export interface StrategyOneDynamicPoolTimingQualification {
+  readonly schemaVersion: "189.0";
+  readonly timingPolicyRevision: string;
+  readonly id: string;
+  readonly routePoolId: typeof STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID;
+  readonly routeKey: string;
+  readonly market: string;
+  readonly buyExchange: string;
+  readonly sellExchange: string;
+  readonly source: "DYNAMIC_POOL_EXACT_ROUTE_EVIDENCE";
+  readonly scope: "DYNAMIC_POOL";
+  readonly maximumBookAgeMs: number;
+  readonly evidenceGeneratedAt: number;
+  readonly perRouteOperatorApprovalRequired: false;
+  readonly liveOrderSubmissionAuthorized: false;
+}
+
+export type StrategyOneExecutionTimingQualification =
+  | StrategyOneTimingCalibrationRecord
+  | StrategyOneDynamicPoolTimingQualification;
 
 interface TimingEvidencePort {
   getReport(now?: number): StrategyOneExecutionTimingReport;
@@ -303,6 +332,56 @@ export class StrategyOneTimingCalibrationService {
         automaticApprovalAllowed: false as const,
         liveOrderSubmissionAuthorized: false as const,
       },
+    });
+  }
+
+  getDynamicPoolRouteQualification(input: {
+    readonly market: string;
+    readonly buyExchange: string;
+    readonly sellExchange: string;
+    readonly now?: number;
+  }): StrategyOneDynamicPoolTimingQualification | null {
+    const now = input.now ?? Date.now();
+    validateTime(now);
+    const route = {
+      market: normalizeMarket(input.market),
+      buyExchange: normalizeExchange(input.buyExchange),
+      sellExchange: normalizeExchange(input.sellExchange),
+    };
+
+    if (!isStrategyOneTinyLiveDynamicRoute(route)) {
+      return null;
+    }
+
+    const headroom = this.reviewHeadroom(route, now);
+
+    if (
+      headroom.state !== "READY" ||
+      headroom.maximumBookAgeMs === null
+    ) {
+      return null;
+    }
+
+    const id = `dynamic-timing-${hash({
+      routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+      routeKey: headroom.routeKey,
+      timingPolicyRevision: CONTROLLED_PILOT_TIMING_POLICY_REVISION,
+      maximumBookAgeMs: headroom.maximumBookAgeMs,
+    }).slice(0, 32)}`;
+
+    return freeze({
+      schemaVersion: "189.0" as const,
+      timingPolicyRevision: CONTROLLED_PILOT_TIMING_POLICY_REVISION,
+      id,
+      routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+      routeKey: headroom.routeKey,
+      ...route,
+      source: "DYNAMIC_POOL_EXACT_ROUTE_EVIDENCE" as const,
+      scope: "DYNAMIC_POOL" as const,
+      maximumBookAgeMs: headroom.maximumBookAgeMs,
+      evidenceGeneratedAt: headroom.generatedAt,
+      perRouteOperatorApprovalRequired: false as const,
+      liveOrderSubmissionAuthorized: false as const,
     });
   }
 
@@ -607,6 +686,7 @@ export class StrategyOneTimingCalibrationService {
         automaticActivationAllowed: false,
         timingPolicyRevision: CONTROLLED_PILOT_TIMING_POLICY_REVISION,
         exactApprovalPhraseRequired: true,
+        dynamicPoolPerRouteApprovalRequired: false,
         maximumApprovalDurationMs: this.maximumApprovalDurationMs,
         bootstrapCalibrationLimitedToFirstAttempt: true,
         liveOrderSubmissionAuthorized: false,

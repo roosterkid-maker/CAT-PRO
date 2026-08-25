@@ -193,7 +193,7 @@ async function testInvalidVenueRejectedBeforeGateway(
         exchange: "coindcx",
       },
     }),
-    /Binance\/Bybit SPOT limit-FOK lane or an approved dynamic-pool route/u,
+    /Binance\/Bybit SPOT limit-FOK lane or an evidence-qualified dynamic-pool route/u,
   );
   assert.equal(calls, 0);
 }
