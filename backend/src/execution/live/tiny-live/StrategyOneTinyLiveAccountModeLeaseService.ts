@@ -15,6 +15,7 @@ import {
 } from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 import {
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
 import {
@@ -52,7 +53,7 @@ export type StrategyOneTinyLiveAccountModeLeaseState =
   | "RESTORE_FAILED";
 
 export interface StrategyOneTinyLiveAccountModeLeaseRecord {
-  readonly schemaVersion: "151.0" | "182.1" | "188.1";
+  readonly schemaVersion: "151.0" | "182.1" | "188.1" | "190.1";
   readonly id: string;
   readonly state: StrategyOneTinyLiveAccountModeLeaseState;
   readonly preArmId: string;
@@ -60,6 +61,7 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   readonly buyExchange: string;
   readonly sellExchange: string;
   readonly capitalPerLegInr: number;
+  readonly maximumCapitalPerLegInr?: number;
   readonly maximumAttempts: 1 | 2 | 9 | 10;
   readonly priorAccountMode: "PAPER";
   readonly leasedAccountMode: "LIVE";
@@ -496,6 +498,8 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
       `tiny-live-account-lease-${hash({
         preArmId:
           arm.id,
+        maximumCapitalPerLegInr:
+          arm.maximumCapitalPerLegInr,
         timingCalibrationId:
           dynamicPoolArm ? `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID}` : calibration?.id,
         requestedAt:
@@ -510,7 +514,7 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
       freeze({
         schemaVersion:
           dynamicPoolArm
-            ? "188.1" as const
+            ? "190.1" as const
             : arm.maximumAttempts === 10
             ? "182.1" as const
             : "151.0" as const,
@@ -527,6 +531,8 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
           arm.sellExchange,
         capitalPerLegInr:
           arm.capitalPerLegInr,
+        maximumCapitalPerLegInr:
+          arm.maximumCapitalPerLegInr,
         maximumAttempts:
           arm.maximumAttempts,
         priorAccountMode:
@@ -1461,6 +1467,7 @@ function isLeaseRecord(
   const legacy = item.schemaVersion === "151.0";
   const tenAttempt = item.schemaVersion === "182.1";
   const dynamicPool = item.schemaVersion === "188.1";
+  const minimumOrderCushionPool = item.schemaVersion === "190.1";
   const exactRouteRecord = (item.routeScope === undefined || item.routeScope === "EXACT_ROUTE") &&
     typeof item.market === "string" && item.market.endsWith("USDT") &&
     typeof item.buyExchange === "string" &&
@@ -1470,7 +1477,7 @@ function isLeaseRecord(
       buyExchange: item.buyExchange,
       sellExchange: item.sellExchange,
     });
-  const dynamicPoolRecord = dynamicPool &&
+  const dynamicPoolRecord = (dynamicPool || minimumOrderCushionPool) &&
     item.routeScope === "DYNAMIC_POOL" &&
     item.routePoolId === STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID &&
     item.market === "DYNAMIC_POOL" &&
@@ -1478,7 +1485,7 @@ function isLeaseRecord(
     item.sellExchange === "binance" &&
     item.timingCalibrationId === `PER_ATTEMPT:${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID}`;
 
-  return (legacy || tenAttempt || dynamicPool) &&
+  return (legacy || tenAttempt || dynamicPool || minimumOrderCushionPool) &&
     typeof item.id ===
       "string" &&
     /^tiny-live-account-lease-[a-f0-9]{32}$/u.test(
@@ -1501,11 +1508,16 @@ function isLeaseRecord(
       100 &&
     (item.capitalPerLegInr ?? 0) <=
       500 &&
+    (
+      !minimumOrderCushionPool ||
+      item.maximumCapitalPerLegInr ===
+        STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr
+    ) &&
     (legacy
       ? item.maximumAttempts === 1 || item.maximumAttempts === 2
       : tenAttempt
         ? item.maximumAttempts === 10
-        : dynamicPool && (
+        : (dynamicPool || minimumOrderCushionPool) && (
           item.maximumAttempts === 9 ||
           item.maximumAttempts === 10
         )) &&
@@ -1581,6 +1593,8 @@ function isValidTransition(
       next.sellExchange &&
     previous.capitalPerLegInr ===
       next.capitalPerLegInr &&
+    previous.maximumCapitalPerLegInr ===
+      next.maximumCapitalPerLegInr &&
     previous.maximumAttempts ===
       next.maximumAttempts &&
     previous.routeScope ===

@@ -8,7 +8,7 @@ import {
 function main(): void {
   const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
 
-  assert.equal(policy.schemaVersion, "188.0");
+  assert.equal(policy.schemaVersion, "190.0");
   assert.equal(policy.id, "strategy-one-dynamic-usdt-route-pool-v1");
   assert.deepEqual(policy.quoteAssets, ["USDT"]);
   assert.deepEqual(policy.venues, ["binance", "coindcx", "bybit"]);
@@ -16,6 +16,12 @@ function main(): void {
   assert.deepEqual(policy.routes, []);
   assert.deepEqual(policy.inventoryTargets, []);
   assert.equal(policy.capitalPerLegInr, 500);
+  assert.equal(policy.maximumCapitalPerLegInr, 505);
+  assert.equal(policy.minimumOrderCushionInr, 5);
+  assert.equal(
+    policy.timingQualification,
+    "AUTOMATIC_VENUE_DIRECTION_POOL_EVIDENCE",
+  );
   assert.equal(policy.maximumAttempts, 10);
   assert.equal(policy.durationMinutes, 180);
   assert.deepEqual(policy.excludedVenues, ["coinswitch", "unocoin", "zebpay"]);
@@ -58,7 +64,7 @@ function main(): void {
   assert.equal(Object.isFrozen(policy.inventoryTargets), true);
 
   console.log(
-    "V188 dynamic Tiny-LIVE route-pool policy passed: current USDT routes across three audited venues, ₹500/leg, 10 attempts/180 minutes, excluded venues, and no transfer/withdraw/order authority.",
+    "V190 dynamic Tiny-LIVE route-pool policy passed: current USDT routes across three audited venues, ₹500 target/₹505 hard cap, venue-direction timing, 10 attempts/180 minutes, excluded venues, and no transfer/withdraw/order authority.",
   );
 }
 

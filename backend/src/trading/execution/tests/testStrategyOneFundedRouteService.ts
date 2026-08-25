@@ -173,6 +173,77 @@ function main(): void {
   assert.equal(belowRules.liveExecutionAllowed, false);
   assert.equal(belowRules.orderSubmissionAllowed, false);
 
+  const cushionBalances = new Map<string, ExchangeBalanceSnapshot>();
+  const cushionCapabilities = new Map([
+    ["coindcx", {
+      ...capability("coindcx"),
+      quantity: {
+        ...capability("coindcx").quantity,
+        maximumQuantity: 1_000,
+        quantityStep: 0.01,
+        quantityPrecision: 2,
+      },
+      notional: {minimumNotional: 5, maximumNotional: null},
+    }],
+    ["coinswitch", {
+      ...capability("coinswitch"),
+      quantity: {
+        ...capability("coinswitch").quantity,
+        maximumQuantity: 1_000,
+        quantityStep: 1,
+        quantityPrecision: 0,
+      },
+      notional: {minimumNotional: 5, maximumNotional: null},
+    }],
+  ]);
+  const cushionService = new StrategyOneFundedRouteService({
+    getCapability: (exchange) => cushionCapabilities.get(exchange) ?? null,
+    getBalance: (exchange, asset) =>
+      cushionBalances.get(`${exchange}:${asset}`) ?? null,
+    getSynchronizationReport: () => synchronizationReport("SYNCHRONIZED"),
+    convertInrToAsset: (_asset, capitalInr) => ({
+      targetQuantity: capitalInr / 99.88,
+    }),
+    getTakerFeePercent: () => 0.1,
+    normalizeQuantity: (request) =>
+      crossExchangeExecutableQuantityNormalizer.normalize(request),
+  });
+  setBalance(cushionBalances, "coindcx", "USDT", 11.97);
+  setBalance(cushionBalances, "coinswitch", "BTC", 130);
+  const sandLike = opportunity("minimum-order-cushion", 120);
+  const cushionFunded = cushionService.evaluate({
+    opportunity: {
+      ...sandLike,
+      pair: {
+        ...sandLike.pair,
+        buy: {...sandLike.pair.buy, bestAskPrice: 0.04233},
+        sell: {...sandLike.pair.sell, bestBidPrice: 0.04274},
+      },
+      buyPrice: 0.04233,
+      sellPrice: 0.04274,
+      buyAvailableQty: 1_827,
+      sellAvailableQty: 120,
+      executableQty: 120,
+      availableExecutableQty: 120,
+    },
+    requestedCapitalInr: 500,
+    maximumCapitalPerLegInr: 505,
+    allowSingleIncrementMinimumOrderRoundUp: true,
+    now: NOW,
+  });
+  assert.equal(
+    cushionFunded.state,
+    "FUNDED",
+    `Bounded cushion should fund: ${JSON.stringify(cushionFunded.blockers)}`,
+  );
+  assert.equal(cushionFunded.executableQuantity, 119);
+  assert.equal(cushionFunded.minimumOrderCushionUsed, true);
+  assert.equal(cushionFunded.quantityNeverIncreased, false);
+  assert.ok((cushionFunded.estimatedBuyRequirementInr ?? 0) > 500);
+  assert.ok((cushionFunded.estimatedBuyRequirementInr ?? Number.POSITIVE_INFINITY) <= 505);
+  assert.equal(cushionFunded.buyFunding.sufficient, true);
+  assert.equal(cushionFunded.sellFunding.sufficient, true);
+
   testFinalPaperStressGate();
 
   console.log("STRATEGY #1 FUNDED ROUTE SERVICE TEST PASSED.");

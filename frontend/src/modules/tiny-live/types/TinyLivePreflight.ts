@@ -561,7 +561,7 @@ export interface StrategyOneTinyLivePreArmAttempt {
 }
 
 export interface StrategyOneTinyLiveRoutePoolPolicy {
-  schemaVersion: "188.0";
+  schemaVersion: "190.0";
   id: "strategy-one-dynamic-usdt-route-pool-v1";
   label: string;
   quoteAssets: ["USDT"];
@@ -574,11 +574,14 @@ export interface StrategyOneTinyLiveRoutePoolPolicy {
   }>;
   inventoryTargets: [];
   capitalPerLegInr: 500;
+  maximumCapitalPerLegInr: 505;
+  minimumOrderCushionInr: 5;
   maximumAttempts: 10;
   durationMinutes: 180;
   stopOnFirstNonCleanResult: true;
   routeSelection: string;
-  timingQualification: "AUTOMATIC_EXACT_ROUTE_EVIDENCE";
+  timingQualification: "AUTOMATIC_VENUE_DIRECTION_POOL_EVIDENCE";
+  minimumOrderNormalization: string;
   perRouteOperatorApprovalRequired: false;
   eligibility: string[];
   excludedVenues: string[];
@@ -588,13 +591,14 @@ export interface StrategyOneTinyLiveRoutePoolPolicy {
 }
 
 export interface StrategyOneTinyLivePreArmRecord {
-  schemaVersion: "125.0" | "150.0" | "182.0" | "188.0";
+  schemaVersion: "125.0" | "150.0" | "182.0" | "188.0" | "190.0";
   id: string;
   state: StrategyOneTinyLivePreArmState;
   market: string;
   buyExchange: "binance" | "bybit" | "coindcx";
   sellExchange: "binance" | "bybit" | "coindcx";
   capitalPerLegInr: number;
+  maximumCapitalPerLegInr?: number;
   requiredArmPhrase: string;
   armedAt: number;
   expiresAt: number;
@@ -623,7 +627,7 @@ export type StrategyOneTinyLiveAccountModeLeaseState =
   | "RESTORE_FAILED";
 
 export interface StrategyOneTinyLiveAccountModeLeaseRecord {
-  schemaVersion: "151.0" | "182.1" | "188.1";
+  schemaVersion: "151.0" | "182.1" | "188.1" | "190.1";
   id: string;
   state: StrategyOneTinyLiveAccountModeLeaseState;
   preArmId: string;
@@ -631,6 +635,7 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   buyExchange: "binance" | "bybit" | "coindcx";
   sellExchange: "binance" | "bybit" | "coindcx";
   capitalPerLegInr: number;
+  maximumCapitalPerLegInr?: number;
   maximumAttempts: 1 | 2 | 9 | 10;
   priorAccountMode: "PAPER";
   leasedAccountMode: "LIVE";

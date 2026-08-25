@@ -301,6 +301,59 @@ function main(): void {
     ),
   );
 
+  const sandMinimumOrderCushion =
+    crossExchangeExecutableQuantityNormalizer.normalize({
+      rawQuantity: 118.26145071226081,
+      buyPrice: 0.04233,
+      sellPrice: 0.04274,
+      buyCapability: capability({
+        exchange: "bybit",
+        quantityStep: 0.01,
+        quantityPrecision: 2,
+        minimumNotional: 5,
+      }),
+      sellCapability: capability({
+        exchange: "coindcx",
+        quantityStep: 1,
+        quantityPrecision: 0,
+        minimumNotional: 5,
+      }),
+      maximumQuantity: 119.3,
+      allowSingleIncrementMinimumOrderRoundUp: true,
+    });
+
+  assert.equal(sandMinimumOrderCushion.state, "NORMALIZED");
+  assert.equal(sandMinimumOrderCushion.normalizedQuantity, 119);
+  assert.equal(sandMinimumOrderCushion.commonQuantityIncrement, 1);
+  assert.equal(sandMinimumOrderCushion.minimumOrderCushionUsed, true);
+  assert.equal(sandMinimumOrderCushion.roundDownOnly, false);
+  assert.equal(sandMinimumOrderCushion.quantityNeverIncreased, false);
+  assert.ok((sandMinimumOrderCushion.increaseQuantity ?? 0) < 1);
+
+  const sandCushionAboveHardCap =
+    crossExchangeExecutableQuantityNormalizer.normalize({
+      rawQuantity: 118.26145071226081,
+      buyPrice: 0.04233,
+      sellPrice: 0.04274,
+      buyCapability: capability({
+        exchange: "bybit",
+        quantityStep: 0.01,
+        quantityPrecision: 2,
+        minimumNotional: 5,
+      }),
+      sellCapability: capability({
+        exchange: "coindcx",
+        quantityStep: 1,
+        quantityPrecision: 0,
+        minimumNotional: 5,
+      }),
+      maximumQuantity: 118.9,
+      allowSingleIncrementMinimumOrderRoundUp: true,
+    });
+
+  assert.equal(sandCushionAboveHardCap.state, "BLOCKED");
+  assert.equal(sandCushionAboveHardCap.minimumOrderCushionUsed, false);
+
   const minimumNotionalFloatingBoundary =
     crossExchangeExecutableQuantityNormalizer
       .normalize({

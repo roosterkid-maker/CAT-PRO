@@ -39,13 +39,13 @@ async function main(): Promise<void> {
 
     assert.equal(
       phrase,
-      "ARM DYNAMIC-POOL USDT INR500 ATTEMPTS10 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS10 MINUTES180",
     );
     const reducedPhrase =
       StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(9);
     assert.equal(
       reducedPhrase,
-      "ARM DYNAMIC-POOL USDT INR500 ATTEMPTS9 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS9 MINUTES180",
     );
     const reducedFilePath = join(directory, "reduced-route-pool.jsonl");
     const reducedService = new StrategyOneTinyLivePreArmService({
@@ -122,10 +122,11 @@ async function main(): Promise<void> {
       now: NOW,
     });
 
-    assert.equal(arm.schemaVersion, "188.0");
+    assert.equal(arm.schemaVersion, "190.0");
     assert.equal(arm.routeScope, "DYNAMIC_POOL");
     assert.equal(arm.routePoolId, STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID);
     assert.equal(arm.capitalPerLegInr, 500);
+    assert.equal(arm.maximumCapitalPerLegInr, 505);
     assert.equal(arm.maximumAttempts, 10);
     assert.equal(arm.expiresAt, NOW + 180 * 60_000);
     assert.equal(arm.attemptsUsed, 0);
@@ -170,6 +171,7 @@ async function main(): Promise<void> {
     );
 
     verifyRetiredFixedBasketArmIsNotRestored(filePath, directory);
+    verifySupersededDynamicPoolArmExpires(filePath, directory);
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
     await verifyBookDependentBlocksCanRequestFreshBooks(directory);
@@ -179,8 +181,40 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V189 dynamic route-pool pre-arm passed: one pool consent, no per-coin approval ordering or seed probes, exact 9-or-10-attempt/180-minute limits, daily-cap enforcement, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
+    "V190 dynamic route-pool pre-arm passed: one pool consent, ₹500 target/₹505 hard cap, no per-coin timing approval, exact 9-or-10-attempt/180-minute limits, daily-cap enforcement, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
   );
+}
+
+function verifySupersededDynamicPoolArmExpires(
+  currentFilePath: string,
+  directory: string,
+): void {
+  const supersededFilePath = join(directory, "superseded-route-pool.jsonl");
+  const envelope = JSON.parse(
+    readFileSync(currentFilePath, "utf8").trim().split(/\r?\n/u)[0],
+  ) as {payload: Record<string, unknown>};
+
+  envelope.payload.schemaVersion = "188.0";
+  envelope.payload.requiredArmPhrase =
+    "ARM DYNAMIC-POOL USDT INR500 ATTEMPTS10 MINUTES180";
+  delete envelope.payload.maximumCapitalPerLegInr;
+  writeFileSync(supersededFilePath, `${JSON.stringify(envelope)}\n`, "utf8");
+
+  const restarted = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    now: () => NOW,
+  }, supersededFilePath);
+
+  assert.equal(
+    restarted.getActiveArm(NOW),
+    null,
+    "A pre-₹505 dynamic arm must expire instead of silently inheriting broader capital consent.",
+  );
+  const [expired] = restarted.getDiagnostics(NOW).records;
+  assert.equal(expired?.schemaVersion, "188.0");
+  assert.equal(expired?.state, "EXPIRED");
+  assert.match(expired?.failureReason ?? "", /predates the ₹505 hard-cap policy/iu);
 }
 
 function verifyRetiredFixedBasketArmIsNotRestored(
@@ -294,6 +328,7 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
     buyExchange: route.buyExchange,
     sellExchange: route.sellExchange,
     capitalPerLegInr: 500,
+    maximumCapitalPerLegInr: 505,
     requiredAuthorizationPhrase: "AUTHORIZE tiny-live-durable-reasons",
   };
   const filePath = join(directory, "durable-last-look-reasons.jsonl");

@@ -263,6 +263,12 @@ function main(): void {
     assert.ok(dynamicQualification);
     assert.equal(dynamicQualification.schemaVersion, "189.0");
     assert.equal(dynamicQualification.scope, "DYNAMIC_POOL");
+    assert.equal(
+      dynamicQualification.source,
+      "DYNAMIC_POOL_VENUE_DIRECTION_EVIDENCE",
+    );
+    assert.equal(dynamicQualification.evidenceRouteKey, "BTCUSDT:binance->bybit");
+    assert.equal(dynamicQualification.venueLaneKey, "binance->bybit");
     assert.equal(dynamicQualification.maximumBookAgeMs, 245);
     assert.equal(dynamicQualification.perRouteOperatorApprovalRequired, false);
     assert.equal(dynamicQualification.liveOrderSubmissionAuthorized, false);
@@ -275,6 +281,19 @@ function main(): void {
       })?.id,
       dynamicQualification.id,
       "Dynamic timing identity must stay stable between preview and final authorization while evidence remains qualified.",
+    );
+    const rotatingCoinQualification = service.getDynamicPoolRouteQualification({
+      market: "ETHUSDT",
+      buyExchange: "binance",
+      sellExchange: "bybit",
+      now: NOW + 1_502,
+    });
+    assert.ok(rotatingCoinQualification);
+    assert.equal(rotatingCoinQualification.routeKey, "ETHUSDT:binance->bybit");
+    assert.equal(
+      rotatingCoinQualification.evidenceRouteKey,
+      "BTCUSDT:binance->bybit",
+      "A rotating dynamic coin must reuse mature venue-direction timing instead of creating a per-coin timing strategy.",
     );
     assert.equal(
       blockedService.getDynamicPoolRouteQualification({
@@ -393,7 +412,7 @@ function main(): void {
   }
 
   console.log(
-    "V189 Strategy #1 dynamic timing qualification needs no per-coin approval, remains exact-route/evidence-bound and grants no order authority; legacy approval records stay auditable.",
+    "V190 Strategy #1 dynamic timing qualification needs no per-coin timing approval, reuses mature venue-direction evidence and grants no order authority; exact coin funding, history and action-time books remain independent gates.",
   );
 }
 

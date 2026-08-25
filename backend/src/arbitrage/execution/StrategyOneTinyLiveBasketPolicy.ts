@@ -32,7 +32,7 @@ export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID =
  * grants no order, transfer or withdrawal authority.
  */
 export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY = deepFreeze({
-  schemaVersion: "188.0" as const,
+  schemaVersion: "190.0" as const,
   id: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
   label: "Dynamic inventory-qualified USDT route pool",
   quoteAssets: ["USDT"] as const,
@@ -41,11 +41,15 @@ export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY = deepFreeze({
   routes: [] as const,
   inventoryTargets: [] as const,
   capitalPerLegInr: 500,
+  maximumCapitalPerLegInr: 505,
+  minimumOrderCushionInr: 5,
   maximumAttempts: 10 as const,
   durationMinutes: 180,
   stopOnFirstNonCleanResult: true,
   routeSelection: "HIGHEST_CURRENT_NET_THAT_PASSES_FRESH_EXACT_PREFLIGHT" as const,
-  timingQualification: "AUTOMATIC_EXACT_ROUTE_EVIDENCE" as const,
+  timingQualification: "AUTOMATIC_VENUE_DIRECTION_POOL_EVIDENCE" as const,
+  minimumOrderNormalization:
+    "ROUND_DOWN_OR_ONE_SHARED_STEP_UP_WITHIN_HARD_CAP" as const,
   perRouteOperatorApprovalRequired: false,
   eligibility: [
     "CURRENT_EXECUTE",

@@ -1147,6 +1147,55 @@ async function main(): Promise<void> {
     "A blocked last-look must perform zero adapter access and zero exchange execution calls.",
   );
 
+  const hardCapCoordinator = new ArbitrageExecutionCoordinator({
+    liveExecution: {
+      hasAdapter: () => true,
+      getAdapter: (exchange) => {
+        const adapter = adapters.get(exchange);
+        if (!adapter) throw new Error("Fixture adapter is missing.");
+        return adapter;
+      },
+      getExchangeStatus: (exchange) => {
+        const adapter = adapters.get(exchange);
+        if (!adapter) throw new Error("Fixture status adapter is missing.");
+        return connectedStatus(adapter);
+      },
+    },
+    orderTimeSafety: orderTimeService(),
+    recoveryIntent: recovery,
+    capitalReservations: capitalReservationFixture(
+      capitalReservationRequests,
+      finalizedReservations,
+    ),
+    getTakerFeePercent: () => 0.1,
+    recordPnL: () => undefined,
+    liveConfirmationPresent: () => true,
+    consumeActionAuthority: () => ({
+      ...actionAuthorityFixture("CONSUMED"),
+      schemaVersion: "190.0",
+      capitalPerLegInr: 500,
+      maximumCapitalPerLegInr: 505,
+      maximumBuyQuoteSpend: 100.05,
+      calibrationScope: "DYNAMIC_POOL",
+    }),
+    bindActionAuthorityPair: () => actionAuthorityFixture("PAIR_BOUND"),
+    finalizeActionAuthority: () => actionAuthorityFixture("FINALIZED"),
+    now: () => NOW,
+  });
+  const buyRequestsBeforeHardCap = buyAdapter.requests.length;
+  const sellRequestsBeforeHardCap = sellAdapter.requests.length;
+  const reservationsBeforeHardCap = capitalReservationRequests.length;
+  const hardCapBlocked = await hardCapCoordinator.execute(
+    opportunity(),
+    {actionAuthorityId: "tiny-live-fixture"},
+  );
+
+  assert.equal(hardCapBlocked.status, "BLOCKED");
+  assert.match(hardCapBlocked.reasons.join(" "), /₹505 hard-cap quote spend/iu);
+  assert.equal(buyAdapter.requests.length, buyRequestsBeforeHardCap);
+  assert.equal(sellAdapter.requests.length, sellRequestsBeforeHardCap);
+  assert.equal(capitalReservationRequests.length, reservationsBeforeHardCap);
+
   console.log(
     "V103 Strategy #1 order-time safety passed: millisecond freshness, full depth, explicit FOK, concurrent dispatch and fail-closed residual recovery are deterministic.",
   );

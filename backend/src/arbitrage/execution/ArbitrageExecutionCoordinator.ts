@@ -565,6 +565,41 @@ export class ArbitrageExecutionCoordinator {
       return blocked;
     }
 
+    const finalBuyQuoteSpend =
+      quantity *
+      lastLook.buyLimitPrice *
+      (1 + (buyFeePercent ?? 0) / 100);
+    const maximumBuyQuoteSpend =
+      consumedAuthority.maximumBuyQuoteSpend;
+    const maximumCapitalPerLegInr =
+      consumedAuthority.maximumCapitalPerLegInr ??
+      consumedAuthority.capitalPerLegInr;
+
+    if (
+      consumedAuthority.schemaVersion === "190.0" &&
+      (
+        !Number.isFinite(maximumBuyQuoteSpend) ||
+        (maximumBuyQuoteSpend ?? 0) <= 0 ||
+        finalBuyQuoteSpend >
+          (maximumBuyQuoteSpend ?? 0) +
+            Math.max(1e-12, Math.abs(maximumBuyQuoteSpend ?? 0) * 1e-12)
+      )
+    ) {
+      const blocked = this.createBlockedResult(
+        opportunity,
+        buyExchange,
+        sellExchange,
+        startedAt,
+        [
+          "Final BUY price and fee requirement exceeds the authorized ₹505 hard-cap quote spend.",
+        ],
+        lastLook,
+        authorityQuantity,
+      );
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      return blocked;
+    }
+
     const reservation =
       this.dependencies.capitalReservations.reserve({
         ownerType:
@@ -572,7 +607,7 @@ export class ArbitrageExecutionCoordinator {
         ownerId:
           twoLegSessionId,
         amount:
-          consumedAuthority.capitalPerLegInr,
+          maximumCapitalPerLegInr,
         ttlMs:
           60_000,
         inventoryRequirements: [

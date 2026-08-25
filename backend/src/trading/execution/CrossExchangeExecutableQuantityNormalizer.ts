@@ -43,9 +43,15 @@ export interface CrossExchangeQuantityNormalizationReport {
 
   reductionPercent: number | null;
 
-  roundDownOnly: true;
+  roundDownOnly: boolean;
 
   quantityNeverIncreased: boolean;
+
+  minimumOrderCushionUsed?: boolean;
+
+  increaseQuantity?: number | null;
+
+  increasePercent?: number | null;
 
   incrementEvidenceComplete: boolean;
 
@@ -79,6 +85,14 @@ export interface CrossExchangeQuantityNormalizationRequest {
    * readiness checks.
    */
   allowIncompleteIncrementEvidenceForPaper?: boolean;
+
+  /**
+   * Optional LIVE-only ceiling for a single shared-increment round-up when
+   * round-down fails solely because of an exchange minimum order rule.
+   */
+  maximumQuantity?: number;
+
+  allowSingleIncrementMinimumOrderRoundUp?: boolean;
 }
 
 export class CrossExchangeExecutableQuantityNormalizer {
@@ -284,7 +298,7 @@ export class CrossExchangeExecutableQuantityNormalizer {
       );
     }
 
-    const maximumQuantity =
+    const roundDownMaximumQuantity =
       Math.min(
         request.rawQuantity,
         ...completeCapabilities.map(
@@ -297,25 +311,28 @@ export class CrossExchangeExecutableQuantityNormalizer {
         ),
       );
 
-    const normalizedQuantity =
+    const roundDownQuantity =
       this.roundDownToIncrement(
-        maximumQuantity,
+        roundDownMaximumQuantity,
         commonIncrement,
       );
 
+    const roundDownBlockers: string[] = [];
+
     if (
       !Number.isFinite(
-        normalizedQuantity,
+        roundDownQuantity,
       ) ||
-      normalizedQuantity <=
+      roundDownQuantity <=
         0
     ) {
-      blockers.push(
+      roundDownBlockers.push(
         "Allocated PAPER capital is below the shared exchange quantity increment.",
       );
     }
 
-    const evaluatedLegs =
+    let normalizedQuantity = roundDownQuantity;
+    let evaluatedLegs =
       completeCapabilityLegs.map(
         (
           leg,
@@ -323,14 +340,14 @@ export class CrossExchangeExecutableQuantityNormalizer {
           this.createLegEvidence(
             leg.capability,
             leg.price,
-            normalizedQuantity > 0
-              ? normalizedQuantity
+            roundDownQuantity > 0
+              ? roundDownQuantity
               : null,
           ),
       );
 
     if (
-      normalizedQuantity >
+      roundDownQuantity >
         0
     ) {
       for (
@@ -338,12 +355,74 @@ export class CrossExchangeExecutableQuantityNormalizer {
           evaluatedLegs
       ) {
         this.validateNormalizedLeg(
-          normalizedQuantity,
+          roundDownQuantity,
           leg,
-          blockers,
+          roundDownBlockers,
         );
       }
     }
+
+    let minimumOrderCushionUsed = false;
+    const maximumCushionQuantity =
+      request.maximumQuantity !== undefined &&
+      Number.isFinite(request.maximumQuantity) &&
+      request.maximumQuantity > 0
+        ? Math.min(
+            request.maximumQuantity,
+            ...completeCapabilities.map(
+              (capability) =>
+                capability.quantity.maximumQuantity ?? Number.POSITIVE_INFINITY,
+            ),
+          )
+        : null;
+
+    if (
+      roundDownBlockers.length > 0 &&
+      request.allowSingleIncrementMinimumOrderRoundUp === true &&
+      maximumCushionQuantity !== null &&
+      roundDownBlockers.every(isMinimumOrderRoundUpBlocker)
+    ) {
+      const singleStepUpQuantity = Number(
+        (roundDownQuantity + commonIncrement).toFixed(
+          Math.min(12, this.decimalPlaces(commonIncrement)),
+        ),
+      );
+      const ceilingTolerance = Math.max(
+        1e-12,
+        Math.abs(maximumCushionQuantity) * 1e-12,
+      );
+
+      if (
+        Number.isFinite(singleStepUpQuantity) &&
+        singleStepUpQuantity > 0 &&
+        singleStepUpQuantity <= maximumCushionQuantity + ceilingTolerance
+      ) {
+        const roundUpLegs = completeCapabilityLegs.map((leg) =>
+          this.createLegEvidence(
+            leg.capability,
+            leg.price,
+            singleStepUpQuantity,
+          ));
+        const roundUpBlockers: string[] = [];
+
+        for (const leg of roundUpLegs) {
+          this.validateNormalizedLeg(
+            singleStepUpQuantity,
+            leg,
+            roundUpBlockers,
+          );
+        }
+
+        if (roundUpBlockers.length === 0) {
+          normalizedQuantity = singleStepUpQuantity;
+          evaluatedLegs = roundUpLegs;
+          roundDownBlockers.length = 0;
+          minimumOrderCushionUsed = true;
+        }
+      }
+    }
+
+    blockers.push(...roundDownBlockers);
 
     const quantityTolerance =
       Math.max(
@@ -360,7 +439,8 @@ export class CrossExchangeExecutableQuantityNormalizer {
         quantityTolerance;
 
     if (
-      !quantityNeverIncreased
+      !quantityNeverIncreased &&
+      !minimumOrderCushionUsed
     ) {
       blockers.push(
         "Quantity normalization attempted to increase allocated exposure.",
@@ -397,16 +477,24 @@ export class CrossExchangeExecutableQuantityNormalizer {
           ) *
           100
         : null;
+    const increaseQuantity = Math.max(
+      0,
+      normalizedQuantity - request.rawQuantity,
+    );
+    const increasePercent = request.rawQuantity > 0
+      ? (increaseQuantity / request.rawQuantity) * 100
+      : null;
 
     return {
       version:
         "81.0",
 
       state:
-        reductionQuantity <=
-        quantityTolerance
-          ? "UNCHANGED"
-          : "NORMALIZED",
+        minimumOrderCushionUsed ||
+        reductionQuantity >
+          quantityTolerance
+          ? "NORMALIZED"
+          : "UNCHANGED",
 
       rawQuantity:
         request.rawQuantity,
@@ -421,9 +509,15 @@ export class CrossExchangeExecutableQuantityNormalizer {
       reductionPercent,
 
       roundDownOnly:
-        true,
+        !minimumOrderCushionUsed,
 
       quantityNeverIncreased,
+
+      minimumOrderCushionUsed,
+
+      increaseQuantity,
+
+      increasePercent,
 
       incrementEvidenceComplete,
 
@@ -484,6 +578,15 @@ export class CrossExchangeExecutableQuantityNormalizer {
 
       quantityNeverIncreased:
         true,
+
+      minimumOrderCushionUsed:
+        false,
+
+      increaseQuantity:
+        null,
+
+      increasePercent:
+        null,
 
       incrementEvidenceComplete,
 
@@ -968,6 +1071,11 @@ function isMateriallyBelowMinimumNotional(
   );
 
   return normalizedNotional + floatingPointTolerance < minimumNotional;
+}
+
+function isMinimumOrderRoundUpBlocker(blocker: string): boolean {
+  return blocker.includes("below minimum") ||
+    blocker === "Allocated PAPER capital is below the shared exchange quantity increment.";
 }
 
 export const crossExchangeExecutableQuantityNormalizer =

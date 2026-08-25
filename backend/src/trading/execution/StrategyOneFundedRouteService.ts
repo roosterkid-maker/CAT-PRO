@@ -48,13 +48,16 @@ export interface StrategyOneFundedRouteReport {
   readonly baseAsset: string | null;
   readonly quoteAsset: string | null;
   readonly requestedCapitalInr: number;
+  readonly maximumCapitalPerLegInr?: number;
   readonly convertedQuoteCapital: number | null;
+  readonly maximumConvertedQuoteCapital?: number | null;
   readonly capitalQuantity: number | null;
   readonly depthQuantity: number | null;
   readonly preFundingQuantity: number | null;
   readonly balanceCappedQuantity: number | null;
   readonly executableQuantity: number | null;
   readonly estimatedExecutableCapitalInr: number | null;
+  readonly estimatedBuyRequirementInr?: number | null;
   readonly reductionPercent: number | null;
   readonly state: StrategyOneFundedRouteState;
   readonly fundingBoundary: StrategyOneFundingBoundary;
@@ -65,7 +68,8 @@ export interface StrategyOneFundedRouteReport {
   readonly authenticatedBalancesRequired: boolean;
   readonly isolatedPaperCapital: boolean;
   readonly staleBalanceAllowed: false;
-  readonly quantityNeverIncreased: true;
+  readonly quantityNeverIncreased: boolean;
+  readonly minimumOrderCushionUsed?: boolean;
   readonly liveExecutionAllowed: false;
   readonly orderSubmissionAllowed: false;
 }
@@ -73,9 +77,11 @@ export interface StrategyOneFundedRouteReport {
 export interface StrategyOneFundedRouteRequest {
   readonly opportunity: ArbitrageOpportunity;
   readonly requestedCapitalInr: number;
+  readonly maximumCapitalPerLegInr?: number;
   readonly requestedQuoteCapital?: number;
   readonly requestedQuantity?: number;
   readonly fundingBoundary?: StrategyOneFundingBoundary;
+  readonly allowSingleIncrementMinimumOrderRoundUp?: boolean;
   readonly now?: number;
 }
 
@@ -93,6 +99,8 @@ export interface StrategyOneFundedRouteDependencies {
     buyCapability: ExchangeMarketCapability | null;
     sellCapability: ExchangeMarketCapability | null;
     allowIncompleteIncrementEvidenceForPaper?: boolean;
+    maximumQuantity?: number;
+    allowSingleIncrementMinimumOrderRoundUp?: boolean;
   }): CrossExchangeQuantityNormalizationReport;
 }
 
@@ -148,6 +156,18 @@ export class StrategyOneFundedRouteService {
     if (!Number.isFinite(request.requestedCapitalInr) || request.requestedCapitalInr <= 0) {
       blockers.push("Requested Strategy #1 capital must be a positive INR amount.");
     }
+    const maximumCapitalPerLegInr =
+      request.maximumCapitalPerLegInr ?? request.requestedCapitalInr;
+    const minimumOrderCushionPolicyEnabled =
+      request.allowSingleIncrementMinimumOrderRoundUp === true &&
+      request.maximumCapitalPerLegInr !== undefined &&
+      maximumCapitalPerLegInr > request.requestedCapitalInr;
+    if (
+      !Number.isFinite(maximumCapitalPerLegInr) ||
+      maximumCapitalPerLegInr < request.requestedCapitalInr
+    ) {
+      blockers.push("Maximum Strategy #1 capital must be finite and no lower than the target capital.");
+    }
 
     const buyCapability = this.dependencies.getCapability(buyExchange, market);
     const sellCapability = this.dependencies.getCapability(sellExchange, market);
@@ -177,6 +197,14 @@ export class StrategyOneFundedRouteService {
     if (assets.quoteAsset && convertedQuoteCapital === null) {
       blockers.push(`Fresh INR/${assets.quoteAsset} capital-conversion evidence is unavailable.`);
     }
+    const maximumConvertedQuoteCapital =
+      convertedQuoteCapital !== null &&
+      Number.isFinite(maximumCapitalPerLegInr) &&
+      maximumCapitalPerLegInr >= request.requestedCapitalInr &&
+      request.requestedCapitalInr > 0
+        ? convertedQuoteCapital *
+          (maximumCapitalPerLegInr / request.requestedCapitalInr)
+        : null;
 
     const capitalQuantity = convertedQuoteCapital !== null && Number.isFinite(opportunity.buyPrice) &&
       opportunity.buyPrice > 0 ? convertedQuoteCapital / opportunity.buyPrice : null;
@@ -264,6 +292,26 @@ export class StrategyOneFundedRouteService {
 
     let quantityNormalization: CrossExchangeQuantityNormalizationReport | null = null;
     if (blockers.length === 0 && balanceCappedQuantity !== null && balanceCappedQuantity > 0) {
+      const maximumQuantityFromCapital =
+        minimumOrderCushionPolicyEnabled &&
+        maximumConvertedQuoteCapital !== null &&
+        buyUnitCost !== null &&
+        buyUnitCost > 0
+          ? maximumConvertedQuoteCapital / buyUnitCost
+          : null;
+      const maximumNormalizationQuantity =
+        maximumQuantityFromCapital !== null &&
+        depthQuantity !== null &&
+        buyCapacity !== null &&
+        sellCapacity !== null
+          ? Math.min(
+              maximumQuantityFromCapital,
+              depthQuantity,
+              buyCapacity,
+              sellCapacity,
+              request.requestedQuantity ?? Number.POSITIVE_INFINITY,
+            )
+          : null;
       quantityNormalization = this.dependencies.normalizeQuantity({
         rawQuantity: balanceCappedQuantity,
         buyPrice: opportunity.buyPrice,
@@ -272,6 +320,10 @@ export class StrategyOneFundedRouteService {
         sellCapability,
         allowIncompleteIncrementEvidenceForPaper:
           fundingBoundary === "ISOLATED_PAPER",
+        maximumQuantity: maximumNormalizationQuantity ?? undefined,
+        allowSingleIncrementMinimumOrderRoundUp:
+          fundingBoundary === "AUTHENTICATED_LIVE_READINESS" &&
+          minimumOrderCushionPolicyEnabled,
       });
       if (quantityNormalization.state === "BLOCKED" ||
           quantityNormalization.normalizedQuantity === null) {
@@ -282,9 +334,46 @@ export class StrategyOneFundedRouteService {
     const executableQuantity = blockers.length === 0
       ? quantityNormalization?.normalizedQuantity ?? null
       : null;
+    const minimumOrderCushionUsed =
+      quantityNormalization?.minimumOrderCushionUsed === true;
     if (executableQuantity !== null && preFundingQuantity !== null &&
-        executableQuantity > preFundingQuantity + Math.max(1e-12, preFundingQuantity * 1e-12)) {
+        executableQuantity > preFundingQuantity + Math.max(1e-12, preFundingQuantity * 1e-12) &&
+        !minimumOrderCushionUsed) {
       blockers.push("Funded quantity attempted to increase pre-funding exposure.");
+    }
+    const provisionalBuyFunding = this.withFinalRequirement(
+      buyFunding,
+      executableQuantity,
+      buyUnitCost,
+    );
+    const provisionalSellFunding = this.withFinalRequirement(
+      sellFunding,
+      executableQuantity,
+      1,
+    );
+    if (
+      executableQuantity !== null &&
+      authenticatedBalancesRequired &&
+      (!provisionalBuyFunding.sufficient || !provisionalSellFunding.sufficient)
+    ) {
+      blockers.push("The minimum-order cushion exceeds fresh authenticated two-leg balances.");
+    }
+    const estimatedBuyRequirementInr =
+      executableQuantity !== null &&
+      buyUnitCost !== null &&
+      convertedQuoteCapital !== null &&
+      convertedQuoteCapital > 0
+        ? request.requestedCapitalInr *
+          ((executableQuantity * buyUnitCost) / convertedQuoteCapital)
+        : null;
+    if (
+      minimumOrderCushionPolicyEnabled &&
+      estimatedBuyRequirementInr !== null &&
+      estimatedBuyRequirementInr > maximumCapitalPerLegInr + 0.01
+    ) {
+      blockers.push(
+        `Minimum-order cushion requires ₹${estimatedBuyRequirementInr.toFixed(2)}, above the ₹${maximumCapitalPerLegInr.toFixed(2)} hard cap.`,
+      );
     }
     const finalExecutableQuantity = blockers.length === 0 ? executableQuantity : null;
     const estimatedExecutableCapitalInr = finalExecutableQuantity !== null && capitalQuantity !== null &&
@@ -312,24 +401,33 @@ export class StrategyOneFundedRouteService {
       baseAsset: assets.baseAsset,
       quoteAsset: assets.quoteAsset,
       requestedCapitalInr: request.requestedCapitalInr,
+      maximumCapitalPerLegInr,
       convertedQuoteCapital,
+      maximumConvertedQuoteCapital,
       capitalQuantity,
       depthQuantity,
       preFundingQuantity,
       balanceCappedQuantity,
       executableQuantity: finalExecutableQuantity,
       estimatedExecutableCapitalInr,
+      estimatedBuyRequirementInr:
+        finalExecutableQuantity === null ? null : estimatedBuyRequirementInr,
       reductionPercent,
       state,
       fundingBoundary,
-      buyFunding: this.withFinalRequirement(buyFunding, finalExecutableQuantity, buyUnitCost),
-      sellFunding: this.withFinalRequirement(sellFunding, finalExecutableQuantity, 1),
+      buyFunding: finalExecutableQuantity === null
+        ? provisionalBuyFunding
+        : this.withFinalRequirement(buyFunding, finalExecutableQuantity, buyUnitCost),
+      sellFunding: finalExecutableQuantity === null
+        ? provisionalSellFunding
+        : this.withFinalRequirement(sellFunding, finalExecutableQuantity, 1),
       quantityNormalization,
       blockers: [...new Set(blockers)],
       authenticatedBalancesRequired,
       isolatedPaperCapital: !authenticatedBalancesRequired,
       staleBalanceAllowed: false,
-      quantityNeverIncreased: true,
+      quantityNeverIncreased: !minimumOrderCushionUsed,
+      minimumOrderCushionUsed,
       liveExecutionAllowed: false,
       orderSubmissionAllowed: false,
     };

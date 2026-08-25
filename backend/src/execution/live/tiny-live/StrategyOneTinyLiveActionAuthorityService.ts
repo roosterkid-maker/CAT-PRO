@@ -27,6 +27,9 @@ import {
 import {
   isExactStrategyOnePilotRoute,
 } from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+import {
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+} from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
 export type StrategyOneTinyLiveAuthorityState =
   | "PREVIEWED"
@@ -37,7 +40,7 @@ export type StrategyOneTinyLiveAuthorityState =
   | "RESOLVED";
 
 export interface StrategyOneTinyLiveAuthorityRecord {
-  readonly schemaVersion: "111.0" | "189.0";
+  readonly schemaVersion: "111.0" | "189.0" | "190.0";
   readonly id: string;
   readonly state: StrategyOneTinyLiveAuthorityState;
   readonly opportunityId: string;
@@ -45,6 +48,8 @@ export interface StrategyOneTinyLiveAuthorityRecord {
   readonly buyExchange: string;
   readonly sellExchange: string;
   readonly capitalPerLegInr: number;
+  readonly maximumCapitalPerLegInr?: number;
+  readonly maximumBuyQuoteSpend?: number;
   readonly exactQuantity: number;
   readonly preflightHash: string;
   readonly calibrationId: string;
@@ -254,6 +259,10 @@ export class StrategyOneTinyLiveActionAuthorityService {
     const capitalPerLegInr =
       preflight?.preview.requestedCapitalPerLegInr ??
       null;
+    const maximumCapitalPerLegInr =
+      selected?.funding.maximumCapitalPerLegInr ?? null;
+    const maximumBuyQuoteSpend =
+      selected?.funding.maximumConvertedQuoteCapital ?? null;
 
     if (!selected || selected.opportunityId !== opportunityId) {
       blockers.push("Action-time preflight did not retain the exact requested opportunity.");
@@ -274,7 +283,6 @@ export class StrategyOneTinyLiveActionAuthorityService {
     ) {
       blockers.push("Exact active-policy Tiny-LIVE capital is unavailable or outside the hard ₹100–₹500 range.");
     }
-
     const route = selected
       ? {
           market: selected.market,
@@ -295,6 +303,19 @@ export class StrategyOneTinyLiveActionAuthorityService {
     const calibration = route
       ? this.dependencies.getCalibration({...route, now})
       : null;
+    const dynamicPoolQualification = calibration?.scope === "DYNAMIC_POOL";
+    if (
+      dynamicPoolQualification &&
+      (
+        maximumCapitalPerLegInr !==
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr ||
+        maximumBuyQuoteSpend === null ||
+        !Number.isFinite(maximumBuyQuoteSpend) ||
+        maximumBuyQuoteSpend <= 0
+      )
+    ) {
+      blockers.push("The approved ₹505 hard cap and fresh maximum quote-spend evidence are unavailable.");
+    }
     const routeAttempts = route
       ? this.routeAttempts(route, now)
       : 0;
@@ -335,7 +356,9 @@ export class StrategyOneTinyLiveActionAuthorityService {
       !route ||
       !calibration ||
       exactQuantity === null ||
-      capitalPerLegInr === null
+      capitalPerLegInr === null ||
+      (dynamicPoolQualification && maximumCapitalPerLegInr === null) ||
+      (dynamicPoolQualification && maximumBuyQuoteSpend === null)
     ) {
       return previewResult(now, null, preflight, blockers);
     }
@@ -345,19 +368,27 @@ export class StrategyOneTinyLiveActionAuthorityService {
       opportunityId,
       route,
       exactQuantity,
+      maximumCapitalPerLegInr,
+      maximumBuyQuoteSpend,
       preflightHash,
       calibrationId: calibration.id,
       previewedAt: now,
     }).slice(0, 32)}`;
     const record = freeze({
       schemaVersion: calibration.scope === "DYNAMIC_POOL"
-        ? "189.0" as const
+        ? "190.0" as const
         : "111.0" as const,
       id,
       state: "PREVIEWED" as const,
       opportunityId,
       ...route,
       capitalPerLegInr,
+      ...(dynamicPoolQualification
+        ? {
+            maximumCapitalPerLegInr: maximumCapitalPerLegInr as number,
+            maximumBuyQuoteSpend: maximumBuyQuoteSpend as number,
+          }
+        : {}),
       exactQuantity,
       preflightHash,
       calibrationId: calibration.id,
@@ -419,6 +450,8 @@ export class StrategyOneTinyLiveActionAuthorityService {
       fresh.preflightHash !== current.preflightHash ||
       fresh.exactQuantity !== current.exactQuantity ||
       fresh.capitalPerLegInr !== current.capitalPerLegInr ||
+      fresh.maximumCapitalPerLegInr !== current.maximumCapitalPerLegInr ||
+      fresh.maximumBuyQuoteSpend !== current.maximumBuyQuoteSpend ||
       fresh.calibrationId !== current.calibrationId
     ) {
       throw new Error("Tiny-LIVE evidence changed after preview; refresh and review again.");
@@ -591,6 +624,8 @@ export class StrategyOneTinyLiveActionAuthorityService {
         capitalPerLegInr:
           this.dependencies
             .getTinyLiveCapitalPerLegInr(),
+        maximumCapitalPerLegInr:
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
         maximumConcurrentAttempts: 1,
         oneTimeAuthority: true,
         authorityTtlMs: this.authorityTtlMs,
@@ -640,6 +675,21 @@ export class StrategyOneTinyLiveActionAuthorityService {
     if (!calibration || exactQuantity === null || exactQuantity <= 0) {
       throw new Error("Fresh dynamic timing qualification or exact funded quantity is unavailable.");
     }
+    const maximumConvertedQuoteCapital =
+      selected.funding.maximumConvertedQuoteCapital;
+    if (
+      calibration.scope === "DYNAMIC_POOL" &&
+      (
+        selected.funding.maximumCapitalPerLegInr !==
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr ||
+        maximumConvertedQuoteCapital === undefined ||
+        maximumConvertedQuoteCapital === null ||
+        !Number.isFinite(maximumConvertedQuoteCapital) ||
+        maximumConvertedQuoteCapital <= 0
+      )
+    ) {
+      throw new Error("Fresh ₹505 hard-cap quote-spend evidence is unavailable.");
+    }
 
 
     if (
@@ -673,6 +723,14 @@ export class StrategyOneTinyLiveActionAuthorityService {
       exactQuantity,
       capitalPerLegInr:
         preflight.preview.requestedCapitalPerLegInr,
+      ...(calibration.scope === "DYNAMIC_POOL"
+        ? {
+            maximumCapitalPerLegInr:
+              selected.funding.maximumCapitalPerLegInr,
+            maximumBuyQuoteSpend:
+              maximumConvertedQuoteCapital,
+          }
+        : {}),
       calibrationId: calibration.id,
     };
   }
@@ -779,7 +837,10 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
     item.resolvedAt,
   ];
 
-  return (item.schemaVersion === "111.0" || item.schemaVersion === "189.0") &&
+  const minimumOrderCushionAuthority = item.schemaVersion === "190.0";
+
+  return (item.schemaVersion === "111.0" || item.schemaVersion === "189.0" ||
+      minimumOrderCushionAuthority) &&
     typeof item.id === "string" && item.id.startsWith("tiny-live-") &&
     states.includes(item.state as StrategyOneTinyLiveAuthorityState) &&
     typeof item.opportunityId === "string" && item.opportunityId.length > 0 &&
@@ -790,6 +851,16 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
     Number.isSafeInteger(item.capitalPerLegInr) &&
     (item.capitalPerLegInr ?? 0) >= 100 &&
     (item.capitalPerLegInr ?? 0) <= 500 &&
+    (
+      !minimumOrderCushionAuthority ||
+      (
+        item.maximumCapitalPerLegInr ===
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr &&
+        typeof item.maximumBuyQuoteSpend === "number" &&
+        Number.isFinite(item.maximumBuyQuoteSpend) &&
+        item.maximumBuyQuoteSpend > 0
+      )
+    ) &&
     typeof item.exactQuantity === "number" &&
     Number.isFinite(item.exactQuantity) && item.exactQuantity > 0 &&
     typeof item.preflightHash === "string" && item.preflightHash.length === 64 &&
@@ -829,6 +900,8 @@ function isValidRestoredTransition(
     previous.buyExchange === next.buyExchange &&
     previous.sellExchange === next.sellExchange &&
     previous.capitalPerLegInr === next.capitalPerLegInr &&
+    previous.maximumCapitalPerLegInr === next.maximumCapitalPerLegInr &&
+    previous.maximumBuyQuoteSpend === next.maximumBuyQuoteSpend &&
     previous.exactQuantity === next.exactQuantity &&
     previous.preflightHash === next.preflightHash &&
     previous.calibrationId === next.calibrationId &&

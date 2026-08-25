@@ -64,10 +64,12 @@ export interface StrategyOneDynamicPoolTimingQualification {
   readonly market: string;
   readonly buyExchange: string;
   readonly sellExchange: string;
-  readonly source: "DYNAMIC_POOL_EXACT_ROUTE_EVIDENCE";
+  readonly source: "DYNAMIC_POOL_VENUE_DIRECTION_EVIDENCE";
   readonly scope: "DYNAMIC_POOL";
   readonly maximumBookAgeMs: number;
   readonly evidenceGeneratedAt: number;
+  readonly evidenceRouteKey: string;
+  readonly venueLaneKey: string;
   readonly perRouteOperatorApprovalRequired: false;
   readonly liveOrderSubmissionAuthorized: false;
 }
@@ -88,6 +90,9 @@ export interface StrategyOneTimingHeadroomReview {
   readonly schemaVersion: "115.0";
   readonly generatedAt: number;
   readonly routeKey: string;
+  readonly qualificationScope?: "EXACT_ROUTE" | "VENUE_DIRECTION_POOL";
+  readonly evidenceRouteKey?: string;
+  readonly venueLaneKey?: string;
   readonly market: string;
   readonly buyExchange: string;
   readonly sellExchange: string;
@@ -181,11 +186,104 @@ export class StrategyOneTimingCalibrationService {
     },
     now = Date.now(),
   ): StrategyOneTimingHeadroomReview {
+    return this.reviewHeadroomAgainstEvidence(
+      input,
+      input,
+      now,
+      "EXACT_ROUTE",
+    );
+  }
+
+  reviewDynamicPoolHeadroom(
+    input: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+    now = Date.now(),
+  ): StrategyOneTimingHeadroomReview {
+    validateTime(now);
+    const requested = {
+      market: normalizeMarket(input.market),
+      buyExchange: normalizeExchange(input.buyExchange),
+      sellExchange: normalizeExchange(input.sellExchange),
+    };
+
+    if (!isStrategyOneTinyLiveDynamicRoute(requested)) {
+      return this.reviewHeadroomAgainstEvidence(
+        requested,
+        requested,
+        now,
+        "VENUE_DIRECTION_POOL",
+      );
+    }
+
+    const timingReport = this.evidence.getReport(now);
+    const pilotReport = this.pilotEquivalentEvidence.getReport(now);
+    const pilotByRoute = new Map(
+      pilotReport.routes.map((route) => [route.routeKey, route] as const),
+    );
+    const reference = timingReport.routes
+      .filter((route) =>
+        route.buyExchange === requested.buyExchange &&
+        route.sellExchange === requested.sellExchange &&
+        route.calibration.publicTimingReady)
+      .flatMap((route) => {
+        const pilotRoute = pilotByRoute.get(route.routeKey);
+        return pilotRoute?.dispatchReserved.calibration.ready
+          ? [{
+              market: route.market,
+              buyExchange: route.buyExchange,
+              sellExchange: route.sellExchange,
+              strength: Math.min(
+                route.metrics.decisionToPipelineStartMs.sampleCount,
+                pilotRoute.dispatchReserved.generations,
+              ),
+              worstP99: Math.max(
+                pilotRoute.dispatchReserved.buyAgeMs.p99Ms ?? Number.POSITIVE_INFINITY,
+                pilotRoute.dispatchReserved.sellAgeMs.p99Ms ?? Number.POSITIVE_INFINITY,
+              ),
+            }]
+          : [];
+      })
+      .sort((first, second) =>
+        second.strength - first.strength ||
+        second.worstP99 - first.worstP99 ||
+        first.market.localeCompare(second.market))[0];
+
+    return this.reviewHeadroomAgainstEvidence(
+      requested,
+      reference ?? requested,
+      now,
+      "VENUE_DIRECTION_POOL",
+    );
+  }
+
+  private reviewHeadroomAgainstEvidence(
+    input: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+    evidenceInput: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+    now: number,
+    qualificationScope: "EXACT_ROUTE" | "VENUE_DIRECTION_POOL",
+  ): StrategyOneTimingHeadroomReview {
     validateTime(now);
     const market = normalizeMarket(input.market);
     const buyExchange = normalizeExchange(input.buyExchange);
     const sellExchange = normalizeExchange(input.sellExchange);
     const routeKey = `${market}:${buyExchange}->${sellExchange}`;
+    const evidenceMarket = normalizeMarket(evidenceInput.market);
+    const evidenceBuyExchange = normalizeExchange(evidenceInput.buyExchange);
+    const evidenceSellExchange = normalizeExchange(evidenceInput.sellExchange);
+    const evidenceRouteKey =
+      `${evidenceMarket}:${evidenceBuyExchange}->${evidenceSellExchange}`;
+    const venueLaneKey = `${buyExchange}->${sellExchange}`;
     const blockers: string[] = [];
 
     if (!isExactStrategyOnePilotRoute({market, buyExchange, sellExchange})) {
@@ -197,13 +295,13 @@ export class StrategyOneTimingCalibrationService {
     const report = this.evidence.getReport(now);
     const pilotReport = this.pilotEquivalentEvidence.getReport(now);
     const route = report.routes.find((item) =>
-      item.market === market &&
-      item.buyExchange === buyExchange &&
-      item.sellExchange === sellExchange);
+      item.market === evidenceMarket &&
+      item.buyExchange === evidenceBuyExchange &&
+      item.sellExchange === evidenceSellExchange);
     const pilotRoute = pilotReport.routes.find((item) =>
-      item.market === market &&
-      item.buyExchange === buyExchange &&
-      item.sellExchange === sellExchange);
+      item.market === evidenceMarket &&
+      item.buyExchange === evidenceBuyExchange &&
+      item.sellExchange === evidenceSellExchange);
 
     if (!route) {
       blockers.push("Route-specific Strategy #1 public timing evidence is unavailable.");
@@ -305,6 +403,9 @@ export class StrategyOneTimingCalibrationService {
       schemaVersion: "115.0" as const,
       generatedAt: now,
       routeKey,
+      qualificationScope,
+      evidenceRouteKey,
+      venueLaneKey,
       market,
       buyExchange,
       sellExchange,
@@ -353,7 +454,7 @@ export class StrategyOneTimingCalibrationService {
       return null;
     }
 
-    const headroom = this.reviewHeadroom(route, now);
+    const headroom = this.reviewDynamicPoolHeadroom(route, now);
 
     if (
       headroom.state !== "READY" ||
@@ -367,6 +468,8 @@ export class StrategyOneTimingCalibrationService {
       routeKey: headroom.routeKey,
       timingPolicyRevision: CONTROLLED_PILOT_TIMING_POLICY_REVISION,
       maximumBookAgeMs: headroom.maximumBookAgeMs,
+      evidenceRouteKey: headroom.evidenceRouteKey,
+      venueLaneKey: headroom.venueLaneKey,
     }).slice(0, 32)}`;
 
     return freeze({
@@ -376,10 +479,12 @@ export class StrategyOneTimingCalibrationService {
       routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
       routeKey: headroom.routeKey,
       ...route,
-      source: "DYNAMIC_POOL_EXACT_ROUTE_EVIDENCE" as const,
+      source: "DYNAMIC_POOL_VENUE_DIRECTION_EVIDENCE" as const,
       scope: "DYNAMIC_POOL" as const,
       maximumBookAgeMs: headroom.maximumBookAgeMs,
       evidenceGeneratedAt: headroom.generatedAt,
+      evidenceRouteKey: headroom.evidenceRouteKey ?? headroom.routeKey,
+      venueLaneKey: headroom.venueLaneKey ?? `${route.buyExchange}->${route.sellExchange}`,
       perRouteOperatorApprovalRequired: false as const,
       liveOrderSubmissionAuthorized: false as const,
     });

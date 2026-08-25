@@ -37,6 +37,9 @@ import {
 import {
   strategyOneExecutionPolicyService,
 } from "../../../trading/policy/StrategyOneExecutionPolicyService";
+import {
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+} from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
 import {
   strategyOnePaperStressGate,
@@ -63,6 +66,7 @@ const REQUIRED_CONFIRMATION_TOKEN =
 
 export interface StrategyOnePilotRuntimePolicy {
   readonly capitalPerLegInr: number;
+  readonly maximumCapitalPerLegInr?: number;
   readonly minimumNetProfitPercent: number;
   readonly maximumPreviewOpportunityAgeMs: number;
 }
@@ -209,6 +213,8 @@ const DEFAULT_DEPENDENCIES:
       return {
         capitalPerLegInr:
           policy.capitalPerLegInr,
+        maximumCapitalPerLegInr:
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
         minimumNetProfitPercent:
           policy.minimumNetProfitPercent,
         maximumPreviewOpportunityAgeMs:
@@ -259,6 +265,10 @@ const DEFAULT_DEPENDENCIES:
           opportunity,
           requestedCapitalInr:
             requestedCapitalInr,
+          maximumCapitalPerLegInr:
+            STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
+          allowSingleIncrementMinimumOrderRoundUp:
+            true,
           fundingBoundary:
             "AUTHENTICATED_LIVE_READINESS",
           now,
@@ -266,7 +276,7 @@ const DEFAULT_DEPENDENCIES:
   reviewTiming:
     (input, now) =>
       strategyOneTimingCalibrationService
-        .reviewHeadroom(
+        .reviewDynamicPoolHeadroom(
           input,
           now,
         ),
@@ -855,7 +865,7 @@ export class StrategyOnePilotPreflightService {
       check(
         "FRESH_TWO_LEG_FUNDING_AND_RULES",
         exactPilotFunded,
-        `Fresh authenticated balances, exchange rules, depth and ₹${tinyLivePolicy.capitalPerLegInr} maximum sizing pass on both legs; only a mandatory sub-one-step quantity round-down is accepted.`,
+        `Fresh authenticated balances, exchange rules and depth pass at the ₹${tinyLivePolicy.capitalPerLegInr} target; one shared-step minimum-order cushion is bounded by the ₹${tinyLivePolicy.maximumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr} hard cap.`,
         exactPilotFunded
           ? []
           : funding.blockers.length >
@@ -864,7 +874,7 @@ export class StrategyOnePilotPreflightService {
                 ...funding.blockers,
               ]
             : [
-                `₹${tinyLivePolicy.capitalPerLegInr} maximum sizing was ${funding.state}; only exchange-mandated quantity rounding below one shared step is accepted.`,
+                `₹${tinyLivePolicy.capitalPerLegInr} target sizing was ${funding.state}; only exchange-mandated rounding within the hard cap is accepted.`,
               ],
       ),
       check(
@@ -943,7 +953,13 @@ function isExactPilotFunding(
     funding.authenticatedBalancesRequired &&
     !funding.isolatedPaperCapital &&
     !funding.staleBalanceAllowed &&
-    funding.quantityNeverIncreased &&
+    (
+      funding.quantityNeverIncreased ||
+      isBoundedMinimumOrderCushion(
+        funding,
+        requestedCapitalInr,
+      )
+    ) &&
     funding.blockers.length ===
       0 &&
     funding.executableQuantity !==
@@ -984,6 +1000,55 @@ function isExactPilotFunding(
       funding,
       requestedCapitalInr,
     );
+}
+
+function isBoundedMinimumOrderCushion(
+  funding: StrategyOneFundedRouteReport,
+  requestedCapitalInr: number,
+): boolean {
+  const normalization = funding.quantityNormalization;
+  const maximumCapitalPerLegInr = funding.maximumCapitalPerLegInr;
+  const estimatedBuyRequirementInr = funding.estimatedBuyRequirementInr;
+  const increaseQuantity = normalization?.increaseQuantity;
+
+  if (
+    funding.minimumOrderCushionUsed !== true ||
+    funding.quantityNeverIncreased ||
+    normalization === null ||
+    normalization.state !== "NORMALIZED" ||
+    normalization.minimumOrderCushionUsed !== true ||
+    normalization.roundDownOnly ||
+    normalization.quantityNeverIncreased ||
+    !normalization.liveOrderSafe ||
+    !normalization.incrementEvidenceComplete ||
+    normalization.paperOnlyFallbackUsed ||
+    normalization.blockers.length > 0 ||
+    normalization.commonQuantityIncrement === null ||
+    increaseQuantity === undefined ||
+    increaseQuantity === null ||
+    normalization.normalizedQuantity === null ||
+    maximumCapitalPerLegInr === undefined ||
+    estimatedBuyRequirementInr === undefined ||
+    estimatedBuyRequirementInr === null
+  ) {
+    return false;
+  }
+
+  const tolerance = Math.max(
+    1e-12,
+    normalization.commonQuantityIncrement * 1e-12,
+  );
+
+  return Number.isFinite(increaseQuantity) &&
+    increaseQuantity > tolerance &&
+    increaseQuantity <=
+      normalization.commonQuantityIncrement + tolerance &&
+    normalization.normalizedQuantity > normalization.rawQuantity &&
+    Number.isFinite(maximumCapitalPerLegInr) &&
+    maximumCapitalPerLegInr ===
+      STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr &&
+    estimatedBuyRequirementInr > requestedCapitalInr &&
+    estimatedBuyRequirementInr <= maximumCapitalPerLegInr + 0.01;
 }
 
 function isMandatorySharedIncrementOnlyReduction(

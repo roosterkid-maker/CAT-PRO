@@ -73,13 +73,14 @@ export interface StrategyOneTinyLivePreArmAttempt {
 }
 
 export interface StrategyOneTinyLivePreArmRecord {
-  readonly schemaVersion: "125.0" | "150.0" | "182.0" | "188.0";
+  readonly schemaVersion: "125.0" | "150.0" | "182.0" | "188.0" | "190.0";
   readonly id: string;
   readonly state: StrategyOneTinyLivePreArmState;
   readonly market: string;
   readonly buyExchange: StrategyOnePilotExchange;
   readonly sellExchange: StrategyOnePilotExchange;
   readonly capitalPerLegInr: number;
+  readonly maximumCapitalPerLegInr?: number;
   readonly requiredArmPhrase: string;
   readonly armedAt: number;
   readonly expiresAt: number;
@@ -662,6 +663,7 @@ export class StrategyOneTinyLivePreArmService {
     const durationMinutes = input.durationMinutes ?? policy.durationMinutes;
     const maximumAttempts = input.maximumAttempts ?? policy.maximumAttempts;
     const capitalPerLegInr = this.dependencies.getCapitalPerLegInr();
+    const maximumCapitalPerLegInr = policy.maximumCapitalPerLegInr;
 
     if (input.routePoolId?.trim() !== policy.id) {
       throw new Error("Unknown Strategy #1 dynamic route-pool policy.");
@@ -713,18 +715,20 @@ export class StrategyOneTinyLivePreArmService {
     const id = `tiny-live-prearm-${hash({
       routePoolId: policy.id,
       capitalPerLegInr,
+      maximumCapitalPerLegInr,
       maximumAttempts,
       armedAt: now,
       expiresAt,
     }).slice(0, 32)}`;
     const record = freeze({
-      schemaVersion: "188.0" as const,
+      schemaVersion: "190.0" as const,
       id,
       state: "ARMED" as const,
       market: "DYNAMIC_POOL",
       buyExchange: "coindcx" as const,
       sellExchange: "binance" as const,
       capitalPerLegInr,
+      maximumCapitalPerLegInr,
       requiredArmPhrase,
       armedAt: now,
       expiresAt,
@@ -889,6 +893,7 @@ export class StrategyOneTinyLivePreArmService {
         sellExchange: authority.sellExchange,
       }) ||
       authority.capitalPerLegInr !== active.capitalPerLegInr
+      || authority.maximumCapitalPerLegInr !== active.maximumCapitalPerLegInr
     ) {
       this.recordBlocked(
         actionCandidate.id,
@@ -1093,7 +1098,16 @@ export class StrategyOneTinyLivePreArmService {
       return;
     }
 
-    if (current.expiresAt >= now) {
+    const supersededDynamicPoolPolicy =
+      current.routeScope === "DYNAMIC_POOL" &&
+      (
+        current.schemaVersion !== "190.0" ||
+        current.maximumCapitalPerLegInr !==
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr ||
+        current.requiredArmPhrase !== dynamicPoolArmPhrase(current.maximumAttempts as 9 | 10)
+      );
+
+    if (current.expiresAt >= now && !supersededDynamicPoolPolicy) {
       return;
     }
 
@@ -1101,7 +1115,9 @@ export class StrategyOneTinyLivePreArmService {
       ...clone(current),
       state: "EXPIRED" as const,
       completedAt: now,
-      failureReason: "Unused one-shot pre-arm expired.",
+      failureReason: supersededDynamicPoolPolicy
+        ? "Dynamic route-pool arm expired because its capital consent predates the ₹505 hard-cap policy."
+        : "Unused one-shot pre-arm expired.",
     }));
   }
 
@@ -1265,7 +1281,7 @@ function dynamicPoolArmPhrase(
   maximumAttempts: 9 | 10 = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
 ): string {
   const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
-  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
+  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} MAXINR${policy.maximumCapitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
 }
 
 function getAttemptsUsed(record: StrategyOneTinyLivePreArmRecord): number {
@@ -1402,6 +1418,7 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
   const batch = item.schemaVersion === "150.0";
   const tenAttemptBatch = item.schemaVersion === "182.0";
   const dynamicPoolBatch = item.schemaVersion === "188.0";
+  const minimumOrderCushionBatch = item.schemaVersion === "190.0";
   const attempts = item.attempts ?? [];
   const attemptsUsed = item.attemptsUsed ?? (legacy ? undefined : 0);
 
@@ -1414,14 +1431,14 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
       buyExchange: item.buyExchange,
       sellExchange: item.sellExchange,
     });
-  const dynamicPoolRecord = dynamicPoolBatch &&
+  const dynamicPoolRecord = (dynamicPoolBatch || minimumOrderCushionBatch) &&
     item.routeScope === "DYNAMIC_POOL" &&
     item.routePoolId === STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID &&
     item.market === "DYNAMIC_POOL" &&
     item.buyExchange === "coindcx" &&
     item.sellExchange === "binance";
 
-  return (legacy || batch || tenAttemptBatch || dynamicPoolBatch) &&
+  return (legacy || batch || tenAttemptBatch || dynamicPoolBatch || minimumOrderCushionBatch) &&
     typeof item.id === "string" && item.id.startsWith("tiny-live-prearm-") &&
     states.includes(item.state as StrategyOneTinyLivePreArmState) &&
     (exactRouteRecord || dynamicPoolRecord) &&
@@ -1429,6 +1446,11 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
     Number.isSafeInteger(item.capitalPerLegInr) &&
     (item.capitalPerLegInr ?? 0) >= 100 &&
     (item.capitalPerLegInr ?? 0) <= 500 &&
+    (
+      !minimumOrderCushionBatch ||
+      item.maximumCapitalPerLegInr ===
+        STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr
+    ) &&
     typeof item.requiredArmPhrase === "string" &&
     isPositiveTime(item.armedAt) &&
     isPositiveTime(item.expiresAt) &&
@@ -1453,7 +1475,7 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
           ? item.maximumAttempts === LEGACY_BATCH_ATTEMPTS
           : tenAttemptBatch
             ? item.maximumAttempts === MAXIMUM_BATCH_ATTEMPTS
-            : dynamicPoolBatch && (
+            : (dynamicPoolBatch || minimumOrderCushionBatch) && (
               item.maximumAttempts === REDUCED_DYNAMIC_POOL_ATTEMPTS ||
               item.maximumAttempts === MAXIMUM_BATCH_ATTEMPTS
             )
@@ -1526,6 +1548,7 @@ function isValidTransition(
     previous.buyExchange === next.buyExchange &&
     previous.sellExchange === next.sellExchange &&
     previous.capitalPerLegInr === next.capitalPerLegInr &&
+    previous.maximumCapitalPerLegInr === next.maximumCapitalPerLegInr &&
     previous.requiredArmPhrase === next.requiredArmPhrase &&
     previous.maximumAttempts === next.maximumAttempts &&
     previous.routeScope === next.routeScope &&
@@ -1540,7 +1563,7 @@ function isValidTransition(
 
   const allowed: Record<StrategyOneTinyLivePreArmState, readonly StrategyOneTinyLivePreArmState[]> = {
     ARMED: ["CLAIMED", "DISARMED", "EXPIRED"],
-    CLAIMED: next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "188.0"
+    CLAIMED: next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "188.0" || next.schemaVersion === "190.0"
       ? ["ARMED", "COMPLETED", "FAILED_SAFE"]
       : ["COMPLETED", "FAILED_SAFE"],
     COMPLETED: [],
@@ -1562,7 +1585,7 @@ function isValidTransition(
   }
 
   if (
-    (next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "188.0") &&
+    (next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "188.0" || next.schemaVersion === "190.0") &&
     previous.state === "CLAIMED"
   ) {
     const appended = next.attempts?.[next.attempts.length - 1] ?? null;

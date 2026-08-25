@@ -227,6 +227,7 @@ export default function BotDashboard() {
           routePoolId: routePool.id,
           confirmation: routePoolArmPhrase(
             routePool.capitalPerLegInr,
+            routePool.maximumCapitalPerLegInr,
             routePoolArmAttempts,
           ),
         });
@@ -285,6 +286,7 @@ export default function BotDashboard() {
       routePoolId: routePool.id,
       confirmation: routePoolArmPhrase(
         routePool.capitalPerLegInr,
+        routePool.maximumCapitalPerLegInr,
         routePoolArmAttempts,
       ),
     });
@@ -1982,7 +1984,7 @@ function StrategyOnePreArmedOneShotPanel({
     <article className={`overflow-hidden rounded-2xl border ${active ? "border-emerald-400/30 bg-emerald-400/[0.035] shadow-[0_0_34px_rgba(52,211,153,.08)]" : "border-border-default bg-panel"}`}>
       <PanelHeader
         icon={<Zap className="size-4" />}
-        eyebrow="V188 DYNAMIC ROUTE POOL"
+        eyebrow="V190 DYNAMIC ROUTE POOL"
         title="Current USDT routes and controlled execution evidence"
         right={(
           <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${active ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : diagnostics?.runtimeGateEnabled ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-border-default bg-panel-light text-text-muted"}`}>
@@ -2000,8 +2002,8 @@ function StrategyOnePreArmedOneShotPanel({
         />
         <ActivityMetric
           label="Hard capital cap"
-          value={`₹${formatInteger(active?.capitalPerLegInr ?? capitalPerLegInr)} / leg`}
-          detail="Two exact spot legs · active policy only"
+          value={`₹${formatInteger(active?.maximumCapitalPerLegInr ?? diagnostics?.routePool.maximumCapitalPerLegInr ?? 505)} / leg`}
+          detail={`₹${formatInteger(active?.capitalPerLegInr ?? capitalPerLegInr)} target · one-step minimum cushion only`}
         />
         <ActivityMetric
           label="Authority lifetime"
@@ -2023,7 +2025,7 @@ function StrategyOnePreArmedOneShotPanel({
               <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">PER-ATTEMPT EXACT INVENTORY</p>
               <p className="mt-1 text-xs text-text-muted">No coin is pinned. The selected BUY/SELL route must prove both live balances before every attempt.</p>
             </div>
-            <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[9px] font-bold text-emerald-300">₹{formatInteger(diagnostics.routePool.capitalPerLegInr)} / LEG</span>
+            <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 font-mono text-[9px] font-bold text-emerald-300">₹{formatInteger(diagnostics.routePool.capitalPerLegInr)} TARGET · ₹{formatInteger(diagnostics.routePool.maximumCapitalPerLegInr)} MAX</span>
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {diagnostics.routePool.eligibility.map((gate) => (
@@ -2189,7 +2191,7 @@ function StrategyOnePreArmedOneShotPanel({
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
           <MiniEvidence label="Operator approval" value="DYNAMIC ARM ONCE" />
-          <MiniEvidence label="Route qualification" value="AUTOMATIC / EXACT" />
+          <MiniEvidence label="Timing qualification" value="AUTOMATIC / VENUE LANE" />
           <MiniEvidence label="Safety ceiling" value="≤ 250 ms" />
         </div>
       </div>
@@ -2220,7 +2222,7 @@ function StrategyOnePreArmedOneShotPanel({
               />
               <span>
                 I understand that arming submits no order now. {armAttempts !== null ? (
-                  <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)}-per-leg attempt.</>
+                  <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)} target attempt, with a hard ₹{formatInteger(diagnostics?.routePool.maximumCapitalPerLegInr ?? 505)} minimum-order ceiling per leg.</>
                 ) : (
                   <>Only {dailyAttemptBudget?.remainingDailyAttempts ?? 0} daily slots remain; the controlled dynamic pool requires 9 or 10 and stays unavailable until {formatIstTime(dailyAttemptBudget?.resetsAt ?? 0)} IST.</>
                 )} Every exact route gets credible-history, inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch. LIVE OFF never resets consumed daily attempts.
@@ -3386,9 +3388,10 @@ function toPreArmRoute(route: {
 
 function routePoolArmPhrase(
   capitalPerLegInr: number,
+  maximumCapitalPerLegInr: number,
   maximumAttempts: 9 | 10,
 ): string {
-  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES180`;
+  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} MAXINR${maximumCapitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES180`;
 }
 
 function formatIstTime(timestamp: number): string {

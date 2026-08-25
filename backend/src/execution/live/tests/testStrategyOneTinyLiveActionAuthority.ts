@@ -169,7 +169,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V111/V189 Tiny-LIVE authority passed: dynamic exact-route evidence needs no per-coin approval, while funded three-second authority, durable claim, expiry/disarm and no automatic retry remain enforced; no exchange order occurred.",
+    "V111/V190 Tiny-LIVE authority passed: venue-direction timing needs no per-coin approval, while exact funded quantity, ₹505 quote cap, three-second authority, durable claim, expiry/disarm and no automatic retry remain enforced; no exchange order occurred.",
   );
 }
 
@@ -192,10 +192,12 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     routePoolId: "strategy-one-dynamic-usdt-route-pool-v1",
     routeKey: "COTIUSDT:coindcx->binance",
     ...route,
-    source: "DYNAMIC_POOL_EXACT_ROUTE_EVIDENCE",
+    source: "DYNAMIC_POOL_VENUE_DIRECTION_EVIDENCE",
     scope: "DYNAMIC_POOL",
     maximumBookAgeMs: 245,
     evidenceGeneratedAt: clock,
+    evidenceRouteKey: "BTCUSDT:coindcx->binance",
+    venueLaneKey: "coindcx->binance",
     perRouteOperatorApprovalRequired: false,
     liveOrderSubmissionAuthorized: false,
   };
@@ -226,7 +228,7 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
   for (const opportunity of opportunities) {
     const preview = service.preview(opportunity.id, ++clock);
     assert.equal(preview.approvedForAuthorization, true);
-    assert.equal(preview.authority?.schemaVersion, "189.0");
+    assert.equal(preview.authority?.schemaVersion, "190.0");
     assert.equal(preview.authority?.calibrationScope, "DYNAMIC_POOL");
     const authority = preview.authority;
     assert.ok(authority);
@@ -1205,6 +1207,11 @@ function routePreflightFixture(
         market: route.market,
         buyExchange: route.buyExchange,
         sellExchange: route.sellExchange,
+        funding: {
+          ...selected.funding,
+          maximumCapitalPerLegInr: 505,
+          maximumConvertedQuoteCapital: 5.05,
+        },
         timing: {
           ...selected.timing,
           routeKey: `${route.market}:${route.buyExchange}->${route.sellExchange}`,
