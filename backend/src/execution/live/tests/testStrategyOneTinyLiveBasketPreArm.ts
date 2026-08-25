@@ -41,6 +41,53 @@ async function main(): Promise<void> {
       phrase,
       "ARM DYNAMIC-POOL USDT INR500 ATTEMPTS10 MINUTES180",
     );
+    const reducedPhrase =
+      StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(9);
+    assert.equal(
+      reducedPhrase,
+      "ARM DYNAMIC-POOL USDT INR500 ATTEMPTS9 MINUTES180",
+    );
+    const reducedFilePath = join(directory, "reduced-route-pool.jsonl");
+    const reducedService = new StrategyOneTinyLivePreArmService({
+      runtimeGateEnabled: () => true,
+      getCapitalPerLegInr: () => 500,
+      getActionDiagnostics: () => ({
+        maximumDailyAttempts: 10,
+        attemptsToday: 1,
+        blockingAuthorityPresent: false,
+      }),
+      now: () => NOW,
+    }, reducedFilePath);
+    assert.throws(() => reducedService.arm({
+      market: "DYNAMIC_POOL",
+      buyExchange: "coindcx",
+      sellExchange: "binance",
+      confirmation: phrase,
+      durationMinutes: 180,
+      maximumAttempts: 10,
+      routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+      now: NOW,
+    }), /exceeds the remaining Tiny-LIVE daily attempt cap/iu);
+    const reducedArm = reducedService.arm({
+      market: "DYNAMIC_POOL",
+      buyExchange: "coindcx",
+      sellExchange: "binance",
+      confirmation: reducedPhrase,
+      durationMinutes: 180,
+      maximumAttempts: 9,
+      routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+      now: NOW,
+    });
+    assert.equal(reducedArm.maximumAttempts, 9);
+    assert.equal(reducedArm.requiredArmPhrase, reducedPhrase);
+    assert.equal(
+      new StrategyOneTinyLivePreArmService({
+        runtimeGateEnabled: () => true,
+        getCapitalPerLegInr: () => 500,
+        now: () => NOW,
+      }, reducedFilePath).getActiveArm(NOW)?.maximumAttempts,
+      9,
+    );
     assert.throws(() => service.arm({
       market: "DYNAMIC_POOL",
       buyExchange: "coindcx",
@@ -90,7 +137,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V188 dynamic route-pool pre-arm passed: exact 10-attempt/180-minute consent, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
+    "V188 dynamic route-pool pre-arm passed: exact 9-or-10-attempt/180-minute consent, daily-cap enforcement, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
   );
 }
 

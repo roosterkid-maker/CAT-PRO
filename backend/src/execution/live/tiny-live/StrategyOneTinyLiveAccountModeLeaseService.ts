@@ -60,7 +60,7 @@ export interface StrategyOneTinyLiveAccountModeLeaseRecord {
   readonly buyExchange: string;
   readonly sellExchange: string;
   readonly capitalPerLegInr: number;
-  readonly maximumAttempts: 1 | 2 | 10;
+  readonly maximumAttempts: 1 | 2 | 9 | 10;
   readonly priorAccountMode: "PAPER";
   readonly leasedAccountMode: "LIVE";
   readonly timingCalibrationId: string;
@@ -1503,7 +1503,12 @@ function isLeaseRecord(
       500 &&
     (legacy
       ? item.maximumAttempts === 1 || item.maximumAttempts === 2
-      : item.maximumAttempts === 10) &&
+      : tenAttempt
+        ? item.maximumAttempts === 10
+        : dynamicPool && (
+          item.maximumAttempts === 9 ||
+          item.maximumAttempts === 10
+        )) &&
     item.priorAccountMode ===
       "PAPER" &&
     item.leasedAccountMode ===

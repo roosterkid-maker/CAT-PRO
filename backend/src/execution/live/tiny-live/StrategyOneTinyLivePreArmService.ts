@@ -85,7 +85,7 @@ export interface StrategyOneTinyLivePreArmRecord {
   readonly failureReason: string | null;
   readonly automaticRetryAllowed: false;
   readonly automaticFundMovementAllowed: false;
-  readonly maximumAttempts: 1 | 2 | 10;
+  readonly maximumAttempts: 1 | 2 | 9 | 10;
   readonly attemptsUsed?: number;
   readonly attempts?: readonly StrategyOneTinyLivePreArmAttempt[];
   readonly nextAttemptNotBefore?: number | null;
@@ -148,7 +148,7 @@ export interface StrategyOneTinyLivePreArmRequest {
   readonly sellExchange: string;
   readonly confirmation: string;
   readonly durationMinutes?: number;
-  readonly maximumAttempts?: 1 | 2 | 10;
+  readonly maximumAttempts?: 1 | 2 | 9 | 10;
   readonly now?: number;
   readonly routePoolId?: string;
 }
@@ -165,6 +165,7 @@ const DEFAULT_DURATION_MINUTES = 15;
 const MAXIMUM_DURATION_MINUTES = 30;
 const MAXIMUM_BATCH_DURATION_MINUTES = 180;
 const LEGACY_BATCH_ATTEMPTS = 2;
+const REDUCED_DYNAMIC_POOL_ATTEMPTS = 9;
 const MAXIMUM_BATCH_ATTEMPTS = 10;
 const BETWEEN_ATTEMPTS_COOLDOWN_MS = 5_000;
 const BLOCKED_REEVALUATION_INTERVAL_MS = 250;
@@ -661,7 +662,7 @@ export class StrategyOneTinyLivePreArmService {
     buyExchange: string;
     sellExchange: string;
     capitalPerLegInr: number;
-    maximumAttempts?: 1 | 2 | 10;
+    maximumAttempts?: 1 | 2 | 9 | 10;
     durationMinutes?: number;
   }): string {
     return armPhrase({
@@ -678,8 +679,10 @@ export class StrategyOneTinyLivePreArmService {
     return dynamicPoolArmPhrase();
   }
 
-  static requiredRoutePoolArmPhrase(): string {
-    return dynamicPoolArmPhrase();
+  static requiredRoutePoolArmPhrase(
+    maximumAttempts: 9 | 10 = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
+  ): string {
+    return dynamicPoolArmPhrase(maximumAttempts);
   }
 
   private armDynamicPool(
@@ -693,7 +696,6 @@ export class StrategyOneTinyLivePreArmService {
     const durationMinutes = input.durationMinutes ?? policy.durationMinutes;
     const maximumAttempts = input.maximumAttempts ?? policy.maximumAttempts;
     const capitalPerLegInr = this.dependencies.getCapitalPerLegInr();
-    const requiredArmPhrase = dynamicPoolArmPhrase();
 
     if (input.routePoolId?.trim() !== policy.id) {
       throw new Error("Unknown Strategy #1 dynamic route-pool policy.");
@@ -707,9 +709,17 @@ export class StrategyOneTinyLivePreArmService {
       throw new Error("Another Strategy #1 Tiny-LIVE pre-arm is already active.");
     }
 
-    if (durationMinutes !== policy.durationMinutes || maximumAttempts !== policy.maximumAttempts) {
-      throw new Error("The dynamic route pool is bounded at 10 attempts over 180 minutes.");
+    if (
+      durationMinutes !== policy.durationMinutes ||
+      (
+        maximumAttempts !== REDUCED_DYNAMIC_POOL_ATTEMPTS &&
+        maximumAttempts !== policy.maximumAttempts
+      )
+    ) {
+      throw new Error("The dynamic route pool supports only 9 or 10 attempts over exactly 180 minutes.");
     }
+
+    const requiredArmPhrase = dynamicPoolArmPhrase(maximumAttempts);
 
     if (capitalPerLegInr !== policy.capitalPerLegInr) {
       throw new Error(
@@ -727,8 +737,10 @@ export class StrategyOneTinyLivePreArmService {
       throw new Error("An existing Tiny-LIVE authority or unresolved attempt blocks route-pool pre-arming.");
     }
 
-    if (action.attemptsToday + policy.maximumAttempts > action.maximumDailyAttempts) {
-      throw new Error("The 10-attempt route pool exceeds the remaining Tiny-LIVE daily attempt cap.");
+    if (action.attemptsToday + maximumAttempts > action.maximumDailyAttempts) {
+      throw new Error(
+        `The ${maximumAttempts}-attempt route pool exceeds the remaining Tiny-LIVE daily attempt cap.`,
+      );
     }
 
     const expiresAt = now + policy.durationMinutes * 60_000;
@@ -758,7 +770,7 @@ export class StrategyOneTinyLivePreArmService {
       failureReason: null,
       automaticRetryAllowed: false as const,
       automaticFundMovementAllowed: false as const,
-      maximumAttempts: 10 as const,
+      maximumAttempts,
       attemptsUsed: 0,
       attempts: [],
       nextAttemptNotBefore: null,
@@ -1247,7 +1259,7 @@ function armPhrase(input: {
   buyExchange: StrategyOnePilotExchange;
   sellExchange: StrategyOnePilotExchange;
   capitalPerLegInr: number;
-  maximumAttempts: 1 | 2 | 10;
+  maximumAttempts: 1 | 2 | 9 | 10;
   durationMinutes: number;
 }): string {
   if (input.maximumAttempts === 1) {
@@ -1260,9 +1272,11 @@ function armPhrase(input: {
   return `ARM ${label} ${input.market} ${input.buyExchange.toUpperCase()} ${input.sellExchange.toUpperCase()} INR${input.capitalPerLegInr} ATTEMPTS${input.maximumAttempts} MINUTES${input.durationMinutes}`;
 }
 
-function dynamicPoolArmPhrase(): string {
+function dynamicPoolArmPhrase(
+  maximumAttempts: 9 | 10 = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
+): string {
   const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
-  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} ATTEMPTS${policy.maximumAttempts} MINUTES${policy.durationMinutes}`;
+  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
 }
 
 function getAttemptsUsed(record: StrategyOneTinyLivePreArmRecord): number {
@@ -1428,10 +1442,24 @@ function isPreArmRecord(value: unknown): value is StrategyOneTinyLivePreArmRecor
     (item.failureReason === null || typeof item.failureReason === "string") &&
     item.automaticRetryAllowed === false &&
     item.automaticFundMovementAllowed === false &&
-    (item.maximumAttempts === 1 || item.maximumAttempts === 2 || item.maximumAttempts === 10) &&
+    (
+      item.maximumAttempts === 1 ||
+      item.maximumAttempts === 2 ||
+      item.maximumAttempts === 9 ||
+      item.maximumAttempts === 10
+    ) &&
     (legacy
       ? item.maximumAttempts === 1
-      : item.maximumAttempts === (batch ? LEGACY_BATCH_ATTEMPTS : MAXIMUM_BATCH_ATTEMPTS) &&
+      : (
+        batch
+          ? item.maximumAttempts === LEGACY_BATCH_ATTEMPTS
+          : tenAttemptBatch
+            ? item.maximumAttempts === MAXIMUM_BATCH_ATTEMPTS
+            : dynamicPoolBatch && (
+              item.maximumAttempts === REDUCED_DYNAMIC_POOL_ATTEMPTS ||
+              item.maximumAttempts === MAXIMUM_BATCH_ATTEMPTS
+            )
+      ) &&
         Number.isSafeInteger(attemptsUsed) &&
         (attemptsUsed ?? -1) >= 0 &&
         (attemptsUsed ?? ((item.maximumAttempts ?? 0) + 1)) <= item.maximumAttempts &&

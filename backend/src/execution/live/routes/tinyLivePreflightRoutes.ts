@@ -682,6 +682,8 @@ router.post(
           : undefined,
         maximumAttempts: request.body?.maximumAttempts === 10
           ? 10
+          : request.body?.maximumAttempts === 9
+            ? 9
           : request.body?.maximumAttempts === 2
             ? 2
             : 1,
