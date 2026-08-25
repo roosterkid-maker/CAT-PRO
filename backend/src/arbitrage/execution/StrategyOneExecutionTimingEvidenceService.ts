@@ -228,6 +228,21 @@ export class StrategyOneExecutionTimingEvidenceService {
   private invalidSamplesRejected = 0;
   private observerFailures = 0;
 
+  /*
+   * Percentile reports are derived entirely from the mutable evidence above.
+   * Building one sorts every retained metric for every route and venue.  A
+   * Tiny-LIVE preview followed immediately by authorization therefore used to
+   * rebuild the same immutable report twice even though the single-threaded
+   * event loop cannot mutate evidence between those synchronous reads.
+   *
+   * Keep the frozen derived report until an evidence owner mutates state.
+   * generatedAt and persistence diagnostics are overlaid on every read so
+   * callers never receive stale action-time or durability metadata.
+   */
+  private cachedReport:
+    StrategyOneExecutionTimingReport | null =
+      null;
+
   constructor(configuration: StrategyOneTimingEvidenceConfiguration = {}) {
     this.maximumRoutes = configuration.maximumRoutes ?? 128;
     this.maximumSamplesPerMetric = configuration.maximumSamplesPerMetric ?? 512;
@@ -252,6 +267,7 @@ export class StrategyOneExecutionTimingEvidenceService {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.invalidateReportCache();
     this.timer = setInterval(() => this.persistSafely(Date.now()), this.persistenceIntervalMs);
     this.timer.unref?.();
   }
@@ -261,9 +277,12 @@ export class StrategyOneExecutionTimingEvidenceService {
     this.timer = null;
     this.persistSafely(Date.now());
     this.running = false;
+    this.invalidateReportCache();
   }
 
   observePaperStage(snapshot: OpportunitySnapshot, stage: StrategyOnePaperTimingStage, observedAt = Date.now()): void {
+    this.invalidateReportCache();
+
     if (!validTime(observedAt) || !validTime(snapshot.generatedAt) || observedAt < snapshot.generatedAt) {
       this.invalidSamplesRejected += 1;
       return;
@@ -376,6 +395,8 @@ export class StrategyOneExecutionTimingEvidenceService {
   }
 
   observeLastLook(report: StrategyOneOrderTimeSafetyReport, observedAt = Date.now()): void {
+    this.invalidateReportCache();
+
     try {
       const values = [report.evaluationDurationMs, report.buyBookAgeMs, report.sellBookAgeMs]
         .filter((value): value is number => value !== null);
@@ -397,6 +418,8 @@ export class StrategyOneExecutionTimingEvidenceService {
 
   observeLiveDispatch(input: {readonly lastLook: StrategyOneOrderTimeSafetyReport; readonly buyDispatchAt: number;
     readonly sellDispatchAt: number}): void {
+    this.invalidateReportCache();
+
     try {
       const observedAt = Math.max(input.buyDispatchAt, input.sellDispatchAt);
       const buyDuration = input.buyDispatchAt - input.lastLook.evaluatedAt;
@@ -419,6 +442,8 @@ export class StrategyOneExecutionTimingEvidenceService {
 
   observeGatewayResult(input: {readonly venue: string; readonly market: string; readonly dispatchedAt: number;
     readonly resultAt: number}): void {
+    this.invalidateReportCache();
+
     try {
       normalizeMarket(input.market);
       const duration = input.resultAt - input.dispatchedAt;
@@ -438,6 +463,8 @@ export class StrategyOneExecutionTimingEvidenceService {
 
   observePrivateEvent(input: StrategyOnePrivateEventTimingInput): void {
     if (input.source === "REST_BACKFILL") return;
+    this.invalidateReportCache();
+
     try {
       const orderTransport = input.receivedAt - input.event.sourceEventAt;
       const fillTransport = input.event.kind === "FILL" ? input.receivedAt - input.event.executedAt : null;
@@ -463,14 +490,26 @@ export class StrategyOneExecutionTimingEvidenceService {
   recordObserverFailure(): void {
     this.observerFailures += 1;
     this.dirty = true;
+    this.invalidateReportCache();
   }
 
   getReport(now = Date.now()): StrategyOneExecutionTimingReport {
+    if (this.cachedReport) {
+      return freeze({
+        ...this.cachedReport,
+        generatedAt: now,
+        running: this.running,
+        persistence: this.store.getDiagnostics(),
+      });
+    }
+
     const venueReports = [...this.venues.values()].map((venue) => this.venueReport(venue));
     const venueByName = new Map(venueReports.map((venue) => [venue.venue, venue]));
     const routes = [...this.routes.values()].map((route) => this.routeReport(route, venueByName))
       .sort((first, second) => second.lastObservedAt - first.lastObservedAt || first.routeKey.localeCompare(second.routeKey));
-    return freeze({version: "106.0", generatedAt: now, running: this.running, routesRetained: routes.length,
+    const report:
+      StrategyOneExecutionTimingReport =
+      freeze({version: "106.0", generatedAt: now, running: this.running, routesRetained: routes.length,
       venuesRetained: venueReports.length, invalidSamplesRejected: this.invalidSamplesRejected,
       observerFailures: this.observerFailures, maximumRoutes: this.maximumRoutes,
       maximumSamplesPerMetric: this.maximumSamplesPerMetric,
@@ -485,6 +524,13 @@ export class StrategyOneExecutionTimingEvidenceService {
       persistence: this.store.getDiagnostics(), safety: {evidenceOnly: true,
         noOrderSubmissionAuthority: true, noAutomaticTtlActivation: true,
         restBackfillExcludedFromTransportCalibration: true, paperEvidenceCannotClaimLiveFillLatency: true}});
+
+    this.cachedReport = report;
+    return report;
+  }
+
+  private invalidateReportCache(): void {
+    this.cachedReport = null;
   }
 
   private routeReport(route: MutableRoute, venues: ReadonlyMap<string, StrategyOneVenueTimingReport>): StrategyOneRouteTimingReport {
@@ -642,6 +688,7 @@ export class StrategyOneExecutionTimingEvidenceService {
     } catch {
       this.observerFailures += 1;
       this.dirty = true;
+      this.invalidateReportCache();
     }
   }
 

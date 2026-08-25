@@ -128,13 +128,24 @@ function main(): void {
       "CoinDCX is a supported venue in the dynamic route pool.");
     assert.equal(report.safety.evidenceDoesNotAuthorizeLiveOrOrders, true);
 
+    const cachedReport = service.getReport(NOW + 3_101);
+    assert.equal(cachedReport.generatedAt, NOW + 3_101,
+      "A cached pilot derivation must retain the caller's exact action-time timestamp.");
+    assert.equal(cachedReport.routes, report.routes,
+      "Unchanged pilot evidence must reuse frozen distributions across preview and authorization.");
+    assert.notEqual(cachedReport.persistence, report.persistence,
+      "Pilot persistence diagnostics must remain fresh on a cached evidence read.");
+
     const absoluteOnly = opportunity({
       generatedAt: NOW + 4_000,
       buyAgeMs: 200,
       sellAgeMs: 20,
     });
     service.observeSnapshot(snapshot(absoluteOnly), NOW + 4_005);
-    const dispatchReport = service.getReport(NOW + 4_100).routes.find((item) =>
+    const afterMutationReport = service.getReport(NOW + 4_100);
+    assert.notEqual(afterMutationReport.routes, cachedReport.routes,
+      "Every genuine pilot observation must invalidate the frozen report derivation.");
+    const dispatchReport = afterMutationReport.routes.find((item) =>
       item.routeKey === "BTCUSDT:binance->bybit");
     assert.ok(dispatchReport);
     assert.equal(dispatchReport.executionGradeGenerations, 3,

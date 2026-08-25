@@ -99,6 +99,30 @@ function main(): void {
     assert.equal(report.venues.find((item) => item.venue === "binance")?.privateFillEvents, 2,
       "REST backfill must not contaminate WebSocket transport calibration.");
 
+    const cachedReport = service.getReport(NOW + 1_501);
+    assert.equal(cachedReport.generatedAt, NOW + 1_501,
+      "A cached derivation must retain the caller's exact action-time timestamp.");
+    assert.equal(cachedReport.routes, report.routes,
+      "Unchanged timing evidence must reuse the frozen route derivation across preview and authorization.");
+    assert.equal(cachedReport.venues, report.venues,
+      "Unchanged timing evidence must reuse the frozen venue derivation across preview and authorization.");
+    assert.notEqual(cachedReport.persistence, report.persistence,
+      "Persistence diagnostics must remain fresh even when percentile evidence is reused.");
+
+    service.observeGatewayResult({
+      venue: "binance",
+      market: "BTCUSDT",
+      dispatchedAt: NOW + 1_502,
+      resultAt: NOW + 1_503,
+    });
+    const invalidatedReport = service.getReport(NOW + 1_504);
+    assert.notEqual(invalidatedReport.routes, cachedReport.routes,
+      "Any genuine timing mutation must invalidate the complete derived report.");
+    assert.equal(
+      invalidatedReport.venues.find((item) => item.venue === "binance")?.gatewayResults,
+      1,
+    );
+
     service.stop();
     const restored = new StrategyOneExecutionTimingEvidenceService({filePath, maximumRoutes: 2,
       maximumSamplesPerMetric: 2, maximumOpportunitiesPerSnapshot: 4, persistenceIntervalMs: 60_000,

@@ -305,6 +305,18 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
   private eligibleVenueOpportunities = 0;
   private invalidObservationsRejected = 0;
   private observerFailures = 0;
+
+  /*
+   * Route distributions are immutable derived evidence, but constructing the
+   * full report sorts every retained distribution across the bounded route
+   * cohort.  Preview and authorization are synchronous independent gates, so
+   * they may safely share this frozen derivation only while no observation has
+   * mutated the owner.  Action-time and persistence fields remain fresh on
+   * every read.
+   */
+  private cachedReport:
+    StrategyOnePilotEquivalentPaperEvidenceReport | null =
+      null;
   private persistedSnapshots = 0;
   private running = false;
   private dirty = false;
@@ -332,6 +344,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.invalidateReportCache();
     this.timer = setInterval(() => this.persistSafely(Date.now()), this.persistenceIntervalMs);
     this.timer.unref?.();
   }
@@ -341,9 +354,12 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     this.timer = null;
     this.persistSafely(Date.now());
     this.running = false;
+    this.invalidateReportCache();
   }
 
   observeSnapshot(snapshot: OpportunitySnapshot, observedAt = Date.now()): void {
+    this.invalidateReportCache();
+
     if (!validTime(observedAt) || !validTime(snapshot.generatedAt) || observedAt < snapshot.generatedAt) {
       this.invalidObservationsRejected += 1;
       this.dirty = true;
@@ -387,6 +403,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
   recordObserverFailure(): void {
     this.observerFailures += 1;
     this.dirty = true;
+    this.invalidateReportCache();
   }
 
   isRouteCalibrationReady(routeKeyValue: string, now = Date.now()): boolean {
@@ -396,11 +413,23 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
 
   getReport(now = Date.now()): StrategyOnePilotEquivalentPaperEvidenceReport {
     if (!validTime(now)) throw new Error("Strategy #1 pilot evidence report time is invalid.");
+
+    if (this.cachedReport) {
+      return deepFreeze({
+        ...this.cachedReport,
+        generatedAt: now,
+        running: this.running,
+        persistence: this.store.getDiagnostics(),
+      });
+    }
+
     const routes = [...this.routes.values()]
       .map((route) => this.routeReport(route))
       .sort((first, second) => second.lastUniqueGenerationAt - first.lastUniqueGenerationAt ||
         first.routeKey.localeCompare(second.routeKey));
-    return deepFreeze({
+    const report:
+      StrategyOnePilotEquivalentPaperEvidenceReport =
+      deepFreeze({
       schemaVersion: "112.0" as const,
       generatedAt: now,
       running: this.running,
@@ -428,6 +457,13 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
         evidenceDoesNotAuthorizeLiveOrOrders: true as const,
       },
     });
+
+    this.cachedReport = report;
+    return report;
+  }
+
+  private invalidateReportCache(): void {
+    this.cachedReport = null;
   }
 
   private observePilotOpportunity(opportunity: ArbitrageOpportunity, observedAt: number): string | null {
@@ -859,6 +895,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     } catch {
       this.observerFailures += 1;
       this.dirty = true;
+      this.invalidateReportCache();
     }
   }
 
