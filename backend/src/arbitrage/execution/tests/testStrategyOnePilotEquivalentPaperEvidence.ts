@@ -267,8 +267,10 @@ function main(): void {
     assert.equal(capacityRoutes.length, 2);
     assert.equal(capacityRoutes.some((item) => item.market === "BTCUSDT"), true,
       "Dispatch-reserved evidence approaching calibration must survive dynamic-route churn.");
-    assert.equal(capacityRoutes.some((item) => item.market === "ETHUSDT"), false,
-      "The least-progressed dispatch-reserved route must be evicted at hard capacity.");
+    assert.equal(capacityRoutes.some((item) => item.market === "ETHUSDT"), true,
+      "An equally progressed candidate must remain stable at hard capacity.");
+    assert.equal(capacityRoutes.some((item) => item.market === "SOLUSDT"), false,
+      "A new equal-progress route must not churn an already retained candidate.");
 
     const stableTimingCohort = new StrategyOnePilotEquivalentPaperEvidenceService({
       filePath: join(directory, "pilot-stable-capacity.jsonl"), maximumRoutes: 2,
@@ -305,6 +307,56 @@ function main(): void {
     const admittedOpportunityRoutes = stableTimingCohort.getReport(NOW + 32_100).routes;
     assert.equal(admittedOpportunityRoutes.some((item) => item.market === "SOLUSDT"), true,
       "A current accepted dynamic opportunity must still enter a full timing cohort.");
+
+    const candidatePriorityCohort = new StrategyOnePilotEquivalentPaperEvidenceService({
+      filePath: join(directory, "pilot-candidate-priority.jsonl"), maximumRoutes: 2,
+      minimumExecutionGradeGenerations: 2, minimumObservationSpanMs: 1_000,
+      persistenceIntervalMs: 60_000, maximumGenerationKeysPerRoute: 8,
+    });
+    for (const generatedAt of [NOW + 40_000, NOW + 41_000]) {
+      candidatePriorityCohort.observeSnapshot({
+        generatedAt,
+        opportunities: [],
+        pilotRouteBooks: [
+          {market: "BTCUSDT", buyExchange: "binance", sellExchange: "bybit",
+            buyTimestamp: generatedAt - 20, sellTimestamp: generatedAt - 15},
+          {market: "ETHUSDT", buyExchange: "coindcx", sellExchange: "binance",
+            buyTimestamp: generatedAt - 20, sellTimestamp: generatedAt - 15},
+        ],
+      }, generatedAt + 5);
+    }
+    assert.equal(candidatePriorityCohort.getReport(NOW + 41_100).routes
+      .every((item) => item.dispatchReserved.calibration.ready), true,
+    "The fixture must begin with a full mature timing-only cohort.");
+
+    candidatePriorityCohort.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 42_000, market: "SANDUSDT", buyExchange: "bybit",
+      sellExchange: "coindcx", buyAgeMs: 500, sellAgeMs: 600, netProfitPercent: 0.6,
+    })), NOW + 42_005);
+    candidatePriorityCohort.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 42_100, market: "ADAUSDT", buyExchange: "binance",
+      sellExchange: "bybit", buyAgeMs: 500, sellAgeMs: 600, netProfitPercent: 0.6,
+    })), NOW + 42_105);
+    candidatePriorityCohort.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 42_200, market: "XRPUSDT", buyExchange: "binance",
+      sellExchange: "bybit", buyAgeMs: 500, sellAgeMs: 600, netProfitPercent: 0.6,
+    })), NOW + 42_205);
+    const stableCandidateMarkets = candidatePriorityCohort.getReport(NOW + 42_300).routes
+      .map((item) => item.market).sort();
+    assert.deepEqual(stableCandidateMarkets, ["ADAUSDT", "SANDUSDT"],
+      "Profitable candidates must displace timing-only routes, while an equal new route cannot churn the bounded cohort.");
+
+    for (const generatedAt of [NOW + 43_000, NOW + 44_000]) {
+      candidatePriorityCohort.observeSnapshot(snapshot(opportunity({
+        generatedAt, market: "SANDUSDT", buyExchange: "bybit", sellExchange: "coindcx",
+        buyAgeMs: 20, sellAgeMs: 15, netProfitPercent: 0.6,
+      })), generatedAt + 5);
+    }
+    const retainedCandidate = candidatePriorityCohort.getReport(NOW + 44_100).routes
+      .find((item) => item.market === "SANDUSDT");
+    assert.equal(retainedCandidate?.dispatchReserved.generations, 2);
+    assert.equal(retainedCandidate?.dispatchReserved.calibration.ready, true,
+      "A retained profitable route must be able to mature from later genuine fresh generations.");
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }

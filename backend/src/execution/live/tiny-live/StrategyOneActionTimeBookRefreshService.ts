@@ -232,10 +232,11 @@ const DEFAULT_DEPENDENCIES:
  * Stale-case rescue for the exact first Tiny-LIVE lane.
  *
  * The normal path remains WebSocket-only. This service is reached only after
- * every non-freshness gate has passed and current dispatch freshness alone
- * blocked the action. Both public books are then refreshed concurrently,
- * published through their existing validated stores, and the normal
- * opportunity engine is rerun. No old opportunity or old price is reused.
+ * immutable route, permission, timing, profit and historical-evidence gates
+ * pass, while current freshness or a book-dependent sizing/depth check blocks
+ * the action. Both public books are then refreshed concurrently, published
+ * through their existing validated stores, and the complete opportunity and
+ * preflight pipeline is rerun. No old opportunity or old price is reused.
  */
 export class StrategyOneActionTimeBookRefreshService {
   private readonly dependencies:

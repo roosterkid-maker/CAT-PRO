@@ -1177,6 +1177,16 @@ function shouldRefreshActionBooks(
           "CURRENT_DISPATCH_RESERVED_FRESHNESS",
       );
 
+  const fundingRulesRefreshable =
+    selected.funding.fundingBoundary ===
+      "AUTHENTICATED_LIVE_READINESS" &&
+    selected.funding.buyFunding.sufficient &&
+    selected.funding.sellFunding.sufficient &&
+    selected.funding.quantityNeverIncreased &&
+    selected.funding.quantityNormalization?.state ===
+      "BLOCKED" &&
+    selected.funding.quantityNormalization.incrementEvidenceComplete;
+
   return (
     freshness?.state ===
       "BLOCKED" &&
@@ -1185,10 +1195,17 @@ function shouldRefreshActionBooks(
         (
           check,
         ) =>
+          check.state ===
+            "PASS" ||
           check.key ===
             "CURRENT_DISPATCH_RESERVED_FRESHNESS" ||
-          check.state ===
-            "PASS",
+          check.key ===
+            "POST_STRESS_DEPTH_AND_ECONOMICS" ||
+          (
+            check.key ===
+              "FRESH_TWO_LEG_FUNDING_AND_RULES" &&
+            fundingRulesRefreshable
+          ),
       )
   );
 }

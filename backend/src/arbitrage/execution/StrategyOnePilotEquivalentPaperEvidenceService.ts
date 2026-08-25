@@ -204,6 +204,15 @@ interface MutableRoute {
   retainedEstimatedFeeImpactPercents: number[];
 }
 
+type RouteAdmissionProgress = Pick<MutableRoute,
+  "dispatchReservedLiveEligibleGenerations" |
+  "liveEligibleProfitGenerations" |
+  "executeDecisionGenerations" |
+  "economicsObservedGenerations" |
+  "dispatchReservedGenerations" |
+  "executionGradeGenerations" |
+  "lastUniqueGenerationAt">;
+
 type PersistedRoute = Omit<MutableRoute,
   "executionGradeBuyAgesMs" | "executionGradeSellAgesMs" |
   "firstDispatchReservedGenerationAt" | "lastDispatchReservedGenerationAt" |
@@ -434,14 +443,31 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
       usedLastPriceFallback: opportunity.usedLastPriceFallback,
       now: observedAt,
     });
+    const rejections = classifyFreshness(opportunity, observedAt);
+    const liveEligible = Number.isFinite(opportunity.netProfitPercent) &&
+      opportunity.netProfitPercent >= PROFIT_TIER_POLICY.liveMinimumNetProfitPercent;
+    const executeDecision = opportunity.decision === "EXECUTE";
+    const executionGrade = rejections.length === 0;
+    const dispatchReserved = executionGrade && dispatchFreshness.passed;
     const observed = this.observeRouteGeneration({
       market,
       buyExchange,
       sellExchange,
       buyTimestamp: opportunity.pair.buy.timestamp,
       sellTimestamp: opportunity.pair.sell.timestamp,
-      rejections: classifyFreshness(opportunity, observedAt),
-    }, observedAt, true, true);
+      rejections,
+    }, observedAt, true, {
+      dispatchReservedLiveEligibleGenerations: Number(
+        dispatchReserved && liveEligible && opportunity.pair.buy.executable &&
+        opportunity.pair.sell.executable && opportunity.enoughLiquidity,
+      ),
+      liveEligibleProfitGenerations: Number(liveEligible),
+      executeDecisionGenerations: Number(executeDecision),
+      economicsObservedGenerations: Number(Number.isFinite(opportunity.netProfitPercent)),
+      dispatchReservedGenerations: Number(dispatchReserved),
+      executionGradeGenerations: Number(executionGrade),
+      lastUniqueGenerationAt: observedAt,
+    });
     if (!observed) return null;
     this.observeEconomics(observed.route, opportunity, observedAt,
       dispatchFreshness.passed && opportunity.pair.buy.executable &&
@@ -475,7 +501,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
       buyTimestamp: book.buyTimestamp,
       sellTimestamp: book.sellTimestamp,
       rejections: freshness.reasons,
-    }, observedAt, true, false);
+    }, observedAt, true, null);
   }
 
   private observeRouteGeneration(
@@ -489,7 +515,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     },
     observedAt: number,
     countRepeated: boolean,
-    replaceAtCapacity: boolean,
+    admissionProgress: RouteAdmissionProgress | null,
   ): {readonly route: MutableRoute; readonly generationIdentity: string} | null {
     const routeKey = `${input.market}:${input.buyExchange}->${input.sellExchange}`;
     const generationKey = `${input.buyTimestamp}:${input.sellTimestamp}`;
@@ -500,7 +526,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
       input.buyExchange,
       input.sellExchange,
       observedAt,
-      replaceAtCapacity,
+      admissionProgress,
     );
     if (!route) return null;
     const generationKeySet = this.generationKeySets.get(routeKey) as Set<string>;
@@ -549,7 +575,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
 
   private ensureRoute(routeKey: string, market: string, buyExchange: StrategyOnePilotExchange,
     sellExchange: StrategyOnePilotExchange, observedAt: number,
-    replaceAtCapacity: boolean): MutableRoute | null {
+    admissionProgress: RouteAdmissionProgress | null): MutableRoute | null {
     const existing = this.routes.get(routeKey);
     if (existing) return existing;
     if (this.routes.size >= this.maximumRoutes) {
@@ -558,17 +584,19 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
        * Replacing and sorting the bounded 128-route evidence cohort for every
        * unretained timing-only book caused continuous route churn, high GC and
        * event-loop tail latency. Keep the timing-only cohort stable once full;
-       * a real accepted opportunity may still enter by replacing the least
-       * progressed route. This preserves dynamic opportunity admission and
-       * evidence safety while making book-only overflow an O(1) rejection.
+       * a real accepted opportunity may still enter by replacing a strictly
+       * less relevant route. Admission compares durable execution/economics
+       * progress without a recency tie-break, so equal or weaker candidates
+       * cannot churn the cohort. This preserves dynamic opportunity admission
+       * and evidence safety while making book-only overflow an O(1) rejection.
        */
-      if (!replaceAtCapacity) return null;
+      if (!admissionProgress) return null;
 
       const leastProgressed = this.findLeastProgressedRoute();
-      if (leastProgressed) {
-        this.routes.delete(leastProgressed.routeKey);
-        this.generationKeySets.delete(leastProgressed.routeKey);
-      }
+      if (!leastProgressed ||
+        this.compareEvidenceProgress(admissionProgress, leastProgressed, false) <= 0) return null;
+      this.routes.delete(leastProgressed.routeKey);
+      this.generationKeySets.delete(leastProgressed.routeKey);
     }
     const created: MutableRoute = {
       routeKey,
@@ -623,7 +651,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     for (const route of this.routes.values()) {
       if (
         leastProgressed === null ||
-        this.compareEvictionPriority(route, leastProgressed) < 0
+        this.compareEvidenceProgress(route, leastProgressed, true) < 0
       ) {
         leastProgressed = route;
       }
@@ -632,15 +660,32 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     return leastProgressed;
   }
 
-  private compareEvictionPriority(first: MutableRoute, second: MutableRoute): number {
+  private compareEvidenceProgress(
+    first: RouteAdmissionProgress,
+    second: RouteAdmissionProgress,
+    includeRecency: boolean,
+  ): number {
+    const dispatchLiveProgress = Math.min(first.dispatchReservedLiveEligibleGenerations,
+      this.minimumExecutionGradeGenerations) - Math.min(second.dispatchReservedLiveEligibleGenerations,
+      this.minimumExecutionGradeGenerations);
+    const liveEligibleProgress = Math.min(first.liveEligibleProfitGenerations,
+      this.minimumExecutionGradeGenerations) - Math.min(second.liveEligibleProfitGenerations,
+      this.minimumExecutionGradeGenerations);
+    const executeDecisionProgress = Math.min(first.executeDecisionGenerations,
+      this.minimumExecutionGradeGenerations) - Math.min(second.executeDecisionGenerations,
+      this.minimumExecutionGradeGenerations);
+    const economicsProgress = Math.min(first.economicsObservedGenerations,
+      this.minimumExecutionGradeGenerations) - Math.min(second.economicsObservedGenerations,
+      this.minimumExecutionGradeGenerations);
     const dispatchProgress = Math.min(first.dispatchReservedGenerations,
       this.minimumExecutionGradeGenerations) - Math.min(second.dispatchReservedGenerations,
       this.minimumExecutionGradeGenerations);
     const executionGradeProgress = Math.min(first.executionGradeGenerations,
       this.minimumExecutionGradeGenerations) - Math.min(second.executionGradeGenerations,
       this.minimumExecutionGradeGenerations);
-    return dispatchProgress || executionGradeProgress ||
-      first.lastUniqueGenerationAt - second.lastUniqueGenerationAt;
+    return dispatchLiveProgress || liveEligibleProgress || executeDecisionProgress ||
+      economicsProgress || dispatchProgress || executionGradeProgress ||
+      (includeRecency ? first.lastUniqueGenerationAt - second.lastUniqueGenerationAt : 0);
   }
 
   private observeEconomics(

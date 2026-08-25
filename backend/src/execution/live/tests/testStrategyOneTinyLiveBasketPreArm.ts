@@ -131,6 +131,7 @@ async function main(): Promise<void> {
     verifyRetiredFixedBasketArmIsNotRestored(filePath, directory);
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
+    await verifyBookDependentBlocksCanRequestFreshBooks(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
@@ -234,6 +235,79 @@ async function verifyChangingRoutesCanRequestFreshBooks(
   }
 }
 
+async function verifyBookDependentBlocksCanRequestFreshBooks(
+  directory: string,
+): Promise<void> {
+  const route: StrategyOneTinyLiveBasketRoute = {
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "coindcx",
+  };
+  let clock = NOW + 20_000;
+  let refreshCalls = 0;
+  const candidate = opportunity("book-dependent-stale", route, clock);
+  const service = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    previewAction: (opportunityId) => bookDependentBlockedPreview(opportunityId, route),
+    refreshActionCandidate: async () => {
+      refreshCalls += 1;
+      return {state: "BLOCKED", opportunity: null, blocker: "Fixture remains blocked."} as never;
+    },
+    now: () => ++clock,
+  }, join(directory, "book-dependent-refresh.jsonl"));
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+  assert.equal(await service.observeSnapshot({generatedAt: clock, opportunities: [candidate]}), null);
+  assert.equal(refreshCalls, 1,
+    "Fresh balances plus a rounding/minimum block may request one bounded public refresh before full preflight reruns.");
+
+  let immutableBlockRefreshCalls = 0;
+  const immutableBlocked = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    previewAction: (opportunityId) =>
+      bookDependentBlockedPreview(opportunityId, route, true),
+    refreshActionCandidate: async () => {
+      immutableBlockRefreshCalls += 1;
+      throw new Error("Immutable blockers must prevent refresh.");
+    },
+    now: () => ++clock,
+  }, join(directory, "immutable-block-no-refresh.jsonl"));
+  immutableBlocked.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+  assert.equal(await immutableBlocked.observeSnapshot({generatedAt: clock, opportunities: [candidate]}), null);
+  assert.equal(immutableBlockRefreshCalls, 0,
+    "A missing immutable timing gate must prevent the public refresh rescue.");
+}
+
 function freshnessBlockedPreview(
   opportunityId: string,
   route: StrategyOneTinyLiveBasketRoute,
@@ -254,10 +328,57 @@ function freshnessBlockedPreview(
             state: "BLOCKED",
             reasons: ["Freshness-only fixture."],
           }],
+          funding: refreshableFundingFixture("NORMALIZED"),
         },
       },
     },
   } as never;
+}
+
+function bookDependentBlockedPreview(
+  opportunityId: string,
+  route: StrategyOneTinyLiveBasketRoute,
+  immutableTimingBlocked = false,
+) {
+  return {
+    approvedForAuthorization: false,
+    authority: null,
+    blockers: ["CURRENT_DISPATCH_RESERVED_FRESHNESS", "FRESH_TWO_LEG_FUNDING_AND_RULES"],
+    preflight: {
+      preview: {
+        selected: {
+          opportunityId,
+          market: route.market,
+          buyExchange: route.buyExchange,
+          sellExchange: route.sellExchange,
+          checks: [
+            {key: "CURRENT_DISPATCH_RESERVED_FRESHNESS", state: "BLOCKED", reasons: ["Stale fixture."]},
+            {key: "FRESH_TWO_LEG_FUNDING_AND_RULES", state: "BLOCKED", reasons: ["Rounded notional is below minimum."]},
+            {key: "POST_STRESS_DEPTH_AND_ECONOMICS", state: "BLOCKED", reasons: ["Exact quantity is unavailable."]},
+            ...(immutableTimingBlocked
+              ? [{key: "PILOT_TIMING_HEADROOM", state: "BLOCKED", reasons: ["Timing evidence is incomplete."]}]
+              : []),
+          ],
+          funding: refreshableFundingFixture("BLOCKED"),
+        },
+      },
+    },
+  } as never;
+}
+
+function refreshableFundingFixture(
+  state: "NORMALIZED" | "BLOCKED",
+) {
+  return {
+    fundingBoundary: "AUTHENTICATED_LIVE_READINESS",
+    buyFunding: {sufficient: true},
+    sellFunding: {sufficient: true},
+    quantityNeverIncreased: true,
+    quantityNormalization: {
+      state,
+      incrementEvidenceComplete: true,
+    },
+  };
 }
 
 function opportunity(
