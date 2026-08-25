@@ -32,6 +32,14 @@ import {
   usePersonalStrategyOneBot,
 } from "@/modules/strategies/hooks/useStrategies";
 
+import {
+  useStrategyOneTwoLegRecovery,
+} from "@/modules/recovery/hooks/useRecoveryDiagnostics";
+
+import type {
+  StrategyOneTwoLegRecoveryData,
+} from "@/modules/recovery/types/RecoveryDiagnostics";
+
 import type {
   PersonalBotExcludedExecution,
   PersonalBotExecution,
@@ -90,6 +98,7 @@ export default function BotDashboard() {
   // global PAPER / Tiny-LIVE selector, so it must remain available in every view.
   const preArmQuery = useStrategyOneTinyLivePreArm(true);
   const opportunityAuditQuery = useStrategyOneTinyLiveOpportunityAudit(deepAuditEnabled);
+  const twoLegRecoveryQuery = useStrategyOneTwoLegRecovery(deepAuditEnabled);
   const armPreArm = useArmStrategyOneTinyLive();
   const disarmPreArm = useDisarmStrategyOneTinyLive();
   const activateAccountLease = useActivateStrategyOneTinyLiveAccountLease();
@@ -430,6 +439,7 @@ export default function BotDashboard() {
 
       <StrategyOnePreArmedOneShotPanel
         diagnostics={preArmDiagnostics}
+        twoLegRecovery={twoLegRecoveryQuery.data?.data ?? null}
         candidate={currentPilotRoute}
         suggestedRoute={suggestedPreArmRoute}
         capitalPerLegInr={preArmCapitalPerLegInr}
@@ -1884,6 +1894,7 @@ function HistoricalCapitalPlacementPanel({placement}: {
 
 function StrategyOnePreArmedOneShotPanel({
   diagnostics,
+  twoLegRecovery,
   candidate,
   suggestedRoute,
   capitalPerLegInr,
@@ -1906,6 +1917,7 @@ function StrategyOnePreArmedOneShotPanel({
   onPaperControlChange,
 }: {
   diagnostics: StrategyOneTinyLivePreArmDiagnostics | null;
+  twoLegRecovery: StrategyOneTwoLegRecoveryData | null;
   candidate: StrategyOnePilotCandidate | null;
   suggestedRoute: StrategyOnePreArmRoute | null;
   capitalPerLegInr: number;
@@ -1936,6 +1948,11 @@ function StrategyOnePreArmedOneShotPanel({
   const route = active?.routeScope === "DYNAMIC_POOL" ? suggestedRoute : active ?? suggestedRoute;
   const recent = diagnostics?.records[0] ?? null;
   const attempts = recent?.attempts ?? [];
+  const latestRecoveryResolution =
+    twoLegRecovery?.resolutions.resolutions[0] ?? null;
+  const recoveryIsClean =
+    twoLegRecovery?.recoveryGate.classification === "CLEAN" &&
+    twoLegRecovery.recoveryGate.summary.unresolvedSessions === 0;
   const candidateMatchesRoute = candidate !== null && (
     active?.routeScope === "DYNAMIC_POOL"
       ? isDynamicPoolRoute(candidate)
@@ -2336,13 +2353,25 @@ function StrategyOnePreArmedOneShotPanel({
 
           <div className="rounded-xl border border-border-default bg-panel-light/40 p-4">
             <p className="font-mono text-[9px] font-bold tracking-[.16em] text-cyan-300">EXECUTION RESULTS</p>
+            {recoveryIsClean && latestRecoveryResolution ? (
+              <div className="mt-3 rounded-lg border border-emerald-400/25 bg-emerald-400/[0.06] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-[9px] font-bold text-emerald-300">AUTHORITATIVE RECOVERY CLEAN</span>
+                  <span className="font-mono text-[9px] text-emerald-200/80">{latestRecoveryResolution.basis.replaceAll("_", " ")}</span>
+                </div>
+                <p className="mt-1 text-[10px] leading-4 text-text-muted">
+                  Latest resolved session: BUY {formatNumber(latestRecoveryResolution.buyFilledQuantity)} · SELL {formatNumber(latestRecoveryResolution.sellFilledQuantity)} · {latestRecoveryResolution.terminalStatuses.join(" / ")}. No automatic exchange order action was performed.
+                </p>
+                <p className="mt-1 text-[9px] leading-4 text-emerald-200/70">The red card below is the immutable original attempt outcome; this recovery record is the current authoritative journal state.</p>
+              </div>
+            ) : null}
             {attempts.length > 0 ? (
               <div className="mt-3 space-y-2">
                 {attempts.map((attempt) => (
                   <div key={`${attempt.attemptNumber}-${attempt.opportunityId}`} className={`rounded-lg border p-3 ${attempt.success ? "border-emerald-400/20 bg-emerald-400/[0.04]" : "border-red-400/20 bg-red-400/[0.04]"}`}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-mono text-[10px] font-bold text-text-primary">ATTEMPT {attempt.attemptNumber}{attempt.market ? ` · ${attempt.market}` : ""}</span>
-                      <span className={`font-mono text-[9px] font-bold ${attempt.success ? "text-emerald-300" : "text-red-300"}`}>{attempt.success ? "SUCCESS" : "FAILED SAFE"} · {attempt.executionStatus}</span>
+                      <span className={`font-mono text-[9px] font-bold ${attempt.success ? "text-emerald-300" : "text-red-300"}`}>{attempt.success ? "SUCCESS" : recoveryIsClean ? "ORIGINAL FAILED SAFE" : "FAILED SAFE"} · {attempt.executionStatus}</span>
                     </div>
                     <p className="mt-1 text-[10px] leading-4 text-text-muted">{attempt.reason}</p>
                     {(attempt.reasons?.length ?? 0) > 1 ? (

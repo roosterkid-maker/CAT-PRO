@@ -447,3 +447,53 @@ export interface RecoveryResolutionMutationResponse {
       RestartRecoveryReport;
   };
 }
+
+export interface StrategyOneTwoLegRecoveryResolution {
+  schemaVersion: "109.0";
+  sessionId: string;
+  status: "RESOLVED";
+  basis:
+    | "PERSISTED_PRE_DISPATCH_NO_ORDER"
+    | "AUTHORITATIVE_TERMINAL_BALANCED";
+  evidenceFingerprint: string;
+  resolutionNote: string;
+  resolvedAt: number;
+  buyFilledQuantity: number;
+  sellFilledQuantity: number;
+  terminalStatuses: string[];
+  automaticOrderActionPerformed: false;
+}
+
+export interface StrategyOneTwoLegRecoveryData {
+  recoveryGate: {
+    schemaVersion: "109.0";
+    generatedAt: number;
+    classification: "CLEAN" | "REVIEW_REQUIRED" | "POSSIBLE_EXPOSURE";
+    allowNewLivePreparation: boolean;
+    unresolved: Array<{
+      sessionId: string;
+      state: string;
+      updatedAt: number;
+      buyDispatchedAt: number | null;
+      sellDispatchedAt: number | null;
+      reasons: string[];
+    }>;
+    summary: {
+      unresolvedSessions: number;
+      possibleExposureSessions: number;
+      persistenceIntegrityProblems: number;
+    };
+    persistenceProblems: string[];
+  };
+  resolutions: {
+    schemaVersion: "109.0";
+    generatedAt: number;
+    resolutions: StrategyOneTwoLegRecoveryResolution[];
+    currentlyValid: number;
+  };
+}
+
+export interface StrategyOneTwoLegRecoveryResponse {
+  success: boolean;
+  data: StrategyOneTwoLegRecoveryData;
+}

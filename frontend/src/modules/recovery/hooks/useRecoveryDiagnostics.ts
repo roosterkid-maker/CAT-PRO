@@ -9,6 +9,7 @@ import {
   fetchRecoveryOverview,
   fetchRuntimeRecovery,
   fetchSettlementAccountingPersistence,
+  fetchStrategyOneTwoLegRecovery,
   resolveDurableRecovery,
 } from "../services/recoveryApi";
 
@@ -30,6 +31,11 @@ const lifecycleKey = [
 const accountingKey = [
   "recovery",
   "settlement-accounting-persistence",
+] as const;
+
+const strategyOneTwoLegKey = [
+  "recovery",
+  "strategy-one-two-leg",
 ] as const;
 
 export function useRecoveryOverview() {
@@ -146,5 +152,27 @@ export function useResolveDurableRecovery() {
           }),
         ]);
       },
+  });
+}
+
+export function useStrategyOneTwoLegRecovery(
+  enabled = true,
+) {
+  return useQuery({
+    queryKey:
+      strategyOneTwoLegKey,
+
+    queryFn:
+      fetchStrategyOneTwoLegRecovery,
+
+    enabled,
+
+    refetchInterval:
+      5_000,
+
+    staleTime:
+      3_000,
+
+    retry: 2,
   });
 }

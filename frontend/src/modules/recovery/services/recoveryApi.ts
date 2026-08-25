@@ -8,6 +8,7 @@ import type {
   RecoveryResolutionMutationResponse,
   RuntimeRecoveryResponse,
   SettlementAccountingPersistenceResponse,
+  StrategyOneTwoLegRecoveryResponse,
 } from "../types/RecoveryDiagnostics";
 
 export async function fetchRecoveryOverview(): Promise<RecoveryOverviewResponse> {
@@ -58,6 +59,15 @@ export async function resolveDurableRecovery(
       {
         resolutionNote,
       },
+    );
+
+  return response.data;
+}
+
+export async function fetchStrategyOneTwoLegRecovery(): Promise<StrategyOneTwoLegRecoveryResponse> {
+  const response =
+    await api.get<StrategyOneTwoLegRecoveryResponse>(
+      "/api/execution/recovery/strategy-one-two-leg",
     );
 
   return response.data;
