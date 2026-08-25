@@ -29,10 +29,96 @@ async function main(): Promise<void> {
   await testParallelRefreshAndFreshOpportunityReevaluation();
   await testBybitBasketRouteParallelRefresh();
   await testFailedLegBlocksWithoutReevaluation();
+  await testHungLegFailsClosedAndReleasesInFlight();
   await testExactRejectionEvidenceIsPreserved();
 
   console.log(
     "V188 action-time book refresh passed: all approved dynamic-pool venues use parallel public reads only on stale fallback, validated refreshed books must produce a new EXECUTE opportunity, failures stay blocked, and no threshold/order/fund authority exists.",
+  );
+}
+
+async function testHungLegFailsClosedAndReleasesInFlight(): Promise<void> {
+  let evaluations =
+    0;
+
+  const never =
+    new Promise<never>(
+      () => undefined,
+    );
+
+  const service =
+    new StrategyOneActionTimeBookRefreshService({
+      refreshCoinDCX: async () =>
+        never,
+      refreshBinance: async (
+        market,
+      ) => ({
+        exchange:
+          "binance",
+        market,
+        accepted:
+          true,
+        requestedAt:
+          NOW,
+        receivedAt:
+          NOW + 10,
+        roundTripMs:
+          10,
+        error:
+          null,
+      }),
+      evaluateExactRoute: () => {
+        evaluations +=
+          1;
+
+        throw new Error(
+          "A timed-out refresh must never reach exact-route evaluation.",
+        );
+      },
+      now:
+        Date.now,
+    });
+
+  const result =
+    await service
+      .refresh({
+        market:
+          "COTIUSDT",
+        buyExchange:
+          "coindcx",
+        sellExchange:
+          "binance",
+      });
+
+  assert.equal(
+    result.state,
+    "BLOCKED",
+  );
+
+  assert.match(
+    result.blocker ??
+      "",
+    /service-owned deadline/iu,
+  );
+
+  assert.equal(
+    evaluations,
+    0,
+  );
+
+  const diagnostics =
+    service
+      .getDiagnostics();
+
+  assert.equal(
+    diagnostics.inFlight,
+    0,
+    "A hung adapter must not keep the Tiny-LIVE route lock forever.",
+  );
+
+  assert.equal(
+    diagnostics.blocked,
+    1,
   );
 }
 

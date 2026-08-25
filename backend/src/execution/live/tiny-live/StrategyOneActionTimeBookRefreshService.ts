@@ -105,6 +105,17 @@ export interface StrategyOneActionTimeBookRefreshDependencies {
 const ACTION_TIME_READ_TIMEOUT_MS =
   190;
 
+/*
+ * Adapter timeouts are the first line of defence, but the Tiny-LIVE trigger
+ * must never remain locked if an adapter/fetch implementation violates that
+ * contract.  Keep one service-owned wall-clock deadline around the complete
+ * parallel read.  A timed-out read is ignored and the route stays blocked;
+ * it can never produce an opportunity or order authority later.
+ */
+const ACTION_TIME_REFRESH_DEADLINE_MS =
+  ACTION_TIME_READ_TIMEOUT_MS +
+  25;
+
 const MINIMUM_ROUTE_REFRESH_INTERVAL_MS =
   500;
 
@@ -385,6 +396,8 @@ export class StrategyOneActionTimeBookRefreshService {
           .now(),
       actionTimeReadTimeoutMs:
         ACTION_TIME_READ_TIMEOUT_MS,
+      actionTimeRefreshDeadlineMs:
+        ACTION_TIME_REFRESH_DEADLINE_MS,
       minimumRouteRefreshIntervalMs:
         MINIMUM_ROUTE_REFRESH_INTERVAL_MS,
       attempts:
@@ -422,25 +435,29 @@ export class StrategyOneActionTimeBookRefreshService {
       readonly StrategyOneActionTimeBookRefreshLeg[];
 
     try {
-      legs = await Promise.all(
-        [route.buyExchange, route.sellExchange].map((exchange) => {
-          if (exchange === "coindcx") {
-            return this.dependencies.refreshCoinDCX(
+      legs = await withDeadline(
+        Promise.all(
+          [route.buyExchange, route.sellExchange].map((exchange) => {
+            if (exchange === "coindcx") {
+              return this.dependencies.refreshCoinDCX(
+                route.market,
+                ACTION_TIME_READ_TIMEOUT_MS,
+              );
+            }
+            if (exchange === "binance") {
+              return this.dependencies.refreshBinance(
+                route.market,
+                ACTION_TIME_READ_TIMEOUT_MS,
+              );
+            }
+            return this.dependencies.refreshBybit(
               route.market,
               ACTION_TIME_READ_TIMEOUT_MS,
             );
-          }
-          if (exchange === "binance") {
-            return this.dependencies.refreshBinance(
-              route.market,
-              ACTION_TIME_READ_TIMEOUT_MS,
-            );
-          }
-          return this.dependencies.refreshBybit(
-            route.market,
-            ACTION_TIME_READ_TIMEOUT_MS,
-          );
-        }),
+          }),
+        ),
+        ACTION_TIME_REFRESH_DEADLINE_MS,
+        "Parallel action-time book refresh exceeded its service-owned deadline.",
       );
     } catch (
       error:
@@ -578,6 +595,54 @@ export class StrategyOneActionTimeBookRefreshService {
       blocker:
         null,
     });
+  }
+}
+
+async function withDeadline<T>(
+  operation:
+    Promise<T>,
+  timeoutMs:
+    number,
+  message:
+    string,
+): Promise<T> {
+  let timer:
+    NodeJS.Timeout | null =
+    null;
+
+  const deadline =
+    new Promise<never>(
+      (
+        _resolve,
+        reject,
+      ) => {
+        timer =
+          setTimeout(
+            () => {
+              reject(
+                new Error(
+                  message,
+                ),
+              );
+            },
+            timeoutMs,
+          );
+      },
+    );
+
+  try {
+    return await Promise.race([
+      operation,
+      deadline,
+    ]);
+  } finally {
+    if (
+      timer
+    ) {
+      clearTimeout(
+        timer,
+      );
+    }
   }
 }
 
