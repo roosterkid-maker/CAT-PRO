@@ -11,10 +11,13 @@ import {
   fetchTinyLiveReadinessClosure,
   runTinyLivePreflight,
   fetchStrategyOnePilotPreview,
-  fetchStrategyOneTinyLivePreArm,
+  fetchStrategyOneDynamicRecommendation,
+  fetchStrategyOneTinyLiveActionDiagnostics,
   fetchStrategyOneTinyLiveOpportunityAudit,
-  armStrategyOneTinyLive,
-  disarmStrategyOneTinyLive,
+  previewStrategyOneTinyLiveAction,
+  authorizeStrategyOneTinyLiveAction,
+  cancelStrategyOneTinyLiveAction,
+  executeStrategyOneTinyLiveAction,
   runStrategyOnePilotPreflight,
   sealTinyLiveEvidencePackage,
 } from "../services/tinyLiveApi";
@@ -146,10 +149,20 @@ export function useRunStrategyOnePilotPreflight() {
   });
 }
 
-export function useStrategyOneTinyLivePreArm() {
+export function useStrategyOneDynamicRecommendation() {
   return useQuery({
-    queryKey: ["tiny-live", "strategy-one-pre-arm"],
-    queryFn: fetchStrategyOneTinyLivePreArm,
+    queryKey: ["tiny-live", "strategy-one-dynamic-recommendation"],
+    queryFn: fetchStrategyOneDynamicRecommendation,
+    refetchInterval: 2_000,
+    staleTime: 1_000,
+    retry: 2,
+  });
+}
+
+export function useStrategyOneTinyLiveActionDiagnostics() {
+  return useQuery({
+    queryKey: ["tiny-live", "strategy-one-action"],
+    queryFn: fetchStrategyOneTinyLiveActionDiagnostics,
     refetchInterval: 1_000,
     staleTime: 500,
     retry: 2,
@@ -166,28 +179,59 @@ export function useStrategyOneTinyLiveOpportunityAudit() {
   });
 }
 
-export function useArmStrategyOneTinyLive() {
+export function usePreviewStrategyOneTinyLiveAction() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: armStrategyOneTinyLive,
+    mutationFn: previewStrategyOneTinyLiveAction,
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: ["tiny-live", "strategy-one-pre-arm"],
+        queryKey: ["tiny-live", "strategy-one-action"],
       });
     },
   });
 }
 
-export function useDisarmStrategyOneTinyLive() {
+export function useAuthorizeStrategyOneTinyLiveAction() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: disarmStrategyOneTinyLive,
+    mutationFn: authorizeStrategyOneTinyLiveAction,
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: ["tiny-live", "strategy-one-pre-arm"],
+        queryKey: ["tiny-live", "strategy-one-action"],
       });
+    },
+  });
+}
+
+export function useCancelStrategyOneTinyLiveAction() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: cancelStrategyOneTinyLiveAction,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["tiny-live", "strategy-one-action"],
+      });
+    },
+  });
+}
+
+export function useExecuteStrategyOneTinyLiveAction() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: executeStrategyOneTinyLiveAction,
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["tiny-live", "strategy-one-action"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["tiny-live", "strategy-one-dynamic-recommendation"],
+        }),
+      ]);
     },
   });
 }

@@ -791,6 +791,71 @@ function main():
       "utf8",
     );
 
+  const frontendControlledLiveSources = [
+    resolve(
+      __dirname,
+      "..",
+      "..",
+      "..",
+      "..",
+      "frontend",
+      "src",
+      "modules",
+      "bot",
+      "pages",
+      "BotDashboard.tsx",
+    ),
+    resolve(
+      __dirname,
+      "..",
+      "..",
+      "..",
+      "..",
+      "frontend",
+      "src",
+      "modules",
+      "tiny-live",
+      "services",
+      "tinyLiveApi.ts",
+    ),
+    resolve(
+      __dirname,
+      "..",
+      "..",
+      "..",
+      "..",
+      "frontend",
+      "src",
+      "modules",
+      "tiny-live",
+      "hooks",
+      "useTinyLivePreflight.ts",
+    ),
+  ].map((filePath) => readFileSync(filePath, "utf8")).join("\n");
+
+  assert.doesNotMatch(
+    frontendControlledLiveSources,
+    /strategy-one-pre-arm|preArm|PreArm/,
+    "The frontend must not restore the removed per-coin pre-arm strategy or endpoint.",
+  );
+
+  for (
+    const requiredControlledLiveFrontendContract
+    of [
+      /strategy-one-dynamic-recommendation/,
+      /strategy-one-action\/preview/,
+      /strategy-one-action\/\$\{encodeURIComponent\(input\.authorityId\)\}\/authorize/,
+      /strategy-one-action\/\$\{encodeURIComponent\(input\.authorityId\)\}\/execute/,
+      /Coins are not pre-approved or hardcoded/,
+    ]
+  ) {
+    assert.match(
+      frontendControlledLiveSources,
+      requiredControlledLiveFrontendContract,
+      "The frontend must expose only the dynamic, exact-opportunity, one-time authority flow.",
+    );
+  }
+
   for (
     const requiredRuntimeGate
     of [

@@ -46,44 +46,49 @@ import type {
 } from "@/modules/strategies/types/PersonalStrategyOneBot";
 
 import {
-  useArmStrategyOneTinyLive,
-  useDisarmStrategyOneTinyLive,
+  useAuthorizeStrategyOneTinyLiveAction,
+  useCancelStrategyOneTinyLiveAction,
+  useExecuteStrategyOneTinyLiveAction,
+  usePreviewStrategyOneTinyLiveAction,
   useRunStrategyOnePilotPreflight,
+  useStrategyOneDynamicRecommendation,
   useStrategyOnePilotPreview,
+  useStrategyOneTinyLiveActionDiagnostics,
   useStrategyOneTinyLiveOpportunityAudit,
-  useStrategyOneTinyLivePreArm,
 } from "@/modules/tiny-live/hooks/useTinyLivePreflight";
 
 import type {
+  StrategyOneControlledLiveRuntimeReport,
   StrategyOnePilotPreflightRunReport,
   StrategyOnePilotPreviewReport,
+  StrategyOneTinyLiveActionDiagnostics,
+  StrategyOneTinyLiveActionPreview,
+  StrategyOneTinyLiveAuthorityRecord,
   StrategyOneTinyLiveOpportunityAuditReport,
-  StrategyOneTinyLivePreArmDiagnostics,
 } from "@/modules/tiny-live/types/TinyLivePreflight";
-
-interface StrategyOnePreArmRoute {
-  market: string;
-  buyExchange: "binance" | "bybit";
-  sellExchange: "binance" | "bybit";
-}
 
 export default function BotDashboard() {
   const query = usePersonalStrategyOneBot();
   const control = usePersonalBotControl();
   const pilotQuery = useStrategyOnePilotPreview();
   const pilotPreflight = useRunStrategyOnePilotPreflight();
-  const preArmQuery = useStrategyOneTinyLivePreArm();
+  const dynamicQuery = useStrategyOneDynamicRecommendation();
+  const actionQuery = useStrategyOneTinyLiveActionDiagnostics();
   const opportunityAuditQuery = useStrategyOneTinyLiveOpportunityAudit();
-  const armPreArm = useArmStrategyOneTinyLive();
-  const disarmPreArm = useDisarmStrategyOneTinyLive();
+  const previewAction = usePreviewStrategyOneTinyLiveAction();
+  const authorizeAction = useAuthorizeStrategyOneTinyLiveAction();
+  const cancelAction = useCancelStrategyOneTinyLiveAction();
+  const executeAction = useExecuteStrategyOneTinyLiveAction();
   const [pilotAcknowledged, setPilotAcknowledged] = useState(false);
-  const [preArmAcknowledged, setPreArmAcknowledged] = useState(false);
+  const [authorizationPhrase, setAuthorizationPhrase] = useState("");
+  const [executeAcknowledged, setExecuteAcknowledged] = useState(false);
   const [viewMode, setViewMode] = useState<BotViewMode>("FOCUS");
   const [missionOpen, setMissionOpen] = useState(false);
   const report = query.data?.data;
   const pilotPreview = pilotQuery.data?.data ?? null;
-  const preArmDiagnostics = preArmQuery.data?.data ?? null;
-  const tinyLiveStatus = tinyLiveAuthorityStatus(preArmDiagnostics);
+  const dynamicRuntime = dynamicQuery.data?.data ?? null;
+  const actionDiagnostics = actionQuery.data?.data ?? null;
+  const tinyLiveStatus = tinyLiveAuthorityStatus(actionDiagnostics);
 
   useEffect(() => {
     if (!missionOpen) return;
@@ -115,16 +120,6 @@ export default function BotDashboard() {
   const appearance = stateAppearance(report.state);
   const feed = report.opportunity.accepted;
   const latestExecution = report.recentExecutions[0] ?? null;
-  const historicalPilotRoute = report.capitalPlacement.pilot.recommendedRoute ??
-    report.capitalPlacement.routes.find((route) => isBinanceBybitRoute(route)) ??
-    null;
-  const currentPilotRoute = pilotPreview?.selected && isBinanceBybitRoute(pilotPreview.selected)
-    ? pilotPreview.selected
-    : null;
-  const suggestedPreArmRoute = toPreArmRoute(currentPilotRoute ?? historicalPilotRoute);
-  const preArmCapitalPerLegInr = pilotPreview?.requestedCapitalPerLegInr ??
-    report.capitalPlacement.pilot.requestedPerLegInr;
-
   function toggleBot(): void {
     if (!report || control.isPending) return;
     control.mutate(!report.control.enabled);
@@ -139,33 +134,45 @@ export default function BotDashboard() {
     });
   }
 
-  function armOneShot(): void {
-    if (
-      !suggestedPreArmRoute ||
-      !preArmAcknowledged ||
-      armPreArm.isPending
-    ) {
-      return;
-    }
+  const activeAuthority = currentTinyLiveAuthority(actionDiagnostics);
 
-    armPreArm.mutate({
-      ...suggestedPreArmRoute,
-      durationMinutes: 15,
-      confirmation: preArmPhrase(suggestedPreArmRoute, preArmCapitalPerLegInr),
+  function previewOneTimeAuthority(): void {
+    const opportunityId = dynamicRuntime?.opportunityId;
+    if (!opportunityId || previewAction.isPending) return;
+
+    previewAction.mutate(
+      {opportunityId},
+      {
+        onSuccess: () => {
+          setAuthorizationPhrase("");
+          setExecuteAcknowledged(false);
+        },
+      },
+    );
+  }
+
+  function authorizeOneTimeAuthority(): void {
+    if (!activeAuthority || activeAuthority.state !== "PREVIEWED") return;
+    authorizeAction.mutate({
+      authorityId: activeAuthority.id,
+      confirmation: authorizationPhrase,
     });
   }
 
-  function disarmOneShot(): void {
-    const active = preArmQuery.data?.data.activeArm;
+  function cancelOneTimeAuthority(): void {
+    if (!activeAuthority) return;
+    cancelAction.mutate({authorityId: activeAuthority.id});
+  }
 
-    if (!active || disarmPreArm.isPending) {
+  function executeOneTimeAuthority(): void {
+    if (
+      !activeAuthority ||
+      activeAuthority.state !== "AUTHORIZED" ||
+      !executeAcknowledged
+    ) {
       return;
     }
-
-    disarmPreArm.mutate({
-      preArmId: active.id,
-      confirmation: `DISARM ${active.id}`,
-    });
+    executeAction.mutate({authorityId: activeAuthority.id});
   }
 
   return (
@@ -242,18 +249,29 @@ export default function BotDashboard() {
         </div>
       </div>
 
-      <StrategyOnePreArmedOneShotPanel
-        diagnostics={preArmDiagnostics}
-        suggestedRoute={suggestedPreArmRoute}
-        capitalPerLegInr={preArmCapitalPerLegInr}
-        acknowledged={preArmAcknowledged}
-        loading={preArmQuery.isPending}
-        arming={armPreArm.isPending}
-        disarming={disarmPreArm.isPending}
-        error={preArmQuery.error ?? armPreArm.error ?? disarmPreArm.error}
-        onAcknowledgedChange={setPreArmAcknowledged}
-        onArm={armOneShot}
-        onDisarm={disarmOneShot}
+      <StrategyOneDynamicOneTimeAuthorityPanel
+        runtime={dynamicRuntime}
+        diagnostics={actionDiagnostics}
+        preview={previewAction.data?.data ?? null}
+        activeAuthority={activeAuthority}
+        authorizationPhrase={authorizationPhrase}
+        executeAcknowledged={executeAcknowledged}
+        loading={dynamicQuery.isPending || actionQuery.isPending}
+        previewing={previewAction.isPending}
+        authorizing={authorizeAction.isPending}
+        cancelling={cancelAction.isPending}
+        executing={executeAction.isPending}
+        error={dynamicQuery.error ?? actionQuery.error ?? previewAction.error ?? authorizeAction.error ?? cancelAction.error ?? executeAction.error}
+        onAuthorizationPhraseChange={setAuthorizationPhrase}
+        onExecuteAcknowledgedChange={setExecuteAcknowledged}
+        onPreview={previewOneTimeAuthority}
+        onAuthorize={authorizeOneTimeAuthority}
+        onCancel={cancelOneTimeAuthority}
+        onExecute={executeOneTimeAuthority}
+        onRefresh={() => {
+          void dynamicQuery.refetch();
+          void actionQuery.refetch();
+        }}
       />
 
       <StrategyOneTinyLiveOpportunityAuditPanel
@@ -264,7 +282,7 @@ export default function BotDashboard() {
       />
 
       {viewMode === "FOCUS" ? (
-        <BotFocusCockpit report={report} latestExecution={latestExecution} feed={feed} diagnostics={preArmDiagnostics} />
+        <BotFocusCockpit report={report} latestExecution={latestExecution} feed={feed} diagnostics={actionDiagnostics} />
       ) : viewMode === "CAPITAL_MANAGER" ? (
         <PersonalCapitalManagerView report={report} />
       ) : (
@@ -397,7 +415,7 @@ export default function BotDashboard() {
       <div className="grid gap-3 md:grid-cols-3">
         <SafetyFact icon={<ShieldCheck />} label="PAPER ledger" value="SIMULATED · NOT REAL FILLS" passed />
         <SafetyFact icon={<Activity />} label="Market scanner" value={report.control.scannerActive ? "Active while BOT is ON or OFF" : "Unavailable"} passed={report.control.scannerActive} />
-        <SafetyFact icon={<Power />} label="Tiny-LIVE authority" value={tinyLiveStatus.label} passed={preArmDiagnostics?.activeArm === null} />
+        <SafetyFact icon={<Power />} label="Tiny-LIVE authority" value={tinyLiveStatus.label} passed={actionDiagnostics?.blockingAuthorityPresent === false} />
       </div>
         </>
       )}
@@ -612,7 +630,7 @@ function BotFocusCockpit({
   report: PersonalStrategyOneBotData;
   latestExecution: PersonalBotExecution | null;
   feed: PersonalBotOpportunity[];
-  diagnostics: StrategyOneTinyLivePreArmDiagnostics | null;
+  diagnostics: StrategyOneTinyLiveActionDiagnostics | null;
 }) {
   const attemptUsage = report.paper.maximumDailyTrades > 0
     ? (report.paper.dailyActivity.reservationAttempts / report.paper.maximumDailyTrades) * 100
@@ -680,7 +698,7 @@ function BotFocusCockpit({
       <div className="grid gap-3 md:grid-cols-3">
         <SafetyFact icon={<ShieldCheck />} label="PAPER ledger" value="SIMULATED · NOT REAL FILLS" passed />
         <SafetyFact icon={<Radio />} label="Scanner" value={report.control.scannerActive ? `${report.opportunity.current} current opportunities` : "Unavailable"} passed={report.control.scannerActive} />
-        <SafetyFact icon={<Power />} label="Tiny-LIVE authority" value={tinyLiveAuthorityStatus(diagnostics).label} passed={diagnostics?.activeArm === null} />
+        <SafetyFact icon={<Power />} label="Tiny-LIVE authority" value={tinyLiveAuthorityStatus(diagnostics).label} passed={diagnostics?.blockingAuthorityPresent === false} />
       </div>
     </div>
   );
@@ -1512,151 +1530,217 @@ function HistoricalCapitalPlacementPanel({placement}: {
   );
 }
 
-function StrategyOnePreArmedOneShotPanel({
+function StrategyOneDynamicOneTimeAuthorityPanel({
+  runtime,
   diagnostics,
-  suggestedRoute,
-  capitalPerLegInr,
-  acknowledged,
+  preview,
+  activeAuthority,
+  authorizationPhrase,
+  executeAcknowledged,
   loading,
-  arming,
-  disarming,
+  previewing,
+  authorizing,
+  cancelling,
+  executing,
   error,
-  onAcknowledgedChange,
-  onArm,
-  onDisarm,
+  onAuthorizationPhraseChange,
+  onExecuteAcknowledgedChange,
+  onPreview,
+  onAuthorize,
+  onCancel,
+  onExecute,
+  onRefresh,
 }: {
-  diagnostics: StrategyOneTinyLivePreArmDiagnostics | null;
-  suggestedRoute: StrategyOnePreArmRoute | null;
-  capitalPerLegInr: number;
-  acknowledged: boolean;
+  runtime: StrategyOneControlledLiveRuntimeReport | null;
+  diagnostics: StrategyOneTinyLiveActionDiagnostics | null;
+  preview: StrategyOneTinyLiveActionPreview | null;
+  activeAuthority: StrategyOneTinyLiveAuthorityRecord | null;
+  authorizationPhrase: string;
+  executeAcknowledged: boolean;
   loading: boolean;
-  arming: boolean;
-  disarming: boolean;
+  previewing: boolean;
+  authorizing: boolean;
+  cancelling: boolean;
+  executing: boolean;
   error: Error | null;
-  onAcknowledgedChange: (checked: boolean) => void;
-  onArm: () => void;
-  onDisarm: () => void;
+  onAuthorizationPhraseChange: (value: string) => void;
+  onExecuteAcknowledgedChange: (checked: boolean) => void;
+  onPreview: () => void;
+  onAuthorize: () => void;
+  onCancel: () => void;
+  onExecute: () => void;
+  onRefresh: () => void;
 }) {
-  const active = diagnostics?.activeArm ?? null;
-  const route = active ?? suggestedRoute;
-  const recent = diagnostics?.records[0] ?? null;
-  const canArm = diagnostics?.runtimeGateEnabled === true &&
-    !active &&
-    suggestedRoute !== null &&
-    acknowledged &&
-    !arming;
-  const status = active
-    ? diagnostics?.triggerInProgress
-      ? "TRIGGERING"
-      : "ARMED"
-    : diagnostics?.runtimeGateEnabled
-      ? "STANDBY"
-      : "LIVE GATE OFF";
+  const recommendation = runtime?.recommendation ?? null;
+  const candidate = runtime?.candidate ?? null;
+  const executableDecision = recommendation?.decision === "EXECUTE_NOW" ||
+    recommendation?.decision === "REDUCE_QUANTITY";
+  const canPreview = diagnostics?.runtimeGateEnabled === true &&
+    executableDecision &&
+    typeof runtime?.opportunityId === "string" &&
+    !activeAuthority &&
+    !previewing;
+  const phraseMatches = activeAuthority?.state === "PREVIEWED" &&
+    authorizationPhrase.trim() === activeAuthority.requiredAuthorizationPhrase;
+  const status = activeAuthority?.state ??
+    (diagnostics?.runtimeGateEnabled ? recommendation?.decision ?? "STANDBY" : "LIVE GATE OFF");
+  const blockers = preview?.blockers.length &&
+    (!runtime || preview.generatedAt >= runtime.generatedAt)
+    ? preview.blockers
+    : recommendation?.blockers.length
+      ? recommendation.blockers
+      : runtime?.blockers ?? [];
 
   return (
-    <article className={`overflow-hidden rounded-2xl border ${active ? "border-emerald-400/30 bg-emerald-400/[0.035] shadow-[0_0_34px_rgba(52,211,153,.08)]" : "border-border-default bg-panel"}`}>
+    <article className={`overflow-hidden rounded-2xl border ${activeAuthority ? "border-amber-400/30 bg-amber-400/[0.035] shadow-[0_0_34px_rgba(251,191,36,.07)]" : "border-border-default bg-panel"}`}>
       <PanelHeader
         icon={<Zap className="size-4" />}
-        eyebrow="V125 PRE-ARMED ONE-SHOT"
-        title="First qualified route executes automatically"
+        eyebrow="DYNAMIC ROUTE · ONE-TIME AUTHORITY"
+        title="Current best route, one exact opportunity"
         right={(
-          <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${active ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : diagnostics?.runtimeGateEnabled ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-border-default bg-panel-light text-text-muted"}`}>
-            {loading ? "LOADING" : status}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold ${activeAuthority ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : executableDecision ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-border-default bg-panel-light text-text-muted"}`}>
+              {loading ? "LOADING" : status.replaceAll("_", " ")}
+            </span>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={loading}
+              aria-label="Refresh dynamic Strategy One recommendation"
+              className="grid size-8 place-items-center rounded-lg border border-border-default bg-panel-light text-text-muted transition hover:text-cyan-200 disabled:cursor-wait disabled:opacity-50"
+            >
+              <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
+            </button>
+          </div>
         )}
       />
 
+      <div className="border-b border-cyan-300/12 bg-cyan-300/[0.035] px-5 py-3 text-[10px] leading-4 text-cyan-100/75">
+        Coins are not pre-approved or hardcoded. The manager evaluates all six Binance, Bybit and CoinDCX directions and binds authority only to the current qualified route, quantity, prices and quote timestamps.
+      </div>
+
       <div className="grid gap-px bg-border-default sm:grid-cols-2 xl:grid-cols-4">
         <ActivityMetric
-          label="Exact route"
-          value={route ? route.market : "NO ROUTE"}
-          detail={route ? `${route.buyExchange.toUpperCase()} BUY → ${route.sellExchange.toUpperCase()} SELL` : "Waiting for Binance/Bybit route evidence"}
-          tone={route ? "positive" : "warning"}
+          label="Dynamic route"
+          value={activeAuthority?.market ?? candidate?.market ?? "NO ROUTE"}
+          detail={activeAuthority
+            ? `${activeAuthority.buyExchange.toUpperCase()} BUY → ${activeAuthority.sellExchange.toUpperCase()} SELL`
+            : candidate
+              ? `${candidate.buyExchange.toUpperCase()} BUY → ${candidate.sellExchange.toUpperCase()} SELL`
+              : "Waiting for current exact-route evidence"}
+          tone={candidate || activeAuthority ? "positive" : "warning"}
         />
         <ActivityMetric
           label="Hard capital cap"
-          value={`₹${formatInteger(active?.capitalPerLegInr ?? capitalPerLegInr)} / leg`}
-          detail="Two FOK spot legs · active policy only"
+          value={`₹${formatInteger(activeAuthority?.capitalPerLegInr ?? recommendation?.maximumCapitalPerLegInr ?? diagnostics?.safety.capitalPerLegInr ?? 500)} / leg`}
+          detail="No automatic transfer or withdrawal"
         />
         <ActivityMetric
-          label="Authority lifetime"
-          value={active ? `until ${formatTime(active.expiresAt)}` : "15 minutes"}
-          detail="Unused arm expires automatically"
+          label="Exact quantity"
+          value={activeAuthority
+            ? formatNumber(activeAuthority.exactQuantity)
+            : recommendation?.recommendedQuantity === null || recommendation?.recommendedQuantity === undefined
+              ? "NO DATA"
+              : formatNumber(recommendation.recommendedQuantity)}
+          detail="Revalidated before authorize and consume"
         />
         <ActivityMetric
-          label="Attempts"
-          value="1 only"
-          detail="No retry · no transfer · no withdrawal"
-          tone="warning"
+          label="Daily attempts"
+          value={`${diagnostics?.attemptsToday ?? 0}/${diagnostics?.maximumDailyAttempts ?? 1}`}
+          detail="Concurrency 1 · no automatic retry"
+          tone={(diagnostics?.attemptsToday ?? 0) > 0 ? "warning" : "default"}
         />
       </div>
 
-      <div className="grid gap-4 px-5 py-4 lg:grid-cols-[1fr_auto] lg:items-center">
-        <div>
-          {active ? (
-            <>
-              <p className="font-mono text-[10px] font-bold text-emerald-300">
-                ARMED {active.market} · {active.buyExchange.toUpperCase()} → {active.sellExchange.toUpperCase()}
+      <div className="space-y-4 px-5 py-4">
+        {!activeAuthority ? (
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="max-w-3xl">
+              <p className={`font-mono text-[10px] font-bold ${executableDecision ? "text-emerald-300" : "text-amber-300"}`}>
+                DYNAMIC DECISION {recommendation?.decision ?? runtime?.state ?? "NO DATA"}
               </p>
               <p className="mt-1 text-xs leading-5 text-text-muted">
-                The next exact EXECUTE opportunity must still pass fresh permissions, clocks, timing calibration, balances, rules, depth, fees, stress profit and final last-look. Only then will the existing coordinator submit both FOK legs automatically.
+                Preview runs the canonical action-time preflight and creates no order or capital reservation. A route-specific authority appears only if the current dynamic evidence passes every gate.
               </p>
-            </>
-          ) : (
+              {diagnostics?.runtimeGateEnabled === false ? (
+                <p className="mt-2 font-mono text-[10px] text-amber-300">Locked safely: the process is not in explicitly enabled Strategy #1 Tiny-LIVE runtime.</p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={onPreview}
+              disabled={!canPreview}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-4 py-2.5 text-xs font-bold text-cyan-200 transition hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
+            >
+              {previewing ? "Running canonical preflight…" : "Preview one-time authority"}
+            </button>
+          </div>
+        ) : activeAuthority.state === "PREVIEWED" ? (
+          <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+            <label className="block">
+              <span className="text-xs leading-5 text-text-muted">
+                Review the exact route above, then type <strong className="font-mono text-amber-200">{activeAuthority.requiredAuthorizationPhrase}</strong>. Authorization expires at {activeAuthority.authorityExpiresAt ? formatTime(activeAuthority.authorityExpiresAt) : "NO DATA"} and still submits no order.
+              </span>
+              <input
+                value={authorizationPhrase}
+                onChange={(event) => onAuthorizationPhraseChange(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={activeAuthority.requiredAuthorizationPhrase}
+                className="mt-3 w-full rounded-lg border border-border-default bg-black/20 px-3 py-2.5 font-mono text-xs text-text-primary outline-none transition focus:border-amber-300/45"
+              />
+            </label>
+            <div className="flex gap-2">
+              <button type="button" onClick={onCancel} disabled={cancelling || authorizing} className="rounded-lg border border-red-400/25 bg-red-400/8 px-3 py-2.5 text-xs font-bold text-red-300 disabled:opacity-50">
+                {cancelling ? "Cancelling…" : "Cancel preview"}
+              </button>
+              <button type="button" onClick={onAuthorize} disabled={!phraseMatches || authorizing || cancelling} className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2.5 text-xs font-bold text-amber-200 disabled:cursor-not-allowed disabled:opacity-50">
+                {authorizing ? "Revalidating…" : "Authorize once"}
+              </button>
+            </div>
+          </div>
+        ) : activeAuthority.state === "AUTHORIZED" ? (
+          <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
             <label className="flex cursor-pointer items-start gap-3 text-xs leading-5 text-text-muted">
               <input
                 type="checkbox"
-                checked={acknowledged}
-                onChange={(event) => onAcknowledgedChange(event.target.checked)}
-                className="mt-1 size-4 rounded border-border-default bg-panel-light accent-emerald-400"
+                checked={executeAcknowledged}
+                onChange={(event) => onExecuteAcknowledgedChange(event.target.checked)}
+                className="mt-1 size-4 rounded border-border-default bg-panel-light accent-red-400"
               />
               <span>
-                I understand that arming submits no order now, but the first matching fully-qualified opportunity can later submit one real ₹{formatInteger(capitalPerLegInr)}-per-leg Binance/Bybit attempt automatically without another click.
+                I understand this final action can submit one real ₹{formatInteger(activeAuthority.capitalPerLegInr)}-per-leg two-venue SPOT attempt for only this exact opportunity. Fresh evidence is revalidated again; expiry or any change blocks execution.
               </span>
             </label>
-          )}
-
-          {!active && diagnostics?.runtimeGateEnabled === false ? (
-            <p className="mt-2 font-mono text-[10px] text-amber-300">
-              Locked safely: runtime is not in explicitly enabled Strategy #1 Tiny-LIVE mode.
-            </p>
-          ) : null}
-
-          {diagnostics?.lastEvaluation ? (
-            <p className="mt-2 font-mono text-[9px] text-text-muted">
-              LAST {diagnostics.lastEvaluation.outcome} · {diagnostics.lastEvaluation.reason}
-            </p>
-          ) : recent && recent.state !== "ARMED" ? (
-            <p className="mt-2 font-mono text-[9px] text-text-muted">
-              LAST ARM {recent.state}{recent.executionStatus ? ` · ${recent.executionStatus}` : ""}
-            </p>
-          ) : null}
-        </div>
-
-        {active ? (
-          <button
-            type="button"
-            onClick={onDisarm}
-            disabled={disarming || diagnostics?.triggerInProgress}
-            className="rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-2.5 text-xs font-bold text-red-300 transition hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {disarming ? "Disarming…" : diagnostics?.triggerInProgress ? "Trigger in progress" : "Disarm one-shot"}
-          </button>
+            <div className="flex gap-2">
+              <button type="button" onClick={onCancel} disabled={cancelling || executing} className="rounded-lg border border-border-default bg-panel-light px-3 py-2.5 text-xs font-bold text-text-muted disabled:opacity-50">
+                {cancelling ? "Cancelling…" : "Cancel authority"}
+              </button>
+              <button type="button" onClick={onExecute} disabled={!executeAcknowledged || executing || cancelling} className="rounded-lg border border-red-400/35 bg-red-400/12 px-4 py-2.5 text-xs font-bold text-red-200 disabled:cursor-not-allowed disabled:opacity-50">
+                {executing ? "Submitting controlled attempt…" : "Execute exact opportunity"}
+              </button>
+            </div>
+          </div>
         ) : (
-          <button
-            type="button"
-            onClick={onArm}
-            disabled={!canArm}
-            className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-xs font-bold text-emerald-300 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-panel-light disabled:text-text-muted"
-          >
-            {arming ? "Arming durably…" : "Arm next qualified trade"}
-          </button>
+          <div>
+            <p className="font-mono text-[10px] font-bold text-amber-300">AUTHORITY {activeAuthority.state}</p>
+            <p className="mt-1 text-xs leading-5 text-text-muted">This attempt is already consumed or requires reconciliation. New authority stays blocked until the durable execution/recovery state is resolved.</p>
+          </div>
         )}
+
+        {blockers.length > 0 ? (
+          <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-4 py-3">
+            <p className="font-mono text-[9px] font-bold text-amber-300">CURRENT BLOCKERS</p>
+            <ul className="mt-2 space-y-1 text-[10px] leading-4 text-text-muted">
+              {blockers.slice(0, 4).map((blocker) => <li key={blocker}>• {blocker}</li>)}
+            </ul>
+          </div>
+        ) : null}
       </div>
 
       {error ? (
         <p className="border-t border-red-400/20 bg-red-400/7 px-5 py-3 text-xs text-red-300">
-          One-shot control failed closed: {error.message}
+          Dynamic one-time control failed closed: {error.message}
         </p>
       ) : null}
     </article>
@@ -2538,53 +2622,8 @@ function pilotPreviewStateTone(status: StrategyOnePilotPreviewReport["state"] | 
   return "border-border-default bg-panel-light text-text-muted";
 }
 
-function isBinanceBybitRoute(route: {
-  buyExchange: string;
-  sellExchange: string;
-}): boolean {
-  const venues = new Set([
-    route.buyExchange.trim().toLowerCase(),
-    route.sellExchange.trim().toLowerCase(),
-  ]);
-
-  return venues.size === 2 && venues.has("binance") && venues.has("bybit");
-}
-
-function toPreArmRoute(route: {
-  market: string;
-  buyExchange: string;
-  sellExchange: string;
-} | null): StrategyOnePreArmRoute | null {
-  if (!route || !isBinanceBybitRoute(route)) {
-    return null;
-  }
-
-  const buyExchange = route.buyExchange.trim().toLowerCase();
-  const sellExchange = route.sellExchange.trim().toLowerCase();
-
-  if (
-    (buyExchange !== "binance" && buyExchange !== "bybit") ||
-    (sellExchange !== "binance" && sellExchange !== "bybit")
-  ) {
-    return null;
-  }
-
-  return {
-    market: route.market.trim().toUpperCase().replace(/[^A-Z0-9]/gu, ""),
-    buyExchange,
-    sellExchange,
-  };
-}
-
-function preArmPhrase(
-  route: StrategyOnePreArmRoute,
-  capitalPerLegInr: number,
-): string {
-  return `ARM ONE-SHOT ${route.market} ${route.buyExchange.toUpperCase()} ${route.sellExchange.toUpperCase()} INR${capitalPerLegInr}`;
-}
-
 function tinyLiveAuthorityStatus(
-  diagnostics: StrategyOneTinyLivePreArmDiagnostics | null,
+  diagnostics: StrategyOneTinyLiveActionDiagnostics | null,
 ): {label: string; tone: string} {
   if (!diagnostics) {
     return {
@@ -2592,15 +2631,28 @@ function tinyLiveAuthorityStatus(
       tone: "border-slate-500/30 bg-slate-500/10 text-slate-300",
     };
   }
-  if (diagnostics.activeArm) {
+  const active = currentTinyLiveAuthority(diagnostics);
+  if (active?.state === "AUTHORIZED") {
     return {
-      label: "TINY-LIVE ARMED",
+      label: "TINY-LIVE AUTHORIZED",
+      tone: "border-red-400/35 bg-red-400/10 text-red-300",
+    };
+  }
+  if (active?.state === "PREVIEWED") {
+    return {
+      label: "AUTHORITY PREVIEWED",
+      tone: "border-amber-400/35 bg-amber-400/10 text-amber-300",
+    };
+  }
+  if (active) {
+    return {
+      label: `LIVE ATTEMPT ${active.state}`,
       tone: "border-red-400/35 bg-red-400/10 text-red-300",
     };
   }
   if (diagnostics.runtimeGateEnabled) {
     return {
-      label: "TINY-LIVE DISARMED",
+      label: "TINY-LIVE STANDBY",
       tone: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
     };
   }
@@ -2608,6 +2660,23 @@ function tinyLiveAuthorityStatus(
     label: "TINY-LIVE OFF",
     tone: "border-slate-500/30 bg-slate-500/10 text-slate-300",
   };
+}
+
+function currentTinyLiveAuthority(
+  diagnostics: StrategyOneTinyLiveActionDiagnostics | null,
+): StrategyOneTinyLiveAuthorityRecord | null {
+  if (!diagnostics) return null;
+
+  return diagnostics.records.find((record) => {
+    if (record.state === "PREVIEWED" || record.state === "AUTHORIZED") {
+      return record.authorityExpiresAt !== null &&
+        record.authorityExpiresAt >= diagnostics.generatedAt;
+    }
+
+    return record.state === "CONSUMED" ||
+      record.state === "PAIR_BOUND" ||
+      (record.state === "FINALIZED" && record.requiresRecovery);
+  }) ?? null;
 }
 
 function auditCategoryTone(state: "PASS" | "BLOCKED" | "NOT_EVALUATED"): string {

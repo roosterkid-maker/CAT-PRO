@@ -11,8 +11,11 @@ import type {
   TinyLiveReadinessClosureResponse,
   StrategyOnePilotPreflightRunResponse,
   StrategyOnePilotPreviewResponse,
-  StrategyOneTinyLivePreArmDiagnosticsResponse,
-  StrategyOneTinyLivePreArmRecordResponse,
+  StrategyOneControlledLiveRuntimeResponse,
+  StrategyOneTinyLiveActionDiagnosticsResponse,
+  StrategyOneTinyLiveActionPreviewResponse,
+  StrategyOneTinyLiveAuthorityRecordResponse,
+  StrategyOneTinyLiveExecutionResponse,
   StrategyOneTinyLiveOpportunityAuditResponse,
 } from "../types/TinyLivePreflight";
 
@@ -117,9 +120,20 @@ export async function runStrategyOnePilotPreflight(
   return response.data;
 }
 
-export async function fetchStrategyOneTinyLivePreArm(): Promise<StrategyOneTinyLivePreArmDiagnosticsResponse> {
-  const response = await api.get<StrategyOneTinyLivePreArmDiagnosticsResponse>(
-    "/api/execution/tiny-live/strategy-one-pre-arm",
+export async function fetchStrategyOneDynamicRecommendation(): Promise<StrategyOneControlledLiveRuntimeResponse> {
+  const response = await api.get<StrategyOneControlledLiveRuntimeResponse>(
+    "/api/execution/tiny-live/strategy-one-dynamic-recommendation",
+    {
+      validateStatus: (status) => status === 200 || status === 409,
+    },
+  );
+
+  return response.data;
+}
+
+export async function fetchStrategyOneTinyLiveActionDiagnostics(): Promise<StrategyOneTinyLiveActionDiagnosticsResponse> {
+  const response = await api.get<StrategyOneTinyLiveActionDiagnosticsResponse>(
+    "/api/execution/tiny-live/strategy-one-action",
   );
 
   return response.data;
@@ -133,28 +147,48 @@ export async function fetchStrategyOneTinyLiveOpportunityAudit(): Promise<Strate
   return response.data;
 }
 
-export async function armStrategyOneTinyLive(input: {
-  market: string;
-  buyExchange: string;
-  sellExchange: string;
-  confirmation: string;
-  durationMinutes: number;
-}): Promise<StrategyOneTinyLivePreArmRecordResponse> {
-  const response = await api.post<StrategyOneTinyLivePreArmRecordResponse>(
-    "/api/execution/tiny-live/strategy-one-pre-arm",
+export async function previewStrategyOneTinyLiveAction(input: {
+  opportunityId: string;
+}): Promise<StrategyOneTinyLiveActionPreviewResponse> {
+  const response = await api.post<StrategyOneTinyLiveActionPreviewResponse>(
+    "/api/execution/tiny-live/strategy-one-action/preview",
     input,
+    {
+      validateStatus: (status) => status === 200 || status === 409,
+    },
   );
 
   return response.data;
 }
 
-export async function disarmStrategyOneTinyLive(input: {
-  preArmId: string;
+export async function authorizeStrategyOneTinyLiveAction(input: {
+  authorityId: string;
   confirmation: string;
-}): Promise<StrategyOneTinyLivePreArmRecordResponse> {
-  const response = await api.post<StrategyOneTinyLivePreArmRecordResponse>(
-    `/api/execution/tiny-live/strategy-one-pre-arm/${encodeURIComponent(input.preArmId)}/disarm`,
+}): Promise<StrategyOneTinyLiveAuthorityRecordResponse> {
+  const response = await api.post<StrategyOneTinyLiveAuthorityRecordResponse>(
+    `/api/execution/tiny-live/strategy-one-action/${encodeURIComponent(input.authorityId)}/authorize`,
     {confirmation: input.confirmation},
+  );
+
+  return response.data;
+}
+
+export async function cancelStrategyOneTinyLiveAction(input: {
+  authorityId: string;
+}): Promise<StrategyOneTinyLiveAuthorityRecordResponse> {
+  const response = await api.post<StrategyOneTinyLiveAuthorityRecordResponse>(
+    `/api/execution/tiny-live/strategy-one-action/${encodeURIComponent(input.authorityId)}/cancel`,
+    {confirmation: `CANCEL ${input.authorityId}`},
+  );
+
+  return response.data;
+}
+
+export async function executeStrategyOneTinyLiveAction(input: {
+  authorityId: string;
+}): Promise<StrategyOneTinyLiveExecutionResponse> {
+  const response = await api.post<StrategyOneTinyLiveExecutionResponse>(
+    `/api/execution/tiny-live/strategy-one-action/${encodeURIComponent(input.authorityId)}/execute`,
   );
 
   return response.data;

@@ -523,75 +523,165 @@ export interface StrategyOnePilotPreflightRunResponse {
   data: StrategyOnePilotPreflightRunReport;
 }
 
-export type StrategyOneTinyLivePreArmState =
-  | "ARMED"
-  | "CLAIMED"
-  | "COMPLETED"
-  | "FAILED_SAFE"
-  | "DISARMED"
-  | "EXPIRED";
+export type StrategyOneDynamicDecision =
+  | "EXECUTE_NOW"
+  | "WAIT"
+  | "SKIP"
+  | "REDUCE_QUANTITY"
+  | "REBALANCE_REQUIRED"
+  | "ROUTE_UNAVAILABLE"
+  | "EMERGENCY_STOP";
 
-export interface StrategyOneTinyLivePreArmRecord {
-  schemaVersion: "125.0";
-  id: string;
-  state: StrategyOneTinyLivePreArmState;
+export interface StrategyOneDynamicDecisionReport {
+  schemaVersion: "1.0";
+  generatedAt: number;
+  opportunityId: string;
   market: string;
-  buyExchange: "binance" | "bybit";
-  sellExchange: "binance" | "bybit";
-  capitalPerLegInr: number;
-  requiredArmPhrase: string;
-  armedAt: number;
-  expiresAt: number;
-  claimedAt: number | null;
+  routeKey: string;
+  decision: StrategyOneDynamicDecision;
+  requestedQuantity: number;
+  recommendedQuantity: number | null;
+  requestedCapitalInr: number;
+  maximumCapitalPerLegInr: 500;
+  economics: {
+    executable: boolean;
+    economicNetProfit: number;
+    economicNetProfitPercent: number;
+    tdsWithheld: number;
+    deployableCashProfit: number;
+    reasons: string[];
+  } | null;
+  blockers: string[];
+  warnings: string[];
+  liveOrderAuthorityGranted: false;
+}
+
+export interface StrategyOneControlledLiveRuntimeReport {
+  schemaVersion: "1.0";
+  generatedAt: number;
+  state:
+    | "NO_CURRENT_OPPORTUNITY"
+    | "BLOCKED_CURRENT_EVIDENCE"
+    | "DYNAMIC_RECOMMENDATION_AVAILABLE";
   opportunityId: string | null;
-  authorityId: string | null;
-  completedAt: number | null;
-  executionStatus: string | null;
-  failureReason: string | null;
+  candidate: {
+    opportunityId: string;
+    market: string;
+    buyExchange: string;
+    sellExchange: string;
+    requestedCapitalInr: number;
+    requestedQuantity: number;
+    buyBookTimestamp: number;
+    sellBookTimestamp: number;
+  } | null;
+  recommendation: StrategyOneDynamicDecisionReport | null;
+  blockers: string[];
+  liveOrderAuthorityGranted: false;
+  orderSubmitted: false;
+}
+
+export interface StrategyOneControlledLiveRuntimeResponse {
+  success: boolean;
+  data: StrategyOneControlledLiveRuntimeReport;
+}
+
+export type StrategyOneTinyLiveAuthorityState =
+  | "PREVIEWED"
+  | "AUTHORIZED"
+  | "CONSUMED"
+  | "PAIR_BOUND"
+  | "FINALIZED"
+  | "RESOLVED"
+  | "CANCELLED";
+
+export interface StrategyOneTinyLiveAuthorityRecord {
+  schemaVersion: "111.0";
+  id: string;
+  state: StrategyOneTinyLiveAuthorityState;
+  opportunityId: string;
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+  capitalPerLegInr: number;
+  exactQuantity: number;
+  maximumBuyPrice?: number;
+  minimumSellPrice?: number;
+  buyQuoteTimestamp?: number;
+  sellQuoteTimestamp?: number;
+  preflightHash: string;
+  calibrationId: string;
+  calibrationScope: string;
+  requiredAuthorizationPhrase: string;
+  previewedAt: number;
+  authorizedAt: number | null;
+  authorityExpiresAt: number | null;
+  consumedAt: number | null;
+  pairBoundAt: number | null;
+  pairSessionId: string | null;
+  finalizedAt: number | null;
+  finalOutcome: string | null;
+  requiresRecovery: boolean;
+  resolvedAt: number | null;
+  cancelledAt?: number | null;
+  liveOrderSubmissionAuthorized: boolean;
   automaticRetryAllowed: false;
   automaticFundMovementAllowed: false;
-  maximumAttempts: 1;
 }
 
-export interface StrategyOneTinyLivePreArmDiagnostics {
-  schemaVersion: "125.0";
+export interface StrategyOneTinyLiveActionDiagnostics {
+  schemaVersion: "111.0";
   generatedAt: number;
   runtimeGateEnabled: boolean;
-  activeArm: StrategyOneTinyLivePreArmRecord | null;
-  triggerInProgress: boolean;
-  lastEvaluation: {
-    evaluatedAt: number;
-    opportunityId: string;
-    outcome: "BLOCKED" | "CLAIMED" | "COMPLETED" | "FAILED_SAFE";
-    reason: string;
-  } | null;
-  records: StrategyOneTinyLivePreArmRecord[];
-  limits: {
-    minimumDurationMinutes: number;
-    defaultDurationMinutes: number;
-    maximumDurationMinutes: number;
-    maximumCapitalPerLegInr: 500;
-    maximumAttemptsPerArm: 1;
-  };
+  maximumDailyAttempts: number;
+  attemptsToday: number;
+  blockingAuthorityPresent: boolean;
+  records: StrategyOneTinyLiveAuthorityRecord[];
+  persistence: unknown;
   safety: {
-    exactRouteBound: true;
-    freshActionTimePreflightRequired: true;
-    durableClaimBeforeOrderAuthority: true;
-    existingCoordinatorOnly: true;
+    capitalPerLegInr: number;
+    maximumConcurrentAttempts: 1;
+    oneTimeAuthority: true;
+    authorityTtlMs: number;
+    journalBeforeCoordinatorAccess: true;
+    pairBindingBeforeExchangeDispatch: true;
     automaticRetryAllowed: false;
     automaticFundMovementAllowed: false;
-    withdrawalAllowed: false;
   };
 }
 
-export interface StrategyOneTinyLivePreArmDiagnosticsResponse {
-  success: true;
-  data: StrategyOneTinyLivePreArmDiagnostics;
+export interface StrategyOneTinyLiveActionDiagnosticsResponse {
+  success: boolean;
+  data: StrategyOneTinyLiveActionDiagnostics;
 }
 
-export interface StrategyOneTinyLivePreArmRecordResponse {
-  success: true;
-  data: StrategyOneTinyLivePreArmRecord;
+export interface StrategyOneTinyLiveActionPreview {
+  schemaVersion: "111.0";
+  generatedAt: number;
+  approvedForAuthorization: boolean;
+  authority: StrategyOneTinyLiveAuthorityRecord | null;
+  preflight: StrategyOnePilotPreflightRunReport | null;
+  blockers: string[];
+  safety: {
+    liveOrderSubmissionPerformed: false;
+    capitalReserved: false;
+    exactActionPhraseRequired: true;
+    oneTimeAuthority: true;
+  };
+}
+
+export interface StrategyOneTinyLiveActionPreviewResponse {
+  success: boolean;
+  data: StrategyOneTinyLiveActionPreview;
+}
+
+export interface StrategyOneTinyLiveAuthorityRecordResponse {
+  success: boolean;
+  data: StrategyOneTinyLiveAuthorityRecord;
+}
+
+export interface StrategyOneTinyLiveExecutionResponse {
+  success: boolean;
+  data: unknown;
 }
 
 export type StrategyOneTinyLiveAuditCategory =
