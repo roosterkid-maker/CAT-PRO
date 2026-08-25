@@ -223,7 +223,12 @@ export class CentralLiveOrderExecutionGateway {
       const evidence = await this.fees.inspect({exchange: result.exchange, product: result.product ?? record.request.product ?? "SPOT",
         market: result.market, orderId: result.orderId, expectedFilledQuantity: result.filledQuantity}, now);
       const state = evidence.complete ? "FEE_RECONCILED" as const : "EVIDENCE_INCOMPLETE" as const;
-      const updated = freeze({...clone(record), state, updatedAt: now, feeEvidence: clone(evidence),
+      const reconciledResult = evidence.complete ? {...clone(result), authoritativeFeeQuoteAmount: evidence.totalFeeQuoteAmount,
+        authoritativeWithholdingQuoteAmount: evidence.totalWithholdingQuoteAmount,
+        authoritativeCashDeductionQuoteAmount: evidence.totalCashDeductionQuoteAmount,
+        authoritativeWithholdingEvidenceComplete: evidence.withholdingEvidenceComplete,
+        authoritativeFeeEvidenceId: evidence.id} : clone(result);
+      const updated = freeze({...clone(record), state, updatedAt: now, result: reconciledResult, feeEvidence: clone(evidence),
         lastError: evidence.complete ? null : evidence.blockers.join(" | ")});
       this.set(updated); this.persist(now);
       return evidence.complete ? this.response(terminal(result.status) ? "READY" : "OPEN", updated, [])

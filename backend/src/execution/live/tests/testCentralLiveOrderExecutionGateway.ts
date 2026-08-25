@@ -157,7 +157,9 @@ function feeEvidence(): OrderFillFeeEvidence {
     observedQuoteQuantity: 500, averageFillPrice: 50_000, fills: [{executionId: "trade-1", orderId: "12345",
       exchange: "binance", product: "PERPETUAL", market: "BTCUSDT", price: 50_000, quantity: 0.01,
       quoteQuantity: 500, feeAsset: "USDT", feeAmount: 0.2, maker: false, executedAt: now,
-      additionalFeeMetadataPresent: false}], fees: [{asset: "USDT", amount: 0.2}], complete: true, blockers: [],
+      additionalFeeMetadataPresent: false}], fees: [{asset: "USDT", amount: 0.2}], withholdings: [],
+    quoteAsset: "USDT", totalFeeQuoteAmount: 0.2, totalWithholdingQuoteAmount: 0,
+    totalCashDeductionQuoteAmount: 0.2, withholdingEvidenceComplete: true, complete: true, blockers: [],
     source: "BINANCE_USDM_ACCOUNT_TRADES"};
 }
 

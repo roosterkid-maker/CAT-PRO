@@ -61,6 +61,10 @@ import {
   type StrategyOneApiPermissionBoundaryReport,
 } from "./StrategyOneApiPermissionBoundaryService";
 
+import {
+  getStrategyOneTinyLiveCashCostProfile,
+} from "../evidence/StrategyOneTinyLiveCashCostService";
+
 const REQUIRED_CONFIRMATION_TOKEN =
   "RUN_STRATEGY_ONE_PILOT_PREFLIGHT_ONLY";
 
@@ -288,13 +292,40 @@ const DEFAULT_DEPENDENCIES:
       opportunity,
       quantity,
       now,
-    ) =>
-      strategyOnePaperStressGate
+    ) => {
+      const buyCashCosts =
+        getStrategyOneTinyLiveCashCostProfile(
+          opportunity.pair.buy.exchange,
+          opportunity.pair.market,
+          "BUY",
+        );
+      const sellCashCosts =
+        getStrategyOneTinyLiveCashCostProfile(
+          opportunity.pair.sell.exchange,
+          opportunity.pair.market,
+          "SELL",
+        );
+      return strategyOnePaperStressGate
         .evaluate({
           opportunity,
           quantity,
           now,
-        }),
+          liveCashCosts: {
+            buyTradingFeeSurchargeMultiplier:
+              buyCashCosts.tradingFeeSurchargeMultiplier,
+            sellTradingFeeSurchargeMultiplier:
+              sellCashCosts.tradingFeeSurchargeMultiplier,
+            buyWithholdingPercent:
+              buyCashCosts.withholdingPercent,
+            sellWithholdingPercent:
+              sellCashCosts.withholdingPercent,
+            evidenceIds: [
+              buyCashCosts.evidenceId,
+              sellCashCosts.evidenceId,
+            ],
+          },
+        });
+    },
   runCorePreflight:
     (request) =>
       tinyLivePreflightService

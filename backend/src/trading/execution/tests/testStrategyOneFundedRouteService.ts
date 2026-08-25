@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type {ArbitrageOpportunity} from "../../../arbitrage/models/ArbitrageOpportunity";
 import type {ExchangeMarketCapability} from "../../../execution/capabilities/models/ExchangeCapability";
 import type {OrderBook} from "../../../orderbook/models/OrderBook";
+import {getStrategyOneTinyLiveCashCostProfile} from "../../../execution/live/evidence/StrategyOneTinyLiveCashCostService";
 import type {
   ExchangeBalanceSynchronizationReport,
   ExchangeBalanceSynchronizationStatus,
@@ -381,6 +382,43 @@ function testFinalPaperStressGate(): void {
   assert.equal(passed.paperOnly, true);
   assert.equal(passed.liveExecutionAllowed, false);
   assert.equal(passed.orderSubmissionAllowed, false);
+
+  const bybitBuyCosts = getStrategyOneTinyLiveCashCostProfile("bybit", "BTCUSDT", "BUY");
+  const coinDCXSellCosts = getStrategyOneTinyLiveCashCostProfile("coindcx", "BTCUSDT", "SELL");
+  books.set(
+    "bybit:BTCUSDT",
+    orderBook("bybit", NOW, [[99.9, 20]], [[100, 5], [100.1, 5]]),
+  );
+  books.set(
+    "coindcx:BTCUSDT",
+    orderBook("coindcx", NOW, [[101.2, 5], [101.1, 5]], [[101.3, 20]]),
+  );
+  const liveCashOpportunity = opportunity("stress-live-cash-costs", 20);
+  const cashBlocked = gate.evaluate({
+    opportunity: {
+      ...liveCashOpportunity,
+      pair: {
+        ...liveCashOpportunity.pair,
+        buy: {...liveCashOpportunity.pair.buy, exchange: "bybit"},
+        sell: {...liveCashOpportunity.pair.sell, exchange: "coindcx"},
+      },
+    },
+    quantity: 10,
+    now: NOW,
+    liveCashCosts: {
+      buyTradingFeeSurchargeMultiplier: bybitBuyCosts.tradingFeeSurchargeMultiplier,
+      sellTradingFeeSurchargeMultiplier: coinDCXSellCosts.tradingFeeSurchargeMultiplier,
+      buyWithholdingPercent: bybitBuyCosts.withholdingPercent,
+      sellWithholdingPercent: coinDCXSellCosts.withholdingPercent,
+      evidenceIds: [bybitBuyCosts.evidenceId, coinDCXSellCosts.evidenceId],
+    },
+  });
+  assert.equal(cashBlocked.status, "BLOCKED");
+  assert.ok((cashBlocked.statutoryCashWithholding ?? 0) > 20);
+  assert.match(cashBlocked.reasons.join(" "), /below minimum 0\.3000%/i);
+  assert.equal(bybitBuyCosts.tradingFeeSurchargeMultiplier, 0.18);
+  assert.equal(bybitBuyCosts.withholdingPercent, 1);
+  assert.equal(coinDCXSellCosts.withholdingPercent, 1);
 
   books.set(
     "coinswitch:BTCUSDT",

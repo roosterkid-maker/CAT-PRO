@@ -36,9 +36,21 @@ export interface ArbitragePnLRecord {
 
   totalFees: number;
 
+  /** Statutory withholding is a tax-credit asset, not an economic trading fee. */
+  totalWithholdings?: number;
+
   netProfit: number;
 
+  /** Immediate cash result after fees and withholding; may differ from economic profit. */
+  cashNetProfit?: number | null;
+
   netProfitPercent: number;
+
+  cashNetProfitPercent?: number | null;
+
+  feeEvidenceComplete?: boolean;
+
+  withholdingEvidenceComplete?: boolean;
 
   recoveryRequired: boolean;
 
@@ -152,13 +164,37 @@ export class ArbitragePnLService {
 
     const buyFee =
       this.toNonNegativeNumber(
-        buyResult.feeAmount,
+        buyResult.authoritativeFeeQuoteAmount ??
+          buyResult.feeAmount,
       );
 
     const sellFee =
       this.toNonNegativeNumber(
-        sellResult.feeAmount,
+        sellResult.authoritativeFeeQuoteAmount ??
+          sellResult.feeAmount,
       );
+
+    const totalWithholdings =
+      this.round(
+        this.toNonNegativeNumber(
+          buyResult.authoritativeWithholdingQuoteAmount ?? 0,
+        ) +
+        this.toNonNegativeNumber(
+          sellResult.authoritativeWithholdingQuoteAmount ?? 0,
+        ),
+      );
+
+    const feeEvidenceComplete =
+      Number.isFinite(
+        buyResult.authoritativeFeeQuoteAmount,
+      ) &&
+      Number.isFinite(
+        sellResult.authoritativeFeeQuoteAmount,
+      );
+
+    const withholdingEvidenceComplete =
+      buyResult.authoritativeWithholdingEvidenceComplete === true &&
+      sellResult.authoritativeWithholdingEvidenceComplete === true;
 
     const totalFees =
       this.round(
@@ -195,6 +231,24 @@ export class ArbitragePnLService {
           : 0,
       );
 
+    const cashNetProfit =
+      withholdingEvidenceComplete
+        ? this.round(
+            netProfit -
+            totalWithholdings,
+          )
+        : null;
+
+    const cashNetProfitPercent =
+      grossBuyValue > 0 &&
+      cashNetProfit !== null
+        ? this.round(
+            cashNetProfit /
+            grossBuyValue *
+            100,
+          )
+        : null;
+
     const record:
       ArbitragePnLRecord = {
       opportunityId:
@@ -228,9 +282,19 @@ export class ArbitragePnLService {
 
       totalFees,
 
+      totalWithholdings,
+
       netProfit,
 
+      cashNetProfit,
+
       netProfitPercent,
+
+      cashNetProfitPercent,
+
+      feeEvidenceComplete,
+
+      withholdingEvidenceComplete,
 
       recoveryRequired:
         result.recoveryRequired,

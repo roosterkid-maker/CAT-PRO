@@ -229,6 +229,13 @@ export interface StrategyOnePaperStressGateReport {
   tradingFees:
     number | null;
 
+  /** Present when the Tiny-LIVE caller supplied account/jurisdiction cash-cost evidence. */
+  statutoryCashWithholding?:
+    number | null;
+
+  statutoryCashCostEvidenceIds?:
+    readonly string[];
+
   safetyBuffer:
     number | null;
 
@@ -347,6 +354,13 @@ export class StrategyOnePaperStressGate {
       ArbitrageOpportunity;
     quantity: number;
     now?: number;
+    liveCashCosts?: {
+      readonly buyTradingFeeSurchargeMultiplier: number;
+      readonly sellTradingFeeSurchargeMultiplier: number;
+      readonly buyWithholdingPercent: number;
+      readonly sellWithholdingPercent: number;
+      readonly evidenceIds: readonly string[];
+    };
   }): StrategyOnePaperStressGateReport {
     const now =
       input.now ??
@@ -534,6 +548,10 @@ export class StrategyOnePaperStressGate {
       null;
 
     let tradingFees:
+      number | null =
+      null;
+
+    let statutoryCashWithholding:
       number | null =
       null;
 
@@ -730,17 +748,53 @@ export class StrategyOnePaperStressGate {
                 adverseRatio
               );
 
-            tradingFees =
-              stressedBuyNotional *
-                (
-                  buyFeePercent /
-                  100
-                ) +
-              stressedSellNotional *
-                (
-                  sellFeePercent /
-                  100
-                );
+            const liveCashCosts =
+              input.liveCashCosts;
+
+            const buyFeeSurchargeMultiplier =
+              liveCashCosts?.buyTradingFeeSurchargeMultiplier ?? 0;
+
+            const sellFeeSurchargeMultiplier =
+              liveCashCosts?.sellTradingFeeSurchargeMultiplier ?? 0;
+
+            const buyWithholdingPercent =
+              liveCashCosts?.buyWithholdingPercent ?? 0;
+
+            const sellWithholdingPercent =
+              liveCashCosts?.sellWithholdingPercent ?? 0;
+
+            const cashCostValues = [
+              buyFeeSurchargeMultiplier,
+              sellFeeSurchargeMultiplier,
+              buyWithholdingPercent,
+              sellWithholdingPercent,
+            ];
+
+            if (cashCostValues.some((value) => !Number.isFinite(value) || value < 0)) {
+              reasons.push(
+                "Tiny-LIVE statutory cash-cost evidence is invalid.",
+              );
+            } else {
+              tradingFees =
+                stressedBuyNotional *
+                  (
+                    buyFeePercent /
+                    100
+                  ) *
+                  (1 + buyFeeSurchargeMultiplier) +
+                stressedSellNotional *
+                  (
+                    sellFeePercent /
+                    100
+                  ) *
+                  (1 + sellFeeSurchargeMultiplier);
+
+              statutoryCashWithholding =
+                stressedBuyNotional *
+                  (buyWithholdingPercent / 100) +
+                stressedSellNotional *
+                  (sellWithholdingPercent / 100);
+            }
 
             safetyBuffer =
               stressedBuyNotional *
@@ -750,14 +804,18 @@ export class StrategyOnePaperStressGate {
                 100
               );
 
-            postStressNetProfit =
-              stressedSellNotional -
-              stressedBuyNotional -
-              tradingFees -
-              safetyBuffer;
+            if (tradingFees !== null && statutoryCashWithholding !== null) {
+              postStressNetProfit =
+                stressedSellNotional -
+                stressedBuyNotional -
+                tradingFees -
+                statutoryCashWithholding -
+                safetyBuffer;
+            }
 
             postStressNetProfitPercent =
-              stressedBuyNotional > 0
+              stressedBuyNotional > 0 &&
+              postStressNetProfit !== null
                 ? (
                     postStressNetProfit /
                     stressedBuyNotional
@@ -777,7 +835,7 @@ export class StrategyOnePaperStressGate {
                   .minimumNetProfitPercent
             ) {
               reasons.push(
-                `Post-stress PAPER net ${postStressNetProfitPercent === null || !Number.isFinite(postStressNetProfitPercent) ? "invalid" : `${postStressNetProfitPercent.toFixed(4)}%`} is below minimum ${this.config.minimumNetProfitPercent.toFixed(4)}%.`,
+                `Post-stress ${input.liveCashCosts ? "Tiny-LIVE cash" : "PAPER"} net ${postStressNetProfitPercent === null || !Number.isFinite(postStressNetProfitPercent) ? "invalid" : `${postStressNetProfitPercent.toFixed(4)}%`} is below minimum ${this.config.minimumNetProfitPercent.toFixed(4)}%.`,
               );
             }
           }
@@ -837,6 +895,9 @@ export class StrategyOnePaperStressGate {
         this.config
           .adverseMoveReservePercentPerLeg,
       tradingFees,
+      statutoryCashWithholding,
+      statutoryCashCostEvidenceIds:
+        input.liveCashCosts?.evidenceIds,
       safetyBuffer,
       postStressNetProfit,
       postStressNetProfitPercent,
@@ -846,7 +907,7 @@ export class StrategyOnePaperStressGate {
       reasons:
         passed
           ? [
-              `Fresh two-book VWAP remains ${(postStressNetProfitPercent ?? 0).toFixed(4)}% net after fees, adverse-move reserve, and safety buffer.`,
+              `Fresh two-book VWAP remains ${(postStressNetProfitPercent ?? 0).toFixed(4)}% net after ${input.liveCashCosts ? "fees, statutory cash withholding" : "fees"}, adverse-move reserve, and safety buffer.`,
             ]
           : [
               ...new Set(

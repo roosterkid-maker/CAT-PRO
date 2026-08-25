@@ -45,6 +45,20 @@ export interface LiveExecutionResult {
 
   feeAmount: number;
 
+  /** Quote-valued trading fees and non-withholding taxes from signed fill evidence. */
+  authoritativeFeeQuoteAmount?: number | null;
+
+  /** Quote-valued statutory withholding from signed fill evidence, kept separate from economic fees. */
+  authoritativeWithholdingQuoteAmount?: number | null;
+
+  /** Total immediate quote-equivalent deduction: fees plus withholding. */
+  authoritativeCashDeductionQuoteAmount?: number | null;
+
+  /** Whether the signed venue source exposes authoritative withholding evidence. */
+  authoritativeWithholdingEvidenceComplete?: boolean;
+
+  authoritativeFeeEvidenceId?: string | null;
+
   cancelled: boolean;
 
   timedOut: boolean;
