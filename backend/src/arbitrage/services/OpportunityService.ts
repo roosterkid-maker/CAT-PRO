@@ -74,6 +74,17 @@ const DEFAULT_OPPORTUNITY_SERVICE_CONFIG:
     5_000,
 };
 
+/*
+ * The two timing-evidence owners each retain at most 128 dynamic routes.
+ * Publishing every executable route on every 20 ms scan only made the
+ * bounded consumers sort, clone and reject the overflow repeatedly. Actual
+ * opportunities remain uncapped and are carried separately below, so an
+ * accepted route outside this timing cohort still enters qualification and
+ * exact-route evidence normally.
+ */
+const MAXIMUM_PILOT_ROUTE_BOOKS_PER_SNAPSHOT =
+  128;
+
 export interface OpportunityPipelineDiagnostics {
   scanStartedAt:
     number;
@@ -593,6 +604,13 @@ export class OpportunityService {
               };
 
               if (!isStrategyOneTinyLiveDynamicRoute(route)) {
+                return;
+              }
+
+              if (
+                pilotRouteBooks.length >=
+                MAXIMUM_PILOT_ROUTE_BOOKS_PER_SNAPSHOT
+              ) {
                 return;
               }
 

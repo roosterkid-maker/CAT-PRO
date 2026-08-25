@@ -162,6 +162,43 @@ function verifyPilotTimingDirectionsIndependentFromEconomics(): void {
   }
 }
 
+function verifyPilotTimingSnapshotBound(): void {
+  marketCache.clear();
+
+  try {
+    const timestamp = Date.now();
+
+    for (let index = 0; index < 80; index += 1) {
+      const market = `T${index}USDT`;
+      for (const exchange of ["binance", "coindcx"]) {
+        marketCache.update({
+          exchange,
+          market,
+          lastPrice: 100,
+          bestBidPrice: 99,
+          bestBidQty: 100,
+          bestAskPrice: 100,
+          bestAskQty: 100,
+          spread: 1,
+          timestamp,
+          source: "orderBook",
+          executable: true,
+        });
+      }
+    }
+
+    const service = new OpportunityService({diagnosticsLogLevel: "silent"});
+    assert.equal(service.getOpportunities().length, 0);
+    assert.equal(
+      service.getLastOpportunitySnapshot()?.pilotRouteBooks?.length,
+      128,
+      "Timing-only route books must stay bounded to the capacity consumed by evidence owners.",
+    );
+  } finally {
+    marketCache.clear();
+  }
+}
+
 function createSpreadRejectedPair(
   timestamp:
     number,
@@ -519,6 +556,7 @@ function main():
 
   verifyLatestRouteSnapshotBound();
   verifyPilotTimingDirectionsIndependentFromEconomics();
+  verifyPilotTimingSnapshotBound();
 
   console.log(
     "Opportunity rejection log-volume test passed.",

@@ -269,6 +269,42 @@ function main(): void {
       "Dispatch-reserved evidence approaching calibration must survive dynamic-route churn.");
     assert.equal(capacityRoutes.some((item) => item.market === "ETHUSDT"), false,
       "The least-progressed dispatch-reserved route must be evicted at hard capacity.");
+
+    const stableTimingCohort = new StrategyOnePilotEquivalentPaperEvidenceService({
+      filePath: join(directory, "pilot-stable-capacity.jsonl"), maximumRoutes: 2,
+      minimumExecutionGradeGenerations: 2, minimumObservationSpanMs: 1_000,
+      persistenceIntervalMs: 60_000, maximumGenerationKeysPerRoute: 8,
+    });
+    stableTimingCohort.observeSnapshot({
+      generatedAt: NOW + 30_000,
+      opportunities: [],
+      pilotRouteBooks: [
+        {market: "BTCUSDT", buyExchange: "binance", sellExchange: "bybit",
+          buyTimestamp: NOW + 29_980, sellTimestamp: NOW + 29_985},
+        {market: "ETHUSDT", buyExchange: "coindcx", sellExchange: "binance",
+          buyTimestamp: NOW + 29_980, sellTimestamp: NOW + 29_985},
+      ],
+    }, NOW + 30_005);
+    stableTimingCohort.observeSnapshot({
+      generatedAt: NOW + 31_000,
+      opportunities: [],
+      pilotRouteBooks: [
+        {market: "SOLUSDT", buyExchange: "binance", sellExchange: "bybit",
+          buyTimestamp: NOW + 30_980, sellTimestamp: NOW + 30_985},
+        {market: "XRPUSDT", buyExchange: "coindcx", sellExchange: "binance",
+          buyTimestamp: NOW + 30_980, sellTimestamp: NOW + 30_985},
+      ],
+    }, NOW + 31_005);
+    const stableRoutes = stableTimingCohort.getReport(NOW + 31_100).routes;
+    assert.deepEqual(stableRoutes.map((item) => item.market).sort(), ["BTCUSDT", "ETHUSDT"],
+      "Timing-only route-book overflow must not churn a full bounded evidence cohort.");
+
+    stableTimingCohort.observeSnapshot(snapshot(opportunity({
+      generatedAt: NOW + 32_000, market: "SOLUSDT",
+    })), NOW + 32_005);
+    const admittedOpportunityRoutes = stableTimingCohort.getReport(NOW + 32_100).routes;
+    assert.equal(admittedOpportunityRoutes.some((item) => item.market === "SOLUSDT"), true,
+      "A current accepted dynamic opportunity must still enter a full timing cohort.");
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }

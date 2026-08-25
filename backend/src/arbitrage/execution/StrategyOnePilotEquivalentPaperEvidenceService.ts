@@ -441,7 +441,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
       buyTimestamp: opportunity.pair.buy.timestamp,
       sellTimestamp: opportunity.pair.sell.timestamp,
       rejections: classifyFreshness(opportunity, observedAt),
-    }, observedAt, true);
+    }, observedAt, true, true);
     if (!observed) return null;
     this.observeEconomics(observed.route, opportunity, observedAt,
       dispatchFreshness.passed && opportunity.pair.buy.executable &&
@@ -475,7 +475,7 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
       buyTimestamp: book.buyTimestamp,
       sellTimestamp: book.sellTimestamp,
       rejections: freshness.reasons,
-    }, observedAt, true);
+    }, observedAt, true, false);
   }
 
   private observeRouteGeneration(
@@ -489,11 +489,20 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     },
     observedAt: number,
     countRepeated: boolean,
+    replaceAtCapacity: boolean,
   ): {readonly route: MutableRoute; readonly generationIdentity: string} | null {
     const routeKey = `${input.market}:${input.buyExchange}->${input.sellExchange}`;
     const generationKey = `${input.buyTimestamp}:${input.sellTimestamp}`;
     const generationIdentity = `${routeKey}:${generationKey}`;
-    const route = this.ensureRoute(routeKey, input.market, input.buyExchange, input.sellExchange, observedAt);
+    const route = this.ensureRoute(
+      routeKey,
+      input.market,
+      input.buyExchange,
+      input.sellExchange,
+      observedAt,
+      replaceAtCapacity,
+    );
+    if (!route) return null;
     const generationKeySet = this.generationKeySets.get(routeKey) as Set<string>;
     if (generationKeySet.has(generationKey)) {
       if (countRepeated) route.repeatedGenerationsIgnored += 1;
@@ -539,20 +548,23 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
   }
 
   private ensureRoute(routeKey: string, market: string, buyExchange: StrategyOnePilotExchange,
-    sellExchange: StrategyOnePilotExchange, observedAt: number): MutableRoute {
+    sellExchange: StrategyOnePilotExchange, observedAt: number,
+    replaceAtCapacity: boolean): MutableRoute | null {
     const existing = this.routes.get(routeKey);
     if (existing) return existing;
     if (this.routes.size >= this.maximumRoutes) {
-      const leastProgressed = [...this.routes.values()].sort((first, second) => {
-        const dispatchProgress = Math.min(first.dispatchReservedGenerations,
-          this.minimumExecutionGradeGenerations) - Math.min(second.dispatchReservedGenerations,
-          this.minimumExecutionGradeGenerations);
-        const executionGradeProgress = Math.min(first.executionGradeGenerations,
-          this.minimumExecutionGradeGenerations) - Math.min(second.executionGradeGenerations,
-          this.minimumExecutionGradeGenerations);
-        return dispatchProgress || executionGradeProgress ||
-          first.lastUniqueGenerationAt - second.lastUniqueGenerationAt;
-      })[0];
+      /*
+       * A full dynamic route-book snapshot can contain hundreds of routes.
+       * Replacing and sorting the bounded 128-route evidence cohort for every
+       * unretained timing-only book caused continuous route churn, high GC and
+       * event-loop tail latency. Keep the timing-only cohort stable once full;
+       * a real accepted opportunity may still enter by replacing the least
+       * progressed route. This preserves dynamic opportunity admission and
+       * evidence safety while making book-only overflow an O(1) rejection.
+       */
+      if (!replaceAtCapacity) return null;
+
+      const leastProgressed = this.findLeastProgressedRoute();
       if (leastProgressed) {
         this.routes.delete(leastProgressed.routeKey);
         this.generationKeySets.delete(leastProgressed.routeKey);
@@ -603,6 +615,32 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     this.routes.set(routeKey, created);
     this.generationKeySets.set(routeKey, new Set());
     return created;
+  }
+
+  private findLeastProgressedRoute(): MutableRoute | null {
+    let leastProgressed: MutableRoute | null = null;
+
+    for (const route of this.routes.values()) {
+      if (
+        leastProgressed === null ||
+        this.compareEvictionPriority(route, leastProgressed) < 0
+      ) {
+        leastProgressed = route;
+      }
+    }
+
+    return leastProgressed;
+  }
+
+  private compareEvictionPriority(first: MutableRoute, second: MutableRoute): number {
+    const dispatchProgress = Math.min(first.dispatchReservedGenerations,
+      this.minimumExecutionGradeGenerations) - Math.min(second.dispatchReservedGenerations,
+      this.minimumExecutionGradeGenerations);
+    const executionGradeProgress = Math.min(first.executionGradeGenerations,
+      this.minimumExecutionGradeGenerations) - Math.min(second.executionGradeGenerations,
+      this.minimumExecutionGradeGenerations);
+    return dispatchProgress || executionGradeProgress ||
+      first.lastUniqueGenerationAt - second.lastUniqueGenerationAt;
   }
 
   private observeEconomics(
