@@ -8,6 +8,9 @@ import {
 import {
   isStrategyOneTinyLiveBasketRoute,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
+import {
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
+} from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 
 export type StrategyOneTimeInForce =
   | "GTC"
@@ -304,6 +307,52 @@ export class StrategyOneLiveVenueContractRegistry {
     const evidence =
       this.getVenue(exchange, route, now);
 
+    return this.toOrderTimeSafetyContract(evidence, route);
+  }
+
+  /**
+   * Builds the final venue contract from the exact route TTL that was already
+   * re-qualified and durably bound to a one-time action authority. This path
+   * still rechecks the immutable venue mapping and current private-fill owner,
+   * but deliberately does not reconstruct historical percentile evidence in
+   * the synchronous pre-dispatch last-look.
+   */
+  getAuthorizedOrderTimeSafetyContract(
+    exchange: string,
+    route: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+    authorizedMaximumBookAgeMs: number,
+    now = Date.now(),
+  ): StrategyOneVenueOrderContract | null {
+    if (
+      !Number.isSafeInteger(authorizedMaximumBookAgeMs) ||
+      authorizedMaximumBookAgeMs <= 0 ||
+      authorizedMaximumBookAgeMs > STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
+    ) {
+      return null;
+    }
+
+    const evidence = this.buildVenue(
+      exchange,
+      route,
+      now,
+      authorizedMaximumBookAgeMs,
+    );
+
+    return this.toOrderTimeSafetyContract(evidence, route);
+  }
+
+  private toOrderTimeSafetyContract(
+    evidence: StrategyOneVenueContractEvidence | null,
+    route?: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+  ): StrategyOneVenueOrderContract | null {
     if (!evidence) {
       return null;
     }
@@ -347,6 +396,19 @@ export class StrategyOneLiveVenueContractRegistry {
     },
     now = Date.now(),
   ): StrategyOneVenueContractEvidence | null {
+    return this.buildVenue(exchange, route, now);
+  }
+
+  private buildVenue(
+    exchange: string,
+    route: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    } | undefined,
+    now: number,
+    authorizedMaximumBookAgeMs?: number,
+  ): StrategyOneVenueContractEvidence | null {
     const normalized =
       normalizeExchange(exchange);
 
@@ -387,7 +449,8 @@ export class StrategyOneLiveVenueContractRegistry {
         : false;
     const calibratedOrderSubmissionTtlMs =
       route && classification === "SAFE_PILOT_CANDIDATE"
-        ? this.dependencies.getApprovedRouteTtl({
+        ? authorizedMaximumBookAgeMs ??
+          this.dependencies.getApprovedRouteTtl({
             ...route,
             now,
           })

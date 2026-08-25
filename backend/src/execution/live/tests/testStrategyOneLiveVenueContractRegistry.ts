@@ -86,6 +86,67 @@ function main(): void {
   assert.deepEqual(cotiContract.supportedTimeInForce, ["GTC"]);
   assert.equal(cotiContract.maximumOrderBookAgeMs, 150);
 
+  let historicalTimingLookups = 0;
+  let privateFillReadinessChecks = 0;
+  const authorizedLastLookRegistry =
+    new StrategyOneLiveVenueContractRegistry({
+      isPrivateFillSessionReady: () => {
+        privateFillReadinessChecks += 1;
+        return true;
+      },
+      getApprovedRouteTtl: () => {
+        historicalTimingLookups += 1;
+        return 150;
+      },
+    });
+  const sandRoute = {
+    market: "SANDUSDT",
+    buyExchange: "bybit",
+    sellExchange: "coindcx",
+  } as const;
+  const authorizedBybit =
+    authorizedLastLookRegistry.getAuthorizedOrderTimeSafetyContract(
+      "bybit",
+      sandRoute,
+      190,
+      1_786_812_800_000,
+    );
+  const authorizedCoinDCX =
+    authorizedLastLookRegistry.getAuthorizedOrderTimeSafetyContract(
+      "coindcx",
+      sandRoute,
+      190,
+      1_786_812_800_000,
+    );
+
+  assert.ok(authorizedBybit);
+  assert.ok(authorizedCoinDCX);
+  assert.equal(authorizedBybit.maximumOrderBookAgeMs, 190);
+  assert.equal(authorizedBybit.requiredTimeInForce, "FOK");
+  assert.equal(authorizedCoinDCX.maximumOrderBookAgeMs, 190);
+  assert.equal(authorizedCoinDCX.requiredTimeInForce, "GTC");
+  assert.equal(
+    historicalTimingLookups,
+    0,
+    "A durably authorized exact-route TTL must not rebuild historical timing evidence inside final last-look.",
+  );
+  assert.equal(
+    privateFillReadinessChecks,
+    2,
+    "Final last-look must still recheck each venue's current authenticated private-fill owner.",
+  );
+  assert.equal(
+    authorizedLastLookRegistry.getAuthorizedOrderTimeSafetyContract(
+      "bybit",
+      sandRoute,
+      251,
+      1_786_812_800_000,
+    ),
+    null,
+    "An authorized TTL above the immutable 250 ms ceiling must fail closed.",
+  );
+  assert.equal(historicalTimingLookups, 0);
+
   const bbReverseRoute = {
     market: "BBUSDT",
     buyExchange: "binance",

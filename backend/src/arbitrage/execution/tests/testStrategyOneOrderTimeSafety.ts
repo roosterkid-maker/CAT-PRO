@@ -177,6 +177,10 @@ function orderTimeService(
   options: {
     staleBuy?: boolean;
     bybitSupportsFok?: boolean;
+    onVenueContract?: (
+      exchange: string,
+      authorizedMaximumBookAgeMs: number | undefined,
+    ) => void;
   } = {},
 ): StrategyOneOrderTimeSafetyService {
   let monotonicTime =
@@ -240,7 +244,13 @@ function orderTimeService(
         () =>
           0.1,
       getVenueContract:
-        (exchange) => ({
+        (exchange, _route, _now, authorizedMaximumBookAgeMs) => {
+          options.onVenueContract?.(
+            exchange,
+            authorizedMaximumBookAgeMs,
+          );
+
+          return ({
           exchange,
           maximumOrderBookAgeMs:
             100,
@@ -260,7 +270,8 @@ function orderTimeService(
                 ],
           authoritativeFillConfirmationReady:
             true,
-        }),
+          });
+        },
       getMonotonicTimeMs:
         () =>
           monotonicTime++,
@@ -816,6 +827,40 @@ async function main(): Promise<void> {
     "Fresh full-depth evidence with audited FOK and fill channels should pass as non-authorizing evidence.",
   );
 
+  const authorizedTtlCalls: Array<{
+    exchange: string;
+    maximumBookAgeMs: number | undefined;
+  }> = [];
+  const authorizedTtlLastLook =
+    orderTimeService({
+      onVenueContract: (exchange, maximumBookAgeMs) => {
+        authorizedTtlCalls.push({exchange, maximumBookAgeMs});
+      },
+    }).evaluate({
+      opportunity: opportunity(),
+      quantity: 1,
+      now: NOW,
+      authorizedMaximumBookAgeMs: 100,
+    });
+
+  assert.equal(authorizedTtlLastLook.decision, "APPROVED");
+  assert.deepEqual(authorizedTtlCalls, [
+    {exchange: "binance", maximumBookAgeMs: 100},
+    {exchange: "bybit", maximumBookAgeMs: 100},
+  ]);
+
+  const invalidAuthorizedTtl = orderTimeService().evaluate({
+    opportunity: opportunity(),
+    quantity: 1,
+    now: NOW,
+    authorizedMaximumBookAgeMs: 251,
+  });
+  assert.equal(invalidAuthorizedTtl.decision, "BLOCKED");
+  assert.match(
+    invalidAuthorizedTtl.reasons.join(" "),
+    /immutable 250 ms ceiling/iu,
+  );
+
   const mixedTimeInForce =
     coinDCXBinanceOrderTimeService()
       .evaluate({
@@ -945,6 +990,11 @@ async function main(): Promise<void> {
     [];
   let clock =
     NOW;
+  let coordinatorAuthorizedMaximumBookAgeMs:
+    number |
+    undefined;
+  const coordinatorOrderTimeSafety =
+    orderTimeService();
   const coordinator =
     new ArbitrageExecutionCoordinator({
       liveExecution: {
@@ -987,7 +1037,13 @@ async function main(): Promise<void> {
           },
       },
       orderTimeSafety:
-        orderTimeService(),
+        {
+          evaluate: (input) => {
+            coordinatorAuthorizedMaximumBookAgeMs =
+              input.authorizedMaximumBookAgeMs;
+            return coordinatorOrderTimeSafety.evaluate(input);
+          },
+        },
       twoLegExecution:
         twoLegFixture(
           adapters,
@@ -1008,7 +1064,14 @@ async function main(): Promise<void> {
         () =>
           true,
       consumeActionAuthority:
-        () => actionAuthorityFixture("CONSUMED"),
+        () => ({
+          ...actionAuthorityFixture("CONSUMED"),
+          schemaVersion: "191.0",
+          maximumCapitalPerLegInr: 505,
+          maximumBuyQuoteSpend: 101,
+          maximumOrderBookAgeMs: 100,
+          calibrationScope: "DYNAMIC_POOL",
+        }),
       bindActionAuthorityPair:
         () => actionAuthorityFixture("PAIR_BOUND"),
       finalizeActionAuthority:
@@ -1023,6 +1086,11 @@ async function main(): Promise<void> {
       opportunity(),
       {actionAuthorityId: "tiny-live-fixture"},
     );
+
+  assertCondition(
+    coordinatorAuthorizedMaximumBookAgeMs === 100,
+    "The coordinator must carry the durably authorized exact-route TTL into final last-look.",
+  );
 
   assertCondition(
     buyAdapter.requests.length ===

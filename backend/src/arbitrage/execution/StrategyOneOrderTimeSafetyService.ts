@@ -31,6 +31,9 @@ import {
   type StrategyOneTimeInForce,
   type StrategyOneVenueOrderContract,
 } from "../../execution/live/contracts/StrategyOneLiveVenueContractRegistry";
+import {
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
+} from "./StrategyOnePilotEquivalentPaperEvidenceService";
 
 export type {
   StrategyOneTimeInForce,
@@ -57,6 +60,7 @@ export interface StrategyOneOrderTimeSafetyDependencies {
       readonly sellExchange: string;
     },
     now: number,
+    authorizedMaximumBookAgeMs?: number,
   ): StrategyOneVenueOrderContract | null;
 
   getMonotonicTimeMs(): number;
@@ -168,13 +172,21 @@ const DEFAULT_DEPENDENCIES:
   getTakerFeePercent:
     getExchangeTakerFeePercent,
   getVenueContract:
-    (exchange, route, now) =>
-      strategyOneLiveVenueContractRegistry
-        .getOrderTimeSafetyContract(
-          exchange,
-          route,
-          now,
-        ),
+    (exchange, route, now, authorizedMaximumBookAgeMs) =>
+      authorizedMaximumBookAgeMs === undefined
+        ? strategyOneLiveVenueContractRegistry
+            .getOrderTimeSafetyContract(
+              exchange,
+              route,
+              now,
+            )
+        : strategyOneLiveVenueContractRegistry
+            .getAuthorizedOrderTimeSafetyContract(
+              exchange,
+              route,
+              authorizedMaximumBookAgeMs,
+              now,
+            ),
   getMonotonicTimeMs:
     () =>
       performance.now(),
@@ -238,6 +250,7 @@ export class StrategyOneOrderTimeSafetyService {
     opportunity: ArbitrageOpportunity;
     quantity: number;
     now?: number;
+    authorizedMaximumBookAgeMs?: number;
   }): StrategyOneOrderTimeSafetyReport {
     const monotonicStartedAt =
       this.dependencies
@@ -281,6 +294,20 @@ export class StrategyOneOrderTimeSafetyService {
       );
     }
 
+    if (
+      input.authorizedMaximumBookAgeMs !== undefined &&
+      (
+        !Number.isSafeInteger(input.authorizedMaximumBookAgeMs) ||
+        input.authorizedMaximumBookAgeMs <= 0 ||
+        input.authorizedMaximumBookAgeMs >
+          STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
+      )
+    ) {
+      reasons.push(
+        "Authorized order-book TTL is invalid or exceeds the immutable 250 ms ceiling.",
+      );
+    }
+
     const opportunityAgeMs =
       Number.isSafeInteger(
         opportunity.timestamp,
@@ -312,6 +339,7 @@ export class StrategyOneOrderTimeSafetyService {
             sellExchange,
           },
           startedAt,
+          input.authorizedMaximumBookAgeMs,
         );
     const sellContract =
       this.dependencies
@@ -323,6 +351,7 @@ export class StrategyOneOrderTimeSafetyService {
             sellExchange,
           },
           startedAt,
+          input.authorizedMaximumBookAgeMs,
         );
 
     this.validateVenueContract(

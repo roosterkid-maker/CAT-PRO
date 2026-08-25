@@ -169,7 +169,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V111/V190 Tiny-LIVE authority passed: venue-direction timing needs no per-coin approval, while exact funded quantity, ₹505 quote cap, three-second authority, durable claim, expiry/disarm and no automatic retry remain enforced; no exchange order occurred.",
+    "V111/V191 Tiny-LIVE authority passed: venue-direction timing needs no per-coin approval, while exact funded quantity, authorized route TTL, ₹505 quote cap, three-second authority, durable claim, expiry/disarm and no automatic retry remain enforced; no exchange order occurred.",
   );
 }
 
@@ -232,8 +232,9 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
   for (const opportunity of opportunities) {
     const preview = service.preview(opportunity.id, ++clock);
     assert.equal(preview.approvedForAuthorization, true);
-    assert.equal(preview.authority?.schemaVersion, "190.0");
+    assert.equal(preview.authority?.schemaVersion, "191.0");
     assert.equal(preview.authority?.calibrationScope, "DYNAMIC_POOL");
+    assert.equal(preview.authority?.maximumOrderBookAgeMs, 245);
     const authority = preview.authority;
     assert.ok(authority);
     const authorized = service.authorize(
@@ -254,6 +255,15 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     "Preview and authorization must each bind qualification to their complete action-time preflight.");
   assert.equal(calibrationHeadrooms.every(Boolean), true,
     "The already-computed action-time headroom must be forwarded without a second evidence rebuild.");
+  assert.equal(
+    service.getDiagnostics(++clock).records.every(
+      (record) =>
+        record.schemaVersion === "191.0" &&
+        record.maximumOrderBookAgeMs === 245,
+    ),
+    true,
+    "Every dynamic authority transition must durably preserve its exact qualified TTL.",
+  );
 }
 
 function testBasketBootstrapQuotaIsRouteScoped(

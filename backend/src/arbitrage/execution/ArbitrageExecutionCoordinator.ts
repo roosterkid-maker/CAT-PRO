@@ -105,6 +105,7 @@ export interface ArbitrageExecutionCoordinatorDependencies {
       opportunity: ArbitrageOpportunity;
       quantity: number;
       now?: number;
+      authorizedMaximumBookAgeMs?: number;
     }): StrategyOneOrderTimeSafetyReport;
   };
 
@@ -437,6 +438,8 @@ export class ArbitrageExecutionCoordinator {
           now:
             this.dependencies
               .now(),
+          authorizedMaximumBookAgeMs:
+            consumedAuthority.maximumOrderBookAgeMs,
         });
 
     try {
@@ -576,7 +579,10 @@ export class ArbitrageExecutionCoordinator {
       consumedAuthority.capitalPerLegInr;
 
     if (
-      consumedAuthority.schemaVersion === "190.0" &&
+      (
+        consumedAuthority.schemaVersion === "190.0" ||
+        consumedAuthority.schemaVersion === "191.0"
+      ) &&
       (
         !Number.isFinite(maximumBuyQuoteSpend) ||
         (maximumBuyQuoteSpend ?? 0) <= 0 ||

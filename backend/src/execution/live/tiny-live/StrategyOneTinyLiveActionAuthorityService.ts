@@ -27,6 +27,7 @@ import {
 
 import {
   isExactStrategyOnePilotRoute,
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
 } from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 import {
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
@@ -41,7 +42,7 @@ export type StrategyOneTinyLiveAuthorityState =
   | "RESOLVED";
 
 export interface StrategyOneTinyLiveAuthorityRecord {
-  readonly schemaVersion: "111.0" | "189.0" | "190.0";
+  readonly schemaVersion: "111.0" | "189.0" | "190.0" | "191.0";
   readonly id: string;
   readonly state: StrategyOneTinyLiveAuthorityState;
   readonly opportunityId: string;
@@ -51,6 +52,7 @@ export interface StrategyOneTinyLiveAuthorityRecord {
   readonly capitalPerLegInr: number;
   readonly maximumCapitalPerLegInr?: number;
   readonly maximumBuyQuoteSpend?: number;
+  readonly maximumOrderBookAgeMs?: number;
   readonly exactQuantity: number;
   readonly preflightHash: string;
   readonly calibrationId: string;
@@ -338,6 +340,13 @@ export class StrategyOneTinyLiveActionAuthorityService {
     if (!calibration) {
       blockers.push("Current exact-route timing evidence is not qualified for the dynamic pool.");
     } else if (
+      !Number.isSafeInteger(calibration.maximumBookAgeMs) ||
+      calibration.maximumBookAgeMs <= 0 ||
+      calibration.maximumBookAgeMs >
+        STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
+    ) {
+      blockers.push("Qualified route TTL is invalid or exceeds the immutable 250 ms ceiling.");
+    } else if (
       calibration.scope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" &&
       routeAttempts > 0
     ) {
@@ -359,6 +368,11 @@ export class StrategyOneTinyLiveActionAuthorityService {
 
         if (!isStrategyOneVenueOrderContractReady(contract)) {
           blockers.push(`${venue} exact time-in-force/private-fill/timing contract is not ready.`);
+        } else if (
+          calibration?.scope === "DYNAMIC_POOL" &&
+          contract.maximumOrderBookAgeMs !== calibration.maximumBookAgeMs
+        ) {
+          blockers.push(`${venue} exact timing contract does not match the qualified route TTL.`);
         }
       }
     }
@@ -385,13 +399,14 @@ export class StrategyOneTinyLiveActionAuthorityService {
       exactQuantity,
       maximumCapitalPerLegInr,
       maximumBuyQuoteSpend,
+      maximumOrderBookAgeMs: calibration.maximumBookAgeMs,
       preflightHash,
       calibrationId: calibration.id,
       previewedAt: now,
     }).slice(0, 32)}`;
     const record = freeze({
       schemaVersion: calibration.scope === "DYNAMIC_POOL"
-        ? "190.0" as const
+        ? "191.0" as const
         : "111.0" as const,
       id,
       state: "PREVIEWED" as const,
@@ -402,6 +417,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
         ? {
             maximumCapitalPerLegInr: maximumCapitalPerLegInr as number,
             maximumBuyQuoteSpend: maximumBuyQuoteSpend as number,
+            maximumOrderBookAgeMs: calibration.maximumBookAgeMs,
           }
         : {}),
       exactQuantity,
@@ -467,6 +483,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
       fresh.capitalPerLegInr !== current.capitalPerLegInr ||
       fresh.maximumCapitalPerLegInr !== current.maximumCapitalPerLegInr ||
       fresh.maximumBuyQuoteSpend !== current.maximumBuyQuoteSpend ||
+      fresh.maximumOrderBookAgeMs !== current.maximumOrderBookAgeMs ||
       fresh.calibrationId !== current.calibrationId
     ) {
       throw new Error("Tiny-LIVE evidence changed after preview; refresh and review again.");
@@ -693,6 +710,15 @@ export class StrategyOneTinyLiveActionAuthorityService {
     if (!calibration || exactQuantity === null || exactQuantity <= 0) {
       throw new Error("Fresh dynamic timing qualification or exact funded quantity is unavailable.");
     }
+
+    if (
+      !Number.isSafeInteger(calibration.maximumBookAgeMs) ||
+      calibration.maximumBookAgeMs <= 0 ||
+      calibration.maximumBookAgeMs >
+        STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
+    ) {
+      throw new Error("Fresh route TTL is invalid or exceeds the immutable 250 ms ceiling.");
+    }
     const maximumConvertedQuoteCapital =
       selected.funding.maximumConvertedQuoteCapital;
     if (
@@ -734,6 +760,13 @@ export class StrategyOneTinyLiveActionAuthorityService {
       if (!isStrategyOneVenueOrderContractReady(contract)) {
         throw new Error(`${venue} action-time LIVE contract is no longer ready.`);
       }
+
+      if (
+        calibration.scope === "DYNAMIC_POOL" &&
+        contract.maximumOrderBookAgeMs !== calibration.maximumBookAgeMs
+      ) {
+        throw new Error(`${venue} action-time LIVE timing contract changed.`);
+      }
     }
 
     return {
@@ -747,6 +780,8 @@ export class StrategyOneTinyLiveActionAuthorityService {
               selected.funding.maximumCapitalPerLegInr,
             maximumBuyQuoteSpend:
               maximumConvertedQuoteCapital,
+            maximumOrderBookAgeMs:
+              calibration.maximumBookAgeMs,
           }
         : {}),
       calibrationId: calibration.id,
@@ -855,7 +890,9 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
     item.resolvedAt,
   ];
 
-  const minimumOrderCushionAuthority = item.schemaVersion === "190.0";
+  const minimumOrderCushionAuthority =
+    item.schemaVersion === "190.0" || item.schemaVersion === "191.0";
+  const authorizedTimingAuthority = item.schemaVersion === "191.0";
 
   return (item.schemaVersion === "111.0" || item.schemaVersion === "189.0" ||
       minimumOrderCushionAuthority) &&
@@ -877,6 +914,15 @@ function isAuthority(value: unknown): value is StrategyOneTinyLiveAuthorityRecor
         typeof item.maximumBuyQuoteSpend === "number" &&
         Number.isFinite(item.maximumBuyQuoteSpend) &&
         item.maximumBuyQuoteSpend > 0
+      )
+    ) &&
+    (
+      !authorizedTimingAuthority ||
+      (
+        Number.isSafeInteger(item.maximumOrderBookAgeMs) &&
+        (item.maximumOrderBookAgeMs ?? 0) > 0 &&
+        (item.maximumOrderBookAgeMs ?? 0) <=
+          STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
       )
     ) &&
     typeof item.exactQuantity === "number" &&
@@ -920,6 +966,7 @@ function isValidRestoredTransition(
     previous.capitalPerLegInr === next.capitalPerLegInr &&
     previous.maximumCapitalPerLegInr === next.maximumCapitalPerLegInr &&
     previous.maximumBuyQuoteSpend === next.maximumBuyQuoteSpend &&
+    previous.maximumOrderBookAgeMs === next.maximumOrderBookAgeMs &&
     previous.exactQuantity === next.exactQuantity &&
     previous.preflightHash === next.preflightHash &&
     previous.calibrationId === next.calibrationId &&
