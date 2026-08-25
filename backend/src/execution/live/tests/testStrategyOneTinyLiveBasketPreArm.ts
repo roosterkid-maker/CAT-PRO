@@ -175,6 +175,7 @@ async function main(): Promise<void> {
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
     await verifyBookDependentBlocksCanRequestFreshBooks(directory);
+    await verifyPreflightWorkIsBoundedAndRouteFair(directory);
     await verifyCompleteCoordinatorReasonsRemainDurable(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
@@ -183,6 +184,78 @@ async function main(): Promise<void> {
   console.log(
     "V190 dynamic route-pool pre-arm passed: one pool consent, ₹500 target/₹505 hard cap, no per-coin timing approval, exact 9-or-10-attempt/180-minute limits, daily-cap enforcement, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
   );
+}
+
+async function verifyPreflightWorkIsBoundedAndRouteFair(
+  directory: string,
+): Promise<void> {
+  const routes: readonly StrategyOneTinyLiveBasketRoute[] = [
+    {market: "COTIUSDT", buyExchange: "coindcx", sellExchange: "binance"},
+    {market: "SANDUSDT", buyExchange: "bybit", sellExchange: "binance"},
+    {market: "BTCUSDT", buyExchange: "binance", sellExchange: "bybit"},
+  ];
+  let clock = NOW + 40_000;
+  const evaluated: string[] = [];
+  const candidates = routes.map((route, index) => ({
+    ...opportunity(`bounded-${index}`, route, clock),
+    netProfitPercent: 1 - index * 0.1,
+  }));
+  const lowerDuplicate = {
+    ...opportunity("bounded-duplicate", routes[0], clock),
+    netProfitPercent: 0.31,
+  };
+  const service = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    previewAction: (opportunityId) => {
+      evaluated.push(opportunityId);
+      const candidate = candidates.find((item) => item.id === opportunityId) ??
+        lowerDuplicate;
+      const route = {
+        market: candidate.pair.market,
+        buyExchange: candidate.pair.buy.exchange,
+        sellExchange: candidate.pair.sell.exchange,
+      } as StrategyOneTinyLiveBasketRoute;
+      return bookDependentBlockedPreview(opportunityId, route, true);
+    },
+    now: () => clock,
+  }, join(directory, "bounded-fair-preflight.jsonl"));
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: clock,
+  });
+
+  const snapshot = {
+    generatedAt: clock,
+    opportunities: [...candidates, lowerDuplicate],
+  };
+
+  assert.equal(await service.observeSnapshot(snapshot), null);
+  assert.deepEqual(evaluated, ["bounded-0"],
+    "One snapshot may run at most one full exact-route preflight; a duplicate route is coalesced to its highest-net candidate.");
+
+  assert.equal(await service.observeSnapshot(snapshot), null);
+  assert.deepEqual(evaluated, ["bounded-0"],
+    "No second route may start inside the post-evaluation cooldown.");
+
+  clock += 251;
+  assert.equal(await service.observeSnapshot(snapshot), null);
+  clock += 251;
+  assert.equal(await service.observeSnapshot(snapshot), null);
+  assert.deepEqual(evaluated, ["bounded-0", "bounded-1", "bounded-2"],
+    "Repeated snapshots must rotate across distinct dynamic routes instead of starving lower-ranked qualified coins.");
 }
 
 function verifySupersededDynamicPoolArmExpires(

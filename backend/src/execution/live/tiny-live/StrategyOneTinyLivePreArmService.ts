@@ -232,6 +232,8 @@ export class StrategyOneTinyLivePreArmService {
   private activeArmId: string | null = null;
   private triggerInProgress = false;
   private nextEvaluationAt = 0;
+  private lastEvaluatedArmId: string | null = null;
+  private lastEvaluatedRouteKey: string | null = null;
   private lastEvaluation: {
     readonly evaluatedAt: number;
     readonly opportunityId: string;
@@ -501,19 +503,44 @@ export class StrategyOneTinyLivePreArmService {
       return null;
     }
 
+    const candidatesByRoute = new Map<string, ArbitrageOpportunity>();
+
+    for (const opportunity of opportunities) {
+      const routeKey = candidateRouteKey(opportunity);
+
+      if (!candidatesByRoute.has(routeKey)) {
+        candidatesByRoute.set(routeKey, opportunity);
+      }
+    }
+
+    const candidates = [...candidatesByRoute.entries()];
+    const previousRouteIndex = this.lastEvaluatedArmId === arm.id &&
+      this.lastEvaluatedRouteKey !== null
+      ? candidates.findIndex(([routeKey]) => routeKey === this.lastEvaluatedRouteKey)
+      : -1;
+    const selectedIndex = previousRouteIndex >= 0
+      ? (previousRouteIndex + 1) % candidates.length
+      : 0;
+    const [selectedRouteKey, selectedOpportunity] = candidates[selectedIndex];
+
+    this.lastEvaluatedArmId = arm.id;
+    this.lastEvaluatedRouteKey = selectedRouteKey;
     this.triggerInProgress = true;
 
     try {
-      for (const opportunity of opportunities) {
-        const result = await this.trigger(arm, opportunity);
-
-        if (result || this.activeArmId === null) {
-          return result;
-        }
-      }
-
-      return null;
+      return await this.trigger(arm, selectedOpportunity);
     } finally {
+      /*
+       * A stale route may perform two bounded public REST reads before it is
+       * blocked.  Never continue sweeping every coin in the same snapshot or
+       * immediately start another route after that async work completes.  The
+       * next immutable snapshot gets one fairly rotated exact route after a
+       * complete cooldown measured from the end of this evaluation.
+       */
+      this.nextEvaluationAt = Math.max(
+        this.nextEvaluationAt,
+        this.dependencies.now() + BLOCKED_REEVALUATION_INTERVAL_MS,
+      );
       this.triggerInProgress = false;
     }
   }
@@ -1257,6 +1284,16 @@ function shouldRefreshActionBooks(
           ),
       )
   );
+}
+
+function candidateRouteKey(
+  opportunity: ArbitrageOpportunity,
+): string {
+  return [
+    normalizeMarket(opportunity.pair.market),
+    opportunity.pair.buy.exchange.trim().toLowerCase(),
+    opportunity.pair.sell.exchange.trim().toLowerCase(),
+  ].join("|");
 }
 
 function armPhrase(input: {
