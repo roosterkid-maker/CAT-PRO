@@ -1138,6 +1138,11 @@ export class TradingAccountService {
     );
   }
 
+  getLatestEmergencyStopTransition() {
+    return this.ledger
+      .getLatestEmergencyStopTransition();
+  }
+
   resetDailyMetrics():
     void {
     const next =

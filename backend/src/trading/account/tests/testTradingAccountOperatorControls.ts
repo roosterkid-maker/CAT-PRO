@@ -455,6 +455,27 @@ function main(): void {
       "The same bounded lease must be able to restore PAPER durably.",
     );
 
+    restartedLeaseAccount
+      .enableEmergencyStop();
+    const enabledStop =
+      restartedLeaseAccount
+        .getLatestEmergencyStopTransition();
+    assert.equal(
+      enabledStop
+        ?.operation,
+      "EMERGENCY_STOP_ENABLED",
+      "The latest durable stop instance must be addressable by a scoped recovery control.",
+    );
+    restartedLeaseAccount
+      .disableEmergencyStop();
+    assert.equal(
+      restartedLeaseAccount
+        .getLatestEmergencyStopTransition()
+        ?.operation,
+      "EMERGENCY_STOP_DISABLED",
+      "A durable stop reset must supersede the prior activation instance.",
+    );
+
     console.log(
       "TRADING ACCOUNT OPERATOR CONTROLS TEST PASSED.",
     );

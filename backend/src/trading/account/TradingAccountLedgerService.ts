@@ -53,6 +53,14 @@ interface TradingAccountLedgerEntry {
     TradingAccount;
 }
 
+export interface TradingAccountEmergencyStopTransition {
+  readonly entryId: string;
+  readonly timestamp: number;
+  readonly operation:
+    | "EMERGENCY_STOP_ENABLED"
+    | "EMERGENCY_STOP_DISABLED";
+}
+
 export interface TradingAccountLedgerDiagnostics {
   persistenceFilePath: string;
 
@@ -287,6 +295,39 @@ export class TradingAccountLedgerService {
         normalized,
       )
     );
+  }
+
+  getLatestEmergencyStopTransition():
+    TradingAccountEmergencyStopTransition | null {
+    for (
+      let index =
+        this.entries.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const entry =
+        this.entries[index];
+
+      if (
+        entry.operation !==
+          "EMERGENCY_STOP_ENABLED" &&
+        entry.operation !==
+          "EMERGENCY_STOP_DISABLED"
+      ) {
+        continue;
+      }
+
+      return Object.freeze({
+        entryId:
+          entry.entryId,
+        timestamp:
+          entry.timestamp,
+        operation:
+          entry.operation,
+      });
+    }
+
+    return null;
   }
 
   getRestoredAccount():

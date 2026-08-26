@@ -56,6 +56,7 @@ import type {
 import {
   useActivateStrategyOneTinyLiveAccountLease,
   useArmStrategyOneTinyLive,
+  useClearRecoveredStrategyOneTinyLiveEmergencyStop,
   useDisarmStrategyOneTinyLive,
   useRestoreStrategyOnePaperAccountMode,
   useRunStrategyOnePilotPreflight,
@@ -70,6 +71,7 @@ import type {
   StrategyOnePilotPreviewReport,
   StrategyOneTinyLiveOpportunityAuditReport,
   StrategyOneTinyLiveAttemptCount,
+  StrategyOneTinyLiveEmergencyStopRecoveryDiagnostics,
   StrategyOneTinyLivePreArmDiagnostics,
 } from "@/modules/tiny-live/types/TinyLivePreflight";
 
@@ -85,6 +87,7 @@ export default function BotDashboard() {
   const [leaseConfirmation, setLeaseConfirmation] = useState("");
   const [modeTransition, setModeTransition] = useState<SimpleOperatingMode | null>(null);
   const [modeTransitionError, setModeTransitionError] = useState<string | null>(null);
+  const [modeTransitionNotice, setModeTransitionNotice] = useState<string | null>(null);
   const [liveConfirmationOpen, setLiveConfirmationOpen] = useState(false);
   const [viewMode, setViewMode] = useState<BotViewMode>("FOCUS");
   const [missionOpen, setMissionOpen] = useState(false);
@@ -101,6 +104,7 @@ export default function BotDashboard() {
   const armPreArm = useArmStrategyOneTinyLive();
   const disarmPreArm = useDisarmStrategyOneTinyLive();
   const activateAccountLease = useActivateStrategyOneTinyLiveAccountLease();
+  const clearRecoveredEmergencyStop = useClearRecoveredStrategyOneTinyLiveEmergencyStop();
   const restorePaperAccountMode = useRestoreStrategyOnePaperAccountMode();
   const report = query.data?.data;
   const pilotPreview = pilotQuery.data?.data ?? null;
@@ -180,10 +184,12 @@ export default function BotDashboard() {
     setLeaseConfirmation("");
     setLiveConfirmationOpen(false);
     setModeTransitionError(null);
+    setModeTransitionNotice(null);
     armPreArm.reset();
     disarmPreArm.reset();
     activateAccountLease.reset();
     restorePaperAccountMode.reset();
+    clearRecoveredEmergencyStop.reset();
   }
 
   async function selectOperatingMode(target: SimpleOperatingMode): Promise<void> {
@@ -257,10 +263,41 @@ export default function BotDashboard() {
   function requestOperatingMode(target: SimpleOperatingMode): void {
     if (target === "TINY_LIVE" && operatingMode !== "TINY_LIVE") {
       setModeTransitionError(null);
+      setModeTransitionNotice(null);
       setLiveConfirmationOpen(true);
       return;
     }
     void selectOperatingMode(target);
+  }
+
+  async function clearRecoveredStop(): Promise<void> {
+    const recovery = preArmDiagnostics?.emergencyStopRecovery;
+
+    if (!recovery?.eligible || !recovery.requiredConfirmation) {
+      setModeTransitionError(
+        recovery?.blockers[0] ??
+          "Recovered emergency-stop reset evidence abhi complete nahi hai.",
+      );
+      setLiveConfirmationOpen(false);
+      return;
+    }
+
+    setModeTransitionError(null);
+    setModeTransitionNotice(null);
+
+    try {
+      await clearRecoveredEmergencyStop.mutateAsync({
+        confirmation: recovery.requiredConfirmation,
+      });
+      setLiveConfirmationOpen(false);
+      setModeTransitionNotice(
+        "Recovered emergency stop clear ho gaya. Tiny-LIVE start karne ke liye LIVE ko dobara confirm karein.",
+      );
+    } catch (error) {
+      setModeTransitionError(readRequestError(error));
+      setLiveConfirmationOpen(false);
+      setViewMode("DEEP_AUDIT");
+    }
   }
 
   function runPilotPreflight(): void {
@@ -404,6 +441,11 @@ export default function BotDashboard() {
               Mode change blocked: {modeTransitionError ?? readRequestError(control.error)}
             </p>
           ) : null}
+          {modeTransitionNotice ? (
+            <p className="mt-3 rounded-lg border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-300">
+              {modeTransitionNotice}
+            </p>
+          ) : null}
         </div>
 
         <div className="bot-command-metrics relative grid grid-cols-2 gap-px bg-white/8 xl:grid-cols-6">
@@ -450,7 +492,7 @@ export default function BotDashboard() {
         leaseConfirmation={leaseConfirmation}
         activatingLease={activateAccountLease.isPending}
         restoringPaper={restorePaperAccountMode.isPending}
-        error={preArmQuery.error ?? armPreArm.error ?? disarmPreArm.error ?? activateAccountLease.error ?? restorePaperAccountMode.error ?? control.error}
+        error={preArmQuery.error ?? armPreArm.error ?? disarmPreArm.error ?? activateAccountLease.error ?? clearRecoveredEmergencyStop.error ?? restorePaperAccountMode.error ?? control.error}
         onAcknowledgedChange={setPreArmAcknowledged}
         onLeaseConfirmationChange={setLeaseConfirmation}
         onArm={armOneShot}
@@ -615,9 +657,12 @@ export default function BotDashboard() {
           maximumAttempts={routePoolArmAttempts ??
             preArmDiagnostics?.dailyAttemptBudget.remainingDailyAttempts ?? 0}
           durationMinutes={preArmDiagnostics?.routePool?.durationMinutes ?? 180}
-          pending={modeTransition === "TINY_LIVE"}
+          emergencyStopRecovery={preArmDiagnostics?.emergencyStopRecovery ?? null}
+          pending={modeTransition === "TINY_LIVE" || clearRecoveredEmergencyStop.isPending}
           onCancel={() => setLiveConfirmationOpen(false)}
-          onConfirm={() => void selectOperatingMode("TINY_LIVE")}
+          onConfirm={() => preArmDiagnostics?.emergencyStopRecovery.active
+            ? void clearRecoveredStop()
+            : void selectOperatingMode("TINY_LIVE")}
         />
       ) : null}
     </section>
@@ -675,6 +720,7 @@ function TinyLiveModeConfirmation({
   capitalPerLegInr,
   maximumAttempts,
   durationMinutes,
+  emergencyStopRecovery,
   pending,
   onCancel,
   onConfirm,
@@ -682,34 +728,62 @@ function TinyLiveModeConfirmation({
   capitalPerLegInr: number;
   maximumAttempts: number;
   durationMinutes: number;
+  emergencyStopRecovery: StrategyOneTinyLiveEmergencyStopRecoveryDiagnostics | null;
   pending: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const recoveringStop =
+    emergencyStopRecovery?.active ===
+      true;
+  const resetEligible =
+    emergencyStopRecovery?.eligible ===
+      true;
+
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-black/80 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="tiny-live-mode-title">
       <article className="w-full max-w-lg overflow-hidden rounded-2xl border border-amber-300/35 bg-[#030b08] shadow-[0_0_70px_rgba(251,191,36,.13)]">
         <div className="flex items-start justify-between gap-4 border-b border-amber-300/15 px-5 py-4">
           <div>
-            <p className="font-mono text-[9px] font-bold tracking-[0.16em] text-amber-300">REAL ORDER MODE</p>
-            <h2 id="tiny-live-mode-title" className="mt-1 text-lg font-semibold text-white">Turn Tiny-LIVE ON?</h2>
+            <p className="font-mono text-[9px] font-bold tracking-[0.16em] text-amber-300">{recoveringStop ? "RECOVERED FAIL-CLOSED STOP" : "REAL ORDER MODE"}</p>
+            <h2 id="tiny-live-mode-title" className="mt-1 text-lg font-semibold text-white">{recoveringStop ? "Clear recovered emergency stop?" : "Turn Tiny-LIVE ON?"}</h2>
           </div>
           <button type="button" onClick={onCancel} disabled={pending} className="rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-50" aria-label="Cancel Tiny-LIVE mode change"><X className="size-4" /></button>
         </div>
         <div className="space-y-3 px-5 py-5 text-sm leading-6 text-slate-300">
-          <p>PAPER automatically pause hoga. Existing safety checks pass hone par real exchange orders submit ho sakte hain.</p>
-          <div className="grid grid-cols-3 gap-2 font-mono text-[10px]">
-            <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">₹{formatInteger(capitalPerLegInr)} / LEG</span>
-            <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">MAX {maximumAttempts}</span>
-            <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">{formatInteger(durationMinutes / 60)} HOURS</span>
-          </div>
-          <p className="text-xs text-slate-500">No transfer or withdrawal. Fresh timing approval, inventory, fee, depth, profit and last-look gates remain mandatory.</p>
+          {recoveringStop ? (
+            <>
+              <p>
+                Failed two-leg attempt ka emergency stop ab authoritative terminal-balanced recovery se resolved hai. Yeh action sirf us exact durable stop instance ko clear karega; arm, lease ya order submit nahi karega.
+              </p>
+              {resetEligible && emergencyStopRecovery?.recovery ? (
+                <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/5 px-3 py-3 text-xs text-emerald-200">
+                  RECOVERY CLEAN · {emergencyStopRecovery.recovery.basis.replaceAll("_", " ")} · resolved {formatTime(emergencyStopRecovery.recovery.resolvedAt)}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-red-300/20 bg-red-300/5 px-3 py-3 text-xs text-red-200">
+                  {emergencyStopRecovery?.blockers[0] ?? "Recovery evidence unavailable."}
+                </div>
+              )}
+              <p className="text-xs text-slate-500">Clear hone ke baad LIVE ko dobara confirm karna hoga. Automatic reset, order retry, transfer aur withdrawal disabled rahenge.</p>
+            </>
+          ) : (
+            <>
+              <p>PAPER automatically pause hoga. Existing safety checks pass hone par real exchange orders submit ho sakte hain.</p>
+              <div className="grid grid-cols-3 gap-2 font-mono text-[10px]">
+                <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">₹{formatInteger(capitalPerLegInr)} / LEG</span>
+                <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">MAX {maximumAttempts}</span>
+                <span className="rounded-lg border border-amber-300/15 bg-amber-300/5 px-2 py-2 text-center">{formatInteger(durationMinutes / 60)} HOURS</span>
+              </div>
+              <p className="text-xs text-slate-500">No transfer or withdrawal. Fresh timing approval, inventory, fee, depth, profit and last-look gates remain mandatory.</p>
+            </>
+          )}
         </div>
         <div className="flex justify-end gap-3 border-t border-white/8 px-5 py-4">
           <button type="button" onClick={onCancel} disabled={pending} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:opacity-50">Cancel</button>
-          <button type="button" onClick={onConfirm} disabled={pending} className="flex items-center gap-2 rounded-lg border border-amber-300/40 bg-amber-300/15 px-4 py-2 text-sm font-bold text-amber-200 transition hover:bg-amber-300/20 disabled:cursor-wait disabled:opacity-60">
+          <button type="button" onClick={onConfirm} disabled={pending || (recoveringStop && !resetEligible)} className="flex items-center gap-2 rounded-lg border border-amber-300/40 bg-amber-300/15 px-4 py-2 text-sm font-bold text-amber-200 transition hover:bg-amber-300/20 disabled:cursor-not-allowed disabled:opacity-60">
             {pending ? <RefreshCw className="size-4 animate-spin" /> : <Power className="size-4" />}
-            {pending ? "Starting..." : "Confirm Tiny-LIVE"}
+            {pending ? "Working..." : recoveringStop ? "Clear recovered stop only" : "Confirm Tiny-LIVE"}
           </button>
         </div>
       </article>

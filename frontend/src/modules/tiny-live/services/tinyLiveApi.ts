@@ -15,6 +15,7 @@ import type {
   StrategyOneTinyLivePreArmRecordResponse,
   StrategyOneTinyLiveAttemptCount,
   StrategyOneTinyLiveAccountModeLeaseRecordResponse,
+  StrategyOneTinyLiveEmergencyStopRecoveryResponse,
   StrategyOneTinyLiveOpportunityAuditResponse,
 } from "../types/TinyLivePreflight";
 
@@ -170,6 +171,17 @@ export async function activateStrategyOneTinyLiveAccountLease(input: {
 }): Promise<StrategyOneTinyLiveAccountModeLeaseRecordResponse> {
   const response = await api.post<StrategyOneTinyLiveAccountModeLeaseRecordResponse>(
     `/api/execution/tiny-live/strategy-one-account-mode-lease/${encodeURIComponent(input.preArmId)}/activate`,
+    {confirmation: input.confirmation},
+  );
+
+  return response.data;
+}
+
+export async function clearRecoveredStrategyOneTinyLiveEmergencyStop(input: {
+  confirmation: string;
+}): Promise<StrategyOneTinyLiveEmergencyStopRecoveryResponse> {
+  const response = await api.post<StrategyOneTinyLiveEmergencyStopRecoveryResponse>(
+    "/api/execution/tiny-live/strategy-one-emergency-stop-recovery/clear",
     {confirmation: input.confirmation},
   );
 

@@ -59,6 +59,10 @@ import {
   strategyOneTinyLiveReadinessWaterfallService,
 } from "../tiny-live/StrategyOneTinyLiveReadinessWaterfallService";
 
+import {
+  strategyOneTinyLiveEmergencyStopRecoveryService,
+} from "../tiny-live/StrategyOneTinyLiveEmergencyStopRecoveryService";
+
 const router =
   Router();
 
@@ -583,11 +587,50 @@ router.get(
         accountModeLease:
           strategyOneTinyLiveAccountModeLeaseService
             .getDiagnostics(),
+        emergencyStopRecovery:
+          strategyOneTinyLiveEmergencyStopRecoveryService
+            .getDiagnostics(),
         readinessWaterfall:
           strategyOneTinyLiveReadinessWaterfallService
             .getReport(),
       },
     });
+  },
+);
+
+router.post(
+  "/strategy-one-emergency-stop-recovery/clear",
+  (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const diagnostics =
+        strategyOneTinyLiveEmergencyStopRecoveryService
+          .clear(
+            typeof request.body?.confirmation === "string"
+              ? request.body.confirmation
+              : "",
+          );
+
+      response.json({
+        success: true,
+        data: diagnostics,
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Recovered Tiny-LIVE emergency-stop reset failed closed.",
+      });
+    }
   },
 );
 

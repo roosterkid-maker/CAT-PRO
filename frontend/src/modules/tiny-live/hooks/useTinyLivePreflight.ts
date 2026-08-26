@@ -15,6 +15,7 @@ import {
   fetchStrategyOneTinyLiveOpportunityAudit,
   armStrategyOneTinyLive,
   activateStrategyOneTinyLiveAccountLease,
+  clearRecoveredStrategyOneTinyLiveEmergencyStop,
   disarmStrategyOneTinyLive,
   restoreStrategyOnePaperAccountMode,
   runStrategyOnePilotPreflight,
@@ -209,6 +210,19 @@ export function useActivateStrategyOneTinyLiveAccountLease() {
 
   return useMutation({
     mutationFn: activateStrategyOneTinyLiveAccountLease,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["tiny-live", "strategy-one-pre-arm"],
+      });
+    },
+  });
+}
+
+export function useClearRecoveredStrategyOneTinyLiveEmergencyStop() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: clearRecoveredStrategyOneTinyLiveEmergencyStop,
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: ["tiny-live", "strategy-one-pre-arm"],

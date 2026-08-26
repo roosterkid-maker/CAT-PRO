@@ -679,6 +679,41 @@ export interface StrategyOneTinyLiveAccountModeLeaseDiagnostics {
   };
 }
 
+export interface StrategyOneTinyLiveEmergencyStopRecoveryDiagnostics {
+  schemaVersion: "201.0";
+  generatedAt: number;
+  state: "CLEAR" | "RECOVERED_RESET_AVAILABLE" | "BLOCKED";
+  active: boolean;
+  eligible: boolean;
+  requiredConfirmation: string | null;
+  stop: {
+    entryId: string;
+    activatedAt: number;
+  } | null;
+  recovery: {
+    authorityId: string;
+    pairSessionId: string;
+    finalizedAt: number | null;
+    resolvedAt: number;
+    basis: "PERSISTED_PRE_DISPATCH_NO_ORDER" | "AUTHORITATIVE_TERMINAL_BALANCED";
+  } | null;
+  blockers: string[];
+  safety: {
+    exactStopInstanceBinding: true;
+    explicitOperatorActionRequired: true;
+    automaticResetAllowed: false;
+    paperModeRequired: true;
+    zeroOpenTradesRequired: true;
+    cleanRecoveryGateRequired: true;
+    currentEvidenceFingerprintRequired: true;
+    accountModeMutationPerformed: false;
+    armMutationPerformed: false;
+    leaseMutationPerformed: false;
+    orderActionPerformed: false;
+    fundMovementPerformed: false;
+  };
+}
+
 export type StrategyOneTinyLiveReadinessStageState =
   | "PASS"
   | "BLOCKED"
@@ -769,6 +804,7 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
   };
   records: StrategyOneTinyLivePreArmRecord[];
   accountModeLease: StrategyOneTinyLiveAccountModeLeaseDiagnostics;
+  emergencyStopRecovery: StrategyOneTinyLiveEmergencyStopRecoveryDiagnostics;
   readinessWaterfall: StrategyOneTinyLiveReadinessWaterfall;
   routePool: StrategyOneTinyLiveRoutePoolPolicy;
   pilotBasket: null;
@@ -804,6 +840,11 @@ export interface StrategyOneTinyLivePreArmRecordResponse {
 export interface StrategyOneTinyLiveAccountModeLeaseRecordResponse {
   success: true;
   data: StrategyOneTinyLiveAccountModeLeaseRecord;
+}
+
+export interface StrategyOneTinyLiveEmergencyStopRecoveryResponse {
+  success: true;
+  data: StrategyOneTinyLiveEmergencyStopRecoveryDiagnostics;
 }
 
 export type StrategyOneTimingCalibrationScope =
