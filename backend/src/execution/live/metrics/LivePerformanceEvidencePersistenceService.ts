@@ -105,6 +105,14 @@ export interface LivePerformanceEvidencePersistenceDiagnostics {
 
   legacyAppendDisabled: true;
 
+  liveOnlySettlementCheckpoint: true;
+
+  observedSettlements: number;
+
+  verifiedLiveSettlements: number;
+
+  excludedNonLiveOrUnverifiedSettlements: number;
+
   restored: boolean;
 
   restoredAt: number | null;
@@ -208,11 +216,25 @@ export class LivePerformanceEvidencePersistenceService {
     string | null =
     null;
 
+  private observedSettlements =
+    0;
+
+  private verifiedLiveSettlements =
+    0;
+
+  private excludedNonLiveOrUnverifiedSettlements =
+    0;
+
   constructor(
     persistenceFilePath =
       DEFAULT_PERSISTENCE_FILE,
     checkpointFilePath =
       DEFAULT_CHECKPOINT_FILE,
+    private readonly getVerifiedLiveSessionIds:
+      () => ReadonlySet<string> =
+      () =>
+        liveExecutionSessionEvidenceService
+          .getVerifiedLiveSessionIds(),
   ) {
     this.legacyStore =
       new JsonlSnapshotStore<
@@ -286,10 +308,15 @@ export class LivePerformanceEvidencePersistenceService {
         )[0] ??
       null;
 
-    const settlements =
+    const observedSettlements =
       executionSettlementService
         .getDiagnostics()
         .settlements;
+
+    const settlements =
+      this.selectVerifiedLiveSettlements(
+        observedSettlements,
+      );
 
     const fingerprint =
       this.fingerprint(
@@ -462,6 +489,18 @@ export class LivePerformanceEvidencePersistenceService {
 
       legacyAppendDisabled:
         true,
+
+      liveOnlySettlementCheckpoint:
+        true,
+
+      observedSettlements:
+        this.observedSettlements,
+
+      verifiedLiveSettlements:
+        this.verifiedLiveSettlements,
+
+      excludedNonLiveOrUnverifiedSettlements:
+        this.excludedNonLiveOrUnverifiedSettlements,
 
       restored:
         this.restored,
@@ -681,42 +720,11 @@ export class LivePerformanceEvidencePersistenceService {
       }
     }
 
-    for (
-      const settlement
-      of record.settlements
-    ) {
-      const existing =
-        this.restoredSettlements
-          .get(
-            settlement.sessionId,
-          );
-
-      const settlementTimestamp =
-        settlement.settledAt ??
-        settlement.createdAt;
-
-      const existingTimestamp =
-        existing
-          ? (
-              existing.settledAt ??
-              existing.createdAt
-            )
-          : -1;
-
-      if (
-        !existing ||
-        settlementTimestamp >=
-          existingTimestamp
-      ) {
-        this.restoredSettlements.set(
-          settlement.sessionId,
-
-          structuredClone(
-            settlement,
-          ),
-        );
-      }
-    }
+    this.addSettlements(
+      this.selectVerifiedLiveSettlements(
+        record.settlements,
+      ),
+    );
   }
 
   private absorbCheckpoint(
@@ -746,8 +754,39 @@ export class LivePerformanceEvidencePersistenceService {
     }
 
     this.addSettlements(
-      checkpoint.settlements,
+      this.selectVerifiedLiveSettlements(
+        checkpoint.settlements,
+      ),
     );
+  }
+
+  private selectVerifiedLiveSettlements(
+    settlements:
+      readonly ExecutionSettlementRecord[],
+  ):
+    ExecutionSettlementRecord[] {
+    const verifiedLiveSessionIds =
+      this.getVerifiedLiveSessionIds();
+    const selected =
+      settlements
+        .filter(
+          (
+            settlement,
+          ) =>
+            verifiedLiveSessionIds.has(
+              settlement.sessionId,
+            ),
+        );
+
+    this.observedSettlements =
+      settlements.length;
+    this.verifiedLiveSettlements =
+      selected.length;
+    this.excludedNonLiveOrUnverifiedSettlements =
+      settlements.length -
+      selected.length;
+
+    return selected;
   }
 
   private mergeSnapshots(

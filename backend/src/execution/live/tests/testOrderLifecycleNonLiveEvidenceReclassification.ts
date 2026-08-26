@@ -358,6 +358,17 @@ function main(): void {
       "Only explicit persisted PAPER/dry-run evidence may prove non-LIVE ownership.",
     );
 
+    assert.deepEqual(
+      Array.from(
+        sessionEvidence
+          .getVerifiedLiveSessionIds(),
+      ).sort(),
+      [
+        "real-live-session",
+      ],
+      "Only explicit persisted non-dry-run, non-PAPER evidence may prove LIVE ownership.",
+    );
+
     const orderEvidence =
       new OrderLifecycleEvidenceService(
         orderFile,

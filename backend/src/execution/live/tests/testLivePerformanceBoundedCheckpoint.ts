@@ -131,6 +131,55 @@ function main(): void {
       21,
     );
 
+    checkpointStore.replaceAllAtomically([
+      {
+        ...checkpointPayload(23, 2_300),
+        settlements: [
+          settlement("verified-live-session"),
+          settlement("paper-session"),
+          settlement("unverified-session"),
+        ],
+      },
+    ]);
+
+    const liveOnlyRestore =
+      new LivePerformanceEvidencePersistenceService(
+        legacyPath,
+        checkpointPath,
+        () =>
+          new Set([
+            "verified-live-session",
+          ]),
+      );
+
+    assert.deepEqual(
+      liveOnlyRestore
+        .getRestoredSettlements()
+        .map((record) => record.sessionId),
+      [
+        "verified-live-session",
+      ],
+      "The LIVE performance checkpoint must exclude PAPER and ambiguous settlement sessions.",
+    );
+    assert.equal(
+      liveOnlyRestore.getDiagnostics().liveOnlySettlementCheckpoint,
+      true,
+    );
+    assert.equal(
+      liveOnlyRestore.getDiagnostics().observedSettlements,
+      3,
+    );
+    assert.equal(
+      liveOnlyRestore.getDiagnostics().verifiedLiveSettlements,
+      1,
+    );
+    assert.equal(
+      liveOnlyRestore
+        .getDiagnostics()
+        .excludedNonLiveOrUnverifiedSettlements,
+      2,
+    );
+
     console.log(
       "V143 live-performance bounded checkpoint test passed: immutable legacy tail migration, bounded current state and previous-checkpoint crash fallback preserved analytics without an order path.",
     );
@@ -208,6 +257,62 @@ function checkpointPayload(
         0,
     }],
     settlements:
+      [],
+  };
+}
+
+function settlement(
+  sessionId: string,
+): Record<string, unknown> {
+  return {
+    id:
+      `settlement-${sessionId}`,
+    sessionId,
+    planId:
+      `plan-${sessionId}`,
+    market:
+      "SANDUSDT",
+    buyExchange:
+      "bybit",
+    sellExchange:
+      "coindcx",
+    status:
+      "SETTLED",
+    quantity:
+      1,
+    buyAveragePrice:
+      1,
+    sellAveragePrice:
+      1.01,
+    buyNotional:
+      1,
+    sellNotional:
+      1.01,
+    grossProfit:
+      0.01,
+    buyFees:
+      0.001,
+    sellFees:
+      0.001,
+    totalFees:
+      0.002,
+    buySlippagePercent:
+      0,
+    sellSlippagePercent:
+      0,
+    totalAdverseSlippagePercent:
+      0,
+    netProfit:
+      0.008,
+    roiPercent:
+      0.8,
+    executionDurationMs:
+      10,
+    createdAt:
+      2_300,
+    settledAt:
+      2_300,
+    reasons:
       [],
   };
 }

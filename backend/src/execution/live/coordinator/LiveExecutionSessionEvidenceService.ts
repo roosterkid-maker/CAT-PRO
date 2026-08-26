@@ -168,6 +168,10 @@ export class LiveExecutionSessionEvidenceService {
     sessions: readonly DailyExecutionReservationSessionEvidence[];
   } | null = null;
 
+  private verifiedLiveSessionIdsCache:
+    ReadonlySet<string> | null =
+    null;
+
   constructor(
     persistenceFilePath =
       DEFAULT_PERSISTENCE_FILE,
@@ -442,6 +446,46 @@ export class LiveExecutionSessionEvidenceService {
     );
   }
 
+  /**
+   * Return exact persisted session IDs whose own durable evidence proves that
+   * they were genuine LIVE sessions. Ambiguous or not-yet-persisted sessions
+   * are deliberately excluded so LIVE analytics can never absorb PAPER or
+   * synthetic settlements merely because they share the settlement engine.
+   */
+  getVerifiedLiveSessionIds():
+    ReadonlySet<string> {
+    if (
+      this.verifiedLiveSessionIdsCache ===
+        null
+    ) {
+      this.verifiedLiveSessionIdsCache =
+        new Set(
+          Array.from(
+            this.latest.values(),
+          )
+            .filter(
+              (
+                record,
+              ) =>
+                !record.dryRun &&
+                !this.isPersistedPaperEvidence(
+                  record,
+                ),
+            )
+            .map(
+              (
+                record,
+              ) =>
+                record.session.id,
+            ),
+        );
+    }
+
+    return new Set(
+      this.verifiedLiveSessionIdsCache,
+    );
+  }
+
   /** Read-only current-local-day reservation ownership from durable sessions. */
   getDailyReservationEvidence(
     now = Date.now(),
@@ -571,6 +615,9 @@ export class LiveExecutionSessionEvidenceService {
     this.dailyReservationSessionsCache =
       null;
 
+    this.verifiedLiveSessionIdsCache =
+      null;
+
     return removed;
   }
 
@@ -671,6 +718,9 @@ export class LiveExecutionSessionEvidenceService {
       );
 
       this.dailyReservationSessionsCache =
+        null;
+
+      this.verifiedLiveSessionIdsCache =
         null;
 
       this.fingerprints.set(
