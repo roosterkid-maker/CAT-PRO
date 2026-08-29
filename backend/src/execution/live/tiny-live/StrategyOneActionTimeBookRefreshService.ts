@@ -131,8 +131,16 @@ export interface StrategyOneActionTimeBookRefreshDependencies {
   now(): number;
 }
 
+/*
+ * Production measurements from the Mumbai runtime show that the official
+ * Binance depth endpoint normally completes inside 170 ms but occasionally
+ * crosses the former 190 ms abort boundary.  Give the public read enough
+ * transport headroom without changing any quote-age, skew, economics or
+ * order-time safety limit.  A response that misses this bounded window still
+ * fails closed and can never reach exact-route evaluation.
+ */
 const ACTION_TIME_READ_TIMEOUT_MS =
-  190;
+  250;
 
 /*
  * Adapter timeouts are the first line of defence, but the Tiny-LIVE trigger

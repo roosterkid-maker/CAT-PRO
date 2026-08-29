@@ -20,8 +20,8 @@ export const BINANCE = {
      * The catalog/activity host is deliberately isolated from signed account
      * reads, but it is materially slower from the Mumbai runtime. The exact
      * action-time depth rescue has its own official Binance endpoint so it can
-     * meet the existing 190 ms fail-closed deadline without changing that
-     * deadline or moving any authenticated/order traffic.
+     * meet the bounded action-time fail-closed deadline without moving any
+     * authenticated or order traffic.
      */
     ACTION_TIME_PUBLIC_BASE_URL:
       process.env.BINANCE_ACTION_TIME_PUBLIC_REST_BASE_URL?.trim() ??
@@ -108,7 +108,7 @@ export const BINANCE = {
     30_000,
 
   ACTION_TIME_ORDER_BOOK_TIMEOUT_MS:
-    190,
+    250,
 
   CONNECTION_ACTIVITY_GRACE_MS:
     15_000,

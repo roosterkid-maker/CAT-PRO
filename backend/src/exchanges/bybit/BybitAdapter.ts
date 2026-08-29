@@ -791,7 +791,7 @@ export class BybitAdapter
    */
   async refreshOrderBookSnapshot(
     marketValue: string,
-    timeoutMs = 190,
+    timeoutMs = 250,
   ): Promise<BybitActionTimeOrderBookRefreshReport> {
     const market = marketValue.trim().toUpperCase();
     const requestedAt = Date.now();

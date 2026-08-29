@@ -120,7 +120,7 @@ async function testAuthorizedFinalRefreshIsParallelAndPublicOnly(): Promise<void
     refreshCoinDCX: async (market, timeoutMs) => {
       coinDCXStarted = true;
       assert.equal(market, "SANDUSDT");
-      assert.equal(timeoutMs, 190);
+      assert.equal(timeoutMs, 250);
       await readGate;
       return {
         exchange: "coindcx",
@@ -135,7 +135,7 @@ async function testAuthorizedFinalRefreshIsParallelAndPublicOnly(): Promise<void
     refreshBybit: async (market, timeoutMs) => {
       bybitStarted = true;
       assert.equal(market, "SANDUSDT");
-      assert.equal(timeoutMs, 190);
+      assert.equal(timeoutMs, 250);
       await readGate;
       return {
         exchange: "bybit",
@@ -176,6 +176,8 @@ async function testAuthorizedFinalRefreshIsParallelAndPublicOnly(): Promise<void
   assert.equal(result.safety.orderSubmissionAllowed, false);
 
   const diagnostics = service.getDiagnostics();
+  assert.equal(diagnostics.actionTimeReadTimeoutMs, 250);
+  assert.equal(diagnostics.actionTimeRefreshDeadlineMs, 275);
   assert.equal(diagnostics.finalRefreshAttempts, 1);
   assert.equal(diagnostics.finalRefreshes, 1);
   assert.equal(diagnostics.finalRefreshBlocks, 0);
@@ -522,7 +524,7 @@ async function testBinanceValidatedSnapshotPublication(): Promise<void> {
       await invalid
         .refreshOrderBookSnapshot(
           "COTIUSDT",
-          190,
+          250,
         )
     ).accepted,
     false,
@@ -589,7 +591,7 @@ async function testParallelRefreshAndFreshOpportunityReevaluation(): Promise<voi
         );
         assert.equal(
           timeoutMs,
-          190,
+          250,
         );
 
         await readGate;
@@ -626,7 +628,7 @@ async function testParallelRefreshAndFreshOpportunityReevaluation(): Promise<voi
         );
         assert.equal(
           timeoutMs,
-          190,
+          250,
         );
 
         await readGate;
