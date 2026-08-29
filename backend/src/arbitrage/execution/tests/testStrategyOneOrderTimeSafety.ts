@@ -853,12 +853,12 @@ async function main(): Promise<void> {
     opportunity: opportunity(),
     quantity: 1,
     now: NOW,
-    authorizedMaximumBookAgeMs: 251,
+    authorizedMaximumBookAgeMs: 301,
   });
   assert.equal(invalidAuthorizedTtl.decision, "BLOCKED");
   assert.match(
     invalidAuthorizedTtl.reasons.join(" "),
-    /immutable 250 ms ceiling/iu,
+    /operator-reviewed 300 ms ceiling/iu,
   );
 
   const mixedTimeInForce =

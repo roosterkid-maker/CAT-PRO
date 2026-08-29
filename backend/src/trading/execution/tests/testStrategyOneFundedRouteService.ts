@@ -460,11 +460,11 @@ function testFinalPaperStressGate(): void {
 
   books.set(
     "binance:BTCUSDT",
-    orderBook("binance", NOW - 191, [[99.9, 20]], [[100, 20]]),
+    orderBook("binance", NOW - 241, [[99.9, 20]], [[100, 20]]),
   );
   books.set(
     "bybit:BTCUSDT",
-    orderBook("bybit", NOW - 191, [[101.2, 20]], [[101.3, 20]]),
+    orderBook("bybit", NOW - 241, [[101.2, 20]], [[101.3, 20]]),
   );
   const basePilot = opportunity("pilot-stale", 20);
   const pilotStale = gate.evaluate({
@@ -480,8 +480,8 @@ function testFinalPaperStressGate(): void {
     now: NOW,
   });
   assert.equal(pilotStale.status, "BLOCKED");
-  assert.match(pilotStale.reasons.join(" "), /maximum 190 ms/i,
-    "Exact Binance/Bybit PAPER last-look must reserve dispatch headroom inside the immutable 250 ms ceiling.");
+  assert.match(pilotStale.reasons.join(" "), /maximum 240 ms/i,
+    "Exact Binance/Bybit PAPER last-look must reserve dispatch headroom inside the operator-reviewed 300 ms ceiling.");
 }
 
 function opportunity(id: string, depth: number): ArbitrageOpportunity {

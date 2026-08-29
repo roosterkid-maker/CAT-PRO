@@ -10,19 +10,21 @@ import {PROFIT_TIER_POLICY} from "../config/profitTiers";
 import type {ArbitrageOpportunity} from "../models/ArbitrageOpportunity";
 import type {OpportunitySnapshot} from "../services/OpportunityService";
 
-export const STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS = 250;
+export const STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS = 300;
 export const STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS = 250;
 
 /*
- * The absolute 250 ms pilot ceiling is unchanged. The first Tiny-LIVE lane
+ * The operator-reviewed absolute 300 ms pilot ceiling gives the action-time
+ * lane 50 ms more tolerance without changing timestamp-skew policy. The lane
  * also needs room for the measured decision-to-dispatch path (target P99
- * 40 ms). The independently enforced action-time cohort stays capped at
- * 190 ms even when the route-specific controlled timing profile uses a 5 ms
- * dispatch reserve and requires a further 5 ms measured operating reserve.
- * Generations above this stricter boundary remain valid historical 250 ms
+ * 40 ms). The independently enforced action-time cohort therefore stays
+ * 60 ms below the absolute ceiling, matching the previous dispatch reserve.
+ * The route-specific controlled timing profile still uses a 5 ms dispatch
+ * reserve and requires a further 5 ms measured operating reserve.
+ * Generations above this stricter boundary remain valid historical 300 ms
  * evidence, but cannot enter the dispatch-reserved calibration cohort.
  */
-export const STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS = 190;
+export const STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS = 240;
 
 export type StrategyOnePilotExchange =
   | "binance"
@@ -96,7 +98,7 @@ export interface StrategyOnePilotEquivalentRouteReport {
   readonly executionGradeBuyAgeMs: StrategyOnePilotTimingDistribution;
   readonly executionGradeSellAgeMs: StrategyOnePilotTimingDistribution;
   readonly dispatchReserved: {
-    readonly maximumBookAgeMs: 190;
+    readonly maximumBookAgeMs: 240;
     readonly firstGenerationAt: number | null;
     readonly lastGenerationAt: number | null;
     readonly generations: number;
@@ -133,9 +135,9 @@ export interface StrategyOnePilotEquivalentPaperEvidenceReport {
   readonly eligibleVenueOpportunities: number;
   readonly invalidObservationsRejected: number;
   readonly observerFailures: number;
-  readonly maximumBookAgeMs: 250;
+  readonly maximumBookAgeMs: 300;
   readonly maximumBookSkewMs: 250;
-  readonly dispatchReservedMaximumBookAgeMs: 190;
+  readonly dispatchReservedMaximumBookAgeMs: 240;
   readonly minimumExecutionGradeGenerations: number;
   readonly minimumObservationSpanMs: number;
   readonly maximumSamplesPerDistribution: number;

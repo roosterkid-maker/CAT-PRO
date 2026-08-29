@@ -2284,7 +2284,7 @@ function StrategyOnePreArmedOneShotPanel({
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
           <MiniEvidence label="Operator approval" value="DYNAMIC ARM ONCE" />
           <MiniEvidence label="Timing qualification" value="AUTOMATIC / VENUE LANE" />
-          <MiniEvidence label="Safety ceiling" value="≤ 250 ms" />
+          <MiniEvidence label="Safety ceiling" value="≤ 300 ms" />
         </div>
       </div>
 
@@ -2734,7 +2734,7 @@ function StrategyOneActionTimePreflightPanel({
       />
 
       <div className="border-b border-border-default px-5 py-3 text-xs leading-5 text-text-muted">
-        A route appears here only when a fresh EXECUTE opportunity matches durable credible history and preserves measured dispatch plus operational timing headroom inside 250 ms. Exact ₹100 sizing then reuses authenticated two-leg balances, exchange order rules, quantity normalization and post-stress depth/fee/slippage checks.
+        A route appears here only when a fresh EXECUTE opportunity matches durable credible history and preserves measured dispatch plus operational timing headroom inside the operator-reviewed 300 ms ceiling. Exact ₹100 sizing then reuses authenticated two-leg balances, exchange order rules, quantity normalization and post-stress depth/fee/slippage checks.
       </div>
 
       {preview ? (

@@ -604,7 +604,7 @@ export class CandidateQualificationService {
       requiredValue:
         `score>=${this.config.minimumFreshnessScore}; ages<=${STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS}ms; skew<=250ms; no fallback`,
       reason: scorePassed && pilot.passed
-        ? "Binance/Bybit pilot quote generation satisfies the dispatch-reserved age boundary inside the absolute 250 ms ceiling."
+        ? "Binance/Bybit pilot quote generation satisfies the dispatch-reserved age boundary inside the operator-reviewed 300 ms ceiling."
         : `Binance/Bybit pilot freshness failed: ${pilot.reasons.join(", ") || "FRESHNESS_SCORE"}.`,
     };
   }

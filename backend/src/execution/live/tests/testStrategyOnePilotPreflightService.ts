@@ -572,7 +572,7 @@ function main(): void {
   opportunities = [
     opportunity(
       NOW -
-        191,
+        241,
     ),
   ];
 
@@ -592,7 +592,7 @@ function main(): void {
         "CURRENT_DISPATCH_RESERVED_FRESHNESS",
     )?.state,
     "BLOCKED",
-    "A current book can be inside the absolute 250 ms ceiling but still lack dispatch reserve.",
+    "A current book can be inside the absolute 300 ms ceiling but still lack dispatch reserve.",
   );
 
   opportunities = [
@@ -689,7 +689,7 @@ function readyTiming(): StrategyOneTimingHeadroomReview {
     buyExchange: "bybit",
     sellExchange: "binance",
     state: "READY",
-    absoluteBookAgeCeilingMs: 250,
+    absoluteBookAgeCeilingMs: 300,
     dispatchSafetyMarginMs: 10,
     requiredOperationalHeadroomMs: 10,
     timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE",
@@ -697,11 +697,11 @@ function readyTiming(): StrategyOneTimingHeadroomReview {
     downstreamPaperDecisionToExecutionStartP99Ms: 5,
     decisionToExecutionStartP99Ms: 5,
     dispatchBudgetMs: 15,
-    maximumBookAgeMs: 235,
+    maximumBookAgeMs: 285,
     executionGradeBuyAgeP99Ms: 100,
     executionGradeSellAgeP99Ms: 110,
     executionGradeWorstAgeP99Ms: 110,
-    residualOperationalHeadroomMs: 125,
+    residualOperationalHeadroomMs: 175,
     blockers: [],
     safety: {
       reviewOnly: true,

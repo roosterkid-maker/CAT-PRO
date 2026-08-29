@@ -432,7 +432,7 @@ export interface StrategyOnePilotCandidate {
     buyExchange: string;
     sellExchange: string;
     state: "READY" | "BLOCKED";
-    absoluteBookAgeCeilingMs: 250;
+    absoluteBookAgeCeilingMs: 300;
     dispatchSafetyMarginMs: number;
     requiredOperationalHeadroomMs: number;
     timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE";
@@ -484,8 +484,8 @@ export interface StrategyOnePilotPreviewReport {
   minimumTwoLegInventoryInr: number;
   minimumCurrentNetProfitPercent: number;
   maximumOpportunityAgeMs: number;
-  maximumExecutionGradeBookAgeMs: 250;
-  maximumDispatchReservedBookAgeMs: 190;
+  maximumExecutionGradeBookAgeMs: 300;
+  maximumDispatchReservedBookAgeMs: 240;
   maximumExecutionGradeBookSkewMs: 250;
   evidence: {
     currentFreshExecuteOpportunities: number;
@@ -884,7 +884,7 @@ export interface StrategyOneTimingHeadroomReview {
   buyExchange: string;
   sellExchange: string;
   state: "READY" | "BLOCKED";
-  absoluteBookAgeCeilingMs: 250;
+  absoluteBookAgeCeilingMs: 300;
   dispatchSafetyMarginMs: number;
   requiredOperationalHeadroomMs: number;
   timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE";

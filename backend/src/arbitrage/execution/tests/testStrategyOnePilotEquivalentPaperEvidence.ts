@@ -115,7 +115,7 @@ function main(): void {
     assert.equal(route.executionGradeBuyAgeMs.p99Ms, 25);
     assert.equal(route.executionGradeSellAgeMs.p99Ms, 20);
     assert.equal(route.calibration.ready, true);
-    assert.equal(route.dispatchReserved.maximumBookAgeMs, 190);
+    assert.equal(route.dispatchReserved.maximumBookAgeMs, 240);
     assert.equal(route.dispatchReserved.generations, 2);
     assert.equal(route.dispatchReserved.buyAgeMs.p99Ms, 25);
     assert.equal(route.dispatchReserved.sellAgeMs.p99Ms, 20);
@@ -138,7 +138,7 @@ function main(): void {
 
     const absoluteOnly = opportunity({
       generatedAt: NOW + 4_000,
-      buyAgeMs: 200,
+      buyAgeMs: 250,
       sellAgeMs: 20,
     });
     service.observeSnapshot(snapshot(absoluteOnly), NOW + 4_005);
@@ -149,7 +149,7 @@ function main(): void {
       item.routeKey === "BTCUSDT:binance->bybit");
     assert.ok(dispatchReport);
     assert.equal(dispatchReport.executionGradeGenerations, 3,
-      "A generation inside the immutable 250 ms ceiling remains in historical execution-grade evidence.");
+      "A generation inside the operator-reviewed 300 ms ceiling remains in historical execution-grade evidence.");
     assert.equal(dispatchReport.dispatchReserved.generations, 2,
       "A generation without dispatch reserve must not enter readiness calibration.");
     assert.equal(dispatchReport.dispatchReserved.rejectedExecutionGradeGenerations, 1);

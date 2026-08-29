@@ -188,14 +188,14 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
   const byId = new Map(opportunities.map((item) => [item.id, item]));
   const qualification: StrategyOneDynamicPoolTimingQualification = {
     schemaVersion: "189.0",
-    timingPolicyRevision: "STRATEGY_ONE_TRIGGER_SYNC_5MS_V2",
+    timingPolicyRevision: "STRATEGY_ONE_TRIGGER_SYNC_5MS_300MS_V3",
     id: "dynamic-timing-coti",
     routePoolId: "strategy-one-dynamic-usdt-route-pool-v1",
     routeKey: "COTIUSDT:coindcx->binance",
     ...route,
     source: "DYNAMIC_POOL_VENUE_DIRECTION_EVIDENCE",
     scope: "DYNAMIC_POOL",
-    maximumBookAgeMs: 245,
+    maximumBookAgeMs: 295,
     evidenceGeneratedAt: clock,
     evidenceRouteKey: "BTCUSDT:coindcx->binance",
     venueLaneKey: "coindcx->binance",
@@ -217,7 +217,7 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     },
     getVenueContract: (exchange: string) => ({
       exchange,
-      maximumOrderBookAgeMs: 245,
+      maximumOrderBookAgeMs: 295,
       requiredTimeInForce: exchange === "coindcx" ? "GTC" as const : "FOK" as const,
       supportedTimeInForce: exchange === "coindcx"
         ? ["GTC" as const]
@@ -235,7 +235,7 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     assert.equal(preview.approvedForAuthorization, true);
     assert.equal(preview.authority?.schemaVersion, "191.0");
     assert.equal(preview.authority?.calibrationScope, "DYNAMIC_POOL");
-    assert.equal(preview.authority?.maximumOrderBookAgeMs, 245);
+    assert.equal(preview.authority?.maximumOrderBookAgeMs, 295);
     const authority = preview.authority;
     assert.ok(authority);
     const authorized = service.authorize(
@@ -260,7 +260,7 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     service.getDiagnostics(++clock).records.every(
       (record) =>
         record.schemaVersion === "191.0" &&
-        record.maximumOrderBookAgeMs === 245,
+        record.maximumOrderBookAgeMs === 295,
     ),
     true,
     "Every dynamic authority transition must durably preserve its exact qualified TTL.",
@@ -1162,8 +1162,8 @@ function preflightFixture(
       minimumTwoLegInventoryInr: 1_000,
       minimumCurrentNetProfitPercent: 0.5,
       maximumOpportunityAgeMs: 10_000,
-      maximumExecutionGradeBookAgeMs: 250,
-      maximumDispatchReservedBookAgeMs: 190,
+      maximumExecutionGradeBookAgeMs: 300,
+      maximumDispatchReservedBookAgeMs: 240,
       maximumExecutionGradeBookSkewMs: 250,
       evidence: {
         currentFreshExecuteOpportunities: 1,
@@ -1202,7 +1202,7 @@ function preflightFixture(
           buyExchange: "binance",
           sellExchange: "bybit",
           state: "READY",
-          absoluteBookAgeCeilingMs: 250,
+          absoluteBookAgeCeilingMs: 300,
           dispatchSafetyMarginMs: 10,
           requiredOperationalHeadroomMs: 10,
           timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE",
@@ -1210,11 +1210,11 @@ function preflightFixture(
           downstreamPaperDecisionToExecutionStartP99Ms: 5,
           decisionToExecutionStartP99Ms: 5,
           dispatchBudgetMs: 15,
-          maximumBookAgeMs: 235,
+          maximumBookAgeMs: 285,
           executionGradeBuyAgeP99Ms: 100,
           executionGradeSellAgeP99Ms: 100,
           executionGradeWorstAgeP99Ms: 100,
-          residualOperationalHeadroomMs: 135,
+          residualOperationalHeadroomMs: 185,
           blockers: [],
           safety: {
             reviewOnly: true,
