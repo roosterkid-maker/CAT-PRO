@@ -187,6 +187,7 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const KOLKATA_UTC_OFFSET_MS = 5.5 * 60 * 60 * 1_000;
 const BETWEEN_ATTEMPTS_COOLDOWN_MS = 5_000;
 const BLOCKED_REEVALUATION_INTERVAL_MS = 250;
+const MAXIMUM_HISTORY_SCREENINGS_PER_SNAPSHOT = 8;
 
 const DEFAULT_DEPENDENCIES: StrategyOneTinyLivePreArmDependencies = {
   runtimeGateEnabled: () =>
@@ -254,6 +255,7 @@ export class StrategyOneTinyLivePreArmService {
   } | null = null;
   private candidatesEvaluated = 0;
   private preflightBlocks = 0;
+  private historicalMismatchesSkipped = 0;
   private refreshesRequested = 0;
   private refreshesRecovered = 0;
   private coordinatorStarts = 0;
@@ -533,21 +535,63 @@ export class StrategyOneTinyLivePreArmService {
     const selectedIndex = previousRouteIndex >= 0
       ? (previousRouteIndex + 1) % candidates.length
       : 0;
-    const [selectedRouteKey, selectedOpportunity] = candidates[selectedIndex];
+    const orderedCandidates = [
+      ...candidates.slice(selectedIndex),
+      ...candidates.slice(0, selectedIndex),
+    ];
+    const screenedCandidates = orderedCandidates.slice(
+      0,
+      MAXIMUM_HISTORY_SCREENINGS_PER_SNAPSHOT,
+    );
+    let selectedOpportunity: ArbitrageOpportunity | null = null;
+    let selectedPreview: StrategyOneTinyLivePreview | null = null;
 
     this.lastEvaluatedArmId = arm.id;
-    this.lastEvaluatedRouteKey = selectedRouteKey;
+
+    for (const [routeKey, opportunity] of screenedCandidates) {
+      this.lastEvaluatedRouteKey = routeKey;
+      this.candidatesEvaluated += 1;
+
+      try {
+        const preview = this.dependencies.previewAction(opportunity.id, observedAt);
+
+        if (isHistoricalMismatchOnly(preview)) {
+          this.historicalMismatchesSkipped += 1;
+          continue;
+        }
+
+        selectedOpportunity = opportunity;
+        selectedPreview = preview;
+        break;
+      } catch (error: unknown) {
+        this.recordBlocked(opportunity.id, observedAt, message(error));
+        return null;
+      }
+    }
+
+    if (!selectedOpportunity || !selectedPreview) {
+      const lastScreened = screenedCandidates.at(-1)?.[1] ?? opportunities[0];
+
+      this.recordBlocked(
+        lastScreened.id,
+        observedAt,
+        `HISTORICAL_ROUTE_SCREEN: ${screenedCandidates.length} current directional route${screenedCandidates.length === 1 ? "" : "s"} checked; none has sufficient credible historical evidence yet.`,
+      );
+      return null;
+    }
+
     this.triggerInProgress = true;
 
     try {
-      return await this.trigger(arm, selectedOpportunity);
+      return await this.trigger(arm, selectedOpportunity, selectedPreview);
     } finally {
       /*
        * A stale route may perform two bounded public REST reads before it is
-       * blocked.  Never continue sweeping every coin in the same snapshot or
-       * immediately start another route after that async work completes.  The
-       * next immutable snapshot gets one fairly rotated exact route after a
-       * complete cooldown measured from the end of this evaluation.
+       * blocked. History-only misses can be screened synchronously, but never
+       * continue sweeping after one route reaches full evidence evaluation or
+       * immediately start another route after async work completes. The next
+       * immutable snapshot resumes fair rotation after a cooldown measured
+       * from the end of this evaluation.
        */
       this.nextEvaluationAt = Math.max(
         this.nextEvaluationAt,
@@ -625,6 +669,7 @@ export class StrategyOneTinyLivePreArmService {
       pipelineTelemetry: {
         candidatesEvaluated: this.candidatesEvaluated,
         preflightBlocks: this.preflightBlocks,
+        historicalMismatchesSkipped: this.historicalMismatchesSkipped,
         refreshesRequested: this.refreshesRequested,
         refreshesRecovered: this.refreshesRecovered,
         coordinatorStarts: this.coordinatorStarts,
@@ -796,6 +841,7 @@ export class StrategyOneTinyLivePreArmService {
   private async trigger(
     armSnapshot: StrategyOneTinyLivePreArmRecord,
     candidate: ArbitrageOpportunity,
+    initialPreview: StrategyOneTinyLivePreview,
   ): Promise<StrategyOneTinyLivePreArmRecord | null> {
     let evaluatedAt = this.dependencies.now();
     let active = this.getActiveArm(evaluatedAt);
@@ -805,16 +851,7 @@ export class StrategyOneTinyLivePreArmService {
       return null;
     }
 
-    this.candidatesEvaluated += 1;
-
-    let preview: StrategyOneTinyLivePreview;
-
-    try {
-      preview = this.dependencies.previewAction(actionCandidate.id, evaluatedAt);
-    } catch (error: unknown) {
-      this.recordBlocked(actionCandidate.id, evaluatedAt, message(error));
-      return null;
-    }
+    let preview = initialPreview;
 
     if (
       !preview.approvedForAuthorization &&
@@ -1298,6 +1335,13 @@ function shouldRefreshActionBooks(
           ),
       )
   );
+}
+
+function isHistoricalMismatchOnly(
+  preview: StrategyOneTinyLivePreview,
+): boolean {
+  return preview.preflight?.preview.state ===
+    "WAITING_FOR_HISTORICAL_MATCH";
 }
 
 function candidateRouteKey(

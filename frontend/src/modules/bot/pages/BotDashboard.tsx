@@ -2020,6 +2020,7 @@ function StrategyOnePreArmedOneShotPanel({
   const armAttempts = dailyAttemptBudget?.routePoolArmAttempts ?? null;
   const route = active?.routeScope === "DYNAMIC_POOL" ? suggestedRoute : active ?? suggestedRoute;
   const recent = diagnostics?.records[0] ?? null;
+  const lastActionTimeRefresh = diagnostics?.actionTimeBookRefresh?.lastResult ?? null;
   const attempts = recent?.attempts ?? [];
   const latestRecoveryResolution =
     twoLegRecovery?.resolutions.resolutions[0] ?? null;
@@ -2344,7 +2345,7 @@ function StrategyOnePreArmedOneShotPanel({
 
           {diagnostics?.lastEvaluation ? (
             <p className="mt-2 font-mono text-[9px] text-text-muted">
-              LAST {diagnostics.lastEvaluation.outcome} · {diagnostics.lastEvaluation.reason}
+              LATEST CANDIDATE {diagnostics.lastEvaluation.outcome} · {diagnostics.lastEvaluation.reason}
             </p>
           ) : recent && recent.state !== "ARMED" ? (
             <p className="mt-2 font-mono text-[9px] text-text-muted">
@@ -2352,10 +2353,27 @@ function StrategyOnePreArmedOneShotPanel({
             </p>
           ) : null}
 
+          {lastActionTimeRefresh ? (
+            <div className="mt-2 rounded-lg border border-amber-300/15 bg-amber-300/[0.035] px-3 py-2 font-mono text-[9px] leading-4 text-text-muted">
+              <p className="font-bold text-amber-200">
+                LAST ACTION-TIME {lastActionTimeRefresh.state} · {lastActionTimeRefresh.route.market} {lastActionTimeRefresh.route.buyExchange.toUpperCase()} BUY → {lastActionTimeRefresh.route.sellExchange.toUpperCase()} SELL · {lastActionTimeRefresh.durationMs} ms
+              </p>
+              <p className="mt-1">
+                {lastActionTimeRefresh.blocker ?? "Fresh exact-route books passed and the full preflight continued."}
+              </p>
+              {lastActionTimeRefresh.legs.length > 0 ? (
+                <p className="mt-1">
+                  LEGS {lastActionTimeRefresh.legs.map((leg) => `${leg.exchange.toUpperCase()} ${leg.accepted ? `${leg.roundTripMs} ms` : `BLOCKED: ${leg.error ?? "no fresh book"}`}`).join(" · ")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {diagnostics?.pipelineTelemetry ? (
             <div className="mt-3 flex flex-wrap gap-2 font-mono text-[9px] text-text-muted">
               <span>CANDIDATES {diagnostics.pipelineTelemetry.candidatesEvaluated}</span>
               <span>· FINAL BLOCKS {diagnostics.pipelineTelemetry.preflightBlocks}</span>
+              <span>· HISTORY SKIPS {diagnostics.pipelineTelemetry.historicalMismatchesSkipped ?? 0}</span>
               <span>· REFRESH {diagnostics.pipelineTelemetry.refreshesRecovered}/{diagnostics.pipelineTelemetry.refreshesRequested}</span>
               <span>· COORDINATOR STARTS {diagnostics.pipelineTelemetry.coordinatorStarts}</span>
             </div>

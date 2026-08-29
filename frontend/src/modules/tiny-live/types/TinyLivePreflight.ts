@@ -793,6 +793,7 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
   pipelineTelemetry: {
     candidatesEvaluated: number;
     preflightBlocks: number;
+    historicalMismatchesSkipped: number;
     refreshesRequested: number;
     refreshesRecovered: number;
     coordinatorStarts: number;
@@ -807,6 +808,41 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
     liveOffResetsConsumedAttempts: false;
   };
   records: StrategyOneTinyLivePreArmRecord[];
+  actionTimeBookRefresh: {
+    schemaVersion: "149.0";
+    generatedAt: number;
+    actionTimeReadTimeoutMs: number;
+    actionTimeRefreshDeadlineMs: number;
+    minimumRouteRefreshIntervalMs: number;
+    attempts: number;
+    refreshed: number;
+    blocked: number;
+    cooldowns: number;
+    coalesced: number;
+    finalRefreshAttempts: number;
+    finalRefreshes: number;
+    finalRefreshBlocks: number;
+    inFlight: number;
+    lastResult: {
+      schemaVersion: "149.0";
+      state: "REFRESHED" | "BLOCKED" | "COOLDOWN";
+      route: {
+        market: string;
+        buyExchange: string;
+        sellExchange: string;
+      };
+      startedAt: number;
+      completedAt: number;
+      durationMs: number;
+      legs: Array<{
+        exchange: string;
+        accepted: boolean;
+        roundTripMs: number;
+        error: string | null;
+      }>;
+      blocker: string | null;
+    } | null;
+  };
   accountModeLease: StrategyOneTinyLiveAccountModeLeaseDiagnostics;
   emergencyStopRecovery: StrategyOneTinyLiveEmergencyStopRecoveryDiagnostics;
   readinessWaterfall: StrategyOneTinyLiveReadinessWaterfall;

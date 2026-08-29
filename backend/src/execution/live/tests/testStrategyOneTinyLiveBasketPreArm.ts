@@ -196,6 +196,7 @@ async function main(): Promise<void> {
     await verifyChangingRoutesCanRequestFreshBooks(directory);
     await verifyBookDependentBlocksCanRequestFreshBooks(directory);
     await verifyPreflightWorkIsBoundedAndRouteFair(directory);
+    await verifyHistoryMismatchesDoNotHideQualifiedRoute(directory);
     await verifyCompleteCoordinatorReasonsRemainDurable(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
@@ -311,6 +312,87 @@ function verifySupersededDynamicPoolArmExpires(
     expired?.failureReason ?? "",
     /predates the current minimum-order normalization and ₹1000 hard-cap policy/iu,
   );
+}
+
+async function verifyHistoryMismatchesDoNotHideQualifiedRoute(
+  directory: string,
+): Promise<void> {
+  const routes: readonly StrategyOneTinyLiveBasketRoute[] = [
+    {market: "NOHISTORY1USDT", buyExchange: "coindcx", sellExchange: "binance"},
+    {market: "NOHISTORY2USDT", buyExchange: "bybit", sellExchange: "coindcx"},
+    {market: "TUTUSDT", buyExchange: "coindcx", sellExchange: "binance"},
+  ];
+  const clock = NOW + 45_000;
+  const evaluated: string[] = [];
+  const candidates = routes.map((route, index) => ({
+    ...opportunity(`history-screen-${index}`, route, clock),
+    netProfitPercent: 1 - index * 0.1,
+  }));
+  const service = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    previewAction: (opportunityId) => {
+      evaluated.push(opportunityId);
+      const index = candidates.findIndex((item) => item.id === opportunityId);
+
+      if (index < 2) {
+        return historicalMismatchPreview();
+      }
+
+      return bookDependentBlockedPreview(opportunityId, routes[2], true);
+    },
+    now: () => clock,
+  }, join(directory, "history-screening.jsonl"));
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: clock,
+  });
+
+  assert.equal(await service.observeSnapshot({
+    generatedAt: clock,
+    opportunities: candidates,
+  }), null);
+  assert.deepEqual(
+    evaluated,
+    candidates.map((item) => item.id),
+    "History-only misses must be skipped inside one snapshot so a lower-net qualified route is not hidden.",
+  );
+  assert.deepEqual(service.getDiagnostics(clock).pipelineTelemetry, {
+    candidatesEvaluated: 3,
+    preflightBlocks: 1,
+    historicalMismatchesSkipped: 2,
+    refreshesRequested: 0,
+    refreshesRecovered: 0,
+    coordinatorStarts: 0,
+  });
+}
+
+function historicalMismatchPreview() {
+  return {
+    approvedForAuthorization: false,
+    authority: null,
+    blockers: [
+      "A current audited-lane opportunity exists, but it has no matching route with sufficient credible historical evidence.",
+    ],
+    preflight: {
+      preview: {
+        state: "WAITING_FOR_HISTORICAL_MATCH",
+        selected: null,
+      },
+    },
+  } as never;
 }
 
 function verifyPriorMinimumOrderConsentExpires(
@@ -430,6 +512,7 @@ async function verifyChangingRoutesCanRequestFreshBooks(
     assert.deepEqual(service.getDiagnostics(clock).pipelineTelemetry, {
       candidatesEvaluated: 1,
       preflightBlocks: 1,
+      historicalMismatchesSkipped: 0,
       refreshesRequested: 1,
       refreshesRecovered: 1,
       coordinatorStarts: 0,
