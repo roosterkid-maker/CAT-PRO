@@ -22,7 +22,8 @@ export type StrategyOneTargetExchange =
   | "bybit"
   | "coindcx"
   | "coinswitch"
-  | "unocoin";
+  | "unocoin"
+  | "zebpay";
 
 export interface StrategyOneVenueOrderContract {
   readonly exchange: string;
@@ -34,6 +35,8 @@ export interface StrategyOneVenueOrderContract {
   readonly requiredTimeInForce:
     StrategyOneTimeInForce;
   readonly authoritativeFillConfirmationReady:
+    boolean;
+  readonly authoritativeFeeReconciliationReady:
     boolean;
 }
 
@@ -50,7 +53,8 @@ export function isStrategyOneVenueOrderContractReady(
     Number.isSafeInteger(contract.maximumOrderBookAgeMs) &&
     contract.maximumOrderBookAgeMs > 0 &&
     contract.supportedTimeInForce.includes(contract.requiredTimeInForce) &&
-    contract.authoritativeFillConfirmationReady;
+    contract.authoritativeFillConfirmationReady &&
+    contract.authoritativeFeeReconciliationReady;
 }
 
 export interface StrategyOneVenueContractEvidence {
@@ -80,6 +84,11 @@ export interface StrategyOneVenueContractEvidence {
     | "AUTHENTICATED_WS_IMPLEMENTED"
     | "DOCUMENTED_NOT_IMPLEMENTED"
     | "NOT_DOCUMENTED";
+  readonly authoritativeFeeEvidence:
+    | "ACTUAL_ORDER_EXECUTION_RECONCILIATION_IMPLEMENTED"
+    | "ACCOUNT_FEE_SCHEDULE_ONLY"
+    | "NOT_IMPLEMENTED"
+    | "NOT_DOCUMENTED";
   readonly runtimePrivateFillSessionReady: boolean;
   readonly calibratedOrderSubmissionTtlMs:
     | number
@@ -87,20 +96,20 @@ export interface StrategyOneVenueContractEvidence {
   readonly documentation: readonly {
     readonly title: string;
     readonly url: string;
-    readonly verifiedOn: "2026-08-15";
+    readonly verifiedOn: "2026-08-29";
   }[];
   readonly blockers: readonly string[];
   readonly liveOrderSubmissionAuthorized: false;
 }
 
 export interface StrategyOneVenueContractReport {
-  readonly schemaVersion: "107.0";
+  readonly schemaVersion: "191.0";
   readonly generatedAt: number;
   readonly requiredProduct: "SPOT";
   readonly requiredTimeInForce: "FOK";
   readonly venues: readonly StrategyOneVenueContractEvidence[];
   readonly summary: {
-    readonly targetVenues: 5;
+    readonly targetVenues: 6;
     readonly safePilotCandidates: number;
     readonly excludedFromLive: number;
     readonly runtimeContractReady: number;
@@ -110,6 +119,7 @@ export interface StrategyOneVenueContractReport {
     readonly pollingCannotSubstituteForPrivateFillEvidence: true;
     readonly unsupportedTimeInForceNeverFallsBackToGtc: true;
     readonly paperEvidenceCannotSatisfyLiveFillEvidence: true;
+    readonly estimatedFeesCannotSatisfyActualFillFeeEvidence: true;
     readonly automaticTtlActivationAllowed: false;
     readonly liveOrderSubmissionAuthorized: false;
   };
@@ -132,7 +142,7 @@ export interface StrategyOneLiveVenueContractDependencies {
 }
 
 const VERIFIED_ON =
-  "2026-08-15" as const;
+  "2026-08-29" as const;
 
 const STATIC_EVIDENCE:
   Readonly<Record<
@@ -155,6 +165,7 @@ const STATIC_EVIDENCE:
       deterministicClientOrderIdentity: "SUPPORTED_AND_MAPPED",
       privateOrderEvidence: "AUTHENTICATED_WS_IMPLEMENTED",
       privateFillEvidence: "AUTHENTICATED_WS_IMPLEMENTED",
+      authoritativeFeeEvidence: "ACTUAL_ORDER_EXECUTION_RECONCILIATION_IMPLEMENTED",
       documentation: [
         {
           title: "Binance Spot trading endpoints",
@@ -178,6 +189,7 @@ const STATIC_EVIDENCE:
       deterministicClientOrderIdentity: "SUPPORTED_AND_MAPPED",
       privateOrderEvidence: "AUTHENTICATED_WS_IMPLEMENTED",
       privateFillEvidence: "AUTHENTICATED_WS_IMPLEMENTED",
+      authoritativeFeeEvidence: "ACTUAL_ORDER_EXECUTION_RECONCILIATION_IMPLEMENTED",
       documentation: [
         {
           title: "Bybit V5 place order",
@@ -206,6 +218,7 @@ const STATIC_EVIDENCE:
       deterministicClientOrderIdentity: "SUPPORTED_AND_MAPPED",
       privateOrderEvidence: "AUTHENTICATED_WS_IMPLEMENTED",
       privateFillEvidence: "AUTHENTICATED_WS_IMPLEMENTED",
+      authoritativeFeeEvidence: "ACTUAL_ORDER_EXECUTION_RECONCILIATION_IMPLEMENTED",
       documentation: [
         {
           title: "CoinDCX Spot API reference",
@@ -221,9 +234,10 @@ const STATIC_EVIDENCE:
       requiredTimeInForce: "FOK",
       documentedTimeInForce: [],
       exactFokAdapterMapping: false,
-      deterministicClientOrderIdentity: "NOT_DOCUMENTED",
+      deterministicClientOrderIdentity: "SUPPORTED_AND_MAPPED",
       privateOrderEvidence: "DOCUMENTED_NOT_IMPLEMENTED",
       privateFillEvidence: "DOCUMENTED_NOT_IMPLEMENTED",
+      authoritativeFeeEvidence: "ACCOUNT_FEE_SCHEDULE_ONLY",
       documentation: [
         {
           title: "CoinSwitch Spot create order",
@@ -233,6 +247,16 @@ const STATIC_EVIDENCE:
         {
           title: "CoinSwitch Spot order updates",
           url: "https://api-trading.coinswitch.co/spot/websockets/order-updates",
+          verifiedOn: VERIFIED_ON,
+        },
+        {
+          title: "CoinSwitch Spot trading fee schedule",
+          url: "https://api-trading.coinswitch.co/spot/reference/trading-fee",
+          verifiedOn: VERIFIED_ON,
+        },
+        {
+          title: "CoinSwitch Spot order book depth",
+          url: "https://api-trading.coinswitch.co/spot/reference/depth",
           verifiedOn: VERIFIED_ON,
         },
       ],
@@ -247,10 +271,30 @@ const STATIC_EVIDENCE:
       deterministicClientOrderIdentity: "NOT_DOCUMENTED",
       privateOrderEvidence: "NOT_DOCUMENTED",
       privateFillEvidence: "NOT_DOCUMENTED",
+      authoritativeFeeEvidence: "NOT_DOCUMENTED",
       documentation: [
         {
           title: "UnoCoin API documentation",
           url: "https://unocoin.com/in/support/api-documentation/",
+          verifiedOn: VERIFIED_ON,
+        },
+      ],
+    },
+    zebpay: {
+      exchange: "zebpay",
+      product: "SPOT",
+      classification: "EXCLUDED_FROM_STRATEGY_ONE_LIVE",
+      requiredTimeInForce: "FOK",
+      documentedTimeInForce: [],
+      exactFokAdapterMapping: false,
+      deterministicClientOrderIdentity: "NOT_DOCUMENTED",
+      privateOrderEvidence: "NOT_DOCUMENTED",
+      privateFillEvidence: "NOT_DOCUMENTED",
+      authoritativeFeeEvidence: "NOT_IMPLEMENTED",
+      documentation: [
+        {
+          title: "ZebPay API documentation",
+          url: "https://build.zebpay.com/",
           verifiedOn: VERIFIED_ON,
         },
       ],
@@ -264,6 +308,7 @@ const TARGET_EXCHANGES:
     "coindcx",
     "coinswitch",
     "unocoin",
+    "zebpay",
   ]);
 
 const DEFAULT_DEPENDENCIES:
@@ -384,6 +429,9 @@ export class StrategyOneLiveVenueContractRegistry {
         evidence.runtimePrivateFillSessionReady &&
         evidence.privateFillEvidence ===
           "AUTHENTICATED_WS_IMPLEMENTED",
+      authoritativeFeeReconciliationReady:
+        evidence.authoritativeFeeEvidence ===
+          "ACTUAL_ORDER_EXECUTION_RECONCILIATION_IMPLEMENTED",
     });
   }
 
@@ -480,6 +528,13 @@ export class StrategyOneLiveVenueContractRegistry {
       blockers.push("AUTHENTICATED_PRIVATE_FILL_SESSION_NOT_READY");
     }
 
+    if (
+      evidence.authoritativeFeeEvidence !==
+        "ACTUAL_ORDER_EXECUTION_RECONCILIATION_IMPLEMENTED"
+    ) {
+      blockers.push("AUTHORITATIVE_PER_ORDER_FEE_EVIDENCE_UNAVAILABLE");
+    }
+
     if (calibratedOrderSubmissionTtlMs === null) {
       blockers.push("CALIBRATED_ORDER_SUBMISSION_TTL_MISSING");
     }
@@ -514,13 +569,13 @@ export class StrategyOneLiveVenueContractRegistry {
       });
 
     return deepFreeze({
-      schemaVersion: "107.0",
+      schemaVersion: "191.0",
       generatedAt: now,
       requiredProduct: "SPOT",
       requiredTimeInForce: "FOK",
       venues,
       summary: {
-        targetVenues: 5,
+        targetVenues: 6,
         safePilotCandidates: venues.filter(
           (venue) => venue.classification === "SAFE_PILOT_CANDIDATE",
         ).length,
@@ -536,6 +591,7 @@ export class StrategyOneLiveVenueContractRegistry {
         pollingCannotSubstituteForPrivateFillEvidence: true,
         unsupportedTimeInForceNeverFallsBackToGtc: true,
         paperEvidenceCannotSatisfyLiveFillEvidence: true,
+        estimatedFeesCannotSatisfyActualFillFeeEvidence: true,
         automaticTtlActivationAllowed: false,
         liveOrderSubmissionAuthorized: false,
       },

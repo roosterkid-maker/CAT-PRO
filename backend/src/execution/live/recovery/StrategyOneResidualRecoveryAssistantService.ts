@@ -636,6 +636,12 @@ export class StrategyOneResidualRecoveryAssistantService {
           );
         }
 
+        if (!contract.authoritativeFeeReconciliationReady) {
+          blockers.push(
+            "Authoritative per-order fill-fee reconciliation is not ready on the recovery venue.",
+          );
+        }
+
         if (
           maximumBookAgeMs === null ||
           !Number.isSafeInteger(maximumBookAgeMs) ||

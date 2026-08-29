@@ -453,6 +453,9 @@ export class ExecutionHealthService {
       this.calculateExchangeStatus(
         adapterRegistered,
         credentialsConfigured,
+        authenticationVerified,
+        exchangeApiReachable,
+        readOnlyVerificationFresh,
         adapterConnected,
         metrics,
         reasons,
@@ -530,6 +533,12 @@ export class ExecutionHealthService {
 
     credentialsConfigured: boolean,
 
+    authenticationVerified: boolean,
+
+    exchangeApiReachable: boolean,
+
+    readOnlyVerificationFresh: boolean,
+
     adapterConnected: boolean,
 
     metrics:
@@ -542,7 +551,10 @@ export class ExecutionHealthService {
   ): ExecutionHealthStatus {
     if (
       !adapterRegistered ||
-      !credentialsConfigured
+      !credentialsConfigured ||
+      !authenticationVerified ||
+      !exchangeApiReachable ||
+      !readOnlyVerificationFresh
     ) {
       return "UNHEALTHY";
     }

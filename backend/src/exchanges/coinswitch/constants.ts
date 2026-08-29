@@ -32,6 +32,9 @@ export const COINSWITCH = {
     PORTFOLIO_PATH:
       "/trade/api/v2/user/portfolio",
 
+    DEPTH_PATH:
+      "/trade/api/v2/depth",
+
     ORDER_PATH:
       "/trade/api/v2/order",
   },

@@ -13,15 +13,16 @@ function main(): void {
   const report =
     readyRegistry.getReport(1_786_812_800_000);
 
-  assert.equal(report.schemaVersion, "107.0");
-  assert.equal(report.venues.length, 5);
-  assert.equal(report.summary.targetVenues, 5);
+  assert.equal(report.schemaVersion, "191.0");
+  assert.equal(report.venues.length, 6);
+  assert.equal(report.summary.targetVenues, 6);
   assert.equal(report.summary.safePilotCandidates, 2);
-  assert.equal(report.summary.excludedFromLive, 3);
+  assert.equal(report.summary.excludedFromLive, 4);
   assert.equal(report.summary.runtimeContractReady, 0);
   assert.equal(report.safety.documentationDoesNotGrantAuthority, true);
   assert.equal(report.safety.unsupportedTimeInForceNeverFallsBackToGtc, true);
   assert.equal(report.safety.automaticTtlActivationAllowed, false);
+  assert.equal(report.safety.estimatedFeesCannotSatisfyActualFillFeeEvidence, true);
   assert.equal(report.safety.liveOrderSubmissionAuthorized, false);
 
   const binance =
@@ -35,6 +36,10 @@ function main(): void {
     assert.equal(venue.exactFokAdapterMapping, true);
     assert.equal(venue.deterministicClientOrderIdentity, "SUPPORTED_AND_MAPPED");
     assert.equal(venue.privateFillEvidence, "AUTHENTICATED_WS_IMPLEMENTED");
+    assert.equal(
+      venue.authoritativeFeeEvidence,
+      "ACTUAL_ORDER_EXECUTION_RECONCILIATION_IMPLEMENTED",
+    );
     assert.equal(venue.runtimePrivateFillSessionReady, true);
     assert.equal(venue.calibratedOrderSubmissionTtlMs, null);
     assert.deepEqual(venue.blockers, ["CALIBRATED_ORDER_SUBMISSION_TTL_MISSING"]);
@@ -44,6 +49,7 @@ function main(): void {
     assert.ok(contract);
     assert.deepEqual(contract.supportedTimeInForce, ["IOC", "FOK"]);
     assert.equal(contract.authoritativeFillConfirmationReady, true);
+    assert.equal(contract.authoritativeFeeReconciliationReady, true);
     assert.equal(contract.maximumOrderBookAgeMs, null);
   }
 
@@ -180,13 +186,25 @@ function main(): void {
   const coinswitch =
     requiredVenue(report, "coinswitch");
   assert.deepEqual(coinswitch.documentedTimeInForce, []);
-  assert.equal(coinswitch.deterministicClientOrderIdentity, "NOT_DOCUMENTED");
+  assert.equal(coinswitch.deterministicClientOrderIdentity, "SUPPORTED_AND_MAPPED");
   assert.equal(coinswitch.privateOrderEvidence, "DOCUMENTED_NOT_IMPLEMENTED");
+  assert.equal(coinswitch.authoritativeFeeEvidence, "ACCOUNT_FEE_SCHEDULE_ONLY");
+  assert.equal(
+    coinswitch.blockers.includes(
+      "AUTHORITATIVE_PER_ORDER_FEE_EVIDENCE_UNAVAILABLE",
+    ),
+    true,
+  );
 
   const unocoin =
     requiredVenue(report, "unocoin");
   assert.equal(unocoin.privateOrderEvidence, "NOT_DOCUMENTED");
   assert.equal(unocoin.privateFillEvidence, "NOT_DOCUMENTED");
+
+  const zebpay =
+    requiredVenue(report, "zebpay");
+  assert.equal(zebpay.classification, "EXCLUDED_FROM_STRATEGY_ONE_LIVE");
+  assert.equal(zebpay.authoritativeFeeEvidence, "NOT_IMPLEMENTED");
 
   const notReadyRegistry =
     new StrategyOneLiveVenueContractRegistry({
@@ -209,6 +227,12 @@ function main(): void {
       ?.authoritativeFillConfirmationReady,
     false,
   );
+  assert.equal(
+    notReadyRegistry
+      .getOrderTimeSafetyContract("binance")
+      ?.authoritativeFeeReconciliationReady,
+    true,
+  );
   assert.equal(notReadyRegistry.getVenue("unknown"), null);
   assert.equal(notReadyRegistry.getOrderTimeSafetyContract("unknown"), null);
 
@@ -223,7 +247,7 @@ function main(): void {
   );
 
   console.log(
-    "Strategy #1 five-venue SPOT contracts are fail closed: Binance/Bybit use FOK, evidence-qualified dynamic-pool routes use CoinDCX bounded GTC in either leg direction, and CoinSwitch/UnoCoin remain excluded; no order authority exists.",
+    "Strategy #1 six-venue SPOT contracts are fail closed: Binance/Bybit use FOK, evidence-qualified dynamic-pool routes use CoinDCX bounded GTC in either leg direction, and CoinSwitch/UnoCoin/ZebPay remain excluded until exact lifecycle and per-order fee evidence exist; no order authority exists.",
   );
 }
 

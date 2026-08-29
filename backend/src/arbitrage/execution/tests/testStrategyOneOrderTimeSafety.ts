@@ -270,6 +270,8 @@ function orderTimeService(
                 ],
           authoritativeFillConfirmationReady:
             true,
+          authoritativeFeeReconciliationReady:
+            true,
           });
         },
       getMonotonicTimeMs:
@@ -364,6 +366,8 @@ function coinDCXBinanceOrderTimeService():
                 "FOK",
               ],
         authoritativeFillConfirmationReady:
+          true,
+        authoritativeFeeReconciliationReady:
           true,
       }),
     getMonotonicTimeMs:

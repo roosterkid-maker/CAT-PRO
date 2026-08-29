@@ -300,6 +300,7 @@ function assistant(
         supportedTimeInForce: ["GTC"],
         requiredTimeInForce: "GTC",
         authoritativeFillConfirmationReady: true,
+        authoritativeFeeReconciliationReady: true,
       }),
     },
     {

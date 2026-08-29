@@ -464,6 +464,10 @@ async function testOfficialOrderApi(
         0.00004 &&
       read.remainingQuantity ===
         0.00006 &&
+      read.createdAt ===
+        1_720_000_000_000 &&
+      read.updatedAt ===
+        1_720_000_001_000 &&
       cancelled.status ===
         "CANCELLATION_RAISED",
     "CoinSwitch order API must implement the official LIMIT create, single-order GET, DELETE cancel, and normalized lifecycle evidence.",
@@ -816,6 +820,10 @@ function normalizedOrder(
       0.0001 -
       executed,
     status,
+    createdAt:
+      1_720_000_000_000,
+    updatedAt:
+      1_720_000_001_000,
   };
 }
 

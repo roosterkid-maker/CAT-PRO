@@ -920,6 +920,15 @@ export class StrategyOneOrderTimeSafetyService {
         `${side} venue ${exchange} lacks authenticated fill-stream confirmation.`,
       );
     }
+
+    if (
+      !contract
+        .authoritativeFeeReconciliationReady
+    ) {
+      reasons.push(
+        `${side} venue ${exchange} lacks authoritative per-order fill-fee reconciliation.`,
+      );
+    }
   }
 
   private validateBookAge(

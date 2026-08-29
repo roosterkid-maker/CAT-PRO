@@ -39,6 +39,8 @@ export interface CoinSwitchSpotOrder {
   executedQuantity: number;
   remainingQuantity: number;
   status: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 interface CoinSwitchOrderEnvelope {
@@ -310,6 +312,16 @@ export class CoinSwitchOrderApi {
         ),
       status:
         status.toUpperCase(),
+      createdAt:
+        this.positiveTimestamp(
+          data.created_time,
+          "created_time",
+        ),
+      updatedAt:
+        this.positiveTimestamp(
+          data.updated_time,
+          "updated_time",
+        ),
     };
   }
 
@@ -530,6 +542,30 @@ export class CoinSwitchOrderApi {
     ) {
       throw new Error(
         `CoinSwitch ${field} must be a non-negative finite number.`,
+      );
+    }
+
+    return parsed;
+  }
+
+  private positiveTimestamp(
+    value: unknown,
+    field: string,
+  ): number {
+    const parsed =
+      Number(
+        value,
+      );
+
+    if (
+      !Number.isSafeInteger(
+        parsed,
+      ) ||
+      parsed <=
+        0
+    ) {
+      throw new Error(
+        `CoinSwitch ${field} must be a positive Unix-millisecond timestamp.`,
       );
     }
 
