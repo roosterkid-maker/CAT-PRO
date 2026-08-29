@@ -43,6 +43,28 @@ export interface StrategyOneActionTimeBookRefreshRoute {
   readonly market: string;
   readonly buyExchange: string;
   readonly sellExchange: string;
+  /**
+   * Optional stale-leg selection for the pre-authority rescue only. Omission
+   * keeps the established fail-closed behaviour and refreshes both legs.
+   */
+  readonly refreshExchanges?: readonly string[];
+  /** Existing validated BUY-book timestamp when BUY is intentionally reused. */
+  readonly minimumBuyTimestamp?: number;
+  /** Existing validated SELL-book timestamp when SELL is intentionally reused. */
+  readonly minimumSellTimestamp?: number;
+}
+
+interface NormalizedStrategyOneActionTimeBookRefreshRoute {
+  readonly market: string;
+  readonly buyExchange: StrategyOneTinyLiveBasketExchange;
+  readonly sellExchange: StrategyOneTinyLiveBasketExchange;
+}
+
+interface NormalizedStrategyOneActionTimeBookRefreshRequest {
+  readonly route: NormalizedStrategyOneActionTimeBookRefreshRoute;
+  readonly refreshExchanges: readonly StrategyOneTinyLiveBasketExchange[];
+  readonly minimumBuyTimestamp: number | null;
+  readonly minimumSellTimestamp: number | null;
 }
 
 export type StrategyOneActionTimeBookRefreshLeg =
@@ -243,9 +265,11 @@ const DEFAULT_DEPENDENCIES:
  * The normal path remains WebSocket-only. This service is reached only after
  * immutable route, permission, timing, profit and historical-evidence gates
  * pass, while current freshness or a book-dependent sizing/depth check blocks
- * the action. Both public books are then refreshed concurrently, published
- * through their existing validated stores, and the complete opportunity and
- * preflight pipeline is rerun. No old opportunity or old price is reused.
+ * the action. Only stale public book legs are refreshed; any unrefreshed leg
+ * is reused only through its existing validated timestamp. The complete
+ * opportunity and preflight pipeline is then rerun, so a reused leg that ages
+ * past the immutable freshness/skew ceiling still fails closed. No old
+ * opportunity or old price is reused.
  */
 export class StrategyOneActionTimeBookRefreshService {
   private readonly dependencies:
@@ -306,11 +330,17 @@ export class StrategyOneActionTimeBookRefreshService {
     input:
       StrategyOneActionTimeBookRefreshRoute,
   ): Promise<StrategyOneActionTimeBookRefreshResult> {
-    const route =
-      normalizeRoute(
+    const request =
+      normalizeRefreshRequest(
         input,
       );
+    const route =
+      request.route;
 
+    const refreshKey =
+      key(
+        request,
+      );
     const routeKey =
       key(
         route,
@@ -319,7 +349,7 @@ export class StrategyOneActionTimeBookRefreshService {
     const existing =
       this.inFlight
         .get(
-          routeKey,
+          refreshKey,
         );
 
     if (
@@ -388,7 +418,7 @@ export class StrategyOneActionTimeBookRefreshService {
 
     operation =
       this.run(
-        route,
+        request,
         startedAt,
       )
         .then(
@@ -417,13 +447,13 @@ export class StrategyOneActionTimeBookRefreshService {
             if (
               this.inFlight
                 .get(
-                  routeKey,
+                  refreshKey,
                 ) ===
               operation
             ) {
               this.inFlight
                 .delete(
-                  routeKey,
+                  refreshKey,
                 );
             }
           },
@@ -431,7 +461,7 @@ export class StrategyOneActionTimeBookRefreshService {
 
     this.inFlight
       .set(
-        routeKey,
+        refreshKey,
         operation,
       );
 
@@ -607,15 +637,15 @@ export class StrategyOneActionTimeBookRefreshService {
   }
 
   private async refreshRouteLegs(
-    route: {
-      readonly market: string;
-      readonly buyExchange: StrategyOneTinyLiveBasketExchange;
-      readonly sellExchange: StrategyOneTinyLiveBasketExchange;
-    },
+    route: NormalizedStrategyOneActionTimeBookRefreshRoute,
+    exchanges: readonly StrategyOneTinyLiveBasketExchange[] = [
+      route.buyExchange,
+      route.sellExchange,
+    ],
   ): Promise<readonly StrategyOneActionTimeBookRefreshLeg[]> {
     return withDeadline(
       Promise.all(
-        [route.buyExchange, route.sellExchange].map((exchange) => {
+        exchanges.map((exchange) => {
           if (exchange === "coindcx") {
             return this.dependencies.refreshCoinDCX(
               route.market,
@@ -640,19 +670,18 @@ export class StrategyOneActionTimeBookRefreshService {
   }
 
   private async run(
-    route: {
-      readonly market: string;
-      readonly buyExchange: StrategyOneTinyLiveBasketExchange;
-      readonly sellExchange: StrategyOneTinyLiveBasketExchange;
-    },
+    request: NormalizedStrategyOneActionTimeBookRefreshRequest,
     startedAt: number,
   ): Promise<StrategyOneActionTimeBookRefreshResult> {
+    const route =
+      request.route;
     let legs:
       readonly StrategyOneActionTimeBookRefreshLeg[];
 
     try {
       legs = await this.refreshRouteLegs(
         route,
+        request.refreshExchanges,
       );
     } catch (
       error:
@@ -723,6 +752,10 @@ export class StrategyOneActionTimeBookRefreshService {
     const receivedAtByExchange = new Map(
       legs.map((leg) => [leg.exchange.trim().toLowerCase(), leg.receivedAt] as const),
     );
+    const refreshedExchanges =
+      new Set(
+        request.refreshExchanges,
+      );
     const evaluation =
       this.dependencies
         .evaluateExactRoute({
@@ -733,15 +766,25 @@ export class StrategyOneActionTimeBookRefreshService {
           sellExchange:
             route.sellExchange,
           minimumBuyTimestamp:
-            receivedAtByExchange.get(
+            refreshedExchanges.has(
               route.buyExchange,
-            ) ??
-            Number.POSITIVE_INFINITY,
+            )
+              ? receivedAtByExchange.get(
+                  route.buyExchange,
+                ) ??
+                Number.POSITIVE_INFINITY
+              : request.minimumBuyTimestamp ??
+                Number.POSITIVE_INFINITY,
           minimumSellTimestamp:
-            receivedAtByExchange.get(
+            refreshedExchanges.has(
               route.sellExchange,
-            ) ??
-            Number.POSITIVE_INFINITY,
+            )
+              ? receivedAtByExchange.get(
+                  route.sellExchange,
+                ) ??
+                Number.POSITIVE_INFINITY
+              : request.minimumSellTimestamp ??
+                Number.POSITIVE_INFINITY,
         });
     const refreshedOpportunity =
       evaluation.opportunity !== null &&
@@ -846,11 +889,7 @@ async function withDeadline<T>(
 function normalizeRoute(
   input:
     StrategyOneActionTimeBookRefreshRoute,
-): {
-  readonly market: string;
-  readonly buyExchange: StrategyOneTinyLiveBasketExchange;
-  readonly sellExchange: StrategyOneTinyLiveBasketExchange;
-} {
+): NormalizedStrategyOneActionTimeBookRefreshRoute {
   const market =
     input.market
       .trim()
@@ -879,6 +918,100 @@ function normalizeRoute(
   };
 }
 
+function normalizeRefreshRequest(
+  input:
+    StrategyOneActionTimeBookRefreshRoute,
+): NormalizedStrategyOneActionTimeBookRefreshRequest {
+  const route =
+    normalizeRoute(
+      input,
+    );
+  const routeExchanges = [
+    route.buyExchange,
+    route.sellExchange,
+  ] as const;
+  const requestedExchanges =
+    input.refreshExchanges ===
+      undefined
+      ? routeExchanges
+      : input.refreshExchanges
+          .map(
+            (exchange) =>
+              exchange
+                .trim()
+                .toLowerCase(),
+          );
+  const refreshExchanges = [
+    ...new Set(
+      requestedExchanges,
+    ),
+  ];
+
+  if (
+    refreshExchanges.length ===
+      0 ||
+    refreshExchanges.some(
+      (exchange) =>
+        !routeExchanges.includes(
+          exchange as StrategyOneTinyLiveBasketExchange,
+        ),
+    )
+  ) {
+    throw new Error(
+      "Action-time selective refresh targets must be non-empty members of the exact route.",
+    );
+  }
+
+  const normalizedRefreshExchanges =
+    refreshExchanges as readonly StrategyOneTinyLiveBasketExchange[];
+  const buyIsRefreshed =
+    normalizedRefreshExchanges.includes(
+      route.buyExchange,
+    );
+  const sellIsRefreshed =
+    normalizedRefreshExchanges.includes(
+      route.sellExchange,
+    );
+  const minimumBuyTimestamp =
+    validMinimumTimestamp(
+      input.minimumBuyTimestamp,
+    );
+  const minimumSellTimestamp =
+    validMinimumTimestamp(
+      input.minimumSellTimestamp,
+    );
+
+  if (
+    (!buyIsRefreshed && minimumBuyTimestamp === null) ||
+    (!sellIsRefreshed && minimumSellTimestamp === null)
+  ) {
+    throw new Error(
+      "Every unrefreshed action-time route leg requires its existing validated minimum timestamp.",
+    );
+  }
+
+  return {
+    route,
+    refreshExchanges:
+      normalizedRefreshExchanges,
+    minimumBuyTimestamp,
+    minimumSellTimestamp,
+  };
+}
+
+function validMinimumTimestamp(
+  value:
+    number | undefined,
+): number | null {
+  return Number.isFinite(
+    value,
+  ) &&
+    (value ?? 0) >
+      0
+    ? value as number
+    : null;
+}
+
 function routeMatches(
   route: {
     readonly market: string;
@@ -905,13 +1038,20 @@ function routeMatches(
 }
 
 function key(
-  route: {
-    readonly market: string;
-    readonly buyExchange: string;
-    readonly sellExchange: string;
-  },
+  input:
+    | NormalizedStrategyOneActionTimeBookRefreshRoute
+    | NormalizedStrategyOneActionTimeBookRefreshRequest,
 ): string {
-  return `${route.market}:${route.buyExchange}->${route.sellExchange}`;
+  const route =
+    "route" in input
+      ? input.route
+      : input;
+  const refreshSuffix =
+    "refreshExchanges" in input
+      ? `:${[...input.refreshExchanges].sort().join(",")}`
+      : "";
+
+  return `${route.market}:${route.buyExchange}->${route.sellExchange}${refreshSuffix}`;
 }
 
 function report(

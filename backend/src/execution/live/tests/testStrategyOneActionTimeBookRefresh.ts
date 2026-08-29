@@ -27,6 +27,7 @@ async function main(): Promise<void> {
   await testBinanceValidatedSnapshotPublication();
   await testBybitValidatedSnapshotPublication();
   await testParallelRefreshAndFreshOpportunityReevaluation();
+  await testOnlyStaleLegIsRefreshed();
   await testReviewAdvancesButSkipRemainsBlocked();
   await testBybitBasketRouteParallelRefresh();
   await testFailedLegBlocksWithoutReevaluation();
@@ -36,7 +37,163 @@ async function main(): Promise<void> {
   await testAuthorizedFinalRefreshFailsClosed();
 
   console.log(
-    "V190 action-time book refresh passed: policy-qualified dynamic-pool venues use parallel public reads only on stale fallback, refreshed EXECUTE/REVIEW candidates advance to explicit preflight, SKIP and refresh failures stay blocked, and no threshold/order/fund authority exists.",
+    "V190 action-time book refresh passed: policy-qualified dynamic-pool venues refresh only stale route legs, preserve validated timestamps for reused legs, keep authorized final reads parallel, and grant no threshold/order/fund authority.",
+  );
+}
+
+async function testOnlyStaleLegIsRefreshed(): Promise<void> {
+  let buyRefreshCalls =
+    0;
+  let sellRefreshCalls =
+    0;
+  const freshBuyTimestamp =
+    NOW -
+    40;
+  const refreshedSellTimestamp =
+    NOW +
+    20;
+  const refreshedOpportunity =
+    opportunity(
+      "fresh-selective-coti",
+      refreshedSellTimestamp,
+    );
+  const service =
+    new StrategyOneActionTimeBookRefreshService({
+      refreshCoinDCX: async () => {
+        buyRefreshCalls +=
+          1;
+        throw new Error(
+          "Already-fresh BUY leg must not be read again.",
+        );
+      },
+      refreshBinance: async (
+        market,
+        timeoutMs,
+      ) => {
+        sellRefreshCalls +=
+          1;
+        assert.equal(
+          market,
+          "COTIUSDT",
+        );
+        assert.equal(
+          timeoutMs,
+          250,
+        );
+        return {
+          exchange:
+            "binance",
+          market,
+          accepted:
+            true,
+          requestedAt:
+            NOW,
+          receivedAt:
+            refreshedSellTimestamp,
+          roundTripMs:
+            20,
+          error:
+            null,
+        };
+      },
+      evaluateExactRoute: (
+        input,
+      ) => {
+        assert.equal(
+          input.minimumBuyTimestamp,
+          freshBuyTimestamp,
+          "The reused leg must keep its existing validated timestamp floor.",
+        );
+        assert.equal(
+          input.minimumSellTimestamp,
+          refreshedSellTimestamp,
+        );
+        return {
+          evaluatedAt:
+            refreshedSellTimestamp,
+          opportunity:
+            refreshedOpportunity,
+          rejection:
+            null,
+          evidence: {
+            buyPrice:
+              refreshedOpportunity.buyPrice,
+            sellPrice:
+              refreshedOpportunity.sellPrice,
+            buyQuantity:
+              refreshedOpportunity.buyAvailableQty,
+            sellQuantity:
+              refreshedOpportunity.sellAvailableQty,
+            buyTimestamp:
+              freshBuyTimestamp,
+            sellTimestamp:
+              refreshedSellTimestamp,
+            rawSpreadPercent:
+              refreshedOpportunity.rawSpreadPercent,
+          },
+          reason:
+            "Exact selective-refresh route accepted.",
+        };
+      },
+      now: () =>
+        refreshedSellTimestamp,
+    });
+
+  const result =
+    await service.refresh({
+      market:
+        "COTIUSDT",
+      buyExchange:
+        "coindcx",
+      sellExchange:
+        "binance",
+      refreshExchanges: [
+        "binance",
+      ],
+      minimumBuyTimestamp:
+        freshBuyTimestamp,
+      minimumSellTimestamp:
+        NOW -
+        500,
+    });
+
+  assert.equal(
+    result.state,
+    "REFRESHED",
+  );
+  assert.equal(
+    buyRefreshCalls,
+    0,
+  );
+  assert.equal(
+    sellRefreshCalls,
+    1,
+  );
+  assert.deepEqual(
+    result.legs.map(
+      (leg) =>
+        leg.exchange,
+    ),
+    [
+      "binance",
+    ],
+  );
+
+  await assert.rejects(
+    () =>
+      new StrategyOneActionTimeBookRefreshService()
+        .refresh({
+          market:
+            "COTIUSDT",
+          buyExchange:
+            "coindcx",
+          sellExchange:
+            "binance",
+          refreshExchanges: [
+            "binance",
+          ],
+        }),
+    /unrefreshed.*validated minimum timestamp/iu,
   );
 }
 

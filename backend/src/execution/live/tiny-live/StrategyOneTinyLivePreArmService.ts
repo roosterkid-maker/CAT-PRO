@@ -10,6 +10,7 @@ import {
   type StrategyOneTimingCalibrationRecord,
 } from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
 import {
+  assessStrategyOnePilotDispatchReservedFreshness,
   isExactStrategyOnePilotRoute,
   type StrategyOnePilotExchange,
 } from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
@@ -32,6 +33,7 @@ import {
 } from "./StrategyOneTinyLiveActionAuthorityService";
 import {
   strategyOneActionTimeBookRefreshService,
+  type StrategyOneActionTimeBookRefreshRoute,
   type StrategyOneActionTimeBookRefreshResult,
   type StrategyOneAuthorizedFinalBookRefreshResult,
 } from "./StrategyOneActionTimeBookRefreshService";
@@ -138,11 +140,9 @@ export interface StrategyOneTinyLivePreArmDependencies {
   ): ReturnType<typeof strategyOneLiveVenueContractRegistry.getOrderTimeSafetyContract>;
   getOpportunity(id: string): ArbitrageOpportunity | null;
   previewAction(opportunityId: string, now: number): StrategyOneTinyLivePreview;
-  refreshActionCandidate(input: {
-    readonly market: string;
-    readonly buyExchange: string;
-    readonly sellExchange: string;
-  }): Promise<StrategyOneActionTimeBookRefreshResult>;
+  refreshActionCandidate(
+    input: StrategyOneActionTimeBookRefreshRoute,
+  ): Promise<StrategyOneActionTimeBookRefreshResult>;
   refreshAuthorizedFinalBooks(input: {
     readonly market: string;
     readonly buyExchange: string;
@@ -870,14 +870,12 @@ export class StrategyOneTinyLivePreArmService {
       try {
         refresh =
           await this.dependencies
-            .refreshActionCandidate({
-              market:
-                normalizeMarket(actionCandidate.pair.market),
-              buyExchange:
-                actionCandidate.pair.buy.exchange,
-              sellExchange:
-                actionCandidate.pair.sell.exchange,
-            });
+            .refreshActionCandidate(
+              actionTimeRefreshRequest(
+                actionCandidate,
+                evaluatedAt,
+              ),
+            );
       } catch (
         error:
           unknown
@@ -1337,6 +1335,140 @@ function shouldRefreshActionBooks(
           ),
       )
   );
+}
+
+/**
+ * Preserve a still-current route leg and refresh only the stale side. The
+ * original timestamps are evidence floors, not replacements: exact-route
+ * reevaluation reads the current validated stores and the next preview still
+ * enforces the unchanged 240 ms dispatch reserve and 250 ms skew ceiling.
+ */
+function actionTimeRefreshRequest(
+  candidate:
+    ArbitrageOpportunity,
+  now:
+    number,
+): StrategyOneActionTimeBookRefreshRoute {
+  const route = {
+    market:
+      normalizeMarket(
+        candidate.pair.market,
+      ),
+    buyExchange:
+      candidate.pair.buy.exchange
+        .trim()
+        .toLowerCase(),
+    sellExchange:
+      candidate.pair.sell.exchange
+        .trim()
+        .toLowerCase(),
+  };
+  const both = [
+    route.buyExchange,
+    route.sellExchange,
+  ];
+  const freshness =
+    assessStrategyOnePilotDispatchReservedFreshness({
+      buyExchange:
+        route.buyExchange,
+      sellExchange:
+        route.sellExchange,
+      buyTimestamp:
+        candidate.pair.buy.timestamp,
+      sellTimestamp:
+        candidate.pair.sell.timestamp,
+      quotesAreFresh:
+        candidate.quotesAreFresh,
+      usedLastPriceFallback:
+        candidate.usedLastPriceFallback,
+      now,
+    });
+  const refreshExchanges =
+    new Set<string>();
+
+  if (
+    candidate.usedLastPriceFallback ||
+    freshness.reasons.includes(
+      "INVALID_QUOTE_TIMESTAMP",
+    )
+  ) {
+    both.forEach(
+      (exchange) =>
+        refreshExchanges.add(
+          exchange,
+        ),
+    );
+  } else {
+    if (
+      freshness.reasons.includes(
+        "BUY_BOOK_STALE",
+      )
+    ) {
+      refreshExchanges.add(
+        route.buyExchange,
+      );
+    }
+    if (
+      freshness.reasons.includes(
+        "SELL_BOOK_STALE",
+      )
+    ) {
+      refreshExchanges.add(
+        route.sellExchange,
+      );
+    }
+    if (
+      freshness.reasons.includes(
+        "BOOK_TIMESTAMP_SKEW",
+      )
+    ) {
+      if (
+        candidate.pair.buy.timestamp <
+        candidate.pair.sell.timestamp
+      ) {
+        refreshExchanges.add(
+          route.buyExchange,
+        );
+      } else if (
+        candidate.pair.sell.timestamp <
+        candidate.pair.buy.timestamp
+      ) {
+        refreshExchanges.add(
+          route.sellExchange,
+        );
+      } else {
+        both.forEach(
+          (exchange) =>
+            refreshExchanges.add(
+              exchange,
+            ),
+        );
+      }
+    }
+  }
+
+  if (
+    refreshExchanges.size ===
+      0
+  ) {
+    both.forEach(
+      (exchange) =>
+        refreshExchanges.add(
+          exchange,
+        ),
+    );
+  }
+
+  return {
+    ...route,
+    refreshExchanges: [
+      ...refreshExchanges,
+    ],
+    minimumBuyTimestamp:
+      candidate.pair.buy.timestamp,
+    minimumSellTimestamp:
+      candidate.pair.sell.timestamp,
+  };
 }
 
 function isHistoricalMismatchOnly(

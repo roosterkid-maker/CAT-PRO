@@ -194,6 +194,7 @@ async function main(): Promise<void> {
     verifyPriorMinimumOrderConsentExpires(filePath, directory);
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
+    await verifyOnlyStaleRouteLegIsRequested(directory);
     await verifyBookDependentBlocksCanRequestFreshBooks(directory);
     await verifyPreflightWorkIsBoundedAndRouteFair(directory);
     await verifyHistoryMismatchesDoNotHideQualifiedRoute(directory);
@@ -479,7 +480,17 @@ async function verifyChangingRoutesCanRequestFreshBooks(
       previewAction: (opportunityId) => freshnessBlockedPreview(opportunityId, route),
       refreshActionCandidate: async (input) => {
         refreshCalls += 1;
-        assert.deepEqual(input, route);
+        assert.deepEqual(input, {
+          ...route,
+          refreshExchanges: [
+            route.buyExchange,
+            route.sellExchange,
+          ],
+          minimumBuyTimestamp:
+            candidate.pair.buy.timestamp,
+          minimumSellTimestamp:
+            candidate.pair.sell.timestamp,
+        });
         return {
           state: "REFRESHED",
           opportunity: refreshed,
@@ -518,6 +529,142 @@ async function verifyChangingRoutesCanRequestFreshBooks(
       coordinatorStarts: 0,
     });
   }
+}
+
+async function verifyOnlyStaleRouteLegIsRequested(
+  directory: string,
+): Promise<void> {
+  const route: StrategyOneTinyLiveBasketRoute = {
+    market:
+      "SANDUSDT",
+    buyExchange:
+      "bybit",
+    sellExchange:
+      "coindcx",
+  };
+  let clock =
+    NOW +
+    50_000;
+  const candidateFixture =
+    opportunity(
+      "selective-stale-sell",
+      route,
+      clock,
+    );
+  const candidate: ArbitrageOpportunity = {
+    ...candidateFixture,
+    pair: {
+      ...candidateFixture.pair,
+      buy: {
+        ...candidateFixture.pair.buy,
+        timestamp:
+          clock -
+          20,
+      },
+      sell: {
+        ...candidateFixture.pair.sell,
+        timestamp:
+          clock -
+          500,
+      },
+    },
+    quotesAreFresh:
+      false,
+  };
+  const refreshed =
+    opportunity(
+      "selective-refreshed-sell",
+      route,
+      clock +
+      20,
+    );
+  let refreshCalls =
+    0;
+  const service =
+    new StrategyOneTinyLivePreArmService({
+      runtimeGateEnabled: () =>
+        true,
+      getCapitalPerLegInr: () =>
+        500,
+      getActionDiagnostics: () => ({
+        maximumDailyAttempts:
+          10,
+        attemptsToday:
+          0,
+        blockingAuthorityPresent:
+          false,
+      }),
+      previewAction: (
+        opportunityId,
+      ) =>
+        freshnessBlockedPreview(
+          opportunityId,
+          route,
+        ),
+      refreshActionCandidate: async (
+        input,
+      ) => {
+        refreshCalls +=
+          1;
+        assert.deepEqual(input, {
+          ...route,
+          refreshExchanges: [
+            "coindcx",
+          ],
+          minimumBuyTimestamp:
+            candidate.pair.buy.timestamp,
+          minimumSellTimestamp:
+            candidate.pair.sell.timestamp,
+        });
+        return {
+          state:
+            "REFRESHED",
+          opportunity:
+            refreshed,
+          blocker:
+            null,
+        } as never;
+      },
+      now: () =>
+        ++clock,
+    }, join(
+      directory,
+      "selective-stale-leg.jsonl",
+    ));
+
+  service.arm({
+    market:
+      "DYNAMIC_POOL",
+    buyExchange:
+      "coindcx",
+    sellExchange:
+      "binance",
+    confirmation:
+      StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes:
+      180,
+    maximumAttempts:
+      10,
+    routePoolId:
+      STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now:
+      ++clock,
+  });
+
+  assert.equal(
+    await service.observeSnapshot({
+      generatedAt:
+        clock,
+      opportunities: [
+        candidate,
+      ],
+    }),
+    null,
+  );
+  assert.equal(
+    refreshCalls,
+    1,
+  );
 }
 
 async function verifyCompleteCoordinatorReasonsRemainDurable(
