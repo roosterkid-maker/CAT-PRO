@@ -81,7 +81,7 @@ export interface StrategyOneFundedRouteRequest {
   readonly requestedQuoteCapital?: number;
   readonly requestedQuantity?: number;
   readonly fundingBoundary?: StrategyOneFundingBoundary;
-  readonly allowSingleIncrementMinimumOrderRoundUp?: boolean;
+  readonly allowMinimumOrderRoundUpWithinHardCap?: boolean;
   readonly now?: number;
 }
 
@@ -100,7 +100,7 @@ export interface StrategyOneFundedRouteDependencies {
     sellCapability: ExchangeMarketCapability | null;
     allowIncompleteIncrementEvidenceForPaper?: boolean;
     maximumQuantity?: number;
-    allowSingleIncrementMinimumOrderRoundUp?: boolean;
+    allowMinimumOrderRoundUpWithinHardCap?: boolean;
   }): CrossExchangeQuantityNormalizationReport;
 }
 
@@ -159,7 +159,7 @@ export class StrategyOneFundedRouteService {
     const maximumCapitalPerLegInr =
       request.maximumCapitalPerLegInr ?? request.requestedCapitalInr;
     const minimumOrderCushionPolicyEnabled =
-      request.allowSingleIncrementMinimumOrderRoundUp === true &&
+      request.allowMinimumOrderRoundUpWithinHardCap === true &&
       request.maximumCapitalPerLegInr !== undefined &&
       maximumCapitalPerLegInr > request.requestedCapitalInr;
     if (
@@ -226,9 +226,10 @@ export class StrategyOneFundedRouteService {
     /*
      * executableQty is already capped to the scanner's target capital. Keep it
      * in depthQuantity so ordinary sizing never grows beyond the candidate.
-     * The separately consented one-step minimum-order cushion may use the
-     * genuinely available top-of-book depth, but remains bounded below by the
-     * hard capital cap, authenticated balances and any explicit quantity cap.
+     * The separately consented minimum-order cushion may use the smallest
+     * number of shared quantity steps required by both venues. It remains
+     * bounded by the hard capital cap, genuinely available top-of-book depth,
+     * authenticated balances and any explicit quantity cap.
      */
     const availableDepthInputs = [
       opportunity.availableExecutableQty,
@@ -340,7 +341,7 @@ export class StrategyOneFundedRouteService {
         allowIncompleteIncrementEvidenceForPaper:
           fundingBoundary === "ISOLATED_PAPER",
         maximumQuantity: maximumNormalizationQuantity ?? undefined,
-        allowSingleIncrementMinimumOrderRoundUp:
+        allowMinimumOrderRoundUpWithinHardCap:
           fundingBoundary === "AUTHENTICATED_LIVE_READINESS" &&
           minimumOrderCushionPolicyEnabled,
       });

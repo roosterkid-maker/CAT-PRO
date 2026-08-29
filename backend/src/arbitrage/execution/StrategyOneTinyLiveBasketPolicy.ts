@@ -49,7 +49,7 @@ export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY = deepFreeze({
   routeSelection: "HIGHEST_CURRENT_NET_THAT_PASSES_FRESH_EXACT_PREFLIGHT" as const,
   timingQualification: "AUTOMATIC_VENUE_DIRECTION_POOL_EVIDENCE" as const,
   minimumOrderNormalization:
-    "ROUND_DOWN_OR_ONE_SHARED_STEP_UP_WITHIN_HARD_CAP" as const,
+    "ROUND_DOWN_OR_MINIMUM_SHARED_STEPS_UP_WITHIN_HARD_CAP" as const,
   perRouteOperatorApprovalRequired: false,
   eligibility: [
     "CURRENT_EXECUTE",

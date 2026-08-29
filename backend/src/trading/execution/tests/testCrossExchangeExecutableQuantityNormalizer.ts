@@ -319,16 +319,99 @@ function main(): void {
         minimumNotional: 5,
       }),
       maximumQuantity: 119.3,
-      allowSingleIncrementMinimumOrderRoundUp: true,
+      allowMinimumOrderRoundUpWithinHardCap: true,
     });
 
   assert.equal(sandMinimumOrderCushion.state, "NORMALIZED");
   assert.equal(sandMinimumOrderCushion.normalizedQuantity, 119);
   assert.equal(sandMinimumOrderCushion.commonQuantityIncrement, 1);
   assert.equal(sandMinimumOrderCushion.minimumOrderCushionUsed, true);
+  assert.equal(sandMinimumOrderCushion.minimumOrderCushionSteps, 1);
   assert.equal(sandMinimumOrderCushion.roundDownOnly, false);
   assert.equal(sandMinimumOrderCushion.quantityNeverIncreased, false);
   assert.ok((sandMinimumOrderCushion.increaseQuantity ?? 0) < 1);
+
+  const mantraBybitCoinDcxCushion =
+    crossExchangeExecutableQuantityNormalizer.normalize({
+      rawQuantity: 1183.069751308,
+      buyPrice: 0.004199,
+      sellPrice: 0.00423,
+      buyCapability: capability({
+        exchange: "bybit",
+        quantityStep: 0.1,
+        quantityPrecision: 1,
+        maximumQuantity: 10_000,
+        minimumNotional: 5,
+      }),
+      sellCapability: capability({
+        exchange: "coindcx",
+        quantityStep: 1,
+        quantityPrecision: 0,
+        maximumQuantity: 10_000,
+        minimumNotional: 5,
+      }),
+      maximumQuantity: 2_300,
+      allowMinimumOrderRoundUpWithinHardCap: true,
+    });
+
+  assert.equal(mantraBybitCoinDcxCushion.state, "NORMALIZED");
+  assert.equal(mantraBybitCoinDcxCushion.normalizedQuantity, 1191);
+  assert.equal(mantraBybitCoinDcxCushion.commonQuantityIncrement, 1);
+  assert.equal(mantraBybitCoinDcxCushion.minimumOrderCushionUsed, true);
+  assert.equal(mantraBybitCoinDcxCushion.minimumOrderCushionSteps, 8);
+  assert.ok(
+    (mantraBybitCoinDcxCushion.legs[0]?.normalizedNotional ?? 0) >= 5,
+  );
+
+  const binanceCoinDcxCushion =
+    crossExchangeExecutableQuantityNormalizer.normalize({
+      rawQuantity: 771,
+      buyPrice: 0.00647,
+      sellPrice: 0.00655,
+      buyCapability: capability({
+        exchange: "coindcx",
+        quantityStep: 1,
+        quantityPrecision: 0,
+        minimumNotional: 5,
+      }),
+      sellCapability: capability({
+        exchange: "binance",
+        quantityStep: 0.1,
+        quantityPrecision: 1,
+        minimumNotional: 5,
+      }),
+      maximumQuantity: 900,
+      allowMinimumOrderRoundUpWithinHardCap: true,
+    });
+
+  assert.equal(binanceCoinDcxCushion.state, "NORMALIZED");
+  assert.equal(binanceCoinDcxCushion.normalizedQuantity, 773);
+  assert.equal(binanceCoinDcxCushion.minimumOrderCushionSteps, 2);
+
+  const binanceBybitCushion =
+    crossExchangeExecutableQuantityNormalizer.normalize({
+      rawQuantity: 49.2,
+      buyPrice: 0.1,
+      sellPrice: 0.102,
+      buyCapability: capability({
+        exchange: "binance",
+        quantityStep: 0.1,
+        quantityPrecision: 1,
+        minimumNotional: 5,
+      }),
+      sellCapability: capability({
+        exchange: "bybit",
+        quantityStep: 0.01,
+        quantityPrecision: 2,
+        minimumNotional: 5,
+      }),
+      maximumQuantity: 55,
+      allowMinimumOrderRoundUpWithinHardCap: true,
+    });
+
+  assert.equal(binanceBybitCushion.state, "NORMALIZED");
+  assert.equal(binanceBybitCushion.normalizedQuantity, 50);
+  assert.equal(binanceBybitCushion.minimumOrderCushionSteps, 8);
 
   const sandCushionAboveHardCap =
     crossExchangeExecutableQuantityNormalizer.normalize({
@@ -348,11 +431,15 @@ function main(): void {
         minimumNotional: 5,
       }),
       maximumQuantity: 118.9,
-      allowSingleIncrementMinimumOrderRoundUp: true,
+      allowMinimumOrderRoundUpWithinHardCap: true,
     });
 
   assert.equal(sandCushionAboveHardCap.state, "BLOCKED");
   assert.equal(sandCushionAboveHardCap.minimumOrderCushionUsed, false);
+  assert.match(
+    sandCushionAboveHardCap.blockers.join(" "),
+    /above the safe quantity ceiling/iu,
+  );
 
   const minimumNotionalFloatingBoundary =
     crossExchangeExecutableQuantityNormalizer

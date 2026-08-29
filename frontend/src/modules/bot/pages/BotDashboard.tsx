@@ -2093,7 +2093,7 @@ function StrategyOnePreArmedOneShotPanel({
         <ActivityMetric
           label="Hard capital cap"
           value={`₹${formatInteger(active?.maximumCapitalPerLegInr ?? diagnostics?.routePool.maximumCapitalPerLegInr ?? 1000)} / leg`}
-          detail={`₹${formatInteger(active?.capitalPerLegInr ?? capitalPerLegInr)} target · one-step minimum cushion only`}
+          detail={`₹${formatInteger(active?.capitalPerLegInr ?? capitalPerLegInr)} target · minimum exchange steps within cap`}
         />
         <ActivityMetric
           label="Authority lifetime"
@@ -3495,7 +3495,7 @@ function routePoolArmPhrase(
   maximumCapitalPerLegInr: number,
   maximumAttempts: StrategyOneTinyLiveAttemptCount,
 ): string {
-  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} MAXINR${maximumCapitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES180`;
+  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} MAXINR${maximumCapitalPerLegInr} MINORDER-STEPS ATTEMPTS${maximumAttempts} MINUTES180`;
 }
 
 function formatIstTime(timestamp: number): string {

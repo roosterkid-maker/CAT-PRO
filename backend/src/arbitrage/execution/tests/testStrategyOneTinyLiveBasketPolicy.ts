@@ -19,6 +19,10 @@ function main(): void {
   assert.equal(policy.maximumCapitalPerLegInr, 1_000);
   assert.equal(policy.minimumOrderCushionInr, 500);
   assert.equal(
+    policy.minimumOrderNormalization,
+    "ROUND_DOWN_OR_MINIMUM_SHARED_STEPS_UP_WITHIN_HARD_CAP",
+  );
+  assert.equal(
     policy.timingQualification,
     "AUTOMATIC_VENUE_DIRECTION_POOL_EVIDENCE",
   );

@@ -229,7 +229,7 @@ function main(): void {
     },
     requestedCapitalInr: 500,
     maximumCapitalPerLegInr: 505,
-    allowSingleIncrementMinimumOrderRoundUp: true,
+    allowMinimumOrderRoundUpWithinHardCap: true,
     now: NOW,
   });
   assert.equal(
@@ -271,7 +271,7 @@ function main(): void {
     },
     requestedCapitalInr: 500,
     maximumCapitalPerLegInr: 1_000,
-    allowSingleIncrementMinimumOrderRoundUp: true,
+    allowMinimumOrderRoundUpWithinHardCap: true,
     now: NOW,
   });
   assert.equal(
@@ -301,7 +301,7 @@ function main(): void {
     },
     requestedCapitalInr: 500,
     maximumCapitalPerLegInr: 505,
-    allowSingleIncrementMinimumOrderRoundUp: true,
+    allowMinimumOrderRoundUpWithinHardCap: true,
     now: NOW,
   });
   assert.equal(insufficientActualDepth.state, "BLOCKED");
@@ -311,7 +311,7 @@ function main(): void {
     opportunity: liveSandCushionOpportunity(sandLike),
     requestedCapitalInr: 500,
     maximumCapitalPerLegInr: 500.5,
-    allowSingleIncrementMinimumOrderRoundUp: true,
+    allowMinimumOrderRoundUpWithinHardCap: true,
     now: NOW,
   });
   assert.equal(insufficientHardCap.state, "BLOCKED");

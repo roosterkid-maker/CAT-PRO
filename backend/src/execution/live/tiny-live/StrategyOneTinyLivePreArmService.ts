@@ -1157,7 +1157,7 @@ export class StrategyOneTinyLivePreArmService {
       state: "EXPIRED" as const,
       completedAt: now,
       failureReason: supersededDynamicPoolPolicy
-        ? `Dynamic route-pool arm expired because its capital consent predates the ₹${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr} hard-cap policy.`
+        ? `Dynamic route-pool arm expired because its consent predates the current minimum-order normalization and ₹${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr} hard-cap policy.`
         : "Unused one-shot pre-arm expired.",
     }));
   }
@@ -1333,7 +1333,7 @@ function dynamicPoolArmPhrase(
     STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
 ): string {
   const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
-  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} MAXINR${policy.maximumCapitalPerLegInr} ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
+  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} MAXINR${policy.maximumCapitalPerLegInr} MINORDER-STEPS ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
 }
 
 function getAttemptsUsed(record: StrategyOneTinyLivePreArmRecord): number {

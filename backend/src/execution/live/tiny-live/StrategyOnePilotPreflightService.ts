@@ -274,7 +274,7 @@ const DEFAULT_DEPENDENCIES:
           requestedQuoteCapital,
           maximumCapitalPerLegInr:
             STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
-          allowSingleIncrementMinimumOrderRoundUp:
+          allowMinimumOrderRoundUpWithinHardCap:
             true,
           fundingBoundary:
             "AUTHENTICATED_LIVE_READINESS",
@@ -906,7 +906,7 @@ export class StrategyOnePilotPreflightService {
       check(
         "FRESH_TWO_LEG_FUNDING_AND_RULES",
         exactPilotFunded,
-        `Fresh authenticated balances, exchange rules and depth pass at the ₹${tinyLivePolicy.capitalPerLegInr} target; one shared-step minimum-order cushion is bounded by the ₹${tinyLivePolicy.maximumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr} hard cap.`,
+        `Fresh authenticated balances, exchange rules and depth pass at the ₹${tinyLivePolicy.capitalPerLegInr} target; the smallest exchange-required shared-step quantity is bounded by the ₹${tinyLivePolicy.maximumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr} hard cap.`,
         exactPilotFunded
           ? []
           : funding.blockers.length >

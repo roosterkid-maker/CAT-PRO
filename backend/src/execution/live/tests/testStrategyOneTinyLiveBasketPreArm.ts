@@ -39,19 +39,19 @@ async function main(): Promise<void> {
 
     assert.equal(
       phrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 ATTEMPTS10 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 MINORDER-STEPS ATTEMPTS10 MINUTES180",
     );
     const reducedPhrase =
       StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(9);
     assert.equal(
       reducedPhrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 ATTEMPTS9 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 MINORDER-STEPS ATTEMPTS9 MINUTES180",
     );
     const continuationPhrase =
       StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(8);
     assert.equal(
       continuationPhrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 ATTEMPTS8 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 MINORDER-STEPS ATTEMPTS8 MINUTES180",
     );
     const reducedFilePath = join(directory, "reduced-route-pool.jsonl");
     const reducedService = new StrategyOneTinyLivePreArmService({
@@ -191,6 +191,7 @@ async function main(): Promise<void> {
 
     verifyRetiredFixedBasketArmIsNotRestored(filePath, directory);
     verifySupersededDynamicPoolArmExpires(filePath, directory);
+    verifyPriorMinimumOrderConsentExpires(filePath, directory);
 
     await verifyChangingRoutesCanRequestFreshBooks(directory);
     await verifyBookDependentBlocksCanRequestFreshBooks(directory);
@@ -306,7 +307,40 @@ function verifySupersededDynamicPoolArmExpires(
   const [expired] = restarted.getDiagnostics(NOW).records;
   assert.equal(expired?.schemaVersion, "188.0");
   assert.equal(expired?.state, "EXPIRED");
-  assert.match(expired?.failureReason ?? "", /predates the ₹1000 hard-cap policy/iu);
+  assert.match(
+    expired?.failureReason ?? "",
+    /predates the current minimum-order normalization and ₹1000 hard-cap policy/iu,
+  );
+}
+
+function verifyPriorMinimumOrderConsentExpires(
+  currentFilePath: string,
+  directory: string,
+): void {
+  const priorConsentFilePath = join(directory, "prior-minimum-order-consent.jsonl");
+  const envelope = JSON.parse(
+    readFileSync(currentFilePath, "utf8").trim().split(/\r?\n/u)[0],
+  ) as {payload: Record<string, unknown>};
+
+  envelope.payload.requiredArmPhrase =
+    "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 ATTEMPTS10 MINUTES180";
+  writeFileSync(priorConsentFilePath, `${JSON.stringify(envelope)}\n`, "utf8");
+
+  const restarted = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    now: () => NOW,
+  }, priorConsentFilePath);
+
+  assert.equal(
+    restarted.getActiveArm(NOW),
+    null,
+    "A one-step-only arm must expire instead of inheriting multi-step minimum-order consent.",
+  );
+  const [expired] = restarted.getDiagnostics(NOW).records;
+  assert.equal(expired?.schemaVersion, "190.0");
+  assert.equal(expired?.state, "EXPIRED");
+  assert.match(expired?.failureReason ?? "", /minimum-order normalization/iu);
 }
 
 function verifyRetiredFixedBasketArmIsNotRestored(

@@ -49,6 +49,8 @@ export interface CrossExchangeQuantityNormalizationReport {
 
   minimumOrderCushionUsed?: boolean;
 
+  minimumOrderCushionSteps?: number;
+
   increaseQuantity?: number | null;
 
   increasePercent?: number | null;
@@ -87,12 +89,13 @@ export interface CrossExchangeQuantityNormalizationRequest {
   allowIncompleteIncrementEvidenceForPaper?: boolean;
 
   /**
-   * Optional LIVE-only ceiling for a single shared-increment round-up when
-   * round-down fails solely because of an exchange minimum order rule.
+   * Optional LIVE-only ceiling for the smallest shared-increment round-up
+   * that satisfies both venues when round-down fails solely because of an
+   * exchange minimum order rule.
    */
   maximumQuantity?: number;
 
-  allowSingleIncrementMinimumOrderRoundUp?: boolean;
+  allowMinimumOrderRoundUpWithinHardCap?: boolean;
 }
 
 export class CrossExchangeExecutableQuantityNormalizer {
@@ -363,6 +366,7 @@ export class CrossExchangeExecutableQuantityNormalizer {
     }
 
     let minimumOrderCushionUsed = false;
+    let minimumOrderCushionSteps = 0;
     const maximumCushionQuantity =
       request.maximumQuantity !== undefined &&
       Number.isFinite(request.maximumQuantity) &&
@@ -378,14 +382,23 @@ export class CrossExchangeExecutableQuantityNormalizer {
 
     if (
       roundDownBlockers.length > 0 &&
-      request.allowSingleIncrementMinimumOrderRoundUp === true &&
+      request.allowMinimumOrderRoundUpWithinHardCap === true &&
       maximumCushionQuantity !== null &&
       roundDownBlockers.every(isMinimumOrderRoundUpBlocker)
     ) {
-      const singleStepUpQuantity = Number(
-        (roundDownQuantity + commonIncrement).toFixed(
-          Math.min(12, this.decimalPlaces(commonIncrement)),
+      const minimumRequiredQuantity = Math.max(
+        commonIncrement,
+        roundDownQuantity,
+        ...evaluatedLegs.map((leg) => leg.minimumQuantity ?? 0),
+        ...evaluatedLegs.map((leg) =>
+          leg.minimumNotional !== null && leg.price > 0
+            ? leg.minimumNotional / leg.price
+            : 0,
         ),
+      );
+      const minimumPassingQuantity = this.roundUpToIncrement(
+        minimumRequiredQuantity,
+        commonIncrement,
       );
       const ceilingTolerance = Math.max(
         1e-12,
@@ -393,32 +406,47 @@ export class CrossExchangeExecutableQuantityNormalizer {
       );
 
       if (
-        Number.isFinite(singleStepUpQuantity) &&
-        singleStepUpQuantity > 0 &&
-        singleStepUpQuantity <= maximumCushionQuantity + ceilingTolerance
+        Number.isFinite(minimumPassingQuantity) &&
+        minimumPassingQuantity > roundDownQuantity &&
+        minimumPassingQuantity <= maximumCushionQuantity + ceilingTolerance
       ) {
         const roundUpLegs = completeCapabilityLegs.map((leg) =>
           this.createLegEvidence(
             leg.capability,
             leg.price,
-            singleStepUpQuantity,
+            minimumPassingQuantity,
           ));
         const roundUpBlockers: string[] = [];
 
         for (const leg of roundUpLegs) {
           this.validateNormalizedLeg(
-            singleStepUpQuantity,
+            minimumPassingQuantity,
             leg,
             roundUpBlockers,
           );
         }
 
         if (roundUpBlockers.length === 0) {
-          normalizedQuantity = singleStepUpQuantity;
+          normalizedQuantity = minimumPassingQuantity;
           evaluatedLegs = roundUpLegs;
           roundDownBlockers.length = 0;
           minimumOrderCushionUsed = true;
+          minimumOrderCushionSteps = Math.max(
+            1,
+            Math.round(
+              (minimumPassingQuantity - roundDownQuantity) / commonIncrement,
+            ),
+          );
+        } else {
+          roundDownBlockers.push(...roundUpBlockers);
         }
+      } else if (
+        Number.isFinite(minimumPassingQuantity) &&
+        minimumPassingQuantity > maximumCushionQuantity + ceilingTolerance
+      ) {
+        roundDownBlockers.push(
+          `Minimum-order normalization requires shared quantity ${minimumPassingQuantity}, above the safe quantity ceiling ${maximumCushionQuantity}.`,
+        );
       }
     }
 
@@ -515,6 +543,8 @@ export class CrossExchangeExecutableQuantityNormalizer {
 
       minimumOrderCushionUsed,
 
+      minimumOrderCushionSteps,
+
       increaseQuantity,
 
       increasePercent,
@@ -581,6 +611,9 @@ export class CrossExchangeExecutableQuantityNormalizer {
 
       minimumOrderCushionUsed:
         false,
+
+      minimumOrderCushionSteps:
+        0,
 
       increaseQuantity:
         null,
@@ -954,6 +987,51 @@ export class CrossExchangeExecutableQuantityNormalizer {
         1e-10
         ? nearestInteger
         : Math.floor(
+            ratio,
+          );
+
+    return Number(
+      (
+        units *
+        increment
+      ).toFixed(
+        decimalPlaces,
+      ),
+    );
+  }
+
+  private roundUpToIncrement(
+    quantity:
+      number,
+
+    increment:
+      number,
+  ): number {
+    const decimalPlaces =
+      Math.min(
+        12,
+        this.decimalPlaces(
+          increment,
+        ),
+      );
+
+    const ratio =
+      quantity /
+      increment;
+
+    const nearestInteger =
+      Math.round(
+        ratio,
+      );
+
+    const units =
+      Math.abs(
+        ratio -
+          nearestInteger,
+      ) <=
+        1e-10
+        ? nearestInteger
+        : Math.ceil(
             ratio,
           );
 
