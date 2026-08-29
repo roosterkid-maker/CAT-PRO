@@ -151,6 +151,7 @@ async function main(): Promise<void> {
     assert.equal(restored.getActiveArm(NOW)?.id, arm.id);
     assert.equal(restored.getDiagnostics(NOW).routePool.id, STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID);
     assert.equal(restored.getDiagnostics(NOW).pilotBasket, null);
+    assert.equal(restored.getDiagnostics(NOW).limits.maximumCapitalPerLegInr, 1_000);
     assert.equal(service.getDiagnostics(NOW).dailyAttemptBudget.routePoolArmAttempts, 10);
 
     const belowRoutePoolMinimum = new StrategyOneTinyLivePreArmService({

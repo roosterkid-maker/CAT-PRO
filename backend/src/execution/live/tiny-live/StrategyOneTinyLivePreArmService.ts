@@ -647,7 +647,8 @@ export class StrategyOneTinyLivePreArmService {
         defaultDurationMinutes: DEFAULT_DURATION_MINUTES,
         maximumDurationMinutes: MAXIMUM_DURATION_MINUTES,
         maximumBatchDurationMinutes: MAXIMUM_BATCH_DURATION_MINUTES,
-        maximumCapitalPerLegInr: 500,
+        maximumCapitalPerLegInr:
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
         maximumAttemptsPerArm: MAXIMUM_BATCH_ATTEMPTS,
       },
       routePool: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,

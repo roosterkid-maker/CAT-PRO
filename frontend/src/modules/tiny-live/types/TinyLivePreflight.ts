@@ -813,7 +813,7 @@ export interface StrategyOneTinyLivePreArmDiagnostics {
     defaultDurationMinutes: number;
     maximumDurationMinutes: number;
     maximumBatchDurationMinutes: number;
-    maximumCapitalPerLegInr: 500;
+    maximumCapitalPerLegInr: 1000;
     maximumAttemptsPerArm: 10;
   };
   safety: {
