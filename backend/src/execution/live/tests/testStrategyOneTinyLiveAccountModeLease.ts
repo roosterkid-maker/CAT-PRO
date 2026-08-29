@@ -104,7 +104,7 @@ function testDynamicRoutePoolLease(filePath: string): void {
     buyExchange: "coindcx",
     sellExchange: "binance",
     requiredArmPhrase:
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 MINORDER-STEPS ATTEMPTS8 MINUTES180",
+      "ARM DYNAMIC-POOL USDT MININR100 TARGETINR500 MAXINR1000 LIQUIDITY-RANGE ATTEMPTS8 MINUTES180",
     maximumCapitalPerLegInr: 1_000,
     expiresAt: NOW + 180 * 60_000,
     maximumAttempts: 8,

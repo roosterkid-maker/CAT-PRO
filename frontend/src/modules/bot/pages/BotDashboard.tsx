@@ -239,6 +239,7 @@ export default function BotDashboard() {
           maximumAttempts: routePoolArmAttempts,
           routePoolId: routePool.id,
           confirmation: routePoolArmPhrase(
+            routePool.minimumCapitalPerLegInr,
             routePool.capitalPerLegInr,
             routePool.maximumCapitalPerLegInr,
             routePoolArmAttempts,
@@ -329,6 +330,7 @@ export default function BotDashboard() {
       maximumAttempts: routePoolArmAttempts,
       routePoolId: routePool.id,
       confirmation: routePoolArmPhrase(
+        routePool.minimumCapitalPerLegInr,
         routePool.capitalPerLegInr,
         routePool.maximumCapitalPerLegInr,
         routePoolArmAttempts,
@@ -2315,7 +2317,7 @@ function StrategyOnePreArmedOneShotPanel({
               />
               <span>
                 I understand that arming submits no order now. {armAttempts !== null ? (
-                  <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)} target attempt, with a hard ₹{formatInteger(diagnostics?.routePool.maximumCapitalPerLegInr ?? 1000)} minimum-order ceiling per leg.</>
+                  <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real exact-sized attempt between ₹{formatInteger(diagnostics?.routePool.minimumCapitalPerLegInr ?? 100)} and ₹{formatInteger(diagnostics?.routePool.maximumCapitalPerLegInr ?? 1000)} per leg (₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)} preferred target).</>
                 ) : (
                   <>The daily Tiny-LIVE cap is exhausted and stays unavailable until {formatIstTime(dailyAttemptBudget?.resetsAt ?? 0)} IST.</>
                 )} Every exact route gets credible-history, inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch. LIVE OFF never resets consumed daily attempts.
@@ -3511,11 +3513,12 @@ function toPreArmRoute(route: {
 }
 
 function routePoolArmPhrase(
+  minimumCapitalPerLegInr: number,
   capitalPerLegInr: number,
   maximumCapitalPerLegInr: number,
   maximumAttempts: StrategyOneTinyLiveAttemptCount,
 ): string {
-  return `ARM DYNAMIC-POOL USDT INR${capitalPerLegInr} MAXINR${maximumCapitalPerLegInr} MINORDER-STEPS ATTEMPTS${maximumAttempts} MINUTES180`;
+  return `ARM DYNAMIC-POOL USDT MININR${minimumCapitalPerLegInr} TARGETINR${capitalPerLegInr} MAXINR${maximumCapitalPerLegInr} LIQUIDITY-RANGE ATTEMPTS${maximumAttempts} MINUTES180`;
 }
 
 function formatIstTime(timestamp: number): string {

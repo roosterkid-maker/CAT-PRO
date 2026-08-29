@@ -694,6 +694,8 @@ export class StrategyOneTinyLivePreArmService {
         defaultDurationMinutes: DEFAULT_DURATION_MINUTES,
         maximumDurationMinutes: MAXIMUM_DURATION_MINUTES,
         maximumBatchDurationMinutes: MAXIMUM_BATCH_DURATION_MINUTES,
+        minimumCapitalPerLegInr:
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.minimumCapitalPerLegInr,
         maximumCapitalPerLegInr:
           STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
         maximumAttemptsPerArm: MAXIMUM_BATCH_ATTEMPTS,
@@ -1511,7 +1513,7 @@ function dynamicPoolArmPhrase(
     STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumAttempts,
 ): string {
   const policy = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY;
-  return `ARM DYNAMIC-POOL USDT INR${policy.capitalPerLegInr} MAXINR${policy.maximumCapitalPerLegInr} MINORDER-STEPS ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
+  return `ARM DYNAMIC-POOL USDT MININR${policy.minimumCapitalPerLegInr} TARGETINR${policy.capitalPerLegInr} MAXINR${policy.maximumCapitalPerLegInr} LIQUIDITY-RANGE ATTEMPTS${maximumAttempts} MINUTES${policy.durationMinutes}`;
 }
 
 function getAttemptsUsed(record: StrategyOneTinyLivePreArmRecord): number {

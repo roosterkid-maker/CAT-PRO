@@ -15,12 +15,13 @@ function main(): void {
   assert.deepEqual(policy.markets, []);
   assert.deepEqual(policy.routes, []);
   assert.deepEqual(policy.inventoryTargets, []);
+  assert.equal(policy.minimumCapitalPerLegInr, 100);
   assert.equal(policy.capitalPerLegInr, 500);
   assert.equal(policy.maximumCapitalPerLegInr, 1_000);
   assert.equal(policy.minimumOrderCushionInr, 500);
   assert.equal(
     policy.minimumOrderNormalization,
-    "ROUND_DOWN_OR_MINIMUM_SHARED_STEPS_UP_WITHIN_HARD_CAP",
+    "SAFE_LIQUIDITY_REDUCTION_TO_FLOOR_OR_MINIMUM_SHARED_STEPS_UP_WITHIN_HARD_CAP",
   );
   assert.equal(
     policy.timingQualification,
@@ -68,7 +69,7 @@ function main(): void {
   assert.equal(Object.isFrozen(policy.inventoryTargets), true);
 
   console.log(
-    "V190 dynamic Tiny-LIVE route-pool policy passed: current USDT routes across three audited venues, ₹500 target/₹1000 hard cap, venue-direction timing, 10 attempts/180 minutes, excluded venues, and no transfer/withdraw/order authority.",
+    "V190 dynamic Tiny-LIVE route-pool policy passed: current USDT routes across three audited venues, ₹100 floor/₹500 target/₹1000 hard cap, venue-direction timing, 10 attempts/180 minutes, excluded venues, and no transfer/withdraw/order authority.",
   );
 }
 

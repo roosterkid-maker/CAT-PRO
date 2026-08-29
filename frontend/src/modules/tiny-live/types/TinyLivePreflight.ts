@@ -581,6 +581,7 @@ export interface StrategyOneTinyLiveRoutePoolPolicy {
     sellExchange: "binance" | "coindcx" | "bybit";
   }>;
   inventoryTargets: [];
+  minimumCapitalPerLegInr: 100;
   capitalPerLegInr: 500;
   maximumCapitalPerLegInr: 1000;
   minimumOrderCushionInr: 500;

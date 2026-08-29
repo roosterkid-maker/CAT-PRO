@@ -89,8 +89,12 @@ function main(): void {
     new StrategyOnePilotPreflightService({
       getTinyLivePolicy:
         () => ({
+          minimumCapitalPerLegInr:
+            100,
           capitalPerLegInr:
             500,
+          maximumCapitalPerLegInr:
+            1_000,
           minimumNetProfitPercent:
             0.3,
           postStressMinimumNetProfitPercent:
@@ -321,13 +325,18 @@ function main(): void {
     );
   assert.equal(
     balanceReduced.state,
-    "BLOCKED_CURRENT_EVIDENCE",
-    "A balance-capped pilot must remain blocked.",
+    "READY_FOR_OPERATOR_PREFLIGHT",
+    "A safely normalized balance/depth-capped pilot above the ₹100 floor must remain eligible.",
+  );
+  assert.ok(
+    (balanceReduced.selected?.funding.estimatedExecutableCapitalInr ?? 0) > 400 &&
+      (balanceReduced.selected?.funding.estimatedExecutableCapitalInr ?? 0) < 420,
+    "The COTI-like ₹410 reduced-depth regression must retain its exact executable capital.",
   );
   assert.equal(
     stressCalls,
-    0,
-    "Stress evaluation must not run for a balance-capped pilot.",
+    1,
+    "Stress evaluation must rerun on the exact reduced quantity.",
   );
 
   funding =
@@ -338,8 +347,27 @@ function main(): void {
     );
   assert.equal(
     excessiveStepReduction.state,
+    "READY_FOR_OPERATOR_PREFLIGHT",
+    "A larger safe round-down must remain eligible when its exact capital stays inside the approved range.",
+  );
+
+  funding =
+    belowFloorReducedFunding();
+  stressCalls =
+    0;
+  const belowFloorReduction =
+    service.getPreview(
+      NOW,
+    );
+  assert.equal(
+    belowFloorReduction.state,
     "BLOCKED_CURRENT_EVIDENCE",
-    "A reduction of one full shared step or more must remain blocked.",
+    "A reduced quantity below ₹100 must remain blocked.",
+  );
+  assert.equal(
+    stressCalls,
+    0,
+    "Post-stress evaluation must not run below the approved capital floor.",
   );
 
   funding =
@@ -1099,8 +1127,12 @@ function fundedRoute(): StrategyOneFundedRouteReport {
       "USDT",
     requestedCapitalInr:
       500,
+    maximumCapitalPerLegInr:
+      1_000,
     convertedQuoteCapital:
       500,
+    maximumConvertedQuoteCapital:
+      1_000,
     capitalQuantity:
       50,
     depthQuantity:
@@ -1112,6 +1144,8 @@ function fundedRoute(): StrategyOneFundedRouteReport {
     executableQuantity:
       50,
     estimatedExecutableCapitalInr:
+      500,
+    estimatedBuyRequirementInr:
       500,
     reductionPercent:
       0,
@@ -1274,7 +1308,7 @@ function balanceReducedFunding(): StrategyOneFundedRouteReport {
   const rounded =
     oneLotRoundedFunding();
   const balanceCappedQuantity =
-    500;
+    425;
 
   return {
     ...rounded,
@@ -1287,6 +1321,15 @@ function balanceReducedFunding(): StrategyOneFundedRouteReport {
           balanceCappedQuantity /
           (rounded.capitalQuantity ?? 1)
         ),
+    sellFunding: {
+      ...rounded.sellFunding,
+      availableBalance:
+        2_170,
+      requiredBalance:
+        balanceCappedQuantity,
+      sufficient:
+        true,
+    },
     quantityNormalization: {
       ...rounded.quantityNormalization!,
       state:
@@ -1341,6 +1384,51 @@ function excessiveStepReductionFunding(): StrategyOneFundedRouteReport {
           capitalQuantity
         ) *
           100,
+    },
+  };
+}
+
+function belowFloorReducedFunding(): StrategyOneFundedRouteReport {
+  const rounded =
+    oneLotRoundedFunding();
+  const executableQuantity =
+    50;
+  const capitalQuantity =
+    rounded.capitalQuantity ??
+      1;
+
+  return {
+    ...rounded,
+    preFundingQuantity:
+      executableQuantity,
+    balanceCappedQuantity:
+      executableQuantity,
+    executableQuantity,
+    estimatedExecutableCapitalInr:
+      500 *
+        (
+          executableQuantity /
+          capitalQuantity
+        ),
+    reductionPercent:
+      (
+        1 -
+        executableQuantity /
+          capitalQuantity
+      ) *
+        100,
+    quantityNormalization: {
+      ...rounded.quantityNormalization!,
+      state:
+        "UNCHANGED",
+      rawQuantity:
+        executableQuantity,
+      normalizedQuantity:
+        executableQuantity,
+      reductionQuantity:
+        0,
+      reductionPercent:
+        0,
     },
   };
 }

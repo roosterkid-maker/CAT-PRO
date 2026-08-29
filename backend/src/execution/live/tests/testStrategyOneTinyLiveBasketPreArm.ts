@@ -39,19 +39,19 @@ async function main(): Promise<void> {
 
     assert.equal(
       phrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 MINORDER-STEPS ATTEMPTS10 MINUTES180",
+      "ARM DYNAMIC-POOL USDT MININR100 TARGETINR500 MAXINR1000 LIQUIDITY-RANGE ATTEMPTS10 MINUTES180",
     );
     const reducedPhrase =
       StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(9);
     assert.equal(
       reducedPhrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 MINORDER-STEPS ATTEMPTS9 MINUTES180",
+      "ARM DYNAMIC-POOL USDT MININR100 TARGETINR500 MAXINR1000 LIQUIDITY-RANGE ATTEMPTS9 MINUTES180",
     );
     const continuationPhrase =
       StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(8);
     assert.equal(
       continuationPhrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 MINORDER-STEPS ATTEMPTS8 MINUTES180",
+      "ARM DYNAMIC-POOL USDT MININR100 TARGETINR500 MAXINR1000 LIQUIDITY-RANGE ATTEMPTS8 MINUTES180",
     );
     const reducedFilePath = join(directory, "reduced-route-pool.jsonl");
     const reducedService = new StrategyOneTinyLivePreArmService({

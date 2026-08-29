@@ -71,6 +71,7 @@ const REQUIRED_CONFIRMATION_TOKEN =
   "RUN_STRATEGY_ONE_PILOT_PREFLIGHT_ONLY";
 
 export interface StrategyOnePilotRuntimePolicy {
+  readonly minimumCapitalPerLegInr?: number;
   readonly capitalPerLegInr: number;
   readonly maximumCapitalPerLegInr?: number;
   readonly minimumNetProfitPercent: number;
@@ -220,6 +221,8 @@ const DEFAULT_DEPENDENCIES:
           .tinyLive;
 
       return {
+        minimumCapitalPerLegInr:
+          STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.minimumCapitalPerLegInr,
         capitalPerLegInr:
           policy.capitalPerLegInr,
         maximumCapitalPerLegInr:
@@ -827,6 +830,10 @@ export class StrategyOnePilotPreflightService {
       isExactPilotFunding(
         funding,
         tinyLivePolicy.capitalPerLegInr,
+        tinyLivePolicy.minimumCapitalPerLegInr ??
+          tinyLivePolicy.capitalPerLegInr,
+        tinyLivePolicy.maximumCapitalPerLegInr ??
+          tinyLivePolicy.capitalPerLegInr,
       );
 
     const stress =
@@ -917,7 +924,7 @@ export class StrategyOnePilotPreflightService {
       check(
         "FRESH_TWO_LEG_FUNDING_AND_RULES",
         exactPilotFunded,
-        `Fresh authenticated balances, exchange rules and depth pass at the ₹${tinyLivePolicy.capitalPerLegInr} target; the smallest exchange-required shared-step quantity is bounded by the ₹${tinyLivePolicy.maximumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr} hard cap.`,
+        `Fresh authenticated balances, exchange rules and depth pass inside the ₹${tinyLivePolicy.minimumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr}–₹${tinyLivePolicy.maximumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr} range (₹${tinyLivePolicy.capitalPerLegInr} preferred target).`,
         exactPilotFunded
           ? []
           : funding.blockers.length >
@@ -926,7 +933,7 @@ export class StrategyOnePilotPreflightService {
                 ...funding.blockers,
               ]
             : [
-                `₹${tinyLivePolicy.capitalPerLegInr} target sizing was ${funding.state}; only exchange-mandated rounding within the hard cap is accepted.`,
+                `₹${tinyLivePolicy.capitalPerLegInr} target sizing was ${funding.state}; the exact safe executable amount must remain inside the approved ₹${tinyLivePolicy.minimumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr}–₹${tinyLivePolicy.maximumCapitalPerLegInr ?? tinyLivePolicy.capitalPerLegInr} range.`,
               ],
       ),
       check(
@@ -998,6 +1005,10 @@ function isExactPilotFunding(
     StrategyOneFundedRouteReport,
   requestedCapitalInr:
     number,
+  minimumCapitalPerLegInr:
+    number,
+  maximumCapitalPerLegInr:
+    number,
 ): boolean {
   const commonSafetyPassed =
     funding.fundingBoundary ===
@@ -1048,10 +1059,95 @@ function isExactPilotFunding(
 
   return funding.state ===
       "REDUCED" &&
-    isMandatorySharedIncrementOnlyReduction(
-      funding,
-      requestedCapitalInr,
+    (
+      isMandatorySharedIncrementOnlyReduction(
+        funding,
+        requestedCapitalInr,
+      ) ||
+      isSafeLiquidityBoundReduction(
+        funding,
+        requestedCapitalInr,
+        minimumCapitalPerLegInr,
+        maximumCapitalPerLegInr,
+      )
     );
+}
+
+/**
+ * Accepts an exact reduced quantity only when fresh depth and/or authenticated
+ * balances safely cap the preferred target without increasing exposure. The
+ * normalized quantity remains exact-route bound and is stress-tested again;
+ * this is not permission to round through an exchange minimum or exceed the
+ * configured hard cap.
+ */
+function isSafeLiquidityBoundReduction(
+  funding: StrategyOneFundedRouteReport,
+  requestedCapitalInr: number,
+  minimumCapitalPerLegInr: number,
+  maximumCapitalPerLegInr: number,
+): boolean {
+  const normalization = funding.quantityNormalization;
+  const capitalQuantity = funding.capitalQuantity;
+  const preFundingQuantity = funding.preFundingQuantity;
+  const balanceCappedQuantity = funding.balanceCappedQuantity;
+  const executableQuantity = funding.executableQuantity;
+  const estimatedCapitalInr = funding.estimatedExecutableCapitalInr;
+  const estimatedBuyRequirementInr = funding.estimatedBuyRequirementInr;
+  const maximumConvertedQuoteCapital = funding.maximumConvertedQuoteCapital;
+
+  if (
+    !Number.isFinite(minimumCapitalPerLegInr) ||
+    !Number.isFinite(maximumCapitalPerLegInr) ||
+    minimumCapitalPerLegInr < 100 ||
+    maximumCapitalPerLegInr > 1_000 ||
+    minimumCapitalPerLegInr > requestedCapitalInr ||
+    requestedCapitalInr > maximumCapitalPerLegInr ||
+    funding.maximumCapitalPerLegInr !== maximumCapitalPerLegInr ||
+    estimatedBuyRequirementInr === undefined ||
+    estimatedBuyRequirementInr === null ||
+    !Number.isFinite(estimatedBuyRequirementInr) ||
+    maximumConvertedQuoteCapital === undefined ||
+    maximumConvertedQuoteCapital === null ||
+    !Number.isFinite(maximumConvertedQuoteCapital) ||
+    maximumConvertedQuoteCapital <= 0 ||
+    normalization === null ||
+    normalization.state === "BLOCKED" ||
+    !normalization.liveOrderSafe ||
+    !normalization.incrementEvidenceComplete ||
+    normalization.paperOnlyFallbackUsed ||
+    !normalization.roundDownOnly ||
+    !normalization.quantityNeverIncreased ||
+    normalization.blockers.length > 0 ||
+    funding.minimumOrderCushionUsed === true ||
+    !funding.quantityNeverIncreased ||
+    capitalQuantity === null ||
+    preFundingQuantity === null ||
+    balanceCappedQuantity === null ||
+    executableQuantity === null ||
+    estimatedCapitalInr === null ||
+    !Number.isFinite(capitalQuantity) ||
+    !Number.isFinite(preFundingQuantity) ||
+    !Number.isFinite(balanceCappedQuantity) ||
+    !Number.isFinite(executableQuantity) ||
+    !Number.isFinite(estimatedCapitalInr)
+  ) {
+    return false;
+  }
+
+  const quantityTolerance = Math.max(1e-12, capitalQuantity * 1e-12);
+  const capitalToleranceInr = 0.01;
+
+  return capitalQuantity > 0 &&
+    executableQuantity > 0 &&
+    preFundingQuantity <= capitalQuantity + quantityTolerance &&
+    balanceCappedQuantity <= preFundingQuantity + quantityTolerance &&
+    executableQuantity <= balanceCappedQuantity + quantityTolerance &&
+    normalization.normalizedQuantity !== null &&
+    Math.abs(normalization.normalizedQuantity - executableQuantity) <= quantityTolerance &&
+    estimatedCapitalInr < requestedCapitalInr - capitalToleranceInr &&
+    estimatedCapitalInr >= minimumCapitalPerLegInr - capitalToleranceInr &&
+    estimatedCapitalInr <= maximumCapitalPerLegInr + capitalToleranceInr &&
+    estimatedBuyRequirementInr <= maximumCapitalPerLegInr + capitalToleranceInr;
 }
 
 function isBoundedMinimumOrderCushion(
