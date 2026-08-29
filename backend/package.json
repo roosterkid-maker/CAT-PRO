@@ -11,7 +11,8 @@
     "test": "npm run build && npm run test:deterministic",
     "test:deterministic": "node dist/scripts/runDeterministicTests.js",
     "benchmark:vwap": "tsx tests/runners/VWAPBenchmarkRunner.ts",
-    "benchmark:all": "npm run benchmark:vwap"
+    "benchmark:opportunity": "node -r ts-node/register tests/runners/OpportunityPipelineBenchmarkRunner.ts",
+    "benchmark:all": "npm run benchmark:vwap && npm run benchmark:opportunity"
   },
   "keywords": [
     "crypto",

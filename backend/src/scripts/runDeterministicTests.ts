@@ -31,6 +31,7 @@ const DETERMINISTIC_TESTS = [
   "arbitrage/tests/testArbitragePnLPersistence.js",
   "arbitrage/tests/testArbitragePnLService.js",
   "arbitrage/tests/testOpportunityEventAdmission.js",
+  "arbitrage/tests/testOpportunityIncrementalRefresh.js",
   "arbitrage/tests/testOpportunityRejectionLogVolume.js",
   "analytics/tests/testStrategyOneForensicsBaseline.js",
   "arbitrage/tests/testUnoCoinFeeEvidenceService.js",

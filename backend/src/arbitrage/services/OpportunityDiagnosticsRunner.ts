@@ -161,6 +161,9 @@ export class OpportunityDiagnosticsRunner {
   private pendingEventEvaluation =
     false;
 
+  private readonly pendingEventMarkets =
+    new Set<string>();
+
   private executableUpdatesReceived =
     0;
 
@@ -323,6 +326,9 @@ export class OpportunityDiagnosticsRunner {
     this.pendingEventEvaluation =
       false;
 
+    this.pendingEventMarkets
+      .clear();
+
     if (
       this.timer !==
       null
@@ -481,6 +487,18 @@ export class OpportunityDiagnosticsRunner {
 
     const receivedAt =
       Date.now();
+
+    const normalizedMarket =
+      update.market
+        .trim()
+        .toUpperCase();
+
+    if (normalizedMarket) {
+      this.pendingEventMarkets
+        .add(
+          normalizedMarket,
+        );
+    }
 
     this.lastExecutableUpdateAt =
       receivedAt;
@@ -655,6 +673,22 @@ export class OpportunityDiagnosticsRunner {
         ? this.lastExecutableUpdateAt
         : null;
 
+    const eventMarkets =
+      trigger ===
+        "MARKET_DATA"
+        ? Array.from(
+            this.pendingEventMarkets,
+          )
+        : [];
+
+    if (
+      trigger ===
+      "MARKET_DATA"
+    ) {
+      this.pendingEventMarkets
+        .clear();
+    }
+
     this.lastStartedAt =
       startedAt;
 
@@ -717,8 +751,14 @@ export class OpportunityDiagnosticsRunner {
         performance.now();
 
       const opportunityCount =
-        opportunityService
-          .refreshOpportunities();
+        trigger ===
+          "MARKET_DATA"
+          ? opportunityService
+              .refreshMarkets(
+                eventMarkets,
+              )
+          : opportunityService
+              .refreshOpportunities();
 
       this.recordLatencySample(
         this.evaluationDurationSamples,
@@ -757,6 +797,26 @@ export class OpportunityDiagnosticsRunner {
     } catch (
       error: unknown
     ) {
+      if (
+        trigger ===
+        "MARKET_DATA"
+      ) {
+        for (
+          const market
+          of eventMarkets
+        ) {
+          this.pendingEventMarkets
+            .add(
+              market,
+            );
+        }
+
+        this.pendingEventEvaluation =
+          this.pendingEventMarkets
+            .size >
+          0;
+      }
+
       const failedAt =
         Date.now();
 

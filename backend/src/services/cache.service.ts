@@ -336,6 +336,33 @@ class MarketCache {
       .entries();
   }
 
+  /**
+   * O(1) read for an event-driven rescan of one changed market. The returned
+   * map is the same authoritative read-only index used by the full scanner;
+   * no quote array or universe-wide grouping is allocated here.
+   */
+  getExecutableMarketQuotes(
+    market:
+      string,
+  ): ReadonlyMap<
+    string,
+    ExecutableQuote
+  > | undefined {
+    const normalizedMarket =
+      market
+        .trim()
+        .toUpperCase();
+
+    if (!normalizedMarket) {
+      return undefined;
+    }
+
+    return this.executableMarketsByMarket
+      .get(
+        normalizedMarket,
+      );
+  }
+
   getExecutableExchangeCountForMarket(
     market:
       string,

@@ -172,6 +172,21 @@ function main(): void {
     );
 
     assert.equal(
+      marketCache
+        .getExecutableMarketQuotes(
+          "btcusdt",
+        )
+        ?.get(
+          "bybit",
+        ),
+      marketCache.get(
+        "bybit",
+        "BTCUSDT",
+      ),
+      "A changed-market scan must resolve the authoritative market index in O(1).",
+    );
+
+    assert.equal(
       indexedMarkets
         .get("ETHUSDT")
         ?.size,

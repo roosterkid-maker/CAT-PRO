@@ -95,6 +95,18 @@ export interface OpportunityPipelineDiagnostics {
   scanDurationMs?:
     number;
 
+  /**
+   * Full scans reconcile the entire executable universe. Incremental scans
+   * replace only markets named by genuine executable-cache mutations while
+   * still publishing one complete authoritative opportunity snapshot.
+   */
+  scanScope?:
+    | "FULL"
+    | "INCREMENTAL";
+
+  evaluatedMarkets?:
+    number;
+
   cachedQuotes:
     number;
 
@@ -159,6 +171,29 @@ export interface OpportunitySnapshot {
    */
   pilotRouteBooks?:
     readonly StrategyOneTinyLiveBasketBookObservation[];
+}
+
+interface OpportunityMarketScanState {
+  readonly market:
+    string;
+
+  readonly executionQualityEligibleQuotes:
+    number;
+
+  readonly marketSnapshots:
+    number;
+
+  readonly exchangePairs:
+    number;
+
+  readonly opportunities:
+    readonly ArbitrageOpportunity[];
+
+  readonly pilotRouteBooks:
+    readonly StrategyOneTinyLiveBasketBookObservation[];
+
+  readonly diagnostics:
+    OpportunityDiagnostics;
 }
 
 export interface ExactRouteEvaluationInput {
@@ -276,6 +311,17 @@ export class OpportunityService {
     OpportunitySnapshot | null =
     null;
 
+  /*
+   * Event-driven scans replace one changed market instead of recomputing the
+   * complete exchange universe. The periodic full scan remains the bounded
+   * reconciliation owner for time-based eligibility changes and cache drift.
+   */
+  private marketScanStates =
+    new Map<
+      string,
+      OpportunityMarketScanState
+    >();
+
   private readonly snapshotListeners =
     new Set<
       OpportunitySnapshotListener
@@ -329,6 +375,22 @@ export class OpportunityService {
   refreshOpportunities(): number {
     return this
       .scanOpportunities()
+      .length;
+  }
+
+  /**
+   * Re-evaluate only executable markets changed since the previous event
+   * batch. A missing baseline, an empty batch or the cache-wide `*` marker
+   * deliberately falls back to a complete reconciliation scan.
+   */
+  refreshMarkets(
+    markets:
+      readonly string[],
+  ): number {
+    return this
+      .scanOpportunities(
+        markets,
+      )
       .length;
   }
 
@@ -481,18 +543,48 @@ export class OpportunityService {
     };
   }
 
-  private scanOpportunities():
+  private scanOpportunities(
+    requestedMarkets?:
+      readonly string[],
+  ):
     ArbitrageOpportunity[] {
     const scanStartedHighResolution =
       performance.now();
 
     this.removeExpiredSnapshots();
 
-    opportunityEngine
-      .resetDiagnostics();
-
     const scanStartedAt =
       Date.now();
+
+    const normalizedRequestedMarkets =
+      new Set(
+        (
+          requestedMarkets ??
+          []
+        )
+          .map(
+            (market) =>
+              market
+                .trim()
+                .toUpperCase(),
+          )
+          .filter(
+            Boolean,
+          ),
+      );
+
+    const incrementalScan =
+      requestedMarkets !==
+        undefined &&
+      normalizedRequestedMarkets
+        .size >
+        0 &&
+      !normalizedRequestedMarkets
+        .has(
+          "*",
+        ) &&
+      this.lastOpportunitySnapshot !==
+        null;
 
     const cachedQuoteCount =
       marketCache
@@ -502,26 +594,123 @@ export class OpportunityService {
      * V19.18
      * Dynamic execution-quality universe.
      *
-     * MarketCache remains untouched so all observed
-     * markets remain available to UI/diagnostics.
-     *
-     * Only the authoritative opportunity pipeline is
+     * MarketCache remains untouched so all observed markets remain available
+     * to UI/diagnostics. Only the authoritative opportunity pipeline is
      * filtered here.
-     */
-    const qualityGeneratedAt =
-      Date.now();
-
-    /*
-     * Ticker-only rows cannot form an executable buy/sell pair and were
-     * previously carried through normalization and grouping on every scan.
-     * Keep the broad catalog for diagnostics, but run the hot path only over
-     * genuine quantity-bearing quotes.
      */
     const executionQuality =
       bybitExecutionUniverseService
         .getOpportunityEligibilitySnapshot(
-          qualityGeneratedAt,
+          Date.now(),
         );
+
+    opportunityEngine
+      .resetDiagnostics();
+
+    const nextMarketScanStates =
+      incrementalScan
+        ? new Map(
+            this.marketScanStates,
+          )
+        : new Map<
+            string,
+            OpportunityMarketScanState
+          >();
+
+    let previousBatchDiagnostics =
+      emptyOpportunityDiagnostics();
+
+    let evaluatedMarketCount =
+      0;
+
+    const scanMarket = (
+      market:
+        string,
+
+      quotesByExchange:
+        ReadonlyMap<
+          string,
+          ExecutableQuote
+        >,
+    ): void => {
+      evaluatedMarketCount +=
+        1;
+
+      const marketStateWithoutDiagnostics =
+        this.scanMarket(
+          market,
+          quotesByExchange,
+          executionQuality
+            .eligibleMarkets,
+        );
+
+      const currentBatchDiagnostics =
+        opportunityEngine
+          .getDiagnostics();
+
+      nextMarketScanStates
+        .set(
+          market,
+          {
+            ...marketStateWithoutDiagnostics,
+            diagnostics:
+              subtractOpportunityDiagnostics(
+                currentBatchDiagnostics,
+                previousBatchDiagnostics,
+              ),
+          },
+        );
+
+      previousBatchDiagnostics =
+        currentBatchDiagnostics;
+    };
+
+    if (incrementalScan) {
+      for (
+        const market
+        of normalizedRequestedMarkets
+      ) {
+        const quotesByExchange =
+          marketCache
+            .getExecutableMarketQuotes(
+              market,
+            );
+
+        if (!quotesByExchange) {
+          nextMarketScanStates
+            .delete(
+              market,
+            );
+
+          evaluatedMarketCount +=
+            1;
+
+          continue;
+        }
+
+        scanMarket(
+          market,
+          quotesByExchange,
+        );
+      }
+    } else {
+      for (
+        const [
+          market,
+          quotesByExchange,
+        ]
+        of marketCache
+          .executableMarketEntries()
+      ) {
+        scanMarket(
+          market,
+          quotesByExchange,
+        );
+      }
+    }
+
+    this.marketScanStates =
+      nextMarketScanStates;
 
     let exchangePairCount =
       0;
@@ -532,6 +721,9 @@ export class OpportunityService {
     let marketSnapshotCount =
       0;
 
+    let diagnostics =
+      emptyOpportunityDiagnostics();
+
     const opportunities:
       ArbitrageOpportunity[] =
       [];
@@ -541,117 +733,52 @@ export class OpportunityService {
       [];
 
     for (
-      const [
-        market,
-        quotesByExchange,
-      ]
-      of marketCache
-        .executableMarketEntries()
+      const state
+      of this.marketScanStates
+        .values()
     ) {
-      const quotes:
-        ExchangeQuote[] =
-        [];
-
-      for (
-        const quote
-        of quotesByExchange.values()
-      ) {
-        if (
-          quote.exchange ===
-            "bybit" &&
-          !executionQuality
-            .eligibleMarkets
-            .has(
-              quote.market,
-            )
-        ) {
-          continue;
-        }
-
-        quotes.push(
-          quote,
-        );
-
-        executionQualityEligibleQuoteCount +=
-          1;
-
-      }
-
-      if (
-        quotes.length ===
-          0
-      ) {
-        continue;
-      }
-
-      marketSnapshotCount +=
-        1;
-
-      const pairBatch =
-        exchangePairGenerator
-          .generatePositiveSpreadCandidatesFromQuotes(
-            market,
-            quotes,
-            (
-              observedMarket,
-              buy,
-              sell,
-            ) => {
-              const route = {
-                market: observedMarket,
-                buyExchange: buy.exchange,
-                sellExchange: sell.exchange,
-              };
-
-              if (!isStrategyOneTinyLiveDynamicRoute(route)) {
-                return;
-              }
-
-              if (
-                pilotRouteBooks.length >=
-                MAXIMUM_PILOT_ROUTE_BOOKS_PER_SNAPSHOT
-              ) {
-                return;
-              }
-
-              pilotRouteBooks.push({
-                market: observedMarket,
-                buyExchange: buy.exchange as StrategyOneTinyLiveBasketRoute["buyExchange"],
-                sellExchange: sell.exchange as StrategyOneTinyLiveBasketRoute["sellExchange"],
-                buyTimestamp: buy.timestamp,
-                sellTimestamp: sell.timestamp,
-              });
-            },
-          );
-
       exchangePairCount +=
-        pairBatch
-          .totalExecutablePairs;
-
-      opportunityEngine
-        .recordPreFilteredNonPositiveSpreads(
-          pairBatch
-            .nonPositiveSpreadPairs,
+        state.exchangePairs;
+      executionQualityEligibleQuoteCount +=
+        state
+          .executionQualityEligibleQuotes;
+      marketSnapshotCount +=
+        state.marketSnapshots;
+      diagnostics =
+        addOpportunityDiagnostics(
+          diagnostics,
+          state.diagnostics,
         );
 
       for (
-        const pair
-        of pairBatch.pairs
+        const opportunity
+        of state.opportunities
       ) {
-        const opportunity =
-          opportunityEngine
-            .evaluate(
-              pair,
-            );
-
         if (
-          opportunity !==
-          null
+          this.isSnapshotFresh(
+            opportunity,
+          )
         ) {
           opportunities.push(
             opportunity,
           );
         }
+      }
+
+      for (
+        const book
+        of state.pilotRouteBooks
+      ) {
+        if (
+          pilotRouteBooks.length >=
+          MAXIMUM_PILOT_ROUTE_BOOKS_PER_SNAPSHOT
+        ) {
+          break;
+        }
+
+        pilotRouteBooks.push(
+          book,
+        );
       }
     }
 
@@ -678,10 +805,6 @@ export class OpportunityService {
         ) +
           1,
       );
-
-    const diagnostics =
-      opportunityEngine
-        .getDiagnostics();
 
     let discoveredProfitTiers =
       0;
@@ -736,6 +859,14 @@ export class OpportunityService {
             3,
           ),
         ),
+
+      scanScope:
+        incrementalScan
+          ? "INCREMENTAL"
+          : "FULL",
+
+      evaluatedMarkets:
+        evaluatedMarketCount,
 
       cachedQuotes:
         cachedQuoteCount,
@@ -845,6 +976,153 @@ export class OpportunityService {
     );
 
     return opportunities;
+  }
+
+  private scanMarket(
+    market:
+      string,
+
+    quotesByExchange:
+      ReadonlyMap<
+        string,
+        ExecutableQuote
+      >,
+
+    eligibleBybitMarkets:
+      ReadonlySet<string>,
+  ): Omit<
+    OpportunityMarketScanState,
+    "diagnostics"
+  > {
+    const quotes:
+      ExchangeQuote[] =
+      [];
+
+    for (
+      const quote
+      of quotesByExchange.values()
+    ) {
+      if (
+        quote.exchange ===
+          "bybit" &&
+        !eligibleBybitMarkets
+          .has(
+            quote.market,
+          )
+      ) {
+        continue;
+      }
+
+      quotes.push(
+        quote,
+      );
+    }
+
+    const opportunities:
+      ArbitrageOpportunity[] =
+      [];
+
+    const pilotRouteBooks:
+      StrategyOneTinyLiveBasketBookObservation[] =
+      [];
+
+    if (
+      quotes.length ===
+        0
+    ) {
+      return {
+        market,
+        executionQualityEligibleQuotes:
+          0,
+        marketSnapshots:
+          0,
+        exchangePairs:
+          0,
+        opportunities,
+        pilotRouteBooks,
+      };
+    }
+
+    const pairBatch =
+      exchangePairGenerator
+        .generatePositiveSpreadCandidatesFromQuotes(
+          market,
+          quotes,
+          (
+            observedMarket,
+            buy,
+            sell,
+          ) => {
+            const route = {
+              market:
+                observedMarket,
+              buyExchange:
+                buy.exchange,
+              sellExchange:
+                sell.exchange,
+            };
+
+            if (
+              !isStrategyOneTinyLiveDynamicRoute(
+                route,
+              )
+            ) {
+              return;
+            }
+
+            pilotRouteBooks.push({
+              market:
+                observedMarket,
+              buyExchange:
+                buy.exchange as StrategyOneTinyLiveBasketRoute["buyExchange"],
+              sellExchange:
+                sell.exchange as StrategyOneTinyLiveBasketRoute["sellExchange"],
+              buyTimestamp:
+                buy.timestamp,
+              sellTimestamp:
+                sell.timestamp,
+            });
+          },
+        );
+
+    opportunityEngine
+      .recordPreFilteredNonPositiveSpreads(
+        pairBatch
+          .nonPositiveSpreadPairs,
+      );
+
+    for (
+      const pair
+      of pairBatch.pairs
+    ) {
+      const opportunity =
+        opportunityEngine
+          .evaluate(
+            pair,
+          );
+
+      if (
+        opportunity !==
+        null
+      ) {
+        opportunities.push(
+          opportunity,
+        );
+      }
+    }
+
+    return {
+      market,
+      executionQualityEligibleQuotes:
+        quotes.length,
+      marketSnapshots:
+        1,
+      exchangePairs:
+        pairBatch
+          .totalExecutablePairs,
+      opportunities,
+      pilotRouteBooks,
+    };
   }
 
   getOpportunityById(
@@ -1440,6 +1718,200 @@ export class OpportunityService {
 
 export const opportunityService =
   new OpportunityService();
+
+function emptyOpportunityDiagnostics():
+  OpportunityDiagnostics {
+  return {
+    engine: {
+      evaluated:
+        0,
+      evaluatorRejected:
+        0,
+      invalidMarketData:
+        0,
+      spreadRejected:
+        0,
+      netProfitRejected:
+        0,
+      quantityRejected:
+        0,
+      liquidityRejected:
+        0,
+      freshnessRejected:
+        0,
+      feeRejected:
+        0,
+      spreadAnalysisRejected:
+        0,
+      quoteIntegrityRejected:
+        0,
+      accepted:
+        0,
+    },
+    evaluator: {
+      evaluated:
+        0,
+      staleBuyQuote:
+        0,
+      staleSellQuote:
+        0,
+      staleBothQuotes:
+        0,
+      pairSynchronizationRejected:
+        0,
+      priceResolutionFailed:
+        0,
+      buyFeeMissing:
+        0,
+      sellFeeMissing:
+        0,
+      invalidBuyPrice:
+        0,
+      invalidSellPrice:
+        0,
+      accepted:
+        0,
+    },
+  };
+}
+
+function subtractOpportunityDiagnostics(
+  current:
+    OpportunityDiagnostics,
+
+  previous:
+    OpportunityDiagnostics,
+): OpportunityDiagnostics {
+  return combineOpportunityDiagnostics(
+    current,
+    previous,
+    -1,
+  );
+}
+
+function addOpportunityDiagnostics(
+  first:
+    OpportunityDiagnostics,
+
+  second:
+    OpportunityDiagnostics,
+): OpportunityDiagnostics {
+  return combineOpportunityDiagnostics(
+    first,
+    second,
+    1,
+  );
+}
+
+function combineOpportunityDiagnostics(
+  first:
+    OpportunityDiagnostics,
+
+  second:
+    OpportunityDiagnostics,
+
+  multiplier:
+    1 | -1,
+): OpportunityDiagnostics {
+  return {
+    engine: {
+      evaluated:
+        first.engine.evaluated +
+        second.engine.evaluated *
+          multiplier,
+      evaluatorRejected:
+        first.engine.evaluatorRejected +
+        second.engine.evaluatorRejected *
+          multiplier,
+      invalidMarketData:
+        first.engine.invalidMarketData +
+        second.engine.invalidMarketData *
+          multiplier,
+      spreadRejected:
+        first.engine.spreadRejected +
+        second.engine.spreadRejected *
+          multiplier,
+      netProfitRejected:
+        first.engine.netProfitRejected +
+        second.engine.netProfitRejected *
+          multiplier,
+      quantityRejected:
+        first.engine.quantityRejected +
+        second.engine.quantityRejected *
+          multiplier,
+      liquidityRejected:
+        first.engine.liquidityRejected +
+        second.engine.liquidityRejected *
+          multiplier,
+      freshnessRejected:
+        first.engine.freshnessRejected +
+        second.engine.freshnessRejected *
+          multiplier,
+      feeRejected:
+        first.engine.feeRejected +
+        second.engine.feeRejected *
+          multiplier,
+      spreadAnalysisRejected:
+        first.engine.spreadAnalysisRejected +
+        second.engine.spreadAnalysisRejected *
+          multiplier,
+      quoteIntegrityRejected:
+        first.engine.quoteIntegrityRejected +
+        second.engine.quoteIntegrityRejected *
+          multiplier,
+      accepted:
+        first.engine.accepted +
+        second.engine.accepted *
+          multiplier,
+    },
+    evaluator: {
+      evaluated:
+        first.evaluator.evaluated +
+        second.evaluator.evaluated *
+          multiplier,
+      staleBuyQuote:
+        first.evaluator.staleBuyQuote +
+        second.evaluator.staleBuyQuote *
+          multiplier,
+      staleSellQuote:
+        first.evaluator.staleSellQuote +
+        second.evaluator.staleSellQuote *
+          multiplier,
+      staleBothQuotes:
+        first.evaluator.staleBothQuotes +
+        second.evaluator.staleBothQuotes *
+          multiplier,
+      pairSynchronizationRejected:
+        first.evaluator.pairSynchronizationRejected +
+        second.evaluator.pairSynchronizationRejected *
+          multiplier,
+      priceResolutionFailed:
+        first.evaluator.priceResolutionFailed +
+        second.evaluator.priceResolutionFailed *
+          multiplier,
+      buyFeeMissing:
+        first.evaluator.buyFeeMissing +
+        second.evaluator.buyFeeMissing *
+          multiplier,
+      sellFeeMissing:
+        first.evaluator.sellFeeMissing +
+        second.evaluator.sellFeeMissing *
+          multiplier,
+      invalidBuyPrice:
+        first.evaluator.invalidBuyPrice +
+        second.evaluator.invalidBuyPrice *
+          multiplier,
+      invalidSellPrice:
+        first.evaluator.invalidSellPrice +
+        second.evaluator.invalidSellPrice *
+          multiplier,
+      accepted:
+        first.evaluator.accepted +
+        second.evaluator.accepted *
+          multiplier,
+    },
+  };
+}
 
 function exactRouteEvidence(
   buy:
