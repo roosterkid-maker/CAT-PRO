@@ -48,6 +48,12 @@ import type {
   StrategyOneTinyLiveAuthorityRecord,
 } from "../../../execution/live/tiny-live/StrategyOneTinyLiveActionAuthorityService";
 
+import {
+  TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY,
+  TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY,
+  type StrategyOneExecutionPolicyDefinition,
+} from "../../../trading/policy/StrategyOneExecutionPolicyService";
+
 function assertCondition(
   condition: boolean,
   message: string,
@@ -177,6 +183,8 @@ function orderTimeService(
   options: {
     staleBuy?: boolean;
     bybitSupportsFok?: boolean;
+    sellBidPrice?: number;
+    executionPolicy?: StrategyOneExecutionPolicyDefinition;
     onVenueContract?: (
       exchange: string,
       authorizedMaximumBookAgeMs: number | undefined,
@@ -188,6 +196,10 @@ function orderTimeService(
 
   return new StrategyOneOrderTimeSafetyService(
     {
+      getExecutionPolicy:
+        () =>
+          options.executionPolicy ??
+          TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY,
       getOrderBook:
         (exchange) => ({
           exchange,
@@ -199,6 +211,7 @@ function orderTimeService(
               ? [
                   {
                     price:
+                      options.sellBidPrice ??
                       102,
                     quantity:
                       2,
@@ -844,6 +857,87 @@ async function main(): Promise<void> {
       approved.postStressNetProfitPercent &&
     !approved.liveOrderSubmissionAuthorized,
     "Fresh full-depth evidence with audited FOK and fill channels should pass as non-authorizing evidence.",
+  );
+
+  const v5RelaxedPostStress =
+    orderTimeService({
+      sellBidPrice:
+        100.51,
+      executionPolicy:
+        TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY,
+    }).evaluate({
+      opportunity:
+        opportunity(),
+      quantity:
+        1,
+      now:
+        NOW,
+    });
+
+  assertCondition(
+    v5RelaxedPostStress.decision ===
+      "APPROVED" &&
+    v5RelaxedPostStress.minimumNetProfitPercent ===
+      0.15 &&
+    v5RelaxedPostStress.postStressNetProfitPercent !==
+      null &&
+    v5RelaxedPostStress.postStressNetProfitPercent >=
+      0.15 &&
+    v5RelaxedPostStress.postStressNetProfitPercent <
+      0.3,
+    `V5 must approve order-time stressed economics between 0.15% and 0.30%: ${JSON.stringify(v5RelaxedPostStress)}`,
+  );
+
+  const v4SameEconomics =
+    orderTimeService({
+      sellBidPrice:
+        100.51,
+      executionPolicy:
+        TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY,
+    }).evaluate({
+      opportunity:
+        opportunity(),
+      quantity:
+        1,
+      now:
+        NOW,
+    });
+
+  assert.equal(
+    v4SameEconomics.decision,
+    "BLOCKED",
+    "Immutable V4 must keep rejecting the same sub-0.30% post-stress result.",
+  );
+
+  const v5BelowFloor =
+    orderTimeService({
+      sellBidPrice:
+        100.44,
+      executionPolicy:
+        TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY,
+    }).evaluate({
+      opportunity:
+        opportunity(),
+      quantity:
+        1,
+      now:
+        NOW,
+    });
+
+  assertCondition(
+    v5BelowFloor.decision ===
+      "BLOCKED" &&
+    v5BelowFloor.postStressNetProfitPercent !==
+      null &&
+    v5BelowFloor.postStressNetProfitPercent <
+      0.15 &&
+    v5BelowFloor.reasons.some(
+      (reason) =>
+        reason.includes(
+          "minimum 0.1500%",
+        ),
+    ),
+    `V5 must still block order-time stressed economics below 0.15%: ${JSON.stringify(v5BelowFloor)}`,
   );
 
   const authorizedTtlCalls: Array<{

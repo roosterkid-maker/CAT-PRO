@@ -69,6 +69,12 @@ export interface StrategyOneExecutionPolicyValues {
     readonly capitalPerLegInr: number;
     readonly maximumConcurrentTrades: 1;
     readonly minimumNetProfitPercent: number;
+    /**
+     * Optional for backward-compatible immutable policy hashes. Historical
+     * policies fall back to minimumNetProfitPercent; newer revisions may use a
+     * separate floor after depth, fees, adverse-move reserve and safety buffer.
+     */
+    readonly postStressMinimumNetProfitPercent?: number;
     readonly maximumPreviewOpportunityAgeMs: number;
     readonly orderSubmissionMaximumQuoteAgeMs: null;
     readonly requireCompleteTwoLegDepth: true;
@@ -339,6 +345,33 @@ export const TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY =
     },
   });
 
+/**
+ * Separates the current fee-adjusted entry floor from the final stressed
+ * economics floor. V1-V4 remain byte-for-byte unchanged for persisted hash
+ * verification and continue to fall back to their original Tiny-LIVE floor.
+ */
+export const TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY =
+  createStrategyOneExecutionPolicyDefinition({
+    policyId:
+      "strategy-one-execution-policy-v5-post-stress-015",
+    revision:
+      5,
+    label:
+      "Strategy #1 Tiny-LIVE 0.30% Current / 0.15% Post-Stress V5",
+    rationale:
+      "Keeps the 0.30% current fee-adjusted Tiny-LIVE entry floor and uses a distinct 0.15% post-stress floor after exact depth, fees, adverse-move reserve and safety buffer; all funding, freshness, authority, fill and recovery guards remain unchanged.",
+    values: {
+      ...structuredClone(
+        TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY.values,
+      ),
+      tinyLive: {
+        ...TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY.values.tinyLive,
+        postStressMinimumNetProfitPercent:
+          0.15,
+      },
+    },
+  });
+
 const DEFAULT_DEPENDENCIES:
   StrategyOneExecutionPolicyDependencies = {
   getRuntimeEvidence:
@@ -420,6 +453,7 @@ export class StrategyOneExecutionPolicyService {
         EXCHANGE_EXECUTABLE_STRATEGY_ONE_EXECUTION_POLICY,
         HFT_PAPER_STRATEGY_ONE_EXECUTION_POLICY,
         TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY,
+        TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY,
       ];
 
     if (
@@ -922,6 +956,16 @@ function validatePolicy(
       ],
     ];
 
+  if (
+    values.tinyLive.postStressMinimumNetProfitPercent !==
+      undefined
+  ) {
+    percentages.push([
+      "tinyLive.postStressMinimumNetProfitPercent",
+      values.tinyLive.postStressMinimumNetProfitPercent,
+    ]);
+  }
+
   for (
     const [
       name,
@@ -1063,6 +1107,17 @@ function validatePolicy(
   }
 
   if (
+    getStrategyOneTinyLivePostStressMinimumNetProfitPercent(
+      values.tinyLive,
+    ) >
+      values.tinyLive.minimumNetProfitPercent
+  ) {
+    throw new Error(
+      "Strategy #1 Tiny-LIVE post-stress floor cannot exceed its current fee-adjusted entry floor.",
+    );
+  }
+
+  if (
     values.tinyLive.capitalPerLegInr <
       100 ||
     values.tinyLive.capitalPerLegInr >
@@ -1099,6 +1154,14 @@ function validatePolicy(
       "Strategy #1 policy hash does not match its execution-critical contents.",
     );
   }
+}
+
+export function getStrategyOneTinyLivePostStressMinimumNetProfitPercent(
+  tinyLive:
+    StrategyOneExecutionPolicyValues["tinyLive"],
+): number {
+  return tinyLive.postStressMinimumNetProfitPercent ??
+    tinyLive.minimumNetProfitPercent;
 }
 
 function validateRuntimeEvidence(

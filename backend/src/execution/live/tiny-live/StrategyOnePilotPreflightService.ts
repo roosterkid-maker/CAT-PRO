@@ -35,6 +35,7 @@ import {
 } from "../../../trading/execution/StrategyOneFundedRouteService";
 
 import {
+  getStrategyOneTinyLivePostStressMinimumNetProfitPercent,
   strategyOneExecutionPolicyService,
 } from "../../../trading/policy/StrategyOneExecutionPolicyService";
 import {
@@ -73,6 +74,7 @@ export interface StrategyOnePilotRuntimePolicy {
   readonly capitalPerLegInr: number;
   readonly maximumCapitalPerLegInr?: number;
   readonly minimumNetProfitPercent: number;
+  readonly postStressMinimumNetProfitPercent: number;
   readonly maximumPreviewOpportunityAgeMs: number;
 }
 
@@ -202,6 +204,7 @@ export interface StrategyOnePilotPreflightDependencies {
     opportunity: ArbitrageOpportunity,
     quantity: number,
     now: number,
+    minimumNetProfitPercent: number,
   ): StrategyOnePaperStressGateReport;
   runCorePreflight(request: TinyLivePreflightRequest): TinyLivePreflightReport;
 }
@@ -223,6 +226,10 @@ const DEFAULT_DEPENDENCIES:
           STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr,
         minimumNetProfitPercent:
           policy.minimumNetProfitPercent,
+        postStressMinimumNetProfitPercent:
+          getStrategyOneTinyLivePostStressMinimumNetProfitPercent(
+            policy,
+          ),
         maximumPreviewOpportunityAgeMs:
           policy.maximumPreviewOpportunityAgeMs,
       };
@@ -293,6 +300,7 @@ const DEFAULT_DEPENDENCIES:
       opportunity,
       quantity,
       now,
+      minimumNetProfitPercent,
     ) => {
       const buyCashCosts =
         getStrategyOneTinyLiveCashCostProfile(
@@ -311,6 +319,7 @@ const DEFAULT_DEPENDENCIES:
           opportunity,
           quantity,
           now,
+          minimumNetProfitPercent,
           liveCashCosts: {
             buyTradingFeeSurchargeMultiplier:
               buyCashCosts.tradingFeeSurchargeMultiplier,
@@ -829,6 +838,7 @@ export class StrategyOnePilotPreflightService {
               opportunity,
               funding.executableQuantity,
               now,
+              tinyLivePolicy.postStressMinimumNetProfitPercent,
             )
         : null;
 
@@ -1445,6 +1455,13 @@ function assertTinyLivePolicy(
     ) ||
     policy.minimumNetProfitPercent <
       0 ||
+    !Number.isFinite(
+      policy.postStressMinimumNetProfitPercent,
+    ) ||
+    policy.postStressMinimumNetProfitPercent <
+      0 ||
+    policy.postStressMinimumNetProfitPercent >
+      policy.minimumNetProfitPercent ||
     !Number.isSafeInteger(
       policy.maximumPreviewOpportunityAgeMs,
     ) ||

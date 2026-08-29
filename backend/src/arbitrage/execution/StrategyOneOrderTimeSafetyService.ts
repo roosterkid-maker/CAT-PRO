@@ -23,7 +23,9 @@ import {
 } from "../../orderbook/services/OrderBookService";
 
 import {
+  getStrategyOneTinyLivePostStressMinimumNetProfitPercent,
   strategyOneExecutionPolicyService,
+  type StrategyOneExecutionPolicyDefinition,
 } from "../../trading/policy/StrategyOneExecutionPolicyService";
 
 import {
@@ -45,6 +47,8 @@ export type {
 } from "../../execution/live/contracts/StrategyOneLiveVenueContractRegistry";
 
 export interface StrategyOneOrderTimeSafetyDependencies {
+  getExecutionPolicy(): StrategyOneExecutionPolicyDefinition;
+
   getOrderBook(
     exchange: string,
     market: string,
@@ -178,6 +182,10 @@ const DEFAULT_CONFIG:
 
 const DEFAULT_DEPENDENCIES:
   StrategyOneOrderTimeSafetyDependencies = {
+  getExecutionPolicy:
+    () =>
+      strategyOneExecutionPolicyService
+        .getActivePolicy(),
   getOrderBook:
     (exchange, market) =>
       orderBookService.get(
@@ -279,8 +287,12 @@ export class StrategyOneOrderTimeSafetyService {
     );
 
     const policy =
-      strategyOneExecutionPolicyService
-        .getActivePolicy();
+      this.dependencies
+        .getExecutionPolicy();
+    const postStressMinimumNetProfitPercent =
+      getStrategyOneTinyLivePostStressMinimumNetProfitPercent(
+        policy.values.tinyLive,
+      );
     const opportunity =
       input.opportunity;
     const market =
@@ -708,11 +720,10 @@ export class StrategyOneOrderTimeSafetyService {
               postStressNetProfitPercent,
             ) ||
             postStressNetProfitPercent <
-              policy.values.tinyLive
-                .minimumNetProfitPercent
+              postStressMinimumNetProfitPercent
           ) {
             reasons.push(
-              `Order-time post-stress net ${formatPercent(postStressNetProfitPercent)} is below Tiny-LIVE minimum ${policy.values.tinyLive.minimumNetProfitPercent.toFixed(4)}%.`,
+              `Order-time post-stress net ${formatPercent(postStressNetProfitPercent)} is below Tiny-LIVE minimum ${postStressMinimumNetProfitPercent.toFixed(4)}%.`,
             );
           }
         }
@@ -819,8 +830,7 @@ export class StrategyOneOrderTimeSafetyService {
       postStressNetProfit,
       postStressNetProfitPercent,
       minimumNetProfitPercent:
-        policy.values.tinyLive
-          .minimumNetProfitPercent,
+        postStressMinimumNetProfitPercent,
       selectedTimeInForce,
       selectedBuyTimeInForce,
       selectedSellTimeInForce,

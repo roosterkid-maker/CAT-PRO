@@ -365,6 +365,7 @@ export class StrategyOnePaperStressGate {
       ArbitrageOpportunity;
     quantity: number;
     now?: number;
+    minimumNetProfitPercent?: number;
     liveCashCosts?: {
       readonly buyTradingFeeSurchargeMultiplier: number;
       readonly sellTradingFeeSurchargeMultiplier: number;
@@ -382,6 +383,22 @@ export class StrategyOnePaperStressGate {
 
     const quantity =
       input.quantity;
+
+    const minimumNetProfitPercent =
+      input.minimumNetProfitPercent ??
+      this.config.minimumNetProfitPercent;
+
+    if (
+      !Number.isFinite(
+        minimumNetProfitPercent,
+      ) ||
+      minimumNetProfitPercent <
+        0
+    ) {
+      throw new Error(
+        "Strategy #1 stress minimumNetProfitPercent must be a non-negative finite number.",
+      );
+    }
 
     const reasons:
       string[] = [];
@@ -863,11 +880,10 @@ export class StrategyOnePaperStressGate {
               ) ||
               postStressNetProfitPercent +
                 1e-12 <
-                this.config
-                  .minimumNetProfitPercent
+                minimumNetProfitPercent
             ) {
               reasons.push(
-                `Post-stress economic net ${postStressNetProfitPercent === null || !Number.isFinite(postStressNetProfitPercent) ? "invalid" : `${postStressNetProfitPercent.toFixed(4)}%`} is below minimum ${this.config.minimumNetProfitPercent.toFixed(4)}%.`,
+                `Post-stress economic net ${postStressNetProfitPercent === null || !Number.isFinite(postStressNetProfitPercent) ? "invalid" : `${postStressNetProfitPercent.toFixed(4)}%`} is below minimum ${minimumNetProfitPercent.toFixed(4)}%.`,
               );
             }
           }
@@ -942,8 +958,7 @@ export class StrategyOnePaperStressGate {
       postStressNetProfit,
       postStressNetProfitPercent,
       minimumNetProfitPercent:
-        this.config
-          .minimumNetProfitPercent,
+        minimumNetProfitPercent,
       reasons:
         passed
           ? [

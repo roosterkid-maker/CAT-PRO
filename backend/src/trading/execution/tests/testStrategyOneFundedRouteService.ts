@@ -577,6 +577,10 @@ function testFinalPaperStressGate(): void {
   assert.equal(coinDCXSellCosts.withholdingPercent, 1);
 
   books.set(
+    "coindcx:BTCUSDT",
+    orderBook("coindcx", NOW, [[99.9, 20]], [[100, 5], [100.1, 5]]),
+  );
+  books.set(
     "coinswitch:BTCUSDT",
     orderBook("coinswitch", NOW, [[100.6, 5], [100.5, 5]], [[100.7, 20]]),
   );
@@ -587,6 +591,21 @@ function testFinalPaperStressGate(): void {
   });
   assert.equal(belowMinimum.status, "BLOCKED");
   assert.match(belowMinimum.reasons.join(" "), /below minimum 0\.3000%/i);
+
+  const relaxedPostStress = gate.evaluate({
+    opportunity: opportunity("stress-v5-post-stress", 20),
+    quantity: 10,
+    now: NOW,
+    minimumNetProfitPercent: 0.15,
+  });
+  assert.equal(
+    relaxedPostStress.status,
+    "PASSED",
+    JSON.stringify(relaxedPostStress),
+  );
+  assert.equal(relaxedPostStress.minimumNetProfitPercent, 0.15);
+  assert.ok((relaxedPostStress.postStressNetProfitPercent ?? 0) >= 0.15);
+  assert.ok((relaxedPostStress.postStressNetProfitPercent ?? 0) < 0.3);
 
   books.set(
     "coinswitch:BTCUSDT",

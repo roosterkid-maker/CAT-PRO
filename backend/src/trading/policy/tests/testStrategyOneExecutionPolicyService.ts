@@ -17,10 +17,12 @@ import {
   createStrategyOneExecutionPolicyDefinition,
   DEFAULT_STRATEGY_ONE_EXECUTION_POLICY,
   EXCHANGE_EXECUTABLE_STRATEGY_ONE_EXECUTION_POLICY,
+  getStrategyOneTinyLivePostStressMinimumNetProfitPercent,
   HFT_PAPER_STRATEGY_ONE_EXECUTION_POLICY,
   STRATEGY_ONE_POLICY_ACTIVATION_CONFIRMATION,
   StrategyOneExecutionPolicyService,
   TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY,
+  TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY,
 } from "../StrategyOneExecutionPolicyService";
 
 import type {
@@ -106,6 +108,32 @@ function main(): void {
   assert.equal(
     TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY.safety.liveOrderSubmissionAllowed,
     false,
+  );
+
+  assert.equal(
+    getStrategyOneTinyLivePostStressMinimumNetProfitPercent(
+      TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY.values.tinyLive,
+    ),
+    0.3,
+    "Historical V4 must retain its original fallback floor.",
+  );
+
+  assert.equal(
+    TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY.values.tinyLive.minimumNetProfitPercent,
+    0.3,
+    "V5 must preserve the current fee-adjusted entry floor.",
+  );
+
+  assert.equal(
+    getStrategyOneTinyLivePostStressMinimumNetProfitPercent(
+      TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY.values.tinyLive,
+    ),
+    0.15,
+  );
+
+  assert.equal(
+    TINY_LIVE_POST_STRESS_015_STRATEGY_ONE_EXECUTION_POLICY.revision,
+    5,
   );
 
   const directory =
@@ -350,6 +378,31 @@ function main(): void {
           },
         }),
       /between ₹100 and ₹500/,
+    );
+
+    assert.throws(
+      () =>
+        createStrategyOneExecutionPolicyDefinition({
+          policyId:
+            "unsafe-post-stress-floor",
+          revision:
+            4,
+          label:
+            "Unsafe post-stress test",
+          rationale:
+            "Must reject a post-stress floor above the current entry floor.",
+          values: {
+            ...structuredClone(
+              TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY.values,
+            ),
+            tinyLive: {
+              ...TINY_LIVE_030_STRATEGY_ONE_EXECUTION_POLICY.values.tinyLive,
+              postStressMinimumNetProfitPercent:
+                0.31,
+            },
+          },
+        }),
+      /post-stress floor cannot exceed/,
     );
 
     console.log(

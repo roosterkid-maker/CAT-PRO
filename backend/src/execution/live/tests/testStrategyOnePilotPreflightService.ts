@@ -69,6 +69,9 @@ function main(): void {
   let stressCalls =
     0;
 
+  let stressMinimumNetProfitPercent =
+    Number.NaN;
+
   let coreCalls =
     0;
 
@@ -89,7 +92,9 @@ function main(): void {
           capitalPerLegInr:
             500,
           minimumNetProfitPercent:
-            0.5,
+            0.3,
+          postStressMinimumNetProfitPercent:
+            0.15,
           maximumPreviewOpportunityAgeMs:
             10_000,
         }),
@@ -125,9 +130,16 @@ function main(): void {
         () =>
           timing,
       evaluateStress:
-        () => {
+        (
+          _opportunity,
+          _quantity,
+          _now,
+          minimumNetProfitPercent,
+        ) => {
           stressCalls +=
             1;
+          stressMinimumNetProfitPercent =
+            minimumNetProfitPercent;
           return stress;
         },
       runCorePreflight:
@@ -197,6 +209,16 @@ function main(): void {
   assert.equal(
     stressCalls,
     1,
+  );
+  assert.equal(
+    stressMinimumNetProfitPercent,
+    0.15,
+    "Tiny-LIVE stress must use the distinct V5 post-stress floor.",
+  );
+  assert.equal(
+    preview.minimumCurrentNetProfitPercent,
+    0.3,
+    "Current fee-adjusted entry must remain on the 0.30% floor.",
   );
   assertSafety(
     preview.safety,
