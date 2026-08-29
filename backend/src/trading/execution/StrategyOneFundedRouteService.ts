@@ -1,7 +1,13 @@
 import {getExchangeTakerFeePercent} from "../../arbitrage/config/fees";
+import {
+  STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
+} from "../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 import type {ArbitrageOpportunity} from "../../arbitrage/models/ArbitrageOpportunity";
 import type {ExchangeMarketCapability} from "../../execution/capabilities/models/ExchangeCapability";
 import {exchangeCapabilityService} from "../../execution/capabilities/services/ExchangeCapabilityService";
+import type {OrderBook} from "../../orderbook/models/OrderBook";
+import {orderBookService} from "../../orderbook/services/OrderBookService";
 import {centralPaperCapitalValuationService} from "../../strategies/services/CentralPaperCapitalValuationService";
 import {
   exchangeBalanceSynchronizationService,
@@ -37,6 +43,23 @@ export interface StrategyOneFundingLegEvidence {
   readonly sufficient: boolean;
 }
 
+export type StrategyOneDepthCeilingSource =
+  | "OPPORTUNITY_TOP_OF_BOOK"
+  | "FRESH_MULTI_LEVEL_ORDER_BOOK";
+
+export interface StrategyOneMultiLevelDepthEvidence {
+  readonly status: "PASSED" | "BLOCKED";
+  readonly buyBookAgeMs: number | null;
+  readonly sellBookAgeMs: number | null;
+  readonly bookSkewMs: number | null;
+  readonly buyDepthQuantity: number | null;
+  readonly sellDepthQuantity: number | null;
+  readonly sharedDepthQuantity: number | null;
+  readonly maximumBookAgeMs: number;
+  readonly maximumBookSkewMs: number;
+  readonly blockers: readonly string[];
+}
+
 export interface StrategyOneFundedRouteReport {
   readonly version: "86.0";
   readonly evaluatedAt: number;
@@ -53,6 +76,9 @@ export interface StrategyOneFundedRouteReport {
   readonly maximumConvertedQuoteCapital?: number | null;
   readonly capitalQuantity: number | null;
   readonly depthQuantity: number | null;
+  readonly availableDepthQuantity?: number | null;
+  readonly depthCeilingSource?: StrategyOneDepthCeilingSource;
+  readonly multiLevelDepthEvidence?: StrategyOneMultiLevelDepthEvidence | null;
   readonly preFundingQuantity: number | null;
   readonly balanceCappedQuantity: number | null;
   readonly executableQuantity: number | null;
@@ -92,6 +118,7 @@ export interface StrategyOneFundedRouteDependencies {
   convertInrToAsset(asset: string, capitalInr: number, contextId: string, now: number):
     {readonly targetQuantity: number} | null;
   getTakerFeePercent(exchange: string, market: string, now: number): number | null;
+  getOrderBook(exchange: string, market: string): OrderBook | null;
   normalizeQuantity(request: {
     rawQuantity: number;
     buyPrice: number;
@@ -116,6 +143,7 @@ const DEFAULT_DEPENDENCIES: StrategyOneFundedRouteDependencies = {
     centralPaperCapitalValuationService.convertInrToAsset(asset, capitalInr, contextId, now),
   getTakerFeePercent: (exchange, market, now) =>
     getExchangeTakerFeePercent(exchange, market, now),
+  getOrderBook: (exchange, market) => orderBookService.get(exchange, market),
   normalizeQuantity: (request) => crossExchangeExecutableQuantityNormalizer.normalize(request),
 };
 
@@ -228,19 +256,38 @@ export class StrategyOneFundedRouteService {
      * in depthQuantity so ordinary sizing never grows beyond the candidate.
      * The separately consented minimum-order cushion may use the smallest
      * number of shared quantity steps required by both venues. It remains
-     * bounded by the hard capital cap, genuinely available top-of-book depth,
-     * authenticated balances and any explicit quantity cap.
+     * bounded by the hard capital cap, fresh synchronized multi-level depth,
+     * authenticated balances and any explicit quantity cap. If that stronger
+     * L2 evidence is unavailable, the original top-of-book ceiling remains.
      */
     const availableDepthInputs = [
       opportunity.availableExecutableQty,
       opportunity.buyAvailableQty,
       opportunity.sellAvailableQty,
     ];
-    const availableDepthQuantity = availableDepthInputs.every(
+    const topOfBookAvailableDepthQuantity = availableDepthInputs.every(
       (quantity) => Number.isFinite(quantity) && quantity > 0,
     )
       ? Math.min(...availableDepthInputs)
       : null;
+    const multiLevelDepthEvidence =
+      fundingBoundary === "AUTHENTICATED_LIVE_READINESS" &&
+      minimumOrderCushionPolicyEnabled
+        ? this.evaluateMultiLevelDepth({
+            buyExchange,
+            sellExchange,
+            market,
+            now,
+          })
+        : null;
+    const availableDepthQuantity =
+      multiLevelDepthEvidence?.status === "PASSED"
+        ? multiLevelDepthEvidence.sharedDepthQuantity
+        : topOfBookAvailableDepthQuantity;
+    const depthCeilingSource: StrategyOneDepthCeilingSource =
+      multiLevelDepthEvidence?.status === "PASSED"
+        ? "FRESH_MULTI_LEVEL_ORDER_BOOK"
+        : "OPPORTUNITY_TOP_OF_BOOK";
 
     const requestedQuantity = request.requestedQuantity ?? capitalQuantity;
     if (requestedQuantity === null || !Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
@@ -348,6 +395,17 @@ export class StrategyOneFundedRouteService {
       if (quantityNormalization.state === "BLOCKED" ||
           quantityNormalization.normalizedQuantity === null) {
         blockers.push(...quantityNormalization.blockers);
+        if (
+          minimumOrderCushionPolicyEnabled &&
+          multiLevelDepthEvidence?.status === "BLOCKED" &&
+          quantityNormalization.blockers.some((blocker) =>
+            blocker.toLowerCase().includes("safe quantity ceiling"),
+          )
+        ) {
+          blockers.push(
+            `Fresh multi-level shared depth was unavailable: ${multiLevelDepthEvidence.blockers.join("; ")}`,
+          );
+        }
       }
     }
 
@@ -426,6 +484,9 @@ export class StrategyOneFundedRouteService {
       maximumConvertedQuoteCapital,
       capitalQuantity,
       depthQuantity,
+      availableDepthQuantity,
+      depthCeilingSource,
+      multiLevelDepthEvidence,
       preFundingQuantity,
       balanceCappedQuantity,
       executableQuantity: finalExecutableQuantity,
@@ -487,6 +548,117 @@ export class StrategyOneFundedRouteService {
       );
     }
     return {baseAsset: buyBase ?? sellBase, quoteAsset: buyQuote ?? sellQuote};
+  }
+
+  private evaluateMultiLevelDepth(request: {
+    buyExchange: string;
+    sellExchange: string;
+    market: string;
+    now: number;
+  }): StrategyOneMultiLevelDepthEvidence {
+    const blockers: string[] = [];
+    const buyBook = this.dependencies.getOrderBook(request.buyExchange, request.market);
+    const sellBook = this.dependencies.getOrderBook(request.sellExchange, request.market);
+    const buyBookAgeMs = buyBook ? request.now - buyBook.timestamp : null;
+    const sellBookAgeMs = sellBook ? request.now - sellBook.timestamp : null;
+    const bookSkewMs = buyBook && sellBook
+      ? Math.abs(buyBook.timestamp - sellBook.timestamp)
+      : null;
+
+    if (!buyBook) blockers.push("BUY multi-level order book is unavailable");
+    if (!sellBook) blockers.push("SELL multi-level order book is unavailable");
+    if (
+      buyBookAgeMs === null ||
+      !Number.isSafeInteger(buyBookAgeMs) ||
+      buyBookAgeMs < 0 ||
+      buyBookAgeMs > STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS
+    ) {
+      blockers.push("BUY multi-level order book is outside the dispatch-reserved freshness budget");
+    }
+    if (
+      sellBookAgeMs === null ||
+      !Number.isSafeInteger(sellBookAgeMs) ||
+      sellBookAgeMs < 0 ||
+      sellBookAgeMs > STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS
+    ) {
+      blockers.push("SELL multi-level order book is outside the dispatch-reserved freshness budget");
+    }
+    if (
+      bookSkewMs === null ||
+      !Number.isSafeInteger(bookSkewMs) ||
+      bookSkewMs > STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS
+    ) {
+      blockers.push("Multi-level order-book timestamp skew exceeds the pilot ceiling");
+    }
+
+    const buyDepthQuantity = buyBook
+      ? this.sumValidatedDepth(buyBook.asks, "BUY asks", "ASCENDING", blockers)
+      : null;
+    const sellDepthQuantity = sellBook
+      ? this.sumValidatedDepth(sellBook.bids, "SELL bids", "DESCENDING", blockers)
+      : null;
+    const sharedDepthQuantity =
+      blockers.length === 0 &&
+      buyDepthQuantity !== null &&
+      sellDepthQuantity !== null
+        ? Math.min(buyDepthQuantity, sellDepthQuantity)
+        : null;
+
+    return {
+      status: blockers.length === 0 && sharedDepthQuantity !== null && sharedDepthQuantity > 0
+        ? "PASSED"
+        : "BLOCKED",
+      buyBookAgeMs,
+      sellBookAgeMs,
+      bookSkewMs,
+      buyDepthQuantity,
+      sellDepthQuantity,
+      sharedDepthQuantity,
+      maximumBookAgeMs: STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+      maximumBookSkewMs: STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
+      blockers: [...new Set(blockers)],
+    };
+  }
+
+  private sumValidatedDepth(
+    levels: OrderBook["asks"],
+    label: string,
+    expectedOrder: "ASCENDING" | "DESCENDING",
+    blockers: string[],
+  ): number | null {
+    if (levels.length === 0) {
+      blockers.push(`${label} are empty`);
+      return null;
+    }
+
+    let totalQuantity = 0;
+    let previousPrice: number | null = null;
+    for (const level of levels) {
+      if (
+        !Number.isFinite(level.price) ||
+        level.price <= 0 ||
+        !Number.isFinite(level.quantity) ||
+        level.quantity <= 0
+      ) {
+        blockers.push(`${label} contain an invalid price or quantity`);
+        return null;
+      }
+      if (
+        previousPrice !== null &&
+        ((expectedOrder === "ASCENDING" && level.price < previousPrice) ||
+          (expectedOrder === "DESCENDING" && level.price > previousPrice))
+      ) {
+        blockers.push(`${label} are not price sorted`);
+        return null;
+      }
+      totalQuantity += level.quantity;
+      if (!Number.isFinite(totalQuantity) || totalQuantity <= 0) {
+        blockers.push(`${label} aggregate quantity is invalid`);
+        return null;
+      }
+      previousPrice = level.price;
+    }
+    return totalQuantity;
   }
 
   private evaluateFundingLeg(request: {

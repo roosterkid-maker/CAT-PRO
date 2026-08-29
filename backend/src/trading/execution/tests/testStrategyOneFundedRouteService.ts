@@ -206,6 +206,7 @@ function main(): void {
       targetQuantity: capitalInr / 99.88,
     }),
     getTakerFeePercent: () => 0.1,
+    getOrderBook: () => null,
     normalizeQuantity: (request) =>
       crossExchangeExecutableQuantityNormalizer.normalize(request),
   });
@@ -317,10 +318,155 @@ function main(): void {
   assert.equal(insufficientHardCap.state, "BLOCKED");
   assert.match(insufficientHardCap.blockers.join(" "), /below minimum 5/i);
 
+  testFreshMultiLevelMinimumOrderCushion();
+
   testFinalPaperStressGate();
 
   console.log("STRATEGY #1 FUNDED ROUTE SERVICE TEST PASSED.");
   console.log("Capital, depth, fee reserve, fresh two-leg balances, market rules and post-stress economics bounded quantity without enabling LIVE orders.");
+}
+
+function testFreshMultiLevelMinimumOrderCushion(): void {
+  const books = new Map<string, OrderBook>();
+  const balances = new Map<string, ExchangeBalanceSnapshot>();
+  const capabilities = new Map<string, ExchangeMarketCapability>([
+    ["coindcx", {
+      ...capability("coindcx"),
+      quantity: {
+        ...capability("coindcx").quantity,
+        maximumQuantity: 100_000,
+        quantityStep: 1,
+        quantityPrecision: 0,
+      },
+      notional: {minimumNotional: 1, maximumNotional: null},
+    }],
+    ["coinswitch", {
+      ...capability("coinswitch"),
+      quantity: {
+        ...capability("coinswitch").quantity,
+        maximumQuantity: 100_000,
+        quantityStep: 1,
+        quantityPrecision: 0,
+      },
+      notional: {minimumNotional: 5, maximumNotional: null},
+    }],
+  ]);
+  const service = new StrategyOneFundedRouteService({
+    getCapability: (exchange) => capabilities.get(exchange) ?? null,
+    getBalance: (exchange, asset) => balances.get(`${exchange}:${asset}`) ?? null,
+    getSynchronizationReport: () => synchronizationReport("SYNCHRONIZED"),
+    convertInrToAsset: (_asset, capitalInr) => ({targetQuantity: capitalInr / 99.88}),
+    getTakerFeePercent: () => 0.1,
+    getOrderBook: (exchange, market) => books.get(`${exchange}:${market}`) ?? null,
+    normalizeQuantity: (request) =>
+      crossExchangeExecutableQuantityNormalizer.normalize(request),
+  });
+  setBalance(balances, "coindcx", "USDT", 50);
+  setBalance(balances, "coinswitch", "BTC", 20_000);
+  books.set(
+    "coindcx:BTCUSDT",
+    orderBook(
+      "coindcx",
+      NOW - 100,
+      [[0.000582, 20_000]],
+      [[0.0005834, 666], [0.000584, 9_000]],
+    ),
+  );
+  books.set(
+    "coinswitch:BTCUSDT",
+    orderBook(
+      "coinswitch",
+      NOW - 90,
+      [[0.0006, 666], [0.000599, 9_000]],
+      [[0.000601, 20_000]],
+    ),
+  );
+
+  const base = opportunity("fresh-multi-level-cushion", 666);
+  const lowPriceOpportunity: ArbitrageOpportunity = {
+    ...base,
+    pair: {
+      ...base.pair,
+      buy: {
+        ...base.pair.buy,
+        bestAskPrice: 0.0005834,
+        bestAskQty: 666,
+        timestamp: NOW - 100,
+      },
+      sell: {
+        ...base.pair.sell,
+        bestBidPrice: 0.0006,
+        bestBidQty: 666,
+        timestamp: NOW - 90,
+      },
+    },
+    buyPrice: 0.0005834,
+    sellPrice: 0.0006,
+    buyAvailableQty: 666,
+    sellAvailableQty: 666,
+    availableExecutableQty: 666,
+    executableQty: 666,
+  };
+  const funded = service.evaluate({
+    opportunity: lowPriceOpportunity,
+    requestedCapitalInr: 500,
+    maximumCapitalPerLegInr: 1_000,
+    allowMinimumOrderRoundUpWithinHardCap: true,
+    now: NOW,
+  });
+  assert.equal(
+    funded.state,
+    "REDUCED",
+    `Fresh L2 depth should permit the smallest shared minimum-order quantity: ${JSON.stringify(funded.blockers)}`,
+  );
+  assert.equal(funded.depthQuantity, 666);
+  assert.equal(funded.availableDepthQuantity, 9_666);
+  assert.equal(funded.depthCeilingSource, "FRESH_MULTI_LEVEL_ORDER_BOOK");
+  assert.equal(funded.multiLevelDepthEvidence?.status, "PASSED");
+  assert.equal(funded.executableQuantity, 8_334);
+  assert.equal(funded.minimumOrderCushionUsed, true);
+
+  const stressGate = new StrategyOnePaperStressGate({
+    getOrderBook: (exchange, market) => books.get(`${exchange}:${market}`) ?? null,
+    getTakerFeePercent: () => 0.1,
+    getMaximumQuoteAgeMs: () => 240,
+    getMaximumPairSkewMs: () => 250,
+  });
+  const stressed = stressGate.evaluate({
+    opportunity: lowPriceOpportunity,
+    quantity: funded.executableQuantity ?? 0,
+    now: NOW,
+  });
+  assert.equal(
+    stressed.status,
+    "PASSED",
+    `Expanded L2 quantity must independently pass full depth and stressed-net checks: ${JSON.stringify(stressed.reasons)}`,
+  );
+  assert.ok((stressed.postStressNetProfitPercent ?? 0) >= 0.3);
+
+  books.set(
+    "coindcx:BTCUSDT",
+    orderBook(
+      "coindcx",
+      NOW - 241,
+      [[0.000582, 20_000]],
+      [[0.0005834, 666], [0.000584, 9_000]],
+    ),
+  );
+  const stale = service.evaluate({
+    opportunity: {...lowPriceOpportunity, id: "stale-multi-level-cushion"},
+    requestedCapitalInr: 500,
+    maximumCapitalPerLegInr: 1_000,
+    allowMinimumOrderRoundUpWithinHardCap: true,
+    now: NOW,
+  });
+  assert.equal(stale.state, "BLOCKED");
+  assert.equal(stale.depthCeilingSource, "OPPORTUNITY_TOP_OF_BOOK");
+  assert.equal(stale.multiLevelDepthEvidence?.status, "BLOCKED");
+  assert.match(
+    stale.blockers.join(" "),
+    /multi-level shared depth was unavailable.*freshness budget/i,
+  );
 }
 
 function liveSandCushionOpportunity(
