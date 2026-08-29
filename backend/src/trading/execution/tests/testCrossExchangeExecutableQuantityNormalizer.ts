@@ -437,6 +437,11 @@ function main(): void {
   assert.equal(sandCushionAboveHardCap.state, "BLOCKED");
   assert.equal(sandCushionAboveHardCap.minimumOrderCushionUsed, false);
   assert.match(
+    sandCushionAboveHardCap.blockers[0] ?? "",
+    /above the safe quantity ceiling/iu,
+    "The actionable depth/capital ceiling must be the primary blocker shown to the operator.",
+  );
+  assert.match(
     sandCushionAboveHardCap.blockers.join(" "),
     /above the safe quantity ceiling/iu,
   );

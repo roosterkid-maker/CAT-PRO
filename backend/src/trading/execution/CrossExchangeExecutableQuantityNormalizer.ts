@@ -444,7 +444,7 @@ export class CrossExchangeExecutableQuantityNormalizer {
         Number.isFinite(minimumPassingQuantity) &&
         minimumPassingQuantity > maximumCushionQuantity + ceilingTolerance
       ) {
-        roundDownBlockers.push(
+        roundDownBlockers.unshift(
           `Minimum-order normalization requires shared quantity ${minimumPassingQuantity}, above the safe quantity ceiling ${maximumCushionQuantity}.`,
         );
       }

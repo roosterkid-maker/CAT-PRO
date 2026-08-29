@@ -36,6 +36,9 @@ import type {
   StrategyOneFundingBoundary,
 } from "../../trading/execution/StrategyOneFundedRouteService";
 import {strategyOneFundedRouteService} from "../../trading/execution/StrategyOneFundedRouteService";
+import {
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+} from "../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 import type {
   StrategyOneCapitalPlacementReport,
 } from "./StrategyOneCapitalPlacementService";
@@ -522,6 +525,12 @@ const DEFAULT_DEPENDENCIES: PersonalStrategyOneBotDependencies = {
     strategyOneFundedRouteService.evaluate({
       opportunity,
       requestedCapitalInr,
+      maximumCapitalPerLegInr:
+        fundingBoundary === "AUTHENTICATED_LIVE_READINESS"
+          ? STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr
+          : undefined,
+      allowMinimumOrderRoundUpWithinHardCap:
+        fundingBoundary === "AUTHENTICATED_LIVE_READINESS",
       fundingBoundary,
       now,
     }),
@@ -678,10 +687,12 @@ export class PersonalStrategyOneBotService {
     const paperController = this.dependencies.getPaperController();
     const account = this.dependencies.getAccount();
     const paperCapital = this.dependencies.getPaperCapitalConfiguration();
-    const fundingCapitalInr = Math.min(
+    const paperFundingCapitalInr = Math.min(
       paperCapital.maximumCapitalPerTrade,
       account.availableCapital,
     );
+    const liveReadinessCapitalInr =
+      STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.capitalPerLegInr;
     const fundingOpportunities = uniqueOpportunities([
       ...opportunities.slice(0, 10),
       ...opportunities.filter((item) => item.decision === "EXECUTE").slice(0, 20),
@@ -689,7 +700,7 @@ export class PersonalStrategyOneBotService {
     const fundingReports = fundingOpportunities.map((opportunity) =>
       this.dependencies.evaluateFunding(
         opportunity,
-        fundingCapitalInr,
+        liveReadinessCapitalInr,
         now,
         "AUTHENTICATED_LIVE_READINESS",
       ));
@@ -699,7 +710,7 @@ export class PersonalStrategyOneBotService {
     const paperCapacityReports = fundingOpportunities.map((opportunity) =>
       this.dependencies.evaluateFunding(
         opportunity,
-        fundingCapitalInr,
+        paperFundingCapitalInr,
         now,
         "ISOLATED_PAPER",
       ));
@@ -715,7 +726,7 @@ export class PersonalStrategyOneBotService {
     const inventoryPlan = buildInventoryPlan(
       engineExecutable,
       fundingByOpportunityId,
-      fundingCapitalInr,
+      liveReadinessCapitalInr,
       now,
     );
     const acceptance = this.dependencies.getAcceptance();
@@ -893,7 +904,7 @@ export class PersonalStrategyOneBotService {
       },
       funding: {
         mode: "AUTHENTICATED_TWO_LEG_BALANCE" as const,
-        requestedCapitalInr: fundingCapitalInr,
+        requestedCapitalInr: liveReadinessCapitalInr,
         evaluatedRoutes: fundingReports.length,
         fundedRoutes: fundingReports.filter((item) => item.state === "FUNDED").length,
         reducedRoutes: fundingReports.filter((item) => item.state === "REDUCED").length,
@@ -902,7 +913,7 @@ export class PersonalStrategyOneBotService {
       },
       paperCapacity: {
         mode: "ISOLATED_PAPER" as const,
-        requestedCapitalInr: fundingCapitalInr,
+        requestedCapitalInr: paperFundingCapitalInr,
         evaluatedRoutes: paperCapacityReports.length,
         executableRoutes: paperCapacityReports.filter((item) => item.state === "FUNDED").length,
         reducedRoutes: paperCapacityReports.filter((item) => item.state === "REDUCED").length,

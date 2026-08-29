@@ -109,7 +109,17 @@ function main(): void {
   assert.equal(ready.opportunity.executable, 1);
   assert.equal(ready.opportunity.fundedExecutable, 1);
   assert.equal(ready.funding.fundedRoutes, 1);
+  assert.equal(
+    ready.funding.requestedCapitalInr,
+    500,
+    "Authenticated LIVE-readiness must use the Tiny-LIVE target, not the PAPER trade ceiling.",
+  );
   assert.equal(ready.paperCapacity.executableRoutes, 1);
+  assert.equal(
+    ready.paperCapacity.requestedCapitalInr,
+    1_000,
+    "Isolated PAPER sizing must retain its independently configured capital.",
+  );
   assert.equal(ready.paperCapacity.authenticatedBalancesRequired, false);
   assert.equal(ready.paperCapacity.liveBalancesMutated, false);
   assert.equal(ready.opportunity.accepted[0]?.funding?.state, "FUNDED");
