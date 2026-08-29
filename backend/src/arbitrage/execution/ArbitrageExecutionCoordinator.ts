@@ -83,6 +83,13 @@ export interface ArbitrageExecutionOptions {
   cancelOnTimeout?: boolean;
 
   actionAuthorityId?: string;
+
+  /**
+   * Tiny-LIVE only: REVIEW may cross the generic aggregate-score boundary
+   * after the exact route passed the complete explicit preflight. A one-time
+   * Tiny-LIVE authority and the coordinator's final last-look remain required.
+   */
+  allowTinyLiveReviewCandidate?: boolean;
 }
 
 export interface ArbitrageExecutionCoordinatorDependencies {
@@ -268,6 +275,7 @@ export class ArbitrageExecutionCoordinator {
     const preflightReasons =
       this.validateOpportunity(
         opportunity,
+        options.allowTinyLiveReviewCandidate === true,
       );
 
     const buyExchange =
@@ -1166,16 +1174,17 @@ export class ArbitrageExecutionCoordinator {
 
   private validateOpportunity(
     opportunity: ArbitrageOpportunity,
+    allowTinyLiveReviewCandidate = false,
   ): string[] {
     const reasons:
       string[] = [];
 
-    if (
-      opportunity.decision !==
-      "EXECUTE"
-    ) {
+    const decisionAccepted = opportunity.decision === "EXECUTE" ||
+      (allowTinyLiveReviewCandidate && opportunity.decision === "REVIEW");
+
+    if (!decisionAccepted) {
       reasons.push(
-        `Opportunity decision is ${opportunity.decision}, not EXECUTE.`,
+        `Opportunity decision is ${opportunity.decision}, not permitted by the execution boundary.`,
       );
     }
 

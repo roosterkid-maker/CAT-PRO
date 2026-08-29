@@ -250,9 +250,9 @@ function blockerRanking(
       `Historical fee-adjusted observations remained below the current ${
         PROFIT_TIER_POLICY.liveMinimumNetProfitPercent.toFixed(2)
       }% LIVE floor.`);
-    add("NON_EXECUTE_DECISION",
-      route.economics.decisions.review + route.economics.decisions.skip,
-      "The central opportunity decision did not reach EXECUTE.");
+    add("NON_PREFLIGHTABLE_DECISION",
+      route.economics.decisions.skip,
+      "The central opportunity decision was SKIP and failed the explicit executable boundary.");
     add("DISPATCH_FRESHNESS_OR_SKEW",
       route.dispatchReserved.rejectedExecutionGradeGenerations + route.rejectedGenerations,
       "Book age, timestamp skew, fallback or non-executable evidence failed the pilot boundary.");
@@ -273,7 +273,7 @@ function dominantBlocker(route: StrategyOnePilotEquivalentRouteReport): string |
     : 0;
   const candidates = [
     ["PROFIT_BELOW_LIVE_MINIMUM", profitBelowCurrentMinimum],
-    ["NON_EXECUTE_DECISION", route.economics.decisions.review + route.economics.decisions.skip],
+    ["NON_PREFLIGHTABLE_DECISION", route.economics.decisions.skip],
     ["DISPATCH_FRESHNESS_OR_SKEW",
       route.dispatchReserved.rejectedExecutionGradeGenerations + route.rejectedGenerations],
     ["INSUFFICIENT_LIQUIDITY", route.economics.insufficientLiquidityGenerations],

@@ -2754,13 +2754,13 @@ function StrategyOneActionTimePreflightPanel({
       />
 
       <div className="border-b border-border-default px-5 py-3 text-xs leading-5 text-text-muted">
-        A route appears here only when a fresh EXECUTE opportunity matches durable credible history and preserves measured dispatch plus operational timing headroom inside the operator-reviewed 300 ms ceiling. Exact ₹100 sizing then reuses authenticated two-leg balances, exchange order rules, quantity normalization and post-stress depth/fee/slippage checks.
+        A route appears here only when a fresh explicit-gate opportunity matches durable credible history and preserves measured dispatch plus operational timing headroom inside the operator-reviewed ceiling. Exact per-attempt sizing then reuses authenticated two-leg balances, exchange order rules, quantity normalization and post-stress depth/fee/slippage checks. The aggregate REVIEW label is not a separate veto; SKIP remains blocked.
       </div>
 
       {preview ? (
         <>
           <div className="grid gap-px bg-border-default sm:grid-cols-2 xl:grid-cols-4">
-            <ActivityMetric label="Binance/Bybit EXECUTE now" value={formatInteger(preview.evidence.currentFreshExecuteOpportunities)} detail={`Dispatch-ready ≤${formatInteger(preview.maximumDispatchReservedBookAgeMs)} ms · absolute ceiling ${formatInteger(preview.maximumExecutionGradeBookAgeMs)} ms`} />
+            <ActivityMetric label="Preflight-eligible now" value={formatInteger(preview.evidence.currentFreshExecuteOpportunities)} detail={`EXECUTE/REVIEW with explicit gates · dispatch-ready ≤${formatInteger(preview.maximumDispatchReservedBookAgeMs)} ms · ceiling ${formatInteger(preview.maximumExecutionGradeBookAgeMs)} ms`} />
             <ActivityMetric label="Audited historical routes" value={formatInteger(preview.evidence.historicalAdapterReadyRoutes)} detail={`${formatInteger(preview.evidence.excludedNonPilotHistoricalRoutes)} non-pilot excluded`} />
             <ActivityMetric label="Current matches" value={formatInteger(preview.evidence.matchedCurrentRoutes)} detail={`${preview.evidence.fullyPreflightableMatches} fully preflightable`} tone={preview.evidence.fullyPreflightableMatches > 0 ? "positive" : "warning"} />
             <ActivityMetric label="Pilot inventory" value={`₹${formatInteger(preview.requestedCapitalPerLegInr)} + ₹${formatInteger(preview.requestedCapitalPerLegInr)}`} detail={`₹${formatInteger(preview.minimumTwoLegInventoryInr)} minimum across both legs`} tone="warning" />

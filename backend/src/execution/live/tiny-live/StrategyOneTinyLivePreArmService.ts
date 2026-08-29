@@ -18,6 +18,7 @@ import {
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
   isStrategyOneTinyLiveDynamicRoute,
+  isStrategyOneTinyLivePreflightDecision,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 import {JsonlSnapshotStore} from "../../../core/persistence/JsonlSnapshotStore";
 import {strategyOneExecutionPolicyService} from "../../../trading/policy/StrategyOneExecutionPolicyService";
@@ -222,6 +223,7 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLivePreArmDependencies = {
   execute: (opportunity, authorityId) =>
     arbitrageExecutionCoordinator.execute(opportunity, {
       actionAuthorityId: authorityId,
+      allowTinyLiveReviewCandidate: true,
       timeoutMs: 3_000,
       pollingIntervalMs: 100,
       cancelOnTimeout: true,
@@ -508,7 +510,7 @@ export class StrategyOneTinyLivePreArmService {
     const opportunities = snapshot.opportunities
       .filter((item) =>
         routeMatches(arm, item) &&
-        item.decision === "EXECUTE" &&
+        isStrategyOneTinyLivePreflightDecision(item.decision) &&
         !(arm.attempts ?? []).some((attempt) => attempt.opportunityId === item.id))
       .sort((first, second) =>
         second.netProfitPercent - first.netProfitPercent);

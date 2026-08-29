@@ -39,6 +39,7 @@ import {
 } from "../../../trading/policy/StrategyOneExecutionPolicyService";
 import {
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+  isStrategyOneTinyLivePreflightDecision,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
 import {
@@ -421,7 +422,7 @@ export class StrategyOnePilotPreflightService {
             .getOpportunities();
 
     const currentCandidates = opportunitySource.filter(
-      (opportunity) => isCurrentExecuteOpportunity(
+      (opportunity) => isCurrentPreflightOpportunity(
         opportunity,
         now,
         tinyLivePolicy.maximumPreviewOpportunityAgeMs,
@@ -1239,7 +1240,7 @@ function isMandatorySharedIncrementOnlyReduction(
   );
 }
 
-function isCurrentExecuteOpportunity(
+function isCurrentPreflightOpportunity(
   opportunity:
     ArbitrageOpportunity,
   now:
@@ -1252,8 +1253,9 @@ function isCurrentExecuteOpportunity(
     opportunity.timestamp;
 
   return (
-    opportunity.decision ===
-      "EXECUTE" &&
+    isStrategyOneTinyLivePreflightDecision(
+      opportunity.decision,
+    ) &&
     opportunity.quotesAreFresh &&
     !opportunity.usedLastPriceFallback &&
     Number.isSafeInteger(
@@ -1334,7 +1336,7 @@ function buildPreviewBlockers(
   ) {
     case "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY":
       return [
-        "No fresh, executable, non-fallback audited Strategy #1 opportunity exists within the route-seed window.",
+        "No fresh, explicit-gate, non-fallback audited Strategy #1 opportunity exists within the route-seed window.",
       ];
 
     case "WAITING_FOR_HISTORICAL_MATCH":

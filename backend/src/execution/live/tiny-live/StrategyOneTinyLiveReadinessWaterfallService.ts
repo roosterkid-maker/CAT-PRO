@@ -297,7 +297,7 @@ function pilotCandidateReasons(
   if (!preview.selected) {
     return preview.blockers.length > 0
       ? [...preview.blockers]
-      : ["No current fresh EXECUTE opportunity has a matching credible route."];
+      : ["No current fresh explicit-gate opportunity has a matching credible route."];
   }
 
   return preview.selected.checks

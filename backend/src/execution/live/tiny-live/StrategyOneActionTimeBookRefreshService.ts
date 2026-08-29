@@ -35,6 +35,7 @@ import {
 } from "../../../exchanges/core/ExchangeManager";
 import {
   isStrategyOneTinyLiveBasketRoute,
+  isStrategyOneTinyLivePreflightDecision,
   type StrategyOneTinyLiveBasketExchange,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
@@ -735,8 +736,10 @@ export class StrategyOneActionTimeBookRefreshService {
             Number.POSITIVE_INFINITY,
         });
     const refreshedOpportunity =
-      evaluation.opportunity?.decision ===
-        "EXECUTE" &&
+      evaluation.opportunity !== null &&
+      isStrategyOneTinyLivePreflightDecision(
+        evaluation.opportunity.decision,
+      ) &&
       routeMatches(
         route,
         evaluation.opportunity,
@@ -1017,8 +1020,12 @@ function describeEvaluationBlocker(
   const sellPrice =
     evidence.sellPrice ??
     "n/a";
+  const decision =
+    evaluation.opportunity
+      ? ` Refreshed decision ${evaluation.opportunity.decision}.`
+      : "";
 
-  return `${code}: ${evaluation.reason} Refreshed BUY ask ${buyPrice}, SELL bid ${sellPrice}, raw spread ${rawSpread}.`;
+  return `${code}: ${evaluation.reason}${decision} Refreshed BUY ask ${buyPrice}, SELL bid ${sellPrice}, raw spread ${rawSpread}.`;
 }
 
 function safety() {

@@ -52,7 +52,7 @@ export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY = deepFreeze({
     "ROUND_DOWN_OR_MINIMUM_SHARED_STEPS_UP_WITHIN_HARD_CAP" as const,
   perRouteOperatorApprovalRequired: false,
   eligibility: [
-    "CURRENT_EXECUTE",
+    "CURRENT_EXPLICIT_GATES",
     "EXACT_ROUTE_CREDIBLE_HISTORY",
     "ACTION_TIME_INVENTORY",
     "ORDER_RULES_AND_FEES",
@@ -64,6 +64,19 @@ export const STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY = deepFreeze({
   withdrawalsAllowed: false,
   liveOrderSubmissionAuthorized: false,
 });
+
+/**
+ * The central analyzer's REVIEW band is an aggregate quality label, not an
+ * independent Tiny-LIVE safety or profit gate. An EXECUTE or REVIEW candidate
+ * may therefore advance only to the controlled exact-route preflight. SKIP
+ * remains ineligible, and every inventory, rules, fee, depth, stress-net,
+ * freshness, authority and final last-look gate still runs afterward.
+ */
+export function isStrategyOneTinyLivePreflightDecision(
+  decision: "EXECUTE" | "REVIEW" | "SKIP",
+): boolean {
+  return decision === "EXECUTE" || decision === "REVIEW";
+}
 
 export function isStrategyOneTinyLiveDynamicRoute(input: {
   readonly market: string;

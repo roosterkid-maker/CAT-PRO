@@ -27,6 +27,7 @@ async function main(): Promise<void> {
   await testBinanceValidatedSnapshotPublication();
   await testBybitValidatedSnapshotPublication();
   await testParallelRefreshAndFreshOpportunityReevaluation();
+  await testReviewAdvancesButSkipRemainsBlocked();
   await testBybitBasketRouteParallelRefresh();
   await testFailedLegBlocksWithoutReevaluation();
   await testHungLegFailsClosedAndReleasesInFlight();
@@ -35,8 +36,74 @@ async function main(): Promise<void> {
   await testAuthorizedFinalRefreshFailsClosed();
 
   console.log(
-    "V189 action-time book refresh passed: all policy-qualified dynamic-pool venues use parallel public reads only on stale fallback, validated refreshed books must produce a new EXECUTE opportunity, failures stay blocked, and no threshold/order/fund authority exists.",
+    "V190 action-time book refresh passed: policy-qualified dynamic-pool venues use parallel public reads only on stale fallback, refreshed EXECUTE/REVIEW candidates advance to explicit preflight, SKIP and refresh failures stay blocked, and no threshold/order/fund authority exists.",
   );
+}
+
+async function testReviewAdvancesButSkipRemainsBlocked(): Promise<void> {
+  const buildService = (decision: "REVIEW" | "SKIP") => {
+    const refreshedOpportunity = {
+      ...opportunity(`fresh-${decision.toLowerCase()}`, NOW + 20),
+      decision,
+      score: decision === "REVIEW" ? 79 : 40,
+    };
+
+    return new StrategyOneActionTimeBookRefreshService({
+      refreshCoinDCX: async (market) => ({
+        exchange: "coindcx",
+        market,
+        accepted: true,
+        requestedAt: NOW,
+        receivedAt: NOW + 20,
+        roundTripMs: 20,
+        error: null,
+      }),
+      refreshBinance: async (market) => ({
+        exchange: "binance",
+        market,
+        accepted: true,
+        requestedAt: NOW,
+        receivedAt: NOW + 20,
+        roundTripMs: 20,
+        error: null,
+      }),
+      evaluateExactRoute: () => ({
+        evaluatedAt: NOW + 20,
+        opportunity: refreshedOpportunity,
+        rejection: null,
+        evidence: {
+          buyPrice: refreshedOpportunity.buyPrice,
+          sellPrice: refreshedOpportunity.sellPrice,
+          buyQuantity: refreshedOpportunity.buyAvailableQty,
+          sellQuantity: refreshedOpportunity.sellAvailableQty,
+          buyTimestamp: NOW + 20,
+          sellTimestamp: NOW + 20,
+          rawSpreadPercent: refreshedOpportunity.rawSpreadPercent,
+        },
+        reason: "Exact route passed the central explicit analyzers.",
+      }),
+      now: () => NOW + 20,
+    });
+  };
+
+  const review = await buildService("REVIEW").refresh({
+    market: "COTIUSDT",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+  });
+  assert.equal(review.state, "REFRESHED");
+  assert.equal(review.opportunity?.decision, "REVIEW");
+  assert.equal(review.safety.thresholdChanged, false);
+  assert.equal(review.safety.orderSubmissionAllowed, false);
+
+  const skip = await buildService("SKIP").refresh({
+    market: "COTIUSDT",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+  });
+  assert.equal(skip.state, "BLOCKED");
+  assert.equal(skip.opportunity, null);
+  assert.match(skip.blocker ?? "", /decision SKIP/iu);
 }
 
 async function testAuthorizedFinalRefreshIsParallelAndPublicOnly(): Promise<void> {

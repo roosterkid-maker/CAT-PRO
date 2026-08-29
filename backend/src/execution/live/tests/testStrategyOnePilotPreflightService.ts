@@ -202,6 +202,38 @@ function main(): void {
     preview.safety,
   );
 
+  opportunities = [{
+    ...opportunity(NOW - 50),
+    id: "opportunity-review",
+    decision: "REVIEW",
+    score: 79,
+  }];
+  exactOpportunity = opportunities[0] ?? null;
+  const reviewPreview = service.getPreview(NOW);
+  assert.equal(
+    reviewPreview.state,
+    "READY_FOR_OPERATOR_PREFLIGHT",
+    "A REVIEW aggregate label must not veto a route that passed every explicit Tiny-LIVE gate.",
+  );
+  assert.equal(reviewPreview.selected?.opportunityId, "opportunity-review");
+
+  opportunities = [{
+    ...opportunity(NOW - 50),
+    id: "opportunity-skip",
+    decision: "SKIP",
+    score: 40,
+  }];
+  exactOpportunity = opportunities[0] ?? null;
+  const skipPreview = service.getPreview(NOW);
+  assert.equal(
+    skipPreview.state,
+    "WAITING_FOR_CURRENT_EXECUTE_OPPORTUNITY",
+    "SKIP must remain outside the Tiny-LIVE preflight boundary.",
+  );
+
+  opportunities = [opportunity(NOW - 50)];
+  exactOpportunity = opportunities[0] ?? null;
+
   placement = {
     ...placementReport(),
     routes: placementReport().routes.map((route) => ({

@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+import assert from "node:assert/strict";
+
 import {
   arbitrageExecutionCoordinator,
 } from "../ArbitrageExecutionCoordinator";
@@ -182,6 +184,42 @@ async function main(): Promise<void> {
           true,
       },
     );
+
+  const reviewOpportunity: ArbitrageOpportunity = {
+    ...TEST_OPPORTUNITY,
+    id: "preflight-review-opportunity",
+    decision: "REVIEW",
+    score: 79,
+  };
+  const reviewDefault = await arbitrageExecutionCoordinator.execute(
+    reviewOpportunity,
+  );
+  assert.equal(
+    reviewDefault.reasons.some((reason) => reason.includes("decision is REVIEW")),
+    true,
+    "The generic coordinator must reject REVIEW by default.",
+  );
+
+  const reviewTinyLive = await arbitrageExecutionCoordinator.execute(
+    reviewOpportunity,
+    {allowTinyLiveReviewCandidate: true},
+  );
+  assert.equal(
+    reviewTinyLive.reasons.some((reason) => reason.includes("decision is REVIEW")),
+    false,
+    "The controlled Tiny-LIVE path may cross only the aggregate REVIEW boundary.",
+  );
+  assert.equal(reviewTinyLive.status, "BLOCKED");
+  assert.equal(reviewTinyLive.buyResult, null);
+  assert.equal(reviewTinyLive.sellResult, null);
+  assert.equal(
+    reviewTinyLive.reasons.some((reason) => reason.includes("confirmation is missing")),
+    true,
+  );
+  assert.equal(
+    reviewTinyLive.reasons.some((reason) => reason.includes("action authority is required")),
+    true,
+  );
 
   console.log(
     "\n======================================",
