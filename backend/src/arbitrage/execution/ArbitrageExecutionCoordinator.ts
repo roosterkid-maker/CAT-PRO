@@ -597,7 +597,7 @@ export class ArbitrageExecutionCoordinator {
         sellExchange,
         startedAt,
         [
-          "Final BUY price and fee requirement exceeds the authorized ₹505 hard-cap quote spend.",
+          `Final BUY price and fee requirement exceeds the authorized ₹${maximumCapitalPerLegInr} hard-cap quote spend.`,
         ],
         lastLook,
         authorityQuantity,

@@ -578,8 +578,8 @@ export interface StrategyOneTinyLiveRoutePoolPolicy {
   }>;
   inventoryTargets: [];
   capitalPerLegInr: 500;
-  maximumCapitalPerLegInr: 505;
-  minimumOrderCushionInr: 5;
+  maximumCapitalPerLegInr: 1000;
+  minimumOrderCushionInr: 500;
   maximumAttempts: 10;
   durationMinutes: 180;
   stopOnFirstNonCleanResult: true;

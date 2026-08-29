@@ -270,7 +270,7 @@ function main(): void {
       availableExecutableQty: 2_000,
     },
     requestedCapitalInr: 500,
-    maximumCapitalPerLegInr: 505,
+    maximumCapitalPerLegInr: 1_000,
     allowSingleIncrementMinimumOrderRoundUp: true,
     now: NOW,
   });
@@ -282,11 +282,13 @@ function main(): void {
   assert.equal(liveSandCushion.depthQuantity, 120.07924269383102);
   assert.equal(liveSandCushion.executableQuantity, 121);
   assert.equal(liveSandCushion.minimumOrderCushionUsed, true);
+  assert.equal(liveSandCushion.maximumCapitalPerLegInr, 1_000);
   assert.equal(
     liveSandCushion.quantityNormalization?.legs[0]?.normalizedNotional,
     5.04086,
   );
   assert.ok((liveSandCushion.estimatedBuyRequirementInr ?? 0) > 500);
+  // The broader ceiling must never become the ordinary execution target.
   assert.ok((liveSandCushion.estimatedBuyRequirementInr ?? Number.POSITIVE_INFINITY) <= 505);
 
   const insufficientActualDepth = cushionService.evaluate({

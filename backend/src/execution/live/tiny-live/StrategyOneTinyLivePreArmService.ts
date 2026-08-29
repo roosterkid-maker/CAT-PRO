@@ -1156,7 +1156,7 @@ export class StrategyOneTinyLivePreArmService {
       state: "EXPIRED" as const,
       completedAt: now,
       failureReason: supersededDynamicPoolPolicy
-        ? "Dynamic route-pool arm expired because its capital consent predates the ₹505 hard-cap policy."
+        ? `Dynamic route-pool arm expired because its capital consent predates the ₹${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr} hard-cap policy.`
         : "Unused one-shot pre-arm expired.",
     }));
   }

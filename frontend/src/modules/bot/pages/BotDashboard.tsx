@@ -2092,7 +2092,7 @@ function StrategyOnePreArmedOneShotPanel({
         />
         <ActivityMetric
           label="Hard capital cap"
-          value={`₹${formatInteger(active?.maximumCapitalPerLegInr ?? diagnostics?.routePool.maximumCapitalPerLegInr ?? 505)} / leg`}
+          value={`₹${formatInteger(active?.maximumCapitalPerLegInr ?? diagnostics?.routePool.maximumCapitalPerLegInr ?? 1000)} / leg`}
           detail={`₹${formatInteger(active?.capitalPerLegInr ?? capitalPerLegInr)} target · one-step minimum cushion only`}
         />
         <ActivityMetric
@@ -2314,7 +2314,7 @@ function StrategyOnePreArmedOneShotPanel({
               />
               <span>
                 I understand that arming submits no order now. {armAttempts !== null ? (
-                  <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)} target attempt, with a hard ₹{formatInteger(diagnostics?.routePool.maximumCapitalPerLegInr ?? 505)} minimum-order ceiling per leg.</>
+                  <>During the next 3 hours, up to {armAttempts} fully-qualified current USDT routes can each submit one real ₹{formatInteger(diagnostics?.routePool.capitalPerLegInr ?? capitalPerLegInr)} target attempt, with a hard ₹{formatInteger(diagnostics?.routePool.maximumCapitalPerLegInr ?? 1000)} minimum-order ceiling per leg.</>
                 ) : (
                   <>The daily Tiny-LIVE cap is exhausted and stays unavailable until {formatIstTime(dailyAttemptBudget?.resetsAt ?? 0)} IST.</>
                 )} Every exact route gets credible-history, inventory, timing, minimum-order, fee, depth and last-look checks; any failed, partial, unknown or exposed result stops the remaining batch. LIVE OFF never resets consumed daily attempts.

@@ -314,7 +314,7 @@ function authorityFixture():
     capitalPerLegInr:
       500,
     maximumCapitalPerLegInr:
-      505,
+      1_000,
     maximumBuyQuoteSpend:
       5.05,
     maximumOrderBookAgeMs:

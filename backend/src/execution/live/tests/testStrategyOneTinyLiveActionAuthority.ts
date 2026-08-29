@@ -170,7 +170,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V111/V191 Tiny-LIVE authority passed: venue-direction timing needs no per-coin approval, while exact funded quantity, authorized route TTL, ₹505 quote cap, three-second authority, durable claim, expiry/disarm and no automatic retry remain enforced; no exchange order occurred.",
+    "V111/V191 Tiny-LIVE authority passed: venue-direction timing needs no per-coin approval, while exact funded quantity, authorized route TTL, ₹1000 quote cap, three-second authority, durable claim, expiry/disarm and no automatic retry remain enforced; no exchange order occurred.",
   );
 }
 
@@ -1314,7 +1314,7 @@ function routePreflightFixture(
         sellExchange: route.sellExchange,
         funding: {
           ...selected.funding,
-          maximumCapitalPerLegInr: 505,
+          maximumCapitalPerLegInr: 1_000,
           maximumConvertedQuoteCapital: 5.05,
         },
         timing: {

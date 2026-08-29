@@ -331,7 +331,9 @@ export class StrategyOneTinyLiveActionAuthorityService {
         maximumBuyQuoteSpend <= 0
       )
     ) {
-      blockers.push("The approved ₹505 hard cap and fresh maximum quote-spend evidence are unavailable.");
+      blockers.push(
+        `The approved ₹${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr} hard cap and fresh maximum quote-spend evidence are unavailable.`,
+      );
     }
     const routeAttempts = route
       ? this.routeAttempts(route, now)
@@ -732,7 +734,9 @@ export class StrategyOneTinyLiveActionAuthorityService {
         maximumConvertedQuoteCapital <= 0
       )
     ) {
-      throw new Error("Fresh ₹505 hard-cap quote-spend evidence is unavailable.");
+      throw new Error(
+        `Fresh ₹${STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.maximumCapitalPerLegInr} hard-cap quote-spend evidence is unavailable.`,
+      );
     }
 
 

@@ -39,19 +39,19 @@ async function main(): Promise<void> {
 
     assert.equal(
       phrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS10 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 ATTEMPTS10 MINUTES180",
     );
     const reducedPhrase =
       StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(9);
     assert.equal(
       reducedPhrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS9 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 ATTEMPTS9 MINUTES180",
     );
     const continuationPhrase =
       StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(8);
     assert.equal(
       continuationPhrase,
-      "ARM DYNAMIC-POOL USDT INR500 MAXINR505 ATTEMPTS8 MINUTES180",
+      "ARM DYNAMIC-POOL USDT INR500 MAXINR1000 ATTEMPTS8 MINUTES180",
     );
     const reducedFilePath = join(directory, "reduced-route-pool.jsonl");
     const reducedService = new StrategyOneTinyLivePreArmService({
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
     assert.equal(arm.routeScope, "DYNAMIC_POOL");
     assert.equal(arm.routePoolId, STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID);
     assert.equal(arm.capitalPerLegInr, 500);
-    assert.equal(arm.maximumCapitalPerLegInr, 505);
+    assert.equal(arm.maximumCapitalPerLegInr, 1_000);
     assert.equal(arm.maximumAttempts, 10);
     assert.equal(arm.expiresAt, NOW + 180 * 60_000);
     assert.equal(arm.attemptsUsed, 0);
@@ -200,7 +200,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "V190 dynamic route-pool pre-arm passed: one pool consent, ₹500 target/₹505 hard cap, no per-coin timing approval, remaining-budget 1–10-attempt/180-minute limits, daily-cap continuation after failed-safe disarm, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
+    "V190 dynamic route-pool pre-arm passed: one pool consent, ₹500 target/₹1000 hard cap, no per-coin timing approval, remaining-budget 1–10-attempt/180-minute limits, daily-cap continuation after failed-safe disarm, changing USDT routes, durable restart recovery, per-attempt freshness and no fund movement authority.",
   );
 }
 
@@ -300,12 +300,12 @@ function verifySupersededDynamicPoolArmExpires(
   assert.equal(
     restarted.getActiveArm(NOW),
     null,
-    "A pre-₹505 dynamic arm must expire instead of silently inheriting broader capital consent.",
+    "A pre-₹1000 dynamic arm must expire instead of silently inheriting broader capital consent.",
   );
   const [expired] = restarted.getDiagnostics(NOW).records;
   assert.equal(expired?.schemaVersion, "188.0");
   assert.equal(expired?.state, "EXPIRED");
-  assert.match(expired?.failureReason ?? "", /predates the ₹505 hard-cap policy/iu);
+  assert.match(expired?.failureReason ?? "", /predates the ₹1000 hard-cap policy/iu);
 }
 
 function verifyRetiredFixedBasketArmIsNotRestored(
@@ -419,7 +419,7 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
     buyExchange: route.buyExchange,
     sellExchange: route.sellExchange,
     capitalPerLegInr: 500,
-    maximumCapitalPerLegInr: 505,
+    maximumCapitalPerLegInr: 1_000,
     requiredAuthorizationPhrase: "AUTHORIZE tiny-live-durable-reasons",
   };
   const filePath = join(directory, "durable-last-look-reasons.jsonl");
