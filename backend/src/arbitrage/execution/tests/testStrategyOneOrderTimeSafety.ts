@@ -823,6 +823,21 @@ async function main(): Promise<void> {
       null &&
     approved.postStressNetProfitPercent >
       approved.minimumNetProfitPercent &&
+    approved.statutoryCashWithholding !==
+      null &&
+    approved.statutoryCashWithholding >
+      0 &&
+    approved.tradingFees !==
+      null &&
+    approved.tradingFees >
+      0.21 &&
+    approved.statutoryCashCostEvidenceIds.includes(
+      "BYBIT_SIGNED_EXECUTION_IND_GST_IND_TDS_V1",
+    ) &&
+    approved.deployableCashPostStressNetProfitPercent !==
+      null &&
+    approved.deployableCashPostStressNetProfitPercent <
+      approved.postStressNetProfitPercent &&
     !approved.liveOrderSubmissionAuthorized,
     "Fresh full-depth evidence with audited FOK and fill channels should pass as non-authorizing evidence.",
   );

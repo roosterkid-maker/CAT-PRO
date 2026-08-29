@@ -35,6 +35,10 @@ import {
   STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
 } from "./StrategyOnePilotEquivalentPaperEvidenceService";
 
+import {
+  getStrategyOneTinyLiveCashCostProfile,
+} from "../../execution/live/evidence/StrategyOneTinyLiveCashCostService";
+
 export type {
   StrategyOneTimeInForce,
   StrategyOneVenueOrderContract,
@@ -122,6 +126,17 @@ export interface StrategyOneOrderTimeSafetyReport {
     | number
     | null;
   readonly tradingFees:
+    | number
+    | null;
+  readonly statutoryCashWithholding:
+    | number
+    | null;
+  readonly statutoryCashCostEvidenceIds:
+    readonly string[];
+  readonly deployableCashPostStressNetProfit:
+    | number
+    | null;
+  readonly deployableCashPostStressNetProfitPercent:
     | number
     | null;
   readonly safetyBuffer:
@@ -492,6 +507,18 @@ export class StrategyOneOrderTimeSafetyService {
     let tradingFees:
       number | null =
       null;
+    let statutoryCashWithholding:
+      number | null =
+      null;
+    let statutoryCashCostEvidenceIds:
+      readonly string[] =
+      [];
+    let deployableCashPostStressNetProfit:
+      number | null =
+      null;
+    let deployableCashPostStressNetProfitPercent:
+      number | null =
+      null;
     let safetyBuffer:
       number | null =
       null;
@@ -612,17 +639,42 @@ export class StrategyOneOrderTimeSafetyService {
                 100
             );
 
+          const buyCashCosts =
+            getStrategyOneTinyLiveCashCostProfile(
+              buyExchange,
+              market,
+              "BUY",
+            );
+          const sellCashCosts =
+            getStrategyOneTinyLiveCashCostProfile(
+              sellExchange,
+              market,
+              "SELL",
+            );
+
+          statutoryCashCostEvidenceIds = [
+            buyCashCosts.evidenceId,
+            sellCashCosts.evidenceId,
+          ];
+
           tradingFees =
             stressedBuy *
               (
                 buyFeePercent /
                 100
-              ) +
+              ) *
+              (1 + buyCashCosts.tradingFeeSurchargeMultiplier) +
             stressedSell *
               (
                 sellFeePercent /
                 100
-              );
+              ) *
+              (1 + sellCashCosts.tradingFeeSurchargeMultiplier);
+          statutoryCashWithholding =
+            stressedBuy *
+              (buyCashCosts.withholdingPercent / 100) +
+            stressedSell *
+              (sellCashCosts.withholdingPercent / 100);
           safetyBuffer =
             stressedBuy *
             (
@@ -638,6 +690,15 @@ export class StrategyOneOrderTimeSafetyService {
           postStressNetProfitPercent =
             stressedBuy > 0
               ? postStressNetProfit /
+                stressedBuy *
+                100
+              : null;
+          deployableCashPostStressNetProfit =
+            postStressNetProfit -
+            statutoryCashWithholding;
+          deployableCashPostStressNetProfitPercent =
+            stressedBuy > 0
+              ? deployableCashPostStressNetProfit /
                 stressedBuy *
                 100
               : null;
@@ -698,6 +759,20 @@ export class StrategyOneOrderTimeSafetyService {
         null &&
       sellLimitPrice !==
         null &&
+      tradingFees !==
+        null &&
+      statutoryCashWithholding !==
+        null &&
+      statutoryCashCostEvidenceIds.length ===
+        2 &&
+      deployableCashPostStressNetProfit !==
+        null &&
+      deployableCashPostStressNetProfitPercent !==
+        null &&
+      safetyBuffer !==
+        null &&
+      postStressNetProfit !==
+        null &&
       postStressNetProfitPercent !==
         null;
 
@@ -736,6 +811,10 @@ export class StrategyOneOrderTimeSafetyService {
       buyFillPercent,
       sellFillPercent,
       tradingFees,
+      statutoryCashWithholding,
+      statutoryCashCostEvidenceIds,
+      deployableCashPostStressNetProfit,
+      deployableCashPostStressNetProfitPercent,
       safetyBuffer,
       postStressNetProfit,
       postStressNetProfitPercent,
@@ -754,7 +833,7 @@ export class StrategyOneOrderTimeSafetyService {
       reasons:
         approved
           ? [
-              `Fresh two-book ${selectedBuyTimeInForce}/${selectedSellTimeInForce} last-look remains ${postStressNetProfitPercent?.toFixed(4)}% net after fees, adverse-move reserve and safety buffer.`,
+              `Fresh two-book ${selectedBuyTimeInForce}/${selectedSellTimeInForce} last-look remains ${postStressNetProfitPercent?.toFixed(4)}% economic net after fees, adverse-move reserve and safety buffer; ${deployableCashPostStressNetProfitPercent?.toFixed(4)}% remains immediately reusable after separately tracked statutory withholding.`,
             ]
           : [
               ...new Set(

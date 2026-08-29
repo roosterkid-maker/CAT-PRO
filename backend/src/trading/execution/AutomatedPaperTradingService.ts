@@ -236,6 +236,17 @@ export interface StrategyOnePaperStressGateReport {
   statutoryCashCostEvidenceIds?:
     readonly string[];
 
+  /**
+   * Immediate reusable-cash result after statutory withholding. Withholding
+   * remains a separately evidenced tax-credit asset and is not an economic
+   * trading expense.
+   */
+  deployableCashPostStressNetProfit?:
+    number | null;
+
+  deployableCashPostStressNetProfitPercent?:
+    number | null;
+
   safetyBuffer:
     number | null;
 
@@ -555,6 +566,14 @@ export class StrategyOnePaperStressGate {
       number | null =
       null;
 
+    let deployableCashPostStressNetProfit:
+      number | null =
+      null;
+
+    let deployableCashPostStressNetProfitPercent:
+      number | null =
+      null;
+
     let safetyBuffer:
       number | null =
       null;
@@ -809,8 +828,11 @@ export class StrategyOnePaperStressGate {
                 stressedSellNotional -
                 stressedBuyNotional -
                 tradingFees -
-                statutoryCashWithholding -
                 safetyBuffer;
+
+              deployableCashPostStressNetProfit =
+                postStressNetProfit -
+                statutoryCashWithholding;
             }
 
             postStressNetProfitPercent =
@@ -818,6 +840,16 @@ export class StrategyOnePaperStressGate {
               postStressNetProfit !== null
                 ? (
                     postStressNetProfit /
+                    stressedBuyNotional
+                  ) *
+                  100
+                : null;
+
+            deployableCashPostStressNetProfitPercent =
+              stressedBuyNotional > 0 &&
+              deployableCashPostStressNetProfit !== null
+                ? (
+                    deployableCashPostStressNetProfit /
                     stressedBuyNotional
                   ) *
                   100
@@ -835,7 +867,7 @@ export class StrategyOnePaperStressGate {
                   .minimumNetProfitPercent
             ) {
               reasons.push(
-                `Post-stress ${input.liveCashCosts ? "Tiny-LIVE cash" : "PAPER"} net ${postStressNetProfitPercent === null || !Number.isFinite(postStressNetProfitPercent) ? "invalid" : `${postStressNetProfitPercent.toFixed(4)}%`} is below minimum ${this.config.minimumNetProfitPercent.toFixed(4)}%.`,
+                `Post-stress economic net ${postStressNetProfitPercent === null || !Number.isFinite(postStressNetProfitPercent) ? "invalid" : `${postStressNetProfitPercent.toFixed(4)}%`} is below minimum ${this.config.minimumNetProfitPercent.toFixed(4)}%.`,
               );
             }
           }
@@ -864,6 +896,12 @@ export class StrategyOnePaperStressGate {
       sellLimitPrice !==
         null &&
       tradingFees !==
+        null &&
+      statutoryCashWithholding !==
+        null &&
+      deployableCashPostStressNetProfit !==
+        null &&
+      deployableCashPostStressNetProfitPercent !==
         null &&
       safetyBuffer !==
         null &&
@@ -898,6 +936,8 @@ export class StrategyOnePaperStressGate {
       statutoryCashWithholding,
       statutoryCashCostEvidenceIds:
         input.liveCashCosts?.evidenceIds,
+      deployableCashPostStressNetProfit,
+      deployableCashPostStressNetProfitPercent,
       safetyBuffer,
       postStressNetProfit,
       postStressNetProfitPercent,
@@ -907,7 +947,9 @@ export class StrategyOnePaperStressGate {
       reasons:
         passed
           ? [
-              `Fresh two-book VWAP remains ${(postStressNetProfitPercent ?? 0).toFixed(4)}% net after ${input.liveCashCosts ? "fees, statutory cash withholding" : "fees"}, adverse-move reserve, and safety buffer.`,
+              input.liveCashCosts
+                ? `Fresh two-book VWAP remains ${(postStressNetProfitPercent ?? 0).toFixed(4)}% economic net after fees, adverse-move reserve, and safety buffer; ${(deployableCashPostStressNetProfitPercent ?? 0).toFixed(4)}% remains immediately reusable after separately tracked statutory withholding.`
+                : `Fresh two-book VWAP remains ${(postStressNetProfitPercent ?? 0).toFixed(4)}% net after fees, adverse-move reserve, and safety buffer.`,
             ]
           : [
               ...new Set(

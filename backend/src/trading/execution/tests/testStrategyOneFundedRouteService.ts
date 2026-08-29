@@ -396,7 +396,7 @@ function testFinalPaperStressGate(): void {
     orderBook("coindcx", NOW, [[101.2, 5], [101.1, 5]], [[101.3, 20]]),
   );
   const liveCashOpportunity = opportunity("stress-live-cash-costs", 20);
-  const cashBlocked = gate.evaluate({
+  const cashSeparated = gate.evaluate({
     opportunity: {
       ...liveCashOpportunity,
       pair: {
@@ -415,9 +415,17 @@ function testFinalPaperStressGate(): void {
       evidenceIds: [bybitBuyCosts.evidenceId, coinDCXSellCosts.evidenceId],
     },
   });
-  assert.equal(cashBlocked.status, "BLOCKED");
-  assert.ok((cashBlocked.statutoryCashWithholding ?? 0) > 20);
-  assert.match(cashBlocked.reasons.join(" "), /below minimum 0\.3000%/i);
+  assert.equal(cashSeparated.status, "PASSED");
+  assert.ok((cashSeparated.statutoryCashWithholding ?? 0) > 20);
+  assert.ok((cashSeparated.postStressNetProfitPercent ?? 0) > 0.3);
+  assert.ok(
+    (cashSeparated.deployableCashPostStressNetProfitPercent ?? 0) < 0,
+    "Recoverable TDS must reduce reusable cash without erasing profitable economic stress evidence.",
+  );
+  assert.match(
+    cashSeparated.reasons.join(" "),
+    /economic net.*immediately reusable.*statutory withholding/i,
+  );
   assert.equal(bybitBuyCosts.tradingFeeSurchargeMultiplier, 0.18);
   assert.equal(bybitBuyCosts.withholdingPercent, 1);
   assert.equal(coinDCXSellCosts.withholdingPercent, 1);

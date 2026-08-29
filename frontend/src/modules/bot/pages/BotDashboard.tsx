@@ -2404,10 +2404,12 @@ function StrategyOnePreArmedOneShotPanel({
 
             {candidateMatchesRoute && candidate ? (
               <>
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <MiniEvidence label="Book age" value={`${candidate.ageMs} ms`} />
                   <MiniEvidence label="Current net" value={`${candidate.currentNetProfitPercent.toFixed(4)}%`} />
-                  <MiniEvidence label="Stress net" value={candidate.stress?.postStressNetProfitPercent === null || candidate.stress?.postStressNetProfitPercent === undefined ? "NO DATA" : `${candidate.stress.postStressNetProfitPercent.toFixed(4)}%`} />
+                  <MiniEvidence label="Economic stress net" value={candidate.stress?.postStressNetProfitPercent === null || candidate.stress?.postStressNetProfitPercent === undefined ? "NO DATA" : `${candidate.stress.postStressNetProfitPercent.toFixed(4)}%`} />
+                  <MiniEvidence label="Cash after TDS" value={candidate.stress?.deployableCashPostStressNetProfitPercent === null || candidate.stress?.deployableCashPostStressNetProfitPercent === undefined ? "NO DATA" : `${candidate.stress.deployableCashPostStressNetProfitPercent.toFixed(4)}%`} />
+                  <MiniEvidence label="TDS lock (USDT)" value={candidate.stress?.statutoryCashWithholding === null || candidate.stress?.statutoryCashWithholding === undefined ? "NO DATA" : formatNumber(candidate.stress.statutoryCashWithholding)} />
                   <MiniEvidence label="Quantity" value={candidate.stress?.quantity ? formatNumber(candidate.stress.quantity) : "NO DATA"} />
                 </div>
                 <p className="mt-3 break-all font-mono text-[9px] text-text-muted">ID {candidate.opportunityId}</p>

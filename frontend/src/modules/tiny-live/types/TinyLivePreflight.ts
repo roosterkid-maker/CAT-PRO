@@ -402,6 +402,10 @@ export interface StrategyOnePilotStress {
   combinedDepthSlippagePercent: number | null;
   adverseMoveReservePercentPerLeg: number;
   tradingFees: number | null;
+  statutoryCashWithholding?: number | null;
+  statutoryCashCostEvidenceIds?: string[];
+  deployableCashPostStressNetProfit?: number | null;
+  deployableCashPostStressNetProfitPercent?: number | null;
   safetyBuffer: number | null;
   postStressNetProfit: number | null;
   postStressNetProfitPercent: number | null;
