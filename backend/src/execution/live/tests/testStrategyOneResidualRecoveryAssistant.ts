@@ -109,6 +109,7 @@ async function main(): Promise<void> {
 
   const executionBoundary =
     await service.getApprovedExecutionBoundary(preview.id, NOW + 2);
+  assert.equal(pair.reconciliations, 2);
   assert.equal(
     executionBoundary.approvedPreview.state,
     "OPERATOR_APPROVED_EVIDENCE_ONLY",
@@ -119,6 +120,41 @@ async function main(): Promise<void> {
   );
   assert.equal(executionBoundary.actionTimePreview.residual.side, "SELL");
   assert.equal(executionBoundary.actionTimePreview.residual.exactQuantity, 2);
+  assert.equal(
+    executionBoundary.actionTimePreview.sourceSessionFingerprint,
+    approved.sourceSessionFingerprint,
+    "volatile reconciliation timestamps and reasons must not invalidate approval",
+  );
+
+  const materialPair =
+    new FakePairPort(longResidualSession, 2);
+  const materialService =
+    assistant(
+      materialPair,
+      {
+        timestamp: NOW - 25,
+        bids: [{price: 1.05, quantity: 3}],
+        asks: [{price: 1.06, quantity: 3}],
+      },
+      capability(1),
+      5,
+      "material-change.jsonl",
+    );
+  const materialPreview =
+    await materialService.inspectSession(longResidualSession.sessionId, NOW);
+  materialService.approvePreview(
+    materialPreview.id,
+    materialPreview.requiredApprovalPhrase ?? "",
+    NOW + 1,
+  );
+
+  await assert.rejects(
+    materialService.getApprovedExecutionBoundary(
+      materialPreview.id,
+      NOW + 2,
+    ),
+    /material recovery evidence changed during action-time reconciliation/u,
+  );
 
   await assert.rejects(
     service.getApprovedExecutionBoundary(preview.id, NOW + 30_001),
@@ -287,6 +323,7 @@ class FakePairPort {
 
   constructor(
     private current: StrategyOneTwoLegSessionRecord,
+    private readonly materialChangeAt: number | null = null,
   ) {}
 
   getSession(
@@ -307,18 +344,119 @@ class FakePairPort {
     }
 
     this.reconciliations += 1;
+    const volatile =
+      withVolatileReconciliation(
+        current,
+        this.reconciliations,
+      );
+    this.current =
+      this.reconciliations === this.materialChangeAt
+        ? withChangedBuyFill(volatile)
+        : volatile;
+    const reconciled =
+      this.getSession(sessionId) as StrategyOneTwoLegSessionRecord;
+
     return {
-      session: current,
-      possibleExposure: current.state === "POSSIBLE_EXPOSURE",
+      session: reconciled,
+      possibleExposure: reconciled.state === "POSSIBLE_EXPOSURE",
       recoveryRequired:
-        current.state === "POSSIBLE_EXPOSURE" ||
-        current.state === "RECOVERY_REQUIRED",
-      buyDispatchedAt: current.buyDispatchedAt,
-      sellDispatchedAt: current.sellDispatchedAt,
-      buyResponse: current.buyResponse,
-      sellResponse: current.sellResponse,
+        reconciled.state === "POSSIBLE_EXPOSURE" ||
+        reconciled.state === "RECOVERY_REQUIRED",
+      buyDispatchedAt: reconciled.buyDispatchedAt,
+      sellDispatchedAt: reconciled.sellDispatchedAt,
+      buyResponse: reconciled.buyResponse,
+      sellResponse: reconciled.sellResponse,
     };
   }
+}
+
+function withVolatileReconciliation(
+  value: StrategyOneTwoLegSessionRecord,
+  count: number,
+): StrategyOneTwoLegSessionRecord {
+  return {
+    ...structuredClone(value),
+    updatedAt: value.updatedAt + count,
+    buyDispatchedAt:
+      (value.buyDispatchedAt ?? value.preparedAt) + count,
+    sellDispatchedAt:
+      (value.sellDispatchedAt ?? value.preparedAt) + count,
+    buyResponse: volatileGateway(value.buyResponse, count),
+    sellResponse: volatileGateway(value.sellResponse, count),
+    reasons: [
+      ...value.reasons,
+      `Read reconciliation ${count} completed without material change.`,
+    ],
+  };
+}
+
+function volatileGateway(
+  response: StrategyOneTwoLegSessionRecord["buyResponse"],
+  count: number,
+): StrategyOneTwoLegSessionRecord["buyResponse"] {
+  if (!response?.record) {
+    return response ? structuredClone(response) : null;
+  }
+
+  const result = response.record.result;
+
+  return {
+    ...structuredClone(response),
+    reasons: [
+      ...response.reasons,
+      `Gateway read reconciliation ${count}.`,
+    ],
+    record: {
+      ...structuredClone(response.record),
+      updatedAt: response.record.updatedAt + count,
+      result: result
+        ? {
+          ...structuredClone(result),
+          startedAt: result.startedAt + count,
+          completedAt: result.completedAt + count,
+          executionTimeMs: result.executionTimeMs + count,
+          failureReason: result.failureReason
+            ? `${result.failureReason} Reconciled ${count}.`
+            : null,
+          reasons: [
+            ...result.reasons,
+            `Result read reconciliation ${count}.`,
+          ],
+        }
+        : null,
+    },
+  };
+}
+
+function withChangedBuyFill(
+  value: StrategyOneTwoLegSessionRecord,
+): StrategyOneTwoLegSessionRecord {
+  const response = value.buyResponse;
+  const record = response?.record;
+  const result = record?.result;
+
+  if (!response || !record || !result) {
+    throw new Error("Material-change fixture requires BUY result evidence.");
+  }
+
+  const filledQuantity =
+    result.filledQuantity + 1;
+
+  return {
+    ...structuredClone(value),
+    buyResponse: {
+      ...structuredClone(response),
+      record: {
+        ...structuredClone(record),
+        result: {
+          ...structuredClone(result),
+          filledQuantity,
+          remainingQuantity:
+            Math.max(0, result.requestedQuantity - filledQuantity),
+        },
+      },
+    },
+  };
 }
 
 function assistant(

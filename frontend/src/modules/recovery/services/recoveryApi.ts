@@ -1,3 +1,5 @@
+import axios from "axios";
+
 import {
   api,
 } from "@/api/client";
@@ -78,26 +80,40 @@ export async function fetchStrategyOneTwoLegRecovery(): Promise<StrategyOneTwoLe
 export async function inspectStrategyOneResidualRecovery(
   sessionId: string,
 ): Promise<StrategyOneResidualRecoveryPreviewResponse> {
-  const response = await api.post<StrategyOneResidualRecoveryPreviewResponse>(
-    `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
-      sessionId,
-    )}/inspect`,
-    {},
+  return recoveryRequest(
+    async () => {
+      const response =
+        await api.post<StrategyOneResidualRecoveryPreviewResponse>(
+          `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
+            sessionId,
+          )}/inspect`,
+          {},
+        );
+
+      return response.data;
+    },
+    "Strategy #1 residual recovery inspection failed closed.",
   );
-  return response.data;
 }
 
 export async function approveStrategyOneResidualRecovery(
   previewId: string,
   confirmation: string,
 ): Promise<StrategyOneResidualRecoveryPreviewResponse> {
-  const response = await api.put<StrategyOneResidualRecoveryPreviewResponse>(
-    `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
-      previewId,
-    )}/approve`,
-    {confirmation},
+  return recoveryRequest(
+    async () => {
+      const response =
+        await api.put<StrategyOneResidualRecoveryPreviewResponse>(
+          `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
+            previewId,
+          )}/approve`,
+          {confirmation},
+        );
+
+      return response.data;
+    },
+    "Strategy #1 residual recovery approval failed closed.",
   );
-  return response.data;
 }
 
 export async function executeStrategyOneResidualRecovery(
@@ -105,11 +121,45 @@ export async function executeStrategyOneResidualRecovery(
   confirmation: string,
   resolutionNote: string,
 ): Promise<StrategyOneResidualExecutionResponse> {
-  const response = await api.post<StrategyOneResidualExecutionResponse>(
-    `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
-      previewId,
-    )}/execute`,
-    {confirmation, resolutionNote},
+  return recoveryRequest(
+    async () => {
+      const response =
+        await api.post<StrategyOneResidualExecutionResponse>(
+          `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
+            previewId,
+          )}/execute`,
+          {confirmation, resolutionNote},
+        );
+
+      return response.data;
+    },
+    "One-time Strategy #1 residual recovery failed closed.",
   );
-  return response.data;
+}
+
+interface RecoveryApiErrorResponse {
+  message?: unknown;
+}
+
+async function recoveryRequest<T>(
+  operation: () => Promise<T>,
+  fallbackMessage: string,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error: unknown) {
+    if (axios.isAxiosError<RecoveryApiErrorResponse>(error)) {
+      const message =
+        error.response?.data?.message;
+
+      throw new Error(
+        typeof message === "string" && message.trim().length > 0
+          ? message.trim()
+          : fallbackMessage,
+        {cause: error},
+      );
+    }
+
+    throw error;
+  }
 }

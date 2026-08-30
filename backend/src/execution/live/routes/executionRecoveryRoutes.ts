@@ -175,9 +175,22 @@ router.post(
           request.params.sessionId,
         );
 
+      const blocked =
+        preview.state === "BLOCKED";
+
       response
-        .status(preview.state === "BLOCKED" ? 409 : 200)
-        .json({success: preview.state !== "BLOCKED", data: preview});
+        .status(blocked ? 409 : 200)
+        .json({
+          success: !blocked,
+          data: preview,
+          ...(blocked
+            ? {
+              message:
+                preview.blockers[0] ??
+                "Strategy #1 residual recovery inspection failed closed.",
+            }
+            : {}),
+        });
     } catch (error: unknown) {
       response.status(409).json({
         success: false,
@@ -263,11 +276,21 @@ router.post(
             : "",
         );
 
+      const completed =
+        result.state === "COMPLETED_RESOLVED";
+
       response
-        .status(result.state === "COMPLETED_RESOLVED" ? 200 : 409)
+        .status(completed ? 200 : 409)
         .json({
-          success: result.state === "COMPLETED_RESOLVED",
+          success: completed,
           data: result,
+          ...(completed
+            ? {}
+            : {
+              message:
+                result.reasons.at(-1) ??
+                "One-time Strategy #1 residual recovery failed closed.",
+            }),
           recoveryGate: strategyOneTwoLegRestartRecoveryService.getReport(),
         });
     } catch (error: unknown) {

@@ -335,7 +335,7 @@ export class StrategyOneResidualRecoveryAssistantService {
       fingerprint(session) !== current.sourceSessionFingerprint
     ) {
       throw new Error(
-        "Strategy #1 recovery session evidence changed; inspect again before approval.",
+        "Strategy #1 material recovery evidence changed; inspect again before approval.",
       );
     }
 
@@ -394,7 +394,7 @@ export class StrategyOneResidualRecoveryAssistantService {
       fingerprint(known) !== approved.sourceSessionFingerprint
     ) {
       throw new Error(
-        "Strategy #1 recovery session evidence changed; inspect and approve again.",
+        "Strategy #1 material recovery evidence changed; inspect and approve again.",
       );
     }
 
@@ -424,7 +424,7 @@ export class StrategyOneResidualRecoveryAssistantService {
 
     if (fingerprint(session) !== approved.sourceSessionFingerprint) {
       throw new Error(
-        "Strategy #1 recovery session evidence changed during action-time reconciliation.",
+        "Strategy #1 material recovery evidence changed during action-time reconciliation.",
       );
     }
 
@@ -1230,10 +1230,126 @@ function finiteNonNegative(value: unknown): number | null {
     : null;
 }
 
+/**
+ * Fingerprint only durable order and financial evidence.
+ *
+ * Read-only reconciliation intentionally rewrites transport metadata such as
+ * updatedAt, dispatch timestamps, gateway timestamps, lastError and diagnostic
+ * reasons. Hashing the entire session therefore made an unchanged terminal
+ * exposure look different at the mandatory action-time reconciliation and
+ * prevented every recovery from reaching the journal-before-I/O boundary.
+ *
+ * Requests, authority flags, gateway/order identity, terminal status, fills,
+ * prices and authoritative fee evidence remain covered so a material change
+ * still invalidates the operator approval.
+ */
 function fingerprint(session: StrategyOneTwoLegSessionRecord): string {
   return createHash("sha256")
-    .update(JSON.stringify(session))
+    .update(JSON.stringify({
+      schemaVersion: session.schemaVersion,
+      sessionId: session.sessionId,
+      requestHash: session.requestHash,
+      opportunityId: session.opportunityId,
+      lastLookDecisionId: session.lastLookDecisionId,
+      buyIdempotencyKey: session.buyIdempotencyKey,
+      sellIdempotencyKey: session.sellIdempotencyKey,
+      buyRequest: session.buyRequest,
+      sellRequest: session.sellRequest,
+      state: session.state,
+      buyResponse: gatewayEvidence(session.buyResponse),
+      sellResponse: gatewayEvidence(session.sellResponse),
+      automaticRetryAllowed: session.automaticRetryAllowed,
+      automaticRecoveryOrderAllowed: session.automaticRecoveryOrderAllowed,
+      newOrderSubmissionAllowed: session.newOrderSubmissionAllowed,
+    }))
     .digest("hex");
+}
+
+function gatewayEvidence(
+  response: StrategyOneTwoLegSessionRecord["buyResponse"],
+) {
+  const record = response?.record;
+  const result = record?.result;
+  const feeEvidence = record?.feeEvidence;
+
+  if (!response) {
+    return null;
+  }
+
+  return {
+    state: response.state,
+    record: record
+      ? {
+        id: record.id,
+        idempotencyKey: record.idempotencyKey,
+        requestHash: record.requestHash,
+        request: record.request,
+        state: record.state,
+        result: result
+          ? {
+            success: result.success,
+            exchange: result.exchange,
+            product: result.product ?? null,
+            reduceOnly: result.reduceOnly ?? null,
+            positionMode: result.positionMode ?? null,
+            positionSide: result.positionSide ?? null,
+            market: result.market,
+            side: result.side,
+            orderId: result.orderId,
+            clientOrderId: result.clientOrderId,
+            status: result.status,
+            requestedQuantity: result.requestedQuantity,
+            filledQuantity: result.filledQuantity,
+            remainingQuantity: result.remainingQuantity,
+            requestedPrice: result.requestedPrice,
+            averageFillPrice: result.averageFillPrice,
+            feeAmount: result.feeAmount,
+            authoritativeFeeQuoteAmount:
+              result.authoritativeFeeQuoteAmount ?? null,
+            authoritativeWithholdingQuoteAmount:
+              result.authoritativeWithholdingQuoteAmount ?? null,
+            authoritativeCashDeductionQuoteAmount:
+              result.authoritativeCashDeductionQuoteAmount ?? null,
+            authoritativeWithholdingEvidenceComplete:
+              result.authoritativeWithholdingEvidenceComplete ?? null,
+            authoritativeFeeEvidenceId:
+              result.authoritativeFeeEvidenceId ?? null,
+            cancelled: result.cancelled,
+            timedOut: result.timedOut,
+          }
+          : null,
+        feeEvidence: feeEvidence
+          ? {
+            version: feeEvidence.version,
+            id: feeEvidence.id,
+            exchange: feeEvidence.exchange,
+            product: feeEvidence.product,
+            market: feeEvidence.market,
+            orderId: feeEvidence.orderId,
+            expectedFilledQuantity: feeEvidence.expectedFilledQuantity,
+            observedFilledQuantity: feeEvidence.observedFilledQuantity,
+            observedQuoteQuantity: feeEvidence.observedQuoteQuantity,
+            averageFillPrice: feeEvidence.averageFillPrice,
+            fills: feeEvidence.fills,
+            fees: feeEvidence.fees,
+            withholdings: feeEvidence.withholdings,
+            quoteAsset: feeEvidence.quoteAsset,
+            totalFeeQuoteAmount: feeEvidence.totalFeeQuoteAmount,
+            totalWithholdingQuoteAmount:
+              feeEvidence.totalWithholdingQuoteAmount,
+            totalCashDeductionQuoteAmount:
+              feeEvidence.totalCashDeductionQuoteAmount,
+            withholdingEvidenceComplete:
+              feeEvidence.withholdingEvidenceComplete,
+            complete: feeEvidence.complete,
+            source: feeEvidence.source,
+          }
+          : null,
+        cancellationRequested: record.cancelRequestedAt !== null,
+        orderSubmissionPerformed: record.orderSubmissionPerformed,
+      }
+      : null,
+  };
 }
 
 function safety() {
