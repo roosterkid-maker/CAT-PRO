@@ -1053,9 +1053,11 @@ function preflightFingerprint(
    */
   const volatileObservationFields = new Set([
     "ageMs",
+    "buyBookAgeMs",
     "checkedAt",
     "evaluatedAt",
     "generatedAt",
+    "sellBookAgeMs",
     "snapshotAgeMs",
     "sourceOpportunityAgeMs",
   ]);

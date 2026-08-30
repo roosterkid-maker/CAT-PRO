@@ -1239,6 +1239,18 @@ function preflightFixture(
           state: "FUNDED",
           executableQuantity: 0.001,
           evaluatedAt: now,
+          multiLevelDepthEvidence: {
+            status: "PASSED",
+            buyBookAgeMs: Math.max(0, now - NOW),
+            sellBookAgeMs: Math.max(0, now - NOW),
+            bookSkewMs: 0,
+            buyDepthQuantity: 1,
+            sellDepthQuantity: 1,
+            sharedDepthQuantity: 1,
+            maximumBookAgeMs: 240,
+            maximumBookSkewMs: 250,
+            blockers: [],
+          },
           buyFunding: {
             snapshotAgeMs: Math.max(0, now - NOW),
           },
