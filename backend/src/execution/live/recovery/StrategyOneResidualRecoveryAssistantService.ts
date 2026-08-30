@@ -127,6 +127,11 @@ export interface StrategyOneResidualRecoveryPreview {
   };
 }
 
+export interface StrategyOneApprovedResidualExecutionBoundary {
+  readonly approvedPreview: StrategyOneResidualRecoveryPreview;
+  readonly actionTimePreview: StrategyOneResidualRecoveryPreview;
+}
+
 interface PersistedSnapshot {
   readonly schemaVersion: "142.0";
   readonly savedAt: number;
@@ -142,6 +147,7 @@ interface PairPort {
 }
 
 export interface StrategyOneResidualRecoveryAssistantDependencies {
+  currentTime(): number;
   getOrderBook(exchange: string, market: string): OrderBook | null;
   getCapability(exchange: string, market: string): ExchangeMarketCapability | null;
   getBalance(exchange: string, asset: string): ExchangeBalanceSnapshot | null;
@@ -186,6 +192,8 @@ const DEFAULT_CONFIGURATION:
 
 const DEFAULT_DEPENDENCIES:
   StrategyOneResidualRecoveryAssistantDependencies = {
+  currentTime:
+    () => Date.now(),
   getOrderBook:
     (exchange, market) =>
       orderBookService.get(exchange, market),
@@ -353,6 +361,90 @@ export class StrategyOneResidualRecoveryAssistantService {
     return preview ? clone(preview) : null;
   }
 
+  /**
+   * Revalidates an explicitly approved preview immediately before a separate
+   * recovery execution owner is allowed to journal an order. This method only
+   * performs known-order reconciliation and cached evidence reads; it has no
+   * exchange order submission port.
+   */
+  async getApprovedExecutionBoundary(
+    previewIdValue: string,
+    now = Date.now(),
+  ): Promise<StrategyOneApprovedResidualExecutionBoundary> {
+    validateTime(now);
+    const approved =
+      this.previews.get(
+        requireIdentifier(previewIdValue, "preview"),
+      );
+
+    if (
+      !approved ||
+      approved.state !== "OPERATOR_APPROVED_EVIDENCE_ONLY" ||
+      approved.approvedAt === null
+    ) {
+      throw new Error(
+        "A current explicitly approved Strategy #1 recovery preview is required.",
+      );
+    }
+
+    const known = this.pairs.getSession(approved.sessionId);
+
+    if (
+      !known ||
+      fingerprint(known) !== approved.sourceSessionFingerprint
+    ) {
+      throw new Error(
+        "Strategy #1 recovery session evidence changed; inspect and approve again.",
+      );
+    }
+
+    let session: StrategyOneTwoLegSessionRecord;
+
+    try {
+      session = (
+        await this.pairs.reconcileSession(approved.sessionId, now)
+      ).session;
+    } catch (error: unknown) {
+      throw new Error(
+        `Action-time recovery reconciliation failed: ${message(error)}`,
+      );
+    }
+
+    const assessmentTime = Math.max(
+      now,
+      this.dependencies.currentTime(),
+    );
+    validateTime(assessmentTime);
+
+    if (approved.expiresAt <= assessmentTime) {
+      throw new Error(
+        "The approved Strategy #1 recovery preview expired; inspect and approve again.",
+      );
+    }
+
+    if (fingerprint(session) !== approved.sourceSessionFingerprint) {
+      throw new Error(
+        "Strategy #1 recovery session evidence changed during action-time reconciliation.",
+      );
+    }
+
+    const actionTime = this.buildPreview(session, assessmentTime, null);
+
+    if (actionTime.state !== "READY_FOR_OPERATOR_REVIEW") {
+      throw new Error(
+        `Action-time recovery evidence is blocked: ${actionTime.blockers.join(" | ")}`,
+      );
+    }
+
+    assertSameRecoveryIntent(approved, actionTime);
+    assertNoWorseRecoveryPrice(approved, actionTime);
+
+    return freeze({
+      approvedPreview: clone(approved),
+      actionTimePreview: clone(actionTime),
+    });
+  }
+
   getDiagnostics(
     now = Date.now(),
   ) {
@@ -420,9 +512,20 @@ export class StrategyOneResidualRecoveryAssistantService {
           : "Unknown authoritative reconciliation failure.";
     }
 
+    // Reconciliation and authenticated reads are asynchronous. The caller's
+    // timestamp marks when inspection started, so a book refreshed during
+    // those reads can legitimately be newer than that timestamp. Assess
+    // freshness against the completion-time clock while preserving injected
+    // future timestamps used by deterministic callers.
+    const assessmentTime = Math.max(
+      now,
+      this.dependencies.currentTime(),
+    );
+    validateTime(assessmentTime);
+
     const preview =
-      this.buildPreview(session, now, reconciliationFailure);
-    this.setAndPersist(preview, now);
+      this.buildPreview(session, assessmentTime, reconciliationFailure);
+    this.setAndPersist(preview, assessmentTime);
     return clone(preview);
   }
 
@@ -1211,6 +1314,52 @@ function normalizeExchange(value: string): string {
 
 function normalizeMarket(value: string): string {
   return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
+}
+
+function assertSameRecoveryIntent(
+  approved: StrategyOneResidualRecoveryPreview,
+  current: StrategyOneResidualRecoveryPreview,
+): void {
+  const unchanged =
+    approved.sessionId === current.sessionId &&
+    approved.sourceSessionFingerprint === current.sourceSessionFingerprint &&
+    normalizeMarket(approved.market) === normalizeMarket(current.market) &&
+    normalizeExchange(approved.residual.venue ?? "") ===
+      normalizeExchange(current.residual.venue ?? "") &&
+    approved.residual.side === current.residual.side &&
+    approved.residual.direction === current.residual.direction &&
+    approved.residual.exactQuantity === current.residual.exactQuantity &&
+    approved.residual.executableQuantity === current.residual.executableQuantity &&
+    approved.residual.dustQuantity === current.residual.dustQuantity &&
+    approved.executionPreview.selectedTimeInForce ===
+      current.executionPreview.selectedTimeInForce;
+
+  if (!unchanged) {
+    throw new Error(
+      "Action-time recovery identity, quantity, venue, side or time-in-force changed; inspect and approve again.",
+    );
+  }
+}
+
+function assertNoWorseRecoveryPrice(
+  approved: StrategyOneResidualRecoveryPreview,
+  current: StrategyOneResidualRecoveryPreview,
+): void {
+  const approvedPrice = approved.executionPreview.limitPrice;
+  const currentPrice = current.executionPreview.limitPrice;
+  const side = approved.residual.side;
+
+  if (
+    approvedPrice === null ||
+    currentPrice === null ||
+    (side === "SELL" && currentPrice < approvedPrice) ||
+    (side === "BUY" && currentPrice > approvedPrice) ||
+    (side !== "SELL" && side !== "BUY")
+  ) {
+    throw new Error(
+      "Action-time recovery price is worse than the explicitly approved limit; inspect and approve again.",
+    );
+  }
 }
 
 function message(error: unknown): string {

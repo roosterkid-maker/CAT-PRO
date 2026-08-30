@@ -107,6 +107,24 @@ async function main(): Promise<void> {
   assert.equal(approved.safety.approvalIsEvidenceOnly, true);
   assert.equal(approved.safety.automaticRecoveryOrderAllowed, false);
 
+  const executionBoundary =
+    await service.getApprovedExecutionBoundary(preview.id, NOW + 2);
+  assert.equal(
+    executionBoundary.approvedPreview.state,
+    "OPERATOR_APPROVED_EVIDENCE_ONLY",
+  );
+  assert.equal(
+    executionBoundary.actionTimePreview.state,
+    "READY_FOR_OPERATOR_REVIEW",
+  );
+  assert.equal(executionBoundary.actionTimePreview.residual.side, "SELL");
+  assert.equal(executionBoundary.actionTimePreview.residual.exactQuantity, 2);
+
+  await assert.rejects(
+    service.getApprovedExecutionBoundary(preview.id, NOW + 30_001),
+    /expired/u,
+  );
+
   const stale =
     await assistant(
       new FakePairPort(longResidualSession),
@@ -123,6 +141,46 @@ async function main(): Promise<void> {
   assert.equal(stale.state, "BLOCKED");
   assert.ok(
     stale.blockers.some((blocker) =>
+      blocker.includes("freshness boundary")),
+  );
+
+  const refreshedDuringInspection =
+    await assistant(
+      new FakePairPort(longResidualSession),
+      {
+        timestamp: NOW + 500,
+        bids: [{price: 1.05, quantity: 3}],
+        asks: [{price: 1.06, quantity: 3}],
+      },
+      capability(1),
+      5,
+      "refreshed-during-inspection.jsonl",
+      NOW + 550,
+    ).inspectSession(longResidualSession.sessionId, NOW);
+
+  assert.equal(refreshedDuringInspection.state, "READY_FOR_OPERATOR_REVIEW");
+  assert.equal(refreshedDuringInspection.createdAt, NOW + 550);
+  assert.equal(refreshedDuringInspection.executionPreview.bookAgeMs, 50);
+  assert.equal(refreshedDuringInspection.blockers.length, 0);
+
+  const futureDatedBeyondCompletion =
+    await assistant(
+      new FakePairPort(longResidualSession),
+      {
+        timestamp: NOW + 551,
+        bids: [{price: 1.05, quantity: 3}],
+        asks: [{price: 1.06, quantity: 3}],
+      },
+      capability(1),
+      5,
+      "future-dated-beyond-completion.jsonl",
+      NOW + 550,
+    ).inspectSession(longResidualSession.sessionId, NOW);
+
+  assert.equal(futureDatedBeyondCompletion.state, "BLOCKED");
+  assert.equal(futureDatedBeyondCompletion.executionPreview.bookAgeMs, -1);
+  assert.ok(
+    futureDatedBeyondCompletion.blockers.some((blocker) =>
       blocker.includes("freshness boundary")),
   );
 
@@ -273,10 +331,12 @@ function assistant(
   marketCapability: ExchangeMarketCapability,
   availableBalance: number,
   file: string,
+  currentTime = NOW,
 ): StrategyOneResidualRecoveryAssistantService {
   return new StrategyOneResidualRecoveryAssistantService(
     pairs,
     {
+      currentTime: () => currentTime,
       getOrderBook: () => ({
         exchange: "coindcx",
         market: "COTIUSDT",

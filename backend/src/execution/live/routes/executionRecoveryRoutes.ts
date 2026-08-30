@@ -30,6 +30,10 @@ import {
   strategyOneResidualRecoveryAssistantService,
 } from "../recovery/StrategyOneResidualRecoveryAssistantService";
 
+import {
+  strategyOneResidualRecoveryExecutionService,
+} from "../recovery/StrategyOneResidualRecoveryExecutionService";
+
 const router =
   Router();
 
@@ -211,6 +215,69 @@ router.put(
           error instanceof Error
             ? error.message
             : "Strategy #1 recovery approval failed closed.",
+      });
+    }
+  },
+);
+
+/*
+ * CAT PRO V202
+ *
+ * The GET route is diagnostics-only. POST is the sole explicit one-time
+ * residual-recovery submission boundary: it requires a separately approved,
+ * still-current preview and its own exact execution phrase. The service
+ * journals before gateway I/O and never retries, replaces, cancels, transfers
+ * or withdraws automatically.
+ */
+router.get(
+  "/strategy-one-residual-execution",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({
+      success: true,
+      data: strategyOneResidualRecoveryExecutionService.getDiagnostics(),
+    });
+  },
+);
+
+router.post(
+  "/strategy-one-residual-assistant/:previewId/execute",
+  async (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const result =
+        await strategyOneResidualRecoveryExecutionService.execute(
+          request.params.previewId,
+          typeof request.body?.confirmation === "string"
+            ? request.body.confirmation
+            : "",
+          typeof request.body?.resolutionNote === "string"
+            ? request.body.resolutionNote
+            : "",
+        );
+
+      response
+        .status(result.state === "COMPLETED_RESOLVED" ? 200 : 409)
+        .json({
+          success: result.state === "COMPLETED_RESOLVED",
+          data: result,
+          recoveryGate: strategyOneTwoLegRestartRecoveryService.getReport(),
+        });
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "One-time Strategy #1 residual recovery failed closed.",
+        recoveryGate: strategyOneTwoLegRestartRecoveryService.getReport(),
       });
     }
   },

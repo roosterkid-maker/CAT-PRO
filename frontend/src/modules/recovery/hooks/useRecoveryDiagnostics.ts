@@ -5,11 +5,14 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  approveStrategyOneResidualRecovery,
+  executeStrategyOneResidualRecovery,
   fetchOrderLifecyclePersistence,
   fetchRecoveryOverview,
   fetchRuntimeRecovery,
   fetchSettlementAccountingPersistence,
   fetchStrategyOneTwoLegRecovery,
+  inspectStrategyOneResidualRecovery,
   resolveDurableRecovery,
 } from "../services/recoveryApi";
 
@@ -174,5 +177,51 @@ export function useStrategyOneTwoLegRecovery(
       3_000,
 
     retry: 2,
+  });
+}
+
+export function useInspectStrategyOneResidualRecovery() {
+  return useMutation({
+    mutationFn: (sessionId: string) =>
+      inspectStrategyOneResidualRecovery(sessionId),
+  });
+}
+
+export function useApproveStrategyOneResidualRecovery() {
+  return useMutation({
+    mutationFn: ({
+      previewId,
+      confirmation,
+    }: {
+      previewId: string;
+      confirmation: string;
+    }) => approveStrategyOneResidualRecovery(previewId, confirmation),
+  });
+}
+
+export function useExecuteStrategyOneResidualRecovery() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      previewId,
+      confirmation,
+      resolutionNote,
+    }: {
+      previewId: string;
+      confirmation: string;
+      resolutionNote: string;
+    }) => executeStrategyOneResidualRecovery(
+      previewId,
+      confirmation,
+      resolutionNote,
+    ),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({queryKey: overviewKey}),
+        queryClient.invalidateQueries({queryKey: runtimeKey}),
+        queryClient.invalidateQueries({queryKey: strategyOneTwoLegKey}),
+      ]);
+    },
   });
 }

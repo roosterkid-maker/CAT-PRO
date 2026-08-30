@@ -14,6 +14,9 @@ import {
 } from "react";
 
 import {
+  useApproveStrategyOneResidualRecovery,
+  useExecuteStrategyOneResidualRecovery,
+  useInspectStrategyOneResidualRecovery,
   useOrderLifecyclePersistence,
   useRecoveryOverview,
   useResolveDurableRecovery,
@@ -42,6 +45,15 @@ export default function RecoveryDiagnosticsDashboard() {
   const resolveMutation =
     useResolveDurableRecovery();
 
+  const inspectResidualMutation =
+    useInspectStrategyOneResidualRecovery();
+
+  const approveResidualMutation =
+    useApproveStrategyOneResidualRecovery();
+
+  const executeResidualMutation =
+    useExecuteStrategyOneResidualRecovery();
+
   const [
     selectedSessionId,
     setSelectedSessionId,
@@ -55,6 +67,26 @@ export default function RecoveryDiagnosticsDashboard() {
     setResolutionNote,
   ] =
     useState("");
+
+  const [
+    residualApprovalConfirmation,
+    setResidualApprovalConfirmation,
+  ] = useState("");
+
+  const [
+    residualExecutionConfirmation,
+    setResidualExecutionConfirmation,
+  ] = useState("");
+
+  const [
+    residualExecutionNote,
+    setResidualExecutionNote,
+  ] = useState("");
+
+  const [
+    residualExecutionAcknowledged,
+    setResidualExecutionAcknowledged,
+  ] = useState(false);
 
   const overview =
     overviewQuery.data?.data;
@@ -123,6 +155,26 @@ export default function RecoveryDiagnosticsDashboard() {
         resolution.sessionId ===
         selectedSessionId,
     ) ?? null;
+
+  const residualPreview =
+    approveResidualMutation.data?.data ??
+    inspectResidualMutation.data?.data ??
+    null;
+
+  const requiredResidualExecutionPhrase = residualPreview
+    ? `EXECUTE ONE-TIME RECOVERY ${residualPreview.id}`
+    : "";
+
+  const selectRecoverySession = (sessionId: string | null) => {
+    setSelectedSessionId(sessionId);
+    inspectResidualMutation.reset();
+    approveResidualMutation.reset();
+    executeResidualMutation.reset();
+    setResidualApprovalConfirmation("");
+    setResidualExecutionConfirmation("");
+    setResidualExecutionNote("");
+    setResidualExecutionAcknowledged(false);
+  };
 
   const refreshAll =
     async () => {
@@ -512,7 +564,7 @@ export default function RecoveryDiagnosticsDashboard() {
                       finding
                     }
                     onSelectSession={
-                      setSelectedSessionId
+                      selectRecoverySession
                     }
                   />
                 ),
@@ -714,6 +766,254 @@ export default function RecoveryDiagnosticsDashboard() {
         )}
       </section>
 
+      {sessionIds.length > 0 ? (
+        <section className="rounded-xl border border-danger/30 bg-panel p-5">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="mt-1 size-5 shrink-0 text-danger" />
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-danger">
+                One-time LIVE residual recovery
+              </p>
+
+              <h2 className="mt-1 text-xl font-bold text-text-primary">
+                Inspect → approve evidence → execute exact FOK recovery
+              </h2>
+
+              <p className="mt-2 max-w-4xl text-sm leading-6 text-text-muted">
+                This control can submit one real compensating order only while
+                PAPER mode and the emergency stop are active. It journals before
+                exchange I/O, uses the approved exact quantity and price limit,
+                and never retries, replaces, cancels, transfers or withdraws
+                automatically. A partial, cancelled, unknown or fee-incomplete
+                result remains blocked.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-[0.14em] text-text-muted">
+                Unresolved session
+              </label>
+
+              <select
+                value={selectedSessionId ?? ""}
+                onChange={(event) =>
+                  selectRecoverySession(event.target.value || null)}
+                className="mt-2 w-full rounded-md border border-border-default bg-panel-light p-3 text-sm text-text-primary outline-none"
+              >
+                <option value="">Select recovery session</option>
+                {sessionIds.map((sessionId) => (
+                  <option key={sessionId} value={sessionId}>
+                    {sessionId}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                disabled={!selectedSessionId || inspectResidualMutation.isPending}
+                onClick={() => {
+                  if (!selectedSessionId) return;
+                  approveResidualMutation.reset();
+                  executeResidualMutation.reset();
+                  setResidualApprovalConfirmation("");
+                  setResidualExecutionConfirmation("");
+                  setResidualExecutionAcknowledged(false);
+                  inspectResidualMutation.mutate(selectedSessionId);
+                }}
+                className="mt-3 w-full rounded-md border border-border-default bg-panel-light px-3 py-2 text-sm font-semibold text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {inspectResidualMutation.isPending
+                  ? "Inspecting signed evidence..."
+                  : "1. Inspect exact residual"}
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {residualPreview ? (
+                <div className="rounded-lg border border-border-default bg-panel-light p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-mono text-xs text-text-muted">
+                      {residualPreview.market} · {residualPreview.residual.venue ?? "unknown"}
+                    </span>
+                    <span className={`rounded-full border px-2 py-1 text-[10px] font-bold ${
+                      residualPreview.state === "BLOCKED"
+                        ? "border-danger/30 bg-danger/10 text-danger"
+                        : "border-success/30 bg-success/10 text-success"
+                    }`}>
+                      {residualPreview.state}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <DataRow
+                      label="Recovery side"
+                      value={`${residualPreview.residual.side ?? "—"} ${residualPreview.residual.executableQuantity ?? "—"}`}
+                    />
+                    <DataRow
+                      label="Limit / TIF"
+                      value={`${residualPreview.executionPreview.limitPrice ?? "—"} / ${residualPreview.executionPreview.selectedTimeInForce ?? "—"}`}
+                    />
+                    <DataRow
+                      label="Depth fill"
+                      value={`${residualPreview.executionPreview.fillPercent ?? "—"}%`}
+                    />
+                    <DataRow
+                      label="Balance"
+                      value={`${residualPreview.executionPreview.availableBalance ?? "—"} ${residualPreview.executionPreview.balanceAsset ?? ""}`}
+                    />
+                  </div>
+
+                  {residualPreview.blockers.length > 0 ? (
+                    <div className="mt-4 space-y-2">
+                      {residualPreview.blockers.map((blocker) => (
+                        <div
+                          key={blocker}
+                          className="rounded-md border border-danger/20 bg-danger/10 p-3 text-xs text-danger"
+                        >
+                          {blocker}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {residualPreview?.state === "READY_FOR_OPERATOR_REVIEW" &&
+              residualPreview.requiredApprovalPhrase ? (
+                <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-warning">
+                    Evidence approval only — no order yet
+                  </p>
+                  <p className="mt-2 break-all font-mono text-xs text-text-primary">
+                    {residualPreview.requiredApprovalPhrase}
+                  </p>
+                  <input
+                    value={residualApprovalConfirmation}
+                    onChange={(event) =>
+                      setResidualApprovalConfirmation(event.target.value)}
+                    placeholder="Type the exact evidence approval phrase"
+                    className="mt-3 w-full rounded-md border border-border-default bg-panel p-3 font-mono text-xs text-text-primary outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      residualApprovalConfirmation.trim() !==
+                        residualPreview.requiredApprovalPhrase ||
+                      approveResidualMutation.isPending
+                    }
+                    onClick={() =>
+                      approveResidualMutation.mutate({
+                        previewId: residualPreview.id,
+                        confirmation: residualApprovalConfirmation.trim(),
+                      })}
+                    className="mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm font-semibold text-warning disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {approveResidualMutation.isPending
+                      ? "Approving evidence..."
+                      : "2. Approve exact recovery evidence"}
+                  </button>
+                </div>
+              ) : null}
+
+              {residualPreview?.state === "OPERATOR_APPROVED_EVIDENCE_ONLY" ? (
+                <div className="rounded-lg border border-danger/40 bg-danger/10 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-danger">
+                    Final LIVE submission boundary
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-text-primary">
+                    The next button can place one real {residualPreview.residual.side}{" "}
+                    {residualPreview.residual.executableQuantity} {residualPreview.executionPreview.balanceAsset}{" "}
+                    order on {residualPreview.residual.venue}. No automatic retry is permitted.
+                  </p>
+
+                  <label className="mt-4 flex items-start gap-3 text-sm text-text-primary">
+                    <input
+                      type="checkbox"
+                      checked={residualExecutionAcknowledged}
+                      onChange={(event) =>
+                        setResidualExecutionAcknowledged(event.target.checked)}
+                      className="mt-1"
+                    />
+                    <span>
+                      I understand this submits one real exact-sized recovery
+                      order and any partial, unknown or failed evidence remains
+                      emergency-blocked.
+                    </span>
+                  </label>
+
+                  <p className="mt-4 break-all font-mono text-xs text-danger">
+                    {requiredResidualExecutionPhrase}
+                  </p>
+                  <input
+                    value={residualExecutionConfirmation}
+                    onChange={(event) =>
+                      setResidualExecutionConfirmation(event.target.value)}
+                    placeholder="Type the exact one-time execution phrase"
+                    className="mt-3 w-full rounded-md border border-danger/30 bg-panel p-3 font-mono text-xs text-text-primary outline-none"
+                  />
+                  <textarea
+                    value={residualExecutionNote}
+                    onChange={(event) =>
+                      setResidualExecutionNote(event.target.value)}
+                    placeholder="Required durable resolution note"
+                    className="mt-3 min-h-24 w-full rounded-md border border-danger/30 bg-panel p-3 text-sm text-text-primary outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      !residualExecutionAcknowledged ||
+                      residualExecutionConfirmation.trim() !==
+                        requiredResidualExecutionPhrase ||
+                      residualExecutionNote.trim().length === 0 ||
+                      executeResidualMutation.isPending
+                    }
+                    onClick={() =>
+                      executeResidualMutation.mutate({
+                        previewId: residualPreview.id,
+                        confirmation: residualExecutionConfirmation.trim(),
+                        resolutionNote: residualExecutionNote.trim(),
+                      })}
+                    className="mt-3 rounded-md border border-danger bg-danger/20 px-4 py-2 text-sm font-bold text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {executeResidualMutation.isPending
+                      ? "Submitting one-time recovery..."
+                      : "3. Execute one-time LIVE recovery"}
+                  </button>
+                </div>
+              ) : null}
+
+              {inspectResidualMutation.isError ||
+              approveResidualMutation.isError ||
+              executeResidualMutation.isError ? (
+                <div className="rounded-lg border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
+                  {executeResidualMutation.error instanceof Error
+                    ? executeResidualMutation.error.message
+                    : approveResidualMutation.error instanceof Error
+                      ? approveResidualMutation.error.message
+                      : inspectResidualMutation.error instanceof Error
+                        ? inspectResidualMutation.error.message
+                        : "Residual recovery failed closed."}
+                </div>
+              ) : null}
+
+              {executeResidualMutation.data?.data ? (
+                <div className={`rounded-lg border p-4 text-sm ${
+                  executeResidualMutation.data.data.state === "COMPLETED_RESOLVED"
+                    ? "border-success/30 bg-success/10 text-success"
+                    : "border-danger/30 bg-danger/10 text-danger"
+                }`}>
+                  Recovery state: {executeResidualMutation.data.data.state}.
+                  {" "}{executeResidualMutation.data.data.reasons.join(" | ")}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       {sessionIds.length >
       0 ? (
         <section className="rounded-xl border border-border-default bg-panel p-5">
@@ -751,7 +1051,7 @@ export default function RecoveryDiagnosticsDashboard() {
                 onChange={(
                   event,
                 ) =>
-                  setSelectedSessionId(
+                  selectRecoverySession(
                     event.target.value ||
                       null,
                   )

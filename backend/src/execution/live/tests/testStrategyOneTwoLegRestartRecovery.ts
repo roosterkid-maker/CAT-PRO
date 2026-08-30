@@ -88,6 +88,66 @@ async function main(): Promise<void> {
     assert.equal(cleared.classification, "CLEAN");
     assert.equal(cleared.allowNewLivePreparation, true);
     assert.equal(cleared.summary.unresolvedSessions, 0);
+
+    const residualPairFile = join(directory, "residual-pairs.jsonl");
+    const residualResolutionFile = join(directory, "residual-resolutions.jsonl");
+    const residualPairs = new StrategyOneTwoLegLiveExecutionService(
+      {
+        executeOrReconcile: async (gatewayInput) =>
+          gatewayInput.request.side === "buy"
+            ? ready(gatewayInput.request, gatewayInput.idempotencyKey, 1)
+            : failed(gatewayInput.request, gatewayInput.idempotencyKey),
+      },
+      residualPairFile,
+    );
+    const residualInput = {
+      ...pairInput(),
+      sessionId: "strategy-one:v202:residual-session",
+      opportunityId: "opportunity:v202:residual",
+    };
+    const residual = await residualPairs.executeOrReconcile(residualInput);
+
+    assert.equal(residual.session.state, "RECOVERY_REQUIRED");
+    const residualResolutions = new StrategyOneTwoLegRecoveryResolutionService(
+      residualPairs,
+      residualResolutionFile,
+    );
+
+    await assert.rejects(
+      residualResolutions.resolveCompensatingOrder(
+        residualInput.sessionId,
+        compensatingEvidence("bybit"),
+        "Wrong venue must fail closed.",
+        NOW + 20,
+      ),
+      /compensating recovery remains unresolved/u,
+    );
+
+    const compensated = await residualResolutions.resolveCompensatingOrder(
+      residualInput.sessionId,
+      compensatingEvidence("binance"),
+      "Exact Binance SELL fill flattened the authoritative long residual.",
+      NOW + 21,
+    );
+
+    assert.equal(
+      compensated.basis,
+      "AUTHORITATIVE_COMPENSATING_ORDER_BALANCED",
+    );
+    assert.equal(compensated.buyFilledQuantity, 1);
+    assert.equal(compensated.sellFilledQuantity, 1);
+    assert.equal(compensated.automaticOrderActionPerformed, true);
+    assert.equal(compensated.compensatingOrder?.side, "sell");
+    assert.equal(
+      residualResolutions.isSessionResolved(residualInput.sessionId),
+      true,
+    );
+    const compensatedGate = new StrategyOneTwoLegRestartRecoveryService(
+      residualPairs,
+      residualResolutions,
+    ).getReport(NOW + 22);
+    assert.equal(compensatedGate.classification, "CLEAN");
+    assert.equal(compensatedGate.allowNewLivePreparation, true);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
@@ -177,6 +237,45 @@ function ready(
     state: "READY",
     record,
     reasons: [],
+  };
+}
+
+function failed(
+  requestValue: LiveExecutionRequest,
+  idempotencyKey: string,
+): CentralLiveOrderGatewayResponse {
+  const response = ready(requestValue, idempotencyKey, 0);
+  const record = response.record as CentralLiveOrderGatewayRecord;
+  return {
+    state: "READY",
+    reasons: ["Injected terminal zero-fill failure."],
+    record: {
+      ...record,
+      result: record.result ? {
+        ...record.result,
+        success: false,
+        status: "FAILED",
+        averageFillPrice: 0,
+        failureReason: "Injected terminal zero-fill failure.",
+      } : null,
+    },
+  };
+}
+
+function compensatingEvidence(exchange: string) {
+  return {
+    exchange,
+    market: "BTCUSDT",
+    side: "sell" as const,
+    orderId: "binance-recovery-order",
+    clientOrderId: "cat-pro-recovery-order",
+    status: "FILLED" as const,
+    requestedQuantity: 1,
+    filledQuantity: 1,
+    remainingQuantity: 0 as const,
+    averageFillPrice: 101,
+    feeEvidenceId: "fee-evidence-binance-recovery",
+    completedAt: NOW + 19,
   };
 }
 

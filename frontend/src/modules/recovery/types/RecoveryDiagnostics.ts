@@ -454,14 +454,15 @@ export interface StrategyOneTwoLegRecoveryResolution {
   status: "RESOLVED";
   basis:
     | "PERSISTED_PRE_DISPATCH_NO_ORDER"
-    | "AUTHORITATIVE_TERMINAL_BALANCED";
+    | "AUTHORITATIVE_TERMINAL_BALANCED"
+    | "AUTHORITATIVE_COMPENSATING_ORDER_BALANCED";
   evidenceFingerprint: string;
   resolutionNote: string;
   resolvedAt: number;
   buyFilledQuantity: number;
   sellFilledQuantity: number;
   terminalStatuses: string[];
-  automaticOrderActionPerformed: false;
+  automaticOrderActionPerformed: boolean;
 }
 
 export interface StrategyOneTwoLegRecoveryData {
@@ -496,4 +497,102 @@ export interface StrategyOneTwoLegRecoveryData {
 export interface StrategyOneTwoLegRecoveryResponse {
   success: boolean;
   data: StrategyOneTwoLegRecoveryData;
+}
+
+export type StrategyOneResidualRecoveryState =
+  | "BLOCKED"
+  | "BALANCED_NO_ACTION"
+  | "READY_FOR_OPERATOR_REVIEW"
+  | "OPERATOR_APPROVED_EVIDENCE_ONLY";
+
+export interface StrategyOneResidualRecoveryPreview {
+  schemaVersion: "142.0";
+  id: string;
+  sessionId: string;
+  sourceSessionFingerprint: string;
+  state: StrategyOneResidualRecoveryState;
+  createdAt: number;
+  expiresAt: number;
+  approvedAt: number | null;
+  opportunityId: string;
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+  authoritative: {
+    bothLegsTerminal: boolean;
+    buyStatus: string | null;
+    sellStatus: string | null;
+    buyFilledQuantity: number | null;
+    sellFilledQuantity: number | null;
+  };
+  residual: {
+    direction: "LONG" | "SHORT" | null;
+    venue: string | null;
+    side: "BUY" | "SELL" | null;
+    exactQuantity: number;
+    executableQuantity: number | null;
+    dustQuantity: number | null;
+  };
+  executionPreview: {
+    selectedTimeInForce: "GTC" | "IOC" | "FOK" | null;
+    maximumBookAgeMs: number | null;
+    bookAgeMs: number | null;
+    fillPercent: number | null;
+    vwapPrice: number | null;
+    limitPrice: number | null;
+    estimatedTotalLossQuote: number | null;
+    maximumAllowedLossQuote: number | null;
+    balanceAsset: string | null;
+    requiredBalance: number | null;
+    availableBalance: number | null;
+    balanceAgeMs: number | null;
+  };
+  blockers: string[];
+  requiredApprovalPhrase: string | null;
+}
+
+export interface StrategyOneResidualRecoveryPreviewResponse {
+  success: boolean;
+  data: StrategyOneResidualRecoveryPreview;
+  message?: string;
+}
+
+export interface StrategyOneResidualExecutionRecord {
+  schemaVersion: "202.0";
+  id: string;
+  idempotencyKey: string;
+  previewId: string;
+  sessionId: string;
+  state:
+    | "PREPARED"
+    | "SUBMISSION_UNCERTAIN"
+    | "FAILED_SAFE"
+    | "COMPLETED_RESOLVED";
+  preparedAt: number;
+  updatedAt: number;
+  request: {
+    exchange: string;
+    market: string;
+    side: "buy" | "sell";
+    orderType: "limit" | "market";
+    timeInForce?: "GTC" | "IOC" | "FOK";
+    quantity: number;
+    price?: number;
+  };
+  gatewayState: string | null;
+  exchangeOrderId: string | null;
+  filledQuantity: number;
+  resolution: StrategyOneTwoLegRecoveryResolution | null;
+  reasons: string[];
+  automaticRetryAllowed: false;
+  automaticCancelAllowed: false;
+  automaticTransferAllowed: false;
+  liveOrderSubmissionPerformed: boolean;
+}
+
+export interface StrategyOneResidualExecutionResponse {
+  success: boolean;
+  data: StrategyOneResidualExecutionRecord;
+  recoveryGate: StrategyOneTwoLegRecoveryData["recoveryGate"];
+  message?: string;
 }
