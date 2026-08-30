@@ -198,6 +198,8 @@ async function main(): Promise<void> {
     await verifyBookDependentBlocksCanRequestFreshBooks(directory);
     await verifyPreflightWorkIsBoundedAndRouteFair(directory);
     await verifyHistoryMismatchesDoNotHideQualifiedRoute(directory);
+    await verifyPreAuthorizationFreshnessDriftDoesNotConsumeBatch(directory);
+    await verifyAuthorizedFailureRemainsTerminal(directory);
     await verifyCompleteCoordinatorReasonsRemainDurable(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
@@ -689,6 +691,7 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
   };
   const filePath = join(directory, "durable-last-look-reasons.jsonl");
   let attemptsToday = 0;
+  let refreshCalls = 0;
   const dependencies = {
     runtimeGateEnabled: () => true,
     getCapitalPerLegInr: () => 500,
@@ -704,6 +707,20 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
       preflight: null,
       blockers: [],
     } as never),
+    refreshActionCandidate: async (input: {
+      readonly refreshExchanges: readonly string[];
+    }) => {
+      refreshCalls += 1;
+      assert.deepEqual(input.refreshExchanges, [
+        route.buyExchange,
+        route.sellExchange,
+      ]);
+      return {
+        state: "REFRESHED",
+        opportunity: candidate,
+        blocker: null,
+      } as never;
+    },
     authorizeAction: () => ({id: authority.id, state: "AUTHORIZED"}),
     refreshAuthorizedFinalBooks: async () => ({
       state: "REFRESHED",
@@ -755,6 +772,8 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
   const attempt = completed?.attempts?.[0];
 
   assert.equal(completed?.state, "FAILED_SAFE");
+  assert.equal(refreshCalls, 1,
+    "An already-qualified dynamic route must refresh both books before its durable claim.");
   assert.equal(attempt?.reason, "Strategy #1 order-time last-look blocked exchange submission.");
   assert.deepEqual(attempt?.reasons, [
     "Strategy #1 order-time last-look blocked exchange submission.",
@@ -781,6 +800,189 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
   });
   assert.equal(continued.state, "ARMED");
   assert.equal(continued.maximumAttempts, 8);
+}
+
+async function verifyPreAuthorizationFreshnessDriftDoesNotConsumeBatch(
+  directory: string,
+): Promise<void> {
+  const route: StrategyOneTinyLiveBasketRoute = {
+    market: "COTIUSDT",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+  };
+  let clock = NOW + 35_000;
+  const candidate = opportunity("preauth-freshness-drift", route, clock);
+  const authority = {
+    id: "tiny-live-preauth-freshness-drift",
+    state: "PREVIEWED",
+    market: route.market,
+    buyExchange: route.buyExchange,
+    sellExchange: route.sellExchange,
+    capitalPerLegInr: 500,
+    maximumCapitalPerLegInr: 1_000,
+    requiredAuthorizationPhrase: "AUTHORIZE tiny-live-preauth-freshness-drift",
+  };
+  const filePath = join(directory, "preauth-freshness-drift.jsonl");
+  let refreshCalls = 0;
+  let authorizeCalls = 0;
+  let coordinatorStarts = 0;
+  const dependencies = {
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: 0,
+      blockingAuthorityPresent: false,
+    }),
+    getActionState: (id: string) =>
+      id === authority.id ? "PREVIEWED" : null,
+    getOpportunity: (id: string) => id === candidate.id ? candidate : null,
+    previewAction: () => ({
+      approvedForAuthorization: true,
+      authority,
+      preflight: null,
+      blockers: [],
+    } as never),
+    refreshActionCandidate: async (input: {
+      readonly refreshExchanges: readonly string[];
+    }) => {
+      refreshCalls += 1;
+      assert.deepEqual(input.refreshExchanges, [
+        route.buyExchange,
+        route.sellExchange,
+      ]);
+      return {
+        state: "REFRESHED",
+        opportunity: candidate,
+        blocker: null,
+      } as never;
+    },
+    authorizeAction: () => {
+      authorizeCalls += 1;
+      throw new Error(
+        "Tiny-LIVE preflight changed: CURRENT_DISPATCH_RESERVED_FRESHNESS: sellAge=295 ms (SELL_BOOK_STALE).",
+      );
+    },
+    refreshAuthorizedFinalBooks: async () => {
+      throw new Error("No authorized final refresh may start.");
+    },
+    execute: async () => {
+      coordinatorStarts += 1;
+      throw new Error("No coordinator may start.");
+    },
+    now: () => ++clock,
+  };
+  const service = new StrategyOneTinyLivePreArmService(dependencies, filePath);
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+
+  const resumed = await service.observeSnapshot({
+    generatedAt: clock,
+    opportunities: [candidate],
+  });
+
+  assert.equal(resumed?.state, "ARMED");
+  assert.equal(resumed?.attemptsUsed, 0);
+  assert.equal(resumed?.attempts?.length, 0);
+  assert.equal(resumed?.opportunityId, null);
+  assert.equal(resumed?.authorityId, null);
+  assert.ok((resumed?.nextAttemptNotBefore ?? 0) > clock);
+  assert.equal(refreshCalls, 1);
+  assert.equal(authorizeCalls, 1);
+  assert.equal(coordinatorStarts, 0);
+  assert.equal(service.getDiagnostics(clock).pipelineTelemetry.coordinatorStarts, 0);
+  assert.match(
+    service.getDiagnostics(clock).lastEvaluation?.reason ?? "",
+    /batch remains armed and no attempt was consumed/iu,
+  );
+
+  const restarted = new StrategyOneTinyLivePreArmService(dependencies, filePath);
+  const restored = restarted.getActiveArm(clock);
+  assert.equal(restored?.state, "ARMED");
+  assert.equal(restored?.attemptsUsed, 0);
+  assert.equal(restored?.attempts?.length, 0);
+}
+
+async function verifyAuthorizedFailureRemainsTerminal(
+  directory: string,
+): Promise<void> {
+  const route: StrategyOneTinyLiveBasketRoute = {
+    market: "COTIUSDT",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+  };
+  let clock = NOW + 37_000;
+  let authorizationStarted = false;
+  const candidate = opportunity("authorized-failure", route, clock);
+  const authority = {
+    id: "tiny-live-authorized-failure",
+    state: "PREVIEWED",
+    market: route.market,
+    buyExchange: route.buyExchange,
+    sellExchange: route.sellExchange,
+    capitalPerLegInr: 500,
+    maximumCapitalPerLegInr: 1_000,
+    requiredAuthorizationPhrase: "AUTHORIZE tiny-live-authorized-failure",
+  };
+  const service = new StrategyOneTinyLivePreArmService({
+    runtimeGateEnabled: () => true,
+    getCapitalPerLegInr: () => 500,
+    getActionDiagnostics: () => ({
+      maximumDailyAttempts: 10,
+      attemptsToday: authorizationStarted ? 1 : 0,
+      blockingAuthorityPresent: authorizationStarted,
+    }),
+    getActionState: () => authorizationStarted ? "AUTHORIZED" : "PREVIEWED",
+    getOpportunity: (id) => id === candidate.id ? candidate : null,
+    previewAction: () => ({
+      approvedForAuthorization: true,
+      authority,
+      preflight: null,
+      blockers: [],
+    } as never),
+    refreshActionCandidate: async () => ({
+      state: "REFRESHED",
+      opportunity: candidate,
+      blocker: null,
+    } as never),
+    authorizeAction: () => {
+      authorizationStarted = true;
+      throw new Error(
+        "Tiny-LIVE preflight changed: blocking authority fixture.",
+      );
+    },
+    now: () => ++clock,
+  }, join(directory, "authorized-failure.jsonl"));
+
+  service.arm({
+    market: "DYNAMIC_POOL",
+    buyExchange: "coindcx",
+    sellExchange: "binance",
+    confirmation: StrategyOneTinyLivePreArmService.requiredRoutePoolArmPhrase(),
+    durationMinutes: 180,
+    maximumAttempts: 10,
+    routePoolId: STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
+    now: ++clock,
+  });
+
+  const failed = await service.observeSnapshot({
+    generatedAt: clock,
+    opportunities: [candidate],
+  });
+
+  assert.equal(failed?.state, "FAILED_SAFE");
+  assert.equal(failed?.attemptsUsed, 1);
+  assert.equal(failed?.attempts?.length, 1);
+  assert.equal(service.getActiveArm(clock), null);
 }
 
 async function verifyBookDependentBlocksCanRequestFreshBooks(

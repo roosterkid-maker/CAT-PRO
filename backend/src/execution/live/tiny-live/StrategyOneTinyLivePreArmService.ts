@@ -123,6 +123,7 @@ export interface StrategyOneTinyLivePreArmDependencies {
     readonly attemptsToday: number;
     readonly blockingAuthorityPresent: boolean;
   };
+  getActionState(id: string): string | null;
   getCalibration(input: {
     market: string;
     buyExchange: string;
@@ -202,6 +203,8 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLivePreArmDependencies = {
     strategyOneExecutionPolicyService.getActivePolicy().values.tinyLive.capitalPerLegInr,
   getActionDiagnostics: (now) =>
     strategyOneTinyLiveActionAuthorityService.getDiagnostics(now),
+  getActionState: (id) =>
+    strategyOneTinyLiveActionAuthorityService.get(id)?.state ?? null,
   getCalibration: (input) =>
     strategyOneTimingCalibrationService.getApprovedRouteCalibration(input),
   getVenueContract: (exchange, route, now) =>
@@ -858,12 +861,13 @@ export class StrategyOneTinyLivePreArmService {
     let preview = initialPreview;
 
     if (
-      !preview.approvedForAuthorization &&
-      shouldRefreshActionBooks(
-        preview,
-        active,
-        actionCandidate,
-      )
+      preview.approvedForAuthorization
+        ? shouldRefreshApprovedDynamicRoute(active, actionCandidate)
+        : shouldRefreshActionBooks(
+            preview,
+            active,
+            actionCandidate,
+          )
     ) {
       this.refreshesRequested += 1;
       let refresh:
@@ -1008,7 +1012,9 @@ export class StrategyOneTinyLivePreArmService {
     });
 
     // This durable transition removes the arm before the three-second order
-    // authority is minted. Every later failure is therefore fail-safe/no-retry.
+    // authority is minted. A changed preflight may release the claim only while
+    // the action record is still PREVIEWED and no blocking authority exists.
+    // Every failure after authorization remains terminal/fail-safe/no-retry.
     this.persist(claimed);
     this.lastEvaluation = freeze({
       evaluatedAt,
@@ -1018,11 +1024,55 @@ export class StrategyOneTinyLivePreArmService {
     });
 
     try {
-      const authorized = this.dependencies.authorizeAction(
-        authority.id,
-        authority.requiredAuthorizationPhrase,
-        this.dependencies.now(),
-      );
+      let authorized: {
+        readonly id: string;
+        readonly state: string;
+      };
+
+      try {
+        authorized = this.dependencies.authorizeAction(
+          authority.id,
+          authority.requiredAuthorizationPhrase,
+          this.dependencies.now(),
+        );
+      } catch (error: unknown) {
+        const failedAt = this.dependencies.now();
+        const reason = message(error);
+        const actionState = this.dependencies.getActionState(authority.id);
+        const action = this.dependencies.getActionDiagnostics(failedAt);
+
+        if (
+          isPreAuthorizationRevalidationFailure(reason) &&
+          actionState === "PREVIEWED" &&
+          !action.blockingAuthorityPresent
+        ) {
+          const resumed = freeze({
+            ...clone(claimed),
+            state: "ARMED" as const,
+            claimedAt: null,
+            opportunityId: null,
+            authorityId: null,
+            completedAt: null,
+            executionStatus: null,
+            failureReason: null,
+            attemptsUsed: getAttemptsUsed(claimed),
+            attempts: [...(claimed.attempts ?? [])],
+            nextAttemptNotBefore: failedAt + BETWEEN_ATTEMPTS_COOLDOWN_MS,
+          });
+
+          this.persist(resumed);
+          this.lastEvaluation = freeze({
+            evaluatedAt: failedAt,
+            opportunityId: actionCandidate.id,
+            outcome: "BLOCKED" as const,
+            reason: `Pre-authorization revalidation blocked before any live order authority existed: ${reason} The batch remains armed and no attempt was consumed.`,
+          });
+
+          return clone(resumed);
+        }
+
+        throw error;
+      }
 
       if (authorized.state !== "AUTHORIZED") {
         throw new Error("Exact one-time action authority was not authorized.");
@@ -1339,6 +1389,21 @@ function shouldRefreshActionBooks(
   );
 }
 
+function shouldRefreshApprovedDynamicRoute(
+  arm: StrategyOneTinyLivePreArmRecord,
+  candidate: ArbitrageOpportunity,
+): boolean {
+  const route = {
+    market: normalizeMarket(candidate.pair.market),
+    buyExchange: candidate.pair.buy.exchange.trim().toLowerCase(),
+    sellExchange: candidate.pair.sell.exchange.trim().toLowerCase(),
+  };
+
+  return arm.routeScope === "DYNAMIC_POOL" &&
+    armAllowsRoute(arm, route) &&
+    isStrategyOneTinyLiveDynamicRoute(route);
+}
+
 /**
  * Preserve a still-current route leg and refresh only the stale side. The
  * original timestamps are evidence floors, not replacements: exact-route
@@ -1533,6 +1598,11 @@ function isCleanCompletion(result: ArbitrageLiveExecutionResult): boolean {
     result.possibleExposure !== true &&
     result.unmatchedBuyQuantity === 0 &&
     result.unmatchedSellQuantity === 0;
+}
+
+function isPreAuthorizationRevalidationFailure(reason: string): boolean {
+  return reason.startsWith("Tiny-LIVE preflight changed:") ||
+    reason.startsWith("Tiny-LIVE evidence changed after preview;");
 }
 
 function summarizeAttempt(input: {
@@ -1818,6 +1888,23 @@ function isValidTransition(
     (next.schemaVersion === "150.0" || next.schemaVersion === "182.0" || next.schemaVersion === "188.0" || next.schemaVersion === "190.0") &&
     previous.state === "CLAIMED"
   ) {
+    const releasedBeforeAuthorization =
+      next.schemaVersion === "190.0" &&
+      next.state === "ARMED" &&
+      getAttemptsUsed(next) === getAttemptsUsed(previous) &&
+      next.attempts?.length === previous.attempts?.length &&
+      next.claimedAt === null &&
+      next.opportunityId === null &&
+      next.authorityId === null &&
+      next.completedAt === null &&
+      next.executionStatus === null &&
+      next.failureReason === null &&
+      next.nextAttemptNotBefore !== null;
+
+    if (releasedBeforeAuthorization) {
+      return true;
+    }
+
     const appended = next.attempts?.[next.attempts.length - 1] ?? null;
     const expectedAttemptsUsed = getAttemptsUsed(previous) + 1;
 
