@@ -708,7 +708,7 @@ async function verifyCompleteCoordinatorReasonsRemainDurable(
       blockers: [],
     } as never),
     refreshActionCandidate: async (input: {
-      readonly refreshExchanges: readonly string[];
+      readonly refreshExchanges?: readonly string[];
     }) => {
       refreshCalls += 1;
       assert.deepEqual(input.refreshExchanges, [
@@ -844,7 +844,7 @@ async function verifyPreAuthorizationFreshnessDriftDoesNotConsumeBatch(
       blockers: [],
     } as never),
     refreshActionCandidate: async (input: {
-      readonly refreshExchanges: readonly string[];
+      readonly refreshExchanges?: readonly string[];
     }) => {
       refreshCalls += 1;
       assert.deepEqual(input.refreshExchanges, [
