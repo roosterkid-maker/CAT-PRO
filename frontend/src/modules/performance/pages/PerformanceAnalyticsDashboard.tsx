@@ -10,6 +10,10 @@ import {
 } from "@/modules/automation/hooks/useAutomationDashboard";
 
 import {
+  useAgentSakhondraReport,
+} from "@/modules/agent-sakhondra/agentSakhondraApi";
+
+import {
   useLivePerformance,
   usePaperAnalytics,
   useShadowPerformance,
@@ -79,6 +83,21 @@ export default function PerformanceAnalyticsDashboard() {
   } =
     usePaperPortfolioOptimizer();
 
+  const {
+    data:
+      tinyLiveResponse,
+
+    isFetching:
+      tinyLiveFetching,
+
+    isError:
+      tinyLiveError,
+
+    refetch:
+      refetchTinyLive,
+  } =
+    useAgentSakhondraReport();
+
   const paper =
     paperResponse?.data;
 
@@ -91,10 +110,14 @@ export default function PerformanceAnalyticsDashboard() {
   const portfolio =
     portfolioResponse?.data;
 
+  const tinyLive =
+    tinyLiveResponse?.data;
+
   const refreshing =
     paperFetching ||
     shadowFetching ||
     liveFetching ||
+    tinyLiveFetching ||
     portfolioFetching;
 
   const refreshAll =
@@ -103,6 +126,7 @@ export default function PerformanceAnalyticsDashboard() {
         refetchPaper(),
         refetchShadow(),
         refetchLive(),
+        refetchTinyLive(),
         refetchPortfolio(),
       ]);
     };
@@ -110,7 +134,8 @@ export default function PerformanceAnalyticsDashboard() {
   const partialEvidence =
     paperError ||
     shadowError ||
-    liveError;
+    liveError ||
+    tinyLiveError;
 
   const largestRouteLoss =
     portfolio?.routes.length
@@ -514,185 +539,160 @@ export default function PerformanceAnalyticsDashboard() {
 
       <section className="rounded-xl border border-border-default bg-panel p-5">
         <SectionTitle
-          title="LIVE Execution Evidence"
-          subtitle="Historical analytics only — LIVE remains disabled"
+          title="Strategy #1 Tiny-LIVE Execution Evidence"
+          subtitle="Dedicated LIVE session journal + linked persistent settlements"
         />
 
-        {!live ? (
+        {!tinyLive ? (
           <EmptyEvidence />
         ) : (
           <>
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Metric
-                label="Executions"
+                label="Tiny-LIVE Attempts"
                 value={String(
-                  live.execution
-                    .totalExecutions,
+                  tinyLive.conversion
+                    .liveAttempts,
                 )}
               />
 
               <Metric
-                label="Fill Rate"
-                value={percent(
-                  live.execution
-                    .fillRatePercent,
+                label="Completed Two-Leg"
+                value={String(
+                  tinyLive.conversion
+                    .completedTwoLeg,
                 )}
               />
 
               <Metric
-                label="Partial Fill"
-                value={percent(
-                  live.execution
-                    .partialFillRatePercent,
+                label="Settled Trades"
+                value={String(
+                  tinyLive.conversion
+                    .settledLiveTrades,
                 )}
               />
 
               <Metric
-                label="Failure Rate"
-                value={percent(
-                  live.execution
-                    .failureRatePercent,
+                label="Unsuccessful"
+                value={String(
+                  tinyLive.conversion
+                    .unsuccessfulLiveAttempts,
                 )}
               />
 
               <Metric
-                label="Timeout Rate"
-                value={percent(
-                  live.execution
-                    .timeoutRatePercent,
+                label="Recovery / Exposure"
+                value={String(
+                  tinyLive.conversion
+                    .possibleExposureOrRecovery,
                 )}
               />
 
               <Metric
-                label="Avg Latency"
-                value={formatDuration(
-                  live.execution
-                    .averageExecutionTimeMs,
-                )}
+                label="Settlement Rate"
+                value={tinyLive.conversion.attemptToSettlementPercent === null
+                  ? "N/A"
+                  : percent(tinyLive.conversion.attemptToSettlementPercent)}
               />
 
               <Metric
                 label="LIVE Win Rate"
-                value={percent(
-                  live.pnl
-                    .winRatePercent,
-                )}
+                value={tinyLive.economics.settledSamples === 0
+                  ? "N/A"
+                  : percent(
+                      tinyLive.economics.profitableSettlements /
+                        tinyLive.economics.settledSamples *
+                        100,
+                    )}
               />
 
               <Metric
                 label="LIVE Net P&L"
-                value={formatMoney(
-                  live.pnl
-                    .netProfit,
-                )}
+                value={tinyLive.economics.realizedNetProfit === null
+                  ? "NOT SETTLED"
+                  : formatMoney(tinyLive.economics.realizedNetProfit)}
               />
             </div>
 
             <div className="mt-6 grid gap-5 xl:grid-cols-2">
               <div className="rounded-lg border border-border-default bg-panel-light p-4">
                 <SectionTitle
-                  title="Slippage"
-                  subtitle={`${live.slippage.sampledExecutions} sampled executions`}
+                  title="Settlement Economics"
+                  subtitle="Session-linked SETTLED records only"
                   compact
                 />
 
                 <div className="mt-4 space-y-3">
                   <DataRow
-                    label="Average Absolute"
-                    value={percent(
-                      live.slippage
-                        .averageAbsoluteSlippagePercent,
-                    )}
+                    label="Profitable Settlements"
+                    value={String(tinyLive.economics.profitableSettlements)}
                   />
 
                   <DataRow
-                    label="Average Signed"
-                    value={percent(
-                      live.slippage
-                        .averageSignedSlippagePercent,
-                    )}
+                    label="Loss Settlements"
+                    value={String(tinyLive.economics.lossSettlements)}
                   />
 
                   <DataRow
-                    label="Worst Adverse"
-                    value={percent(
-                      live.slippage
-                        .worstAdverseSlippagePercent,
-                    )}
+                    label="Total Fees"
+                    value={tinyLive.economics.totalFees === null
+                      ? "NO SETTLEMENT"
+                      : formatMoney(tinyLive.economics.totalFees)}
                   />
 
                   <DataRow
-                    label="Best Favorable"
-                    value={percent(
-                      live.slippage
-                        .bestFavorableSlippagePercent,
-                    )}
+                    label="Average ROI"
+                    value={tinyLive.economics.averageRoiPercent === null
+                      ? "N/A"
+                      : percent(tinyLive.economics.averageRoiPercent)}
                   />
                 </div>
               </div>
 
               <div className="rounded-lg border border-border-default bg-panel-light p-4">
                 <SectionTitle
-                  title="Expected vs Realized"
-                  subtitle="Settlement evidence"
+                  title="Journal Linkage"
+                  subtitle="No PAPER or synthetic records"
                   compact
                 />
 
                 <div className="mt-4 space-y-3">
                   <DataRow
-                    label="Matched Cycles"
+                    label="Retained LIVE Sessions"
                     value={String(
-                      live
-                        .expectedVsRealized
-                        .matchedCycles,
+                      tinyLive.window
+                        .retainedLiveSessions,
                     )}
                   />
 
                   <DataRow
-                    label="Expected Net"
-                    value={formatMoney(
-                      live
-                        .expectedVsRealized
-                        .totalExpectedNetProfit,
-                    )}
+                    label="Completed → Settlement"
+                    value={tinyLive.conversion.completedToSettlementPercent === null
+                      ? "N/A"
+                      : percent(tinyLive.conversion.completedToSettlementPercent)}
                   />
 
                   <DataRow
-                    label="Realized Net"
-                    value={formatMoney(
-                      live
-                        .expectedVsRealized
-                        .totalRealizedNetProfit,
-                    )}
+                    label="PAPER Included"
+                    value="NO"
                   />
 
                   <DataRow
-                    label="Profit Variance"
-                    value={formatMoney(
-                      live
-                        .expectedVsRealized
-                        .totalProfitVariance,
-                    )}
+                    label="Synthetic Included"
+                    value="NO"
                   />
 
                   <DataRow
-                    label="Profit Retention"
-                    value={
-                      live
-                        .expectedVsRealized
-                        .aggregateProfitRetentionPercent ===
-                      null
-                        ? "N/A"
-                        : percent(
-                            live
-                              .expectedVsRealized
-                              .aggregateProfitRetentionPercent,
-                          )
-                    }
+                    label="Evidence State"
+                    value={tinyLive.agent.state.replaceAll("_", " ")}
                   />
                 </div>
               </div>
             </div>
+
+            <p className="mt-4 text-xs leading-5 text-text-muted">
+              Attempts come only from the durable Strategy #1 two-leg LIVE journal. P&amp;L appears only after an exact sessionId-linked persistent settlement; failed-safe or recovery-required attempts remain visible but are never fabricated as settled profit or loss.
+            </p>
           </>
         )}
       </section>
@@ -1340,24 +1340,4 @@ function formatMoney(
   ).format(
     value,
   );
-}
-
-function formatDuration(
-  milliseconds: number,
-): string {
-  if (
-    milliseconds <
-    1_000
-  ) {
-    return `${milliseconds.toFixed(
-      0,
-    )} ms`;
-  }
-
-  return `${(
-    milliseconds /
-    1_000
-  ).toFixed(
-    2,
-  )} s`;
 }

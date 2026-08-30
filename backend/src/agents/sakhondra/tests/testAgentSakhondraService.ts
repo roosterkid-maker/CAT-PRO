@@ -179,7 +179,7 @@ const liveSettlement: ExecutionSettlementRecord = {
 const report = new AgentSakhondraService({
   getOpportunityAudit: () => audit,
   getTimingReport: () => timing,
-  listLiveSessions: () => [session("live-1", "COMPLETED"), session("live-2", "FAILED")],
+  listLiveSessions: () => [session("live-1", "COMPLETED"), session("live-2", "RECOVERY_REQUIRED")],
   getSettlement: (sessionId) => sessionId === "live-1" ? liveSettlement : null,
 }, 0).getReport(now);
 
@@ -187,6 +187,7 @@ assert.equal(report.evidenceBoundary.paperExecutionsIncluded, false);
 assert.equal(report.conversion.liveAttempts, 2);
 assert.equal(report.conversion.settledLiveTrades, 1);
 assert.equal(report.conversion.unsuccessfulLiveAttempts, 1);
+assert.equal(report.conversion.possibleExposureOrRecovery, 1);
 assert.equal(report.economics.realizedNetProfit, 0.8);
 assert.equal(report.timing.operationalHeadroomMs, 27);
 assert.equal(report.routes[0]?.settled, 1);
