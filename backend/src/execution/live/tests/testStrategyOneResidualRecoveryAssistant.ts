@@ -126,6 +126,100 @@ async function main(): Promise<void> {
     "volatile reconciliation timestamps and reasons must not invalidate approval",
   );
 
+  const lossSession =
+    session({
+      buyFilled: 10,
+      sellFilled: 8,
+      buyStatus: "FILLED",
+      sellStatus: "CANCELLED",
+      buyAveragePrice: 1,
+      sellAveragePrice: 1.02,
+      state: "RECOVERY_REQUIRED",
+      sessionId: "strategy-one-session-one-time-loss",
+    });
+  const lossPair =
+    new FakePairPort(lossSession);
+  const lossService =
+    assistant(
+      lossPair,
+      {
+        timestamp: NOW - 25,
+        bids: [{price: 0.8, quantity: 3}],
+        asks: [{price: 0.81, quantity: 3}],
+      },
+      capability(1),
+      5,
+      "one-time-loss.jsonl",
+    );
+  const defaultLossPreview =
+    await lossService.inspectSession(lossSession.sessionId, NOW);
+  assert.equal(defaultLossPreview.state, "BLOCKED");
+  assert.equal(defaultLossPreview.oneTimeLossAuthorization, null);
+  assert.ok(
+    defaultLossPreview.blockers.some((blocker) =>
+      blocker.includes("exceeds cap")),
+  );
+
+  const wrongLossAuthorization =
+    await lossService.inspectSession(
+      lossSession.sessionId,
+      NOW,
+      {
+        maximumLossQuote: 0.5,
+        confirmation: "APPROVE",
+      },
+    );
+  assert.equal(wrongLossAuthorization.state, "BLOCKED");
+  assert.equal(wrongLossAuthorization.oneTimeLossAuthorization, null);
+  assert.ok(
+    wrongLossAuthorization.blockers.some((blocker) =>
+      blocker.includes("Exact one-time residual loss authorization")),
+  );
+
+  const oneTimeLossPreview =
+    await lossService.inspectSession(
+      lossSession.sessionId,
+      NOW,
+      {
+        maximumLossQuote: 0.5,
+        confirmation:
+          "APPROVE ONE-TIME COTI RECOVERY SELL 2 MAX LOSS 0.50 USDT",
+      },
+    );
+  assert.equal(oneTimeLossPreview.state, "READY_FOR_OPERATOR_REVIEW");
+  assert.equal(
+    oneTimeLossPreview.executionPreview.maximumAllowedLossQuote,
+    0.5,
+  );
+  assert.equal(
+    oneTimeLossPreview.oneTimeLossAuthorization?.maximumLossQuote,
+    0.5,
+  );
+  assert.equal(oneTimeLossPreview.safety.orderSubmissionPerformed, false);
+
+  lossService.approvePreview(
+    oneTimeLossPreview.id,
+    oneTimeLossPreview.requiredApprovalPhrase ?? "",
+    NOW + 1,
+  );
+  const oneTimeLossBoundary =
+    await lossService.getApprovedExecutionBoundary(
+      oneTimeLossPreview.id,
+      NOW + 2,
+    );
+  assert.equal(
+    oneTimeLossBoundary.actionTimePreview.state,
+    "READY_FOR_OPERATOR_REVIEW",
+  );
+  assert.equal(
+    oneTimeLossBoundary.actionTimePreview.executionPreview.maximumAllowedLossQuote,
+    0.5,
+  );
+  assert.equal(
+    oneTimeLossBoundary.actionTimePreview.oneTimeLossAuthorization?.confirmation,
+    "APPROVE ONE-TIME COTI RECOVERY SELL 2 MAX LOSS 0.50 USDT",
+  );
+
   const materialPair =
     new FakePairPort(longResidualSession, 2);
   const materialService =

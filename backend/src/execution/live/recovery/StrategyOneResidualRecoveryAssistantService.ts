@@ -108,6 +108,11 @@ export interface StrategyOneResidualRecoveryPreview {
     readonly availableBalance: number | null;
     readonly balanceAgeMs: number | null;
   };
+  readonly oneTimeLossAuthorization: {
+    readonly maximumLossQuote: number;
+    readonly confirmation: string;
+    readonly authorizedAt: number;
+  } | null;
   readonly blockers: readonly string[];
   readonly requiredApprovalPhrase: string | null;
   readonly safety: {
@@ -168,6 +173,7 @@ export interface StrategyOneResidualRecoveryAssistantConfiguration {
   readonly maximumCapabilityAgeMs: number;
   readonly maximumBalanceAgeMs: number;
   readonly maximumLossPercentOfResidual: number;
+  readonly maximumOperatorAuthorizedLossQuote: number;
   readonly maximumResidualQuoteValue: number;
   readonly maximumPreviews: number;
 }
@@ -186,6 +192,7 @@ const DEFAULT_CONFIGURATION:
   maximumCapabilityAgeMs: 300_000,
   maximumBalanceAgeMs: 15_000,
   maximumLossPercentOfResidual: 1,
+  maximumOperatorAuthorizedLossQuote: 1,
   maximumResidualQuoteValue: 10_000,
   maximumPreviews: 500,
 };
@@ -274,25 +281,35 @@ export class StrategyOneResidualRecoveryAssistantService {
   inspectSession(
     sessionIdValue: string,
     now = Date.now(),
+    oneTimeLossAuthorization: {
+      readonly maximumLossQuote: number;
+      readonly confirmation: string;
+    } | null = null,
   ): Promise<StrategyOneResidualRecoveryPreview> {
     const sessionId =
       requireIdentifier(sessionIdValue, "session");
     validateTime(now);
 
+    const inFlightKey =
+      oneTimeLossAuthorization
+        ? `${sessionId}:${createHash("sha256")
+            .update(JSON.stringify(oneTimeLossAuthorization))
+            .digest("hex")}`
+        : sessionId;
     const active =
-      this.inFlight.get(sessionId);
+      this.inFlight.get(inFlightKey);
 
     if (active) {
       return active;
     }
 
     const work =
-      this.inspectInternal(sessionId, now)
+      this.inspectInternal(sessionId, now, oneTimeLossAuthorization)
         .finally(() => {
-          this.inFlight.delete(sessionId);
+          this.inFlight.delete(inFlightKey);
         });
 
-    this.inFlight.set(sessionId, work);
+    this.inFlight.set(inFlightKey, work);
     return work;
   }
 
@@ -428,7 +445,12 @@ export class StrategyOneResidualRecoveryAssistantService {
       );
     }
 
-    const actionTime = this.buildPreview(session, assessmentTime, null);
+    const actionTime = this.buildPreview(
+      session,
+      assessmentTime,
+      null,
+      approved.oneTimeLossAuthorization,
+    );
 
     if (actionTime.state !== "READY_FOR_OPERATOR_REVIEW") {
       throw new Error(
@@ -486,6 +508,10 @@ export class StrategyOneResidualRecoveryAssistantService {
   private async inspectInternal(
     sessionId: string,
     now: number,
+    oneTimeLossAuthorization: {
+      readonly maximumLossQuote: number;
+      readonly confirmation: string;
+    } | null,
   ): Promise<StrategyOneResidualRecoveryPreview> {
     const known =
       this.pairs.getSession(sessionId);
@@ -524,7 +550,12 @@ export class StrategyOneResidualRecoveryAssistantService {
     validateTime(assessmentTime);
 
     const preview =
-      this.buildPreview(session, assessmentTime, reconciliationFailure);
+      this.buildPreview(
+        session,
+        assessmentTime,
+        reconciliationFailure,
+        oneTimeLossAuthorization,
+      );
     this.setAndPersist(preview, assessmentTime);
     return clone(preview);
   }
@@ -533,6 +564,11 @@ export class StrategyOneResidualRecoveryAssistantService {
     session: StrategyOneTwoLegSessionRecord,
     now: number,
     reconciliationFailure: string | null,
+    requestedOneTimeLossAuthorization: {
+      readonly maximumLossQuote: number;
+      readonly confirmation: string;
+      readonly authorizedAt?: number;
+    } | null = null,
   ): StrategyOneResidualRecoveryPreview {
     const blockers:
       string[] = [];
@@ -620,6 +656,16 @@ export class StrategyOneResidualRecoveryAssistantService {
       buyExchange,
       sellExchange,
     };
+    const oneTimeLossAuthorization =
+      validateOneTimeLossAuthorization(
+        requestedOneTimeLossAuthorization,
+        market,
+        side,
+        exactResidual,
+        now,
+        this.configuration.maximumOperatorAuthorizedLossQuote,
+        blockers,
+      );
 
     let executableQuantity:
       number | null = null;
@@ -862,8 +908,9 @@ export class StrategyOneResidualRecoveryAssistantService {
         estimatedTotalLossQuote =
           estimatedAdverseMoveLossQuote + estimatedFeeQuote;
         maximumAllowedLossQuote =
+          oneTimeLossAuthorization?.maximumLossQuote ??
           referenceNotional *
-          this.configuration.maximumLossPercentOfResidual / 100;
+            this.configuration.maximumLossPercentOfResidual / 100;
 
         if (
           referenceNotional >
@@ -1008,6 +1055,7 @@ export class StrategyOneResidualRecoveryAssistantService {
         availableBalance,
         balanceAgeMs,
       },
+      oneTimeLossAuthorization,
       blockers: [...new Set(blockers)],
       safety: safety(),
     };
@@ -1370,6 +1418,76 @@ function safety() {
   });
 }
 
+function validateOneTimeLossAuthorization(
+  requested: {
+    readonly maximumLossQuote: number;
+    readonly confirmation: string;
+    readonly authorizedAt?: number;
+  } | null,
+  market: string,
+  side: "BUY" | "SELL" | null,
+  exactQuantity: number,
+  now: number,
+  hardMaximumLossQuote: number,
+  blockers: string[],
+): StrategyOneResidualRecoveryPreview["oneTimeLossAuthorization"] {
+  if (!requested) {
+    return null;
+  }
+
+  if (
+    !Number.isFinite(requested.maximumLossQuote) ||
+    requested.maximumLossQuote <= 0 ||
+    requested.maximumLossQuote > hardMaximumLossQuote
+  ) {
+    blockers.push(
+      `One-time operator loss cap must be positive and at most ${hardMaximumLossQuote} quote units.`,
+    );
+    return null;
+  }
+
+  if (
+    (side !== "BUY" && side !== "SELL") ||
+    !Number.isFinite(exactQuantity) ||
+    exactQuantity <= 0
+  ) {
+    blockers.push(
+      "One-time operator loss authorization requires an exact directional residual.",
+    );
+    return null;
+  }
+
+  const baseAsset =
+    market.endsWith("USDT")
+      ? market.slice(0, -4)
+      : market;
+  const expected =
+    `APPROVE ONE-TIME ${baseAsset} RECOVERY ${side} ${formatApprovalNumber(exactQuantity)} MAX LOSS ${requested.maximumLossQuote.toFixed(2)} USDT`;
+
+  if (requested.confirmation.trim() !== expected) {
+    blockers.push(
+      "Exact one-time residual loss authorization phrase is required.",
+    );
+    return null;
+  }
+
+  return freeze({
+    maximumLossQuote: requested.maximumLossQuote,
+    confirmation: expected,
+    authorizedAt:
+      Number.isSafeInteger(requested.authorizedAt) &&
+      (requested.authorizedAt ?? 0) > 0
+        ? requested.authorizedAt as number
+        : now,
+  });
+}
+
+function formatApprovalNumber(value: number): string {
+  return Number.isInteger(value)
+    ? value.toFixed(0)
+    : value.toString();
+}
+
 function validateConfiguration(
   configuration: StrategyOneResidualRecoveryAssistantConfiguration,
 ): void {
@@ -1383,6 +1501,10 @@ function validateConfiguration(
     !Number.isFinite(configuration.maximumLossPercentOfResidual) ||
     configuration.maximumLossPercentOfResidual <= 0 ||
     configuration.maximumLossPercentOfResidual > 100 ||
+    !Number.isFinite(configuration.maximumOperatorAuthorizedLossQuote) ||
+    configuration.maximumOperatorAuthorizedLossQuote <= 0 ||
+    configuration.maximumOperatorAuthorizedLossQuote >
+      configuration.maximumResidualQuoteValue ||
     !Number.isFinite(configuration.maximumResidualQuoteValue) ||
     configuration.maximumResidualQuoteValue <= 0 ||
     !Number.isSafeInteger(configuration.maximumPreviews) ||

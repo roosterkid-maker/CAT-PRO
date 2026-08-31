@@ -173,6 +173,20 @@ router.post(
       const preview =
         await strategyOneResidualRecoveryAssistantService.inspectSession(
           request.params.sessionId,
+          Date.now(),
+          request.body?.maximumLossQuote !== undefined ||
+          request.body?.lossAuthorization !== undefined
+            ? {
+              maximumLossQuote:
+                typeof request.body?.maximumLossQuote === "number"
+                  ? request.body.maximumLossQuote
+                  : Number.NaN,
+              confirmation:
+                typeof request.body?.lossAuthorization === "string"
+                  ? request.body.lossAuthorization
+                  : "",
+            }
+            : null,
         );
 
       const blocked =
