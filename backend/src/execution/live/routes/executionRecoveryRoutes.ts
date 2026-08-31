@@ -320,6 +320,65 @@ router.post(
   },
 );
 
+/*
+ * A second submission is never a retry of the first gateway record. This
+ * boundary is available only when the backend proves the original attempt
+ * received a deterministic Binance HTTP 4xx rejection before acceptance,
+ * with no order ID, fill, timeout or ambiguous submission evidence. It still
+ * requires a fresh approved preview and a new exact operator phrase.
+ */
+router.post(
+  "/strategy-one-residual-assistant/:previewId/execute-confirmed-reject-second-attempt",
+  async (
+    request,
+    response,
+  ) => {
+    response.setHeader("Cache-Control", "no-store");
+
+    try {
+      const result =
+        await strategyOneResidualRecoveryExecutionService
+          .executeConfirmedRejectSecondAttempt(
+            typeof request.body?.priorExecutionId === "string"
+              ? request.body.priorExecutionId
+              : "",
+            request.params.previewId,
+            typeof request.body?.confirmation === "string"
+              ? request.body.confirmation
+              : "",
+            typeof request.body?.resolutionNote === "string"
+              ? request.body.resolutionNote
+              : "",
+          );
+
+      const completed = result.state === "COMPLETED_RESOLVED";
+      response
+        .status(completed ? 200 : 409)
+        .json({
+          success: completed,
+          data: result,
+          ...(completed
+            ? {}
+            : {
+              message:
+                result.reasons.at(-1) ??
+                "Confirmed-reject Strategy #1 second attempt failed closed.",
+            }),
+          recoveryGate: strategyOneTwoLegRestartRecoveryService.getReport(),
+        });
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Confirmed-reject Strategy #1 second attempt failed closed.",
+        recoveryGate: strategyOneTwoLegRestartRecoveryService.getReport(),
+      });
+    }
+  },
+);
+
 router.post(
   "/strategy-one-two-leg/:sessionId/resolve",
   async (

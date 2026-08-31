@@ -11,6 +11,7 @@ import type {
   RuntimeRecoveryResponse,
   SettlementAccountingPersistenceResponse,
   StrategyOneResidualExecutionResponse,
+  StrategyOneResidualExecutionDiagnosticsResponse,
   StrategyOneResidualRecoveryPreviewResponse,
   StrategyOneTwoLegRecoveryResponse,
 } from "../types/RecoveryDiagnostics";
@@ -134,6 +135,38 @@ export async function executeStrategyOneResidualRecovery(
       return response.data;
     },
     "One-time Strategy #1 residual recovery failed closed.",
+  );
+}
+
+export async function fetchStrategyOneResidualExecutionDiagnostics():
+Promise<StrategyOneResidualExecutionDiagnosticsResponse> {
+  const response =
+    await api.get<StrategyOneResidualExecutionDiagnosticsResponse>(
+      "/api/execution/recovery/strategy-one-residual-execution",
+    );
+
+  return response.data;
+}
+
+export async function executeStrategyOneConfirmedRejectSecondAttempt(
+  priorExecutionId: string,
+  previewId: string,
+  confirmation: string,
+  resolutionNote: string,
+): Promise<StrategyOneResidualExecutionResponse> {
+  return recoveryRequest(
+    async () => {
+      const response =
+        await api.post<StrategyOneResidualExecutionResponse>(
+          `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
+            previewId,
+          )}/execute-confirmed-reject-second-attempt`,
+          {priorExecutionId, confirmation, resolutionNote},
+        );
+
+      return response.data;
+    },
+    "Confirmed-reject Strategy #1 second attempt failed closed.",
   );
 }
 

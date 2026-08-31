@@ -588,6 +588,37 @@ export interface StrategyOneResidualExecutionRecord {
   automaticCancelAllowed: false;
   automaticTransferAllowed: false;
   liveOrderSubmissionPerformed: boolean;
+  attemptNumber?: 1 | 2;
+  priorExecutionId?: string | null;
+}
+
+export interface StrategyOneConfirmedRejectSecondAttemptEligibility {
+  priorExecutionId: string;
+  sessionId: string;
+  eligible: boolean;
+  confirmedExchangeHttpStatus: number | null;
+  confirmedExchangeCode: string | null;
+  secondAttemptExecutionId: string | null;
+  reasons: string[];
+}
+
+export interface StrategyOneResidualExecutionDiagnosticsResponse {
+  success: boolean;
+  data: {
+    schemaVersion: "202.0";
+    generatedAt: number;
+    records: StrategyOneResidualExecutionRecord[];
+    confirmedRejectSecondAttempts:
+      StrategyOneConfirmedRejectSecondAttemptEligibility[];
+    summary: {
+      total: number;
+      prepared: number;
+      uncertain: number;
+      failedSafe: number;
+      completedResolved: number;
+      inFlight: number;
+    };
+  };
 }
 
 export interface StrategyOneResidualExecutionResponse {

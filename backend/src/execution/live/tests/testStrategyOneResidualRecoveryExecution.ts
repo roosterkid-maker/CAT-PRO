@@ -83,6 +83,178 @@ async function main(): Promise<void> {
   assert.equal(gateway.calls, 1);
   assert.equal(resolutions.calls, 1);
 
+  const rejectedPreviewId = "recovery-preview-confirmed-reject-first";
+  const secondPreviewId = "recovery-preview-confirmed-reject-second";
+  const secondAttemptGateway = new ConfirmedRejectThenFillGateway();
+  const secondAttemptResolutions = new FakeResolutions();
+  const secondAttemptFile = resolve(
+    tmpdir(),
+    "cat-pro-test-residual-recovery-second-attempt.jsonl",
+  );
+  rmSync(secondAttemptFile, {force: true});
+  const secondAttemptService = new StrategyOneResidualRecoveryExecutionService(
+    new FakeAssistant(boundary(rejectedPreviewId)),
+    secondAttemptGateway,
+    secondAttemptResolutions,
+    paperEmergencyAccount(),
+    secondAttemptFile,
+  );
+  const confirmedReject = await secondAttemptService.execute(
+    rejectedPreviewId,
+    `EXECUTE ONE-TIME RECOVERY ${rejectedPreviewId}`,
+    "Binance rejected the request before acceptance.",
+    NOW,
+  );
+  assert.equal(confirmedReject.state, "FAILED_SAFE");
+  assert.equal(confirmedReject.exchangeOrderId, null);
+  assert.equal(confirmedReject.filledQuantity, 0);
+  assert.equal(confirmedReject.liveOrderSubmissionPerformed, false);
+
+  const eligibilityService =
+    new StrategyOneResidualRecoveryExecutionService(
+      new FakeAssistant(boundary(secondPreviewId)),
+      secondAttemptGateway,
+      secondAttemptResolutions,
+      paperEmergencyAccount(),
+      secondAttemptFile,
+    );
+
+  const eligibility = eligibilityService.getDiagnostics(NOW + 100)
+    .confirmedRejectSecondAttempts
+    .find((item) => item.priorExecutionId === confirmedReject.id);
+  assert.equal(eligibility?.eligible, true);
+  assert.equal(eligibility?.confirmedExchangeHttpStatus, 400);
+  assert.equal(eligibility?.confirmedExchangeCode, "-1111");
+
+  const expiredSecondPreviewId =
+    "recovery-preview-confirmed-reject-expired-before-gateway";
+  const expiredBoundary = boundary(expiredSecondPreviewId);
+  const expiredSecondAttemptService =
+    new StrategyOneResidualRecoveryExecutionService(
+      new FakeAssistant({
+        approvedPreview: expiredBoundary.approvedPreview,
+        actionTimePreview: {
+          ...expiredBoundary.actionTimePreview,
+          createdAt: expiredBoundary.approvedPreview.expiresAt,
+        },
+      }),
+      secondAttemptGateway,
+      secondAttemptResolutions,
+      paperEmergencyAccount(),
+      secondAttemptFile,
+    );
+  await assert.rejects(
+    expiredSecondAttemptService.executeConfirmedRejectSecondAttempt(
+      confirmedReject.id,
+      expiredSecondPreviewId,
+      `EXECUTE CONFIRMED-REJECT SECOND ATTEMPT ${confirmedReject.id} ${expiredSecondPreviewId}`,
+      "An expired boundary must not consume the only submission slot.",
+      NOW + 200,
+    ),
+    /expired before gateway ownership/u,
+  );
+  assert.equal(secondAttemptGateway.calls, 1);
+  const reusablePreparedChild = expiredSecondAttemptService
+    .getDiagnostics(NOW + 300).records
+    .find((record) => record.priorExecutionId === confirmedReject.id);
+  assert.equal(reusablePreparedChild?.state, "PREPARED");
+  assert.equal(
+    expiredSecondAttemptService.getDiagnostics(NOW + 300)
+      .confirmedRejectSecondAttempts
+      .find((item) => item.priorExecutionId === confirmedReject.id)?.eligible,
+    true,
+    "a pre-gateway child journal must be reusable through one fresh preview",
+  );
+
+  const restartedSecondAttemptService =
+    new StrategyOneResidualRecoveryExecutionService(
+      new FakeAssistant(boundary(secondPreviewId)),
+      secondAttemptGateway,
+      secondAttemptResolutions,
+      paperEmergencyAccount(),
+      secondAttemptFile,
+    );
+
+  const changedLineagePreviewId = "recovery-preview-confirmed-reject-changed-lineage";
+  const changedLineageService = new StrategyOneResidualRecoveryExecutionService(
+    new FakeAssistant(boundary(
+      changedLineagePreviewId,
+      "changed-source-session-fingerprint",
+    )),
+    secondAttemptGateway,
+    secondAttemptResolutions,
+    paperEmergencyAccount(),
+    secondAttemptFile,
+  );
+  await assert.rejects(
+    changedLineageService.executeConfirmedRejectSecondAttempt(
+      confirmedReject.id,
+      changedLineagePreviewId,
+      `EXECUTE CONFIRMED-REJECT SECOND ATTEMPT ${confirmedReject.id} ${changedLineagePreviewId}`,
+      "Changed lineage must never acquire second-attempt ownership.",
+      NOW + 500,
+    ),
+    /requires unchanged session lineage/u,
+  );
+  assert.equal(secondAttemptGateway.calls, 1);
+
+  assert.throws(
+    () => restartedSecondAttemptService.executeConfirmedRejectSecondAttempt(
+      confirmedReject.id,
+      secondPreviewId,
+      "EXECUTE SECOND ATTEMPT",
+      "Wrong phrase must fail before gateway I/O.",
+      NOW + 1_000,
+    ),
+    /Exact confirmed-reject second-attempt phrase/u,
+  );
+  assert.equal(secondAttemptGateway.calls, 1);
+
+  const requiredSecondAttemptPhrase =
+    `EXECUTE CONFIRMED-REJECT SECOND ATTEMPT ${confirmedReject.id} ${secondPreviewId}`;
+  const parallelSecondPreviewId =
+    "recovery-preview-confirmed-reject-parallel";
+  const [recovered, parallelReplay] = await Promise.all([
+    restartedSecondAttemptService.executeConfirmedRejectSecondAttempt(
+      confirmedReject.id,
+      secondPreviewId,
+      requiredSecondAttemptPhrase,
+      "Fresh approval for one separately journaled confirmed-reject attempt.",
+      NOW + 1_000,
+    ),
+    restartedSecondAttemptService.executeConfirmedRejectSecondAttempt(
+      confirmedReject.id,
+      parallelSecondPreviewId,
+      `EXECUTE CONFIRMED-REJECT SECOND ATTEMPT ${confirmedReject.id} ${parallelSecondPreviewId}`,
+      "A concurrent preview for the same predecessor must share one attempt.",
+      NOW + 1_001,
+    ),
+  ]);
+  assert.equal(recovered.state, "COMPLETED_RESOLVED");
+  assert.equal(parallelReplay.id, recovered.id);
+  assert.equal(recovered.id, reusablePreparedChild?.id);
+  assert.equal(recovered.attemptNumber, 2);
+  assert.equal(recovered.priorExecutionId, confirmedReject.id);
+  assert.notEqual(recovered.idempotencyKey, confirmedReject.idempotencyKey);
+  assert.equal(secondAttemptGateway.calls, 2);
+  assert.deepEqual(secondAttemptGateway.submissionAuthorities, [true, true]);
+  assert.notEqual(
+    secondAttemptGateway.idempotencyKeys[0],
+    secondAttemptGateway.idempotencyKeys[1],
+  );
+  assert.equal(secondAttemptResolutions.calls, 1);
+
+  const secondReplay = await restartedSecondAttemptService
+    .executeConfirmedRejectSecondAttempt(
+      confirmedReject.id,
+      secondPreviewId,
+      requiredSecondAttemptPhrase,
+      "UI replay must return the completed child record.",
+      NOW + 2_000,
+    );
+  assert.equal(secondReplay.id, recovered.id);
+  assert.equal(secondAttemptGateway.calls, 2);
+
   const cancelledGateway = new FakeGateway("CANCELLED");
   const cancelledResolution = new FakeResolutions();
   const cancelledFile = resolve(
@@ -90,13 +262,14 @@ async function main(): Promise<void> {
     "cat-pro-test-residual-recovery-cancelled.jsonl",
   );
   rmSync(cancelledFile, {force: true});
-  const cancelled = await new StrategyOneResidualRecoveryExecutionService(
+  const cancelledService = new StrategyOneResidualRecoveryExecutionService(
     new FakeAssistant(boundary("recovery-preview-cancelled")),
     cancelledGateway,
     cancelledResolution,
     paperEmergencyAccount(),
     cancelledFile,
-  ).execute(
+  );
+  const cancelled = await cancelledService.execute(
     "recovery-preview-cancelled",
     "EXECUTE ONE-TIME RECOVERY recovery-preview-cancelled",
     "Cancelled FOK remains unresolved.",
@@ -107,6 +280,12 @@ async function main(): Promise<void> {
   assert.equal(cancelled.filledQuantity, 0);
   assert.equal(cancelledResolution.calls, 0);
   assert.equal(cancelled.automaticRetryAllowed, false);
+  assert.equal(
+    cancelledService.getDiagnostics(NOW + 100)
+      .confirmedRejectSecondAttempts[0]?.eligible,
+    false,
+    "an accepted/cancelled order must never qualify for a second attempt",
+  );
 
   const uncertainPreviewId = "recovery-preview-uncertain";
   const uncertainAssistant = new FakeAssistant(boundary(uncertainPreviewId));
@@ -139,6 +318,12 @@ async function main(): Promise<void> {
   assert.equal(readReconciled.state, "SUBMISSION_UNCERTAIN");
   assert.deepEqual(uncertainGateway.submissionAuthorities, [true, false]);
   assert.equal(uncertainAssistant.calls, 1);
+  assert.equal(
+    uncertainService.getDiagnostics(NOW + 60_001)
+      .confirmedRejectSecondAttempts[0]?.eligible,
+    false,
+    "uncertain submission evidence must never qualify for a second attempt",
+  );
 
   const blockedGateway = new FakeGateway("FILLED");
   const blockedService = new StrategyOneResidualRecoveryExecutionService(
@@ -165,8 +350,9 @@ async function main(): Promise<void> {
   rmSync(file, {force: true});
   rmSync(cancelledFile, {force: true});
   rmSync(uncertainFile, {force: true});
+  rmSync(secondAttemptFile, {force: true});
   console.log(
-    "V202 one-time residual recovery execution test passed: exact approved FOK request journaled once, authoritative fill-fee evidence resolved exposure, and cancelled/account-unsafe paths failed closed without retry.",
+    "V202 recovery execution test passed: exact FOK execution remained idempotent, and only a deterministic zero-fill Binance HTTP rejection could receive one fresh separately authorized second attempt while cancelled/uncertain outcomes stayed blocked.",
   );
 }
 
@@ -253,6 +439,49 @@ class FakeUncertainGateway {
   }
 }
 
+class ConfirmedRejectThenFillGateway {
+  calls = 0;
+  submissionAuthorities: boolean[] = [];
+  idempotencyKeys: string[] = [];
+  private readonly owned = new Map<string, CentralLiveOrderGatewayRecord>();
+
+  get(idempotencyKey: string): CentralLiveOrderGatewayRecord | null {
+    const record = this.owned.get(idempotencyKey);
+    return record ? structuredClone(record) : null;
+  }
+
+  async executeOrReconcile(input: {
+    readonly request: LiveExecutionRequest;
+    readonly idempotencyKey: string;
+    readonly allowNewSubmission: boolean;
+    readonly now?: number;
+  }): Promise<CentralLiveOrderGatewayResponse> {
+    this.calls += 1;
+    this.submissionAuthorities.push(input.allowNewSubmission);
+    this.idempotencyKeys.push(input.idempotencyKey);
+    const existing = this.owned.get(input.idempotencyKey);
+    if (existing) {
+      return {
+        state: "READY",
+        record: structuredClone(existing),
+        reasons: [],
+      };
+    }
+
+    const record = this.owned.size === 0
+      ? confirmedRejectGatewayRecord(input.request, input.idempotencyKey)
+      : gatewayRecord(input.request, input.idempotencyKey, "FILLED");
+    this.owned.set(input.idempotencyKey, record);
+    return {
+      state: "READY",
+      record: structuredClone(record),
+      reasons: record.result?.status === "FAILED"
+        ? ["Order has no filled quantity and therefore no fill commission."]
+        : [],
+    };
+  }
+}
+
 class FakeResolutions {
   calls = 0;
   evidence: StrategyOneCompensatingOrderEvidence | null = null;
@@ -290,18 +519,21 @@ function paperEmergencyAccount() {
 
 function boundary(
   previewId = PREVIEW_ID,
+  sourceSessionFingerprint = "source-session-fingerprint",
 ): StrategyOneApprovedResidualExecutionBoundary {
   const approved = preview(
     previewId,
     "OPERATOR_APPROVED_EVIDENCE_ONLY",
     NOW,
     0.03698,
+    sourceSessionFingerprint,
   );
   const actionTime = preview(
     `${previewId}-action-time-read-only`,
     "READY_FOR_OPERATOR_REVIEW",
     null,
     0.03701,
+    sourceSessionFingerprint,
   );
   return {approvedPreview: approved, actionTimePreview: actionTime};
 }
@@ -311,6 +543,7 @@ function preview(
   state: StrategyOneResidualRecoveryPreview["state"],
   approvedAt: number | null,
   actionTimePrice: number,
+  sourceSessionFingerprint = "source-session-fingerprint",
 ): StrategyOneResidualRecoveryPreview {
   const estimatedFeeQuote = 138 * actionTimePrice * 0.001;
   const estimatedAdverseMoveLossQuote =
@@ -319,7 +552,7 @@ function preview(
     schemaVersion: "142.0",
     id,
     sessionId: "strategy-one:residual-test-session",
-    sourceSessionFingerprint: "source-session-fingerprint",
+    sourceSessionFingerprint,
     state,
     createdAt: NOW,
     expiresAt: NOW + 30_000,
@@ -456,6 +689,50 @@ function gatewayRecord(
     } : null,
     cancelRequestedAt: null,
     orderSubmissionPerformed: true,
+    lastError: null,
+  };
+}
+
+function confirmedRejectGatewayRecord(
+  request: LiveExecutionRequest,
+  idempotencyKey: string,
+): CentralLiveOrderGatewayRecord {
+  return {
+    version: "76.0",
+    id: "central-recovery-confirmed-reject",
+    idempotencyKey,
+    requestHash: "confirmed-reject-request-hash",
+    request: structuredClone(request),
+    state: "FEE_RECONCILED",
+    preparedAt: NOW,
+    updatedAt: NOW + 25,
+    result: {
+      success: false,
+      exchange: "binance",
+      product: "SPOT",
+      market: request.market,
+      side: request.side,
+      orderId: null,
+      clientOrderId: "cat-confirmed-reject",
+      status: "FAILED",
+      requestedQuantity: request.quantity,
+      filledQuantity: 0,
+      remainingQuantity: request.quantity,
+      requestedPrice: request.price ?? null,
+      averageFillPrice: 0,
+      feeAmount: 0,
+      cancelled: false,
+      timedOut: false,
+      startedAt: NOW,
+      completedAt: NOW + 25,
+      executionTimeMs: 25,
+      failureReason:
+        "Binance POST /api/v3/order failed: status=400, code=-1111, message=Parameter 'price' has too much precision.",
+      reasons: ["Unable to create or monitor the Binance order."],
+    },
+    feeEvidence: null,
+    cancelRequestedAt: null,
+    orderSubmissionPerformed: false,
     lastError: null,
   };
 }

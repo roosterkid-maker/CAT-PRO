@@ -15,6 +15,7 @@ import {
 
 import {
   useApproveStrategyOneResidualRecovery,
+  useExecuteStrategyOneConfirmedRejectSecondAttempt,
   useExecuteStrategyOneResidualRecovery,
   useInspectStrategyOneResidualRecovery,
   useOrderLifecyclePersistence,
@@ -22,6 +23,7 @@ import {
   useResolveDurableRecovery,
   useRuntimeRecovery,
   useSettlementAccountingPersistence,
+  useStrategyOneResidualExecutionDiagnostics,
 } from "../hooks/useRecoveryDiagnostics";
 
 import type {
@@ -42,6 +44,9 @@ export default function RecoveryDiagnosticsDashboard() {
   const accountingQuery =
     useSettlementAccountingPersistence();
 
+  const residualExecutionQuery =
+    useStrategyOneResidualExecutionDiagnostics();
+
   const resolveMutation =
     useResolveDurableRecovery();
 
@@ -53,6 +58,9 @@ export default function RecoveryDiagnosticsDashboard() {
 
   const executeResidualMutation =
     useExecuteStrategyOneResidualRecovery();
+
+  const executeSecondAttemptMutation =
+    useExecuteStrategyOneConfirmedRejectSecondAttempt();
 
   const [
     selectedSessionId,
@@ -106,13 +114,15 @@ export default function RecoveryDiagnosticsDashboard() {
     overviewQuery.isFetching ||
     runtimeQuery.isFetching ||
     lifecycleQuery.isFetching ||
-    accountingQuery.isFetching;
+    accountingQuery.isFetching ||
+    residualExecutionQuery.isFetching;
 
   const partialEvidence =
     overviewQuery.isError ||
     runtimeQuery.isError ||
     lifecycleQuery.isError ||
-    accountingQuery.isError;
+    accountingQuery.isError ||
+    residualExecutionQuery.isError;
 
   const sessionIds =
     useMemo(
@@ -161,8 +171,34 @@ export default function RecoveryDiagnosticsDashboard() {
     inspectResidualMutation.data?.data ??
     null;
 
-  const requiredResidualExecutionPhrase = residualPreview
-    ? `EXECUTE ONE-TIME RECOVERY ${residualPreview.id}`
+  const confirmedRejectSecondAttempt =
+    residualExecutionQuery.data?.data
+      .confirmedRejectSecondAttempts
+      .find((item) =>
+        item.sessionId === selectedSessionId && item.eligible) ??
+    null;
+
+  const residualExecutionHistory =
+    residualExecutionQuery.data?.data.records
+      .filter((record) => record.sessionId === selectedSessionId) ??
+    [];
+
+  const blockedSecondAttemptAssessment =
+    residualExecutionQuery.data?.data
+      .confirmedRejectSecondAttempts
+      .find((item) =>
+        item.sessionId === selectedSessionId && !item.eligible) ??
+    null;
+
+  const residualExecutionBoundaryAvailable =
+    confirmedRejectSecondAttempt !== null ||
+    residualExecutionHistory.length === 0;
+
+  const requiredResidualExecutionPhrase =
+    residualPreview && residualExecutionBoundaryAvailable
+    ? confirmedRejectSecondAttempt
+      ? `EXECUTE CONFIRMED-REJECT SECOND ATTEMPT ${confirmedRejectSecondAttempt.priorExecutionId} ${residualPreview.id}`
+      : `EXECUTE ONE-TIME RECOVERY ${residualPreview.id}`
     : "";
 
   const selectRecoverySession = (sessionId: string | null) => {
@@ -170,6 +206,7 @@ export default function RecoveryDiagnosticsDashboard() {
     inspectResidualMutation.reset();
     approveResidualMutation.reset();
     executeResidualMutation.reset();
+    executeSecondAttemptMutation.reset();
     setResidualApprovalConfirmation("");
     setResidualExecutionConfirmation("");
     setResidualExecutionNote("");
@@ -183,6 +220,7 @@ export default function RecoveryDiagnosticsDashboard() {
         runtimeQuery.refetch(),
         lifecycleQuery.refetch(),
         accountingQuery.refetch(),
+        residualExecutionQuery.refetch(),
       ]);
     };
 
@@ -818,6 +856,7 @@ export default function RecoveryDiagnosticsDashboard() {
                   if (!selectedSessionId) return;
                   approveResidualMutation.reset();
                   executeResidualMutation.reset();
+                  executeSecondAttemptMutation.reset();
                   setResidualApprovalConfirmation("");
                   setResidualExecutionConfirmation("");
                   setResidualExecutionAcknowledged(false);
@@ -918,7 +957,8 @@ export default function RecoveryDiagnosticsDashboard() {
                 </div>
               ) : null}
 
-              {residualPreview?.state === "OPERATOR_APPROVED_EVIDENCE_ONLY" ? (
+              {residualPreview?.state === "OPERATOR_APPROVED_EVIDENCE_ONLY" &&
+              residualExecutionBoundaryAvailable ? (
                 <div className="rounded-lg border border-danger/40 bg-danger/10 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-danger">
                     Final LIVE submission boundary
@@ -928,6 +968,17 @@ export default function RecoveryDiagnosticsDashboard() {
                     {residualPreview.residual.executableQuantity} {residualPreview.executionPreview.balanceAsset}{" "}
                     order on {residualPreview.residual.venue}. No automatic retry is permitted.
                   </p>
+
+                  {confirmedRejectSecondAttempt ? (
+                    <div className="mt-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-warning">
+                      The original request has a deterministic Binance HTTP{" "}
+                      {confirmedRejectSecondAttempt.confirmedExchangeHttpStatus}{" "}
+                      rejection ({confirmedRejectSecondAttempt.confirmedExchangeCode})
+                      with no order ID or fill. This is one separately authorized
+                      second attempt with a new durable idempotency key; the original
+                      record remains immutable.
+                    </div>
+                  ) : null}
 
                   <label className="mt-4 flex items-start gap-3 text-sm text-text-primary">
                     <input
@@ -939,7 +990,10 @@ export default function RecoveryDiagnosticsDashboard() {
                     />
                     <span>
                       I understand this submits one real exact-sized recovery
-                      order and any partial, unknown or failed evidence remains
+                      order {confirmedRejectSecondAttempt
+                        ? "as the sole confirmed-reject second attempt "
+                        : ""}
+                      and any partial, unknown or failed evidence remains
                       emergency-blocked.
                     </span>
                   </label>
@@ -968,28 +1022,67 @@ export default function RecoveryDiagnosticsDashboard() {
                       residualExecutionConfirmation.trim() !==
                         requiredResidualExecutionPhrase ||
                       residualExecutionNote.trim().length === 0 ||
-                      executeResidualMutation.isPending
+                      executeResidualMutation.isPending ||
+                      executeSecondAttemptMutation.isPending
                     }
-                    onClick={() =>
-                      executeResidualMutation.mutate({
+                    onClick={() => {
+                      const input = {
                         previewId: residualPreview.id,
                         confirmation: residualExecutionConfirmation.trim(),
                         resolutionNote: residualExecutionNote.trim(),
-                      })}
+                      };
+                      if (confirmedRejectSecondAttempt) {
+                        executeSecondAttemptMutation.mutate({
+                          ...input,
+                          priorExecutionId:
+                            confirmedRejectSecondAttempt.priorExecutionId,
+                        });
+                        return;
+                      }
+                      executeResidualMutation.mutate(input);
+                    }}
                     className="mt-3 rounded-md border border-danger bg-danger/20 px-4 py-2 text-sm font-bold text-danger disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {executeResidualMutation.isPending
-                      ? "Submitting one-time recovery..."
-                      : "3. Execute one-time LIVE recovery"}
+                    {executeResidualMutation.isPending ||
+                    executeSecondAttemptMutation.isPending
+                      ? "Submitting exact recovery..."
+                      : confirmedRejectSecondAttempt
+                        ? "3. Execute confirmed-reject second attempt"
+                        : "3. Execute one-time LIVE recovery"}
                   </button>
+                </div>
+              ) : null}
+
+              {residualPreview?.state === "OPERATOR_APPROVED_EVIDENCE_ONLY" &&
+              !residualExecutionBoundaryAvailable ? (
+                <div className="rounded-lg border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
+                  <p className="font-semibold">
+                    No additional recovery submission is authorized.
+                  </p>
+                  <p className="mt-2 leading-6">
+                    This session already has durable execution ownership. A new
+                    order is blocked unless the original record proves the one
+                    eligible deterministic pre-accept rejection and no second
+                    attempt has been journaled.
+                  </p>
+                  {blockedSecondAttemptAssessment?.reasons.length ? (
+                    <div className="mt-3 space-y-1 font-mono text-xs">
+                      {blockedSecondAttemptAssessment.reasons.map((reason) => (
+                        <p key={reason}>{reason}</p>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
               {inspectResidualMutation.isError ||
               approveResidualMutation.isError ||
-              executeResidualMutation.isError ? (
+              executeResidualMutation.isError ||
+              executeSecondAttemptMutation.isError ? (
                 <div className="rounded-lg border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
-                  {executeResidualMutation.error instanceof Error
+                  {executeSecondAttemptMutation.error instanceof Error
+                    ? executeSecondAttemptMutation.error.message
+                    : executeResidualMutation.error instanceof Error
                     ? executeResidualMutation.error.message
                     : approveResidualMutation.error instanceof Error
                       ? approveResidualMutation.error.message
@@ -999,14 +1092,18 @@ export default function RecoveryDiagnosticsDashboard() {
                 </div>
               ) : null}
 
-              {executeResidualMutation.data?.data ? (
+              {(executeSecondAttemptMutation.data?.data ??
+              executeResidualMutation.data?.data) ? (
                 <div className={`rounded-lg border p-4 text-sm ${
-                  executeResidualMutation.data.data.state === "COMPLETED_RESOLVED"
+                  (executeSecondAttemptMutation.data?.data ??
+                  executeResidualMutation.data?.data)?.state === "COMPLETED_RESOLVED"
                     ? "border-success/30 bg-success/10 text-success"
                     : "border-danger/30 bg-danger/10 text-danger"
                 }`}>
-                  Recovery state: {executeResidualMutation.data.data.state}.
-                  {" "}{executeResidualMutation.data.data.reasons.join(" | ")}
+                  Recovery state: {(executeSecondAttemptMutation.data?.data ??
+                    executeResidualMutation.data?.data)?.state}.
+                  {" "}{(executeSecondAttemptMutation.data?.data ??
+                    executeResidualMutation.data?.data)?.reasons.join(" | ")}
                 </div>
               ) : null}
             </div>

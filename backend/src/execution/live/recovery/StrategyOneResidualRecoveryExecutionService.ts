@@ -46,6 +46,24 @@ export interface StrategyOneResidualRecoveryExecutionRecord {
   readonly automaticCancelAllowed: false;
   readonly automaticTransferAllowed: false;
   readonly liveOrderSubmissionPerformed: boolean;
+  /** Present on newly journaled records; legacy records without it are attempt one. */
+  readonly attemptNumber?: 1 | 2;
+  /** Exact immutable predecessor for the separately authorized second attempt. */
+  readonly priorExecutionId?: string | null;
+}
+
+export interface StrategyOneConfirmedRejectSecondAttemptEligibility {
+  readonly priorExecutionId: string;
+  readonly sessionId: string;
+  readonly eligible: boolean;
+  readonly confirmedExchangeHttpStatus: number | null;
+  readonly confirmedExchangeCode: string | null;
+  readonly secondAttemptExecutionId: string | null;
+  readonly reasons: readonly string[];
+}
+
+interface ConfirmedRejectSecondAttemptContext {
+  readonly priorExecutionId: string;
 }
 
 interface AssistantPort {
@@ -167,6 +185,51 @@ export class StrategyOneResidualRecoveryExecutionService {
     return work;
   }
 
+  executeConfirmedRejectSecondAttempt(
+    priorExecutionIdValue: string,
+    previewIdValue: string,
+    confirmationValue: string,
+    resolutionNoteValue: string,
+    now = Date.now(),
+  ): Promise<StrategyOneResidualRecoveryExecutionRecord> {
+    validateTime(now);
+    const priorExecutionId = requireIdentifier(
+      priorExecutionIdValue,
+      "prior execution",
+    );
+    const previewId = requireIdentifier(previewIdValue, "preview");
+    const resolutionNote = requireText(resolutionNoteValue, "resolutionNote");
+    const required = requiredSecondAttemptPhrase(priorExecutionId, previewId);
+
+    if (confirmationValue.trim() !== required) {
+      throw new Error(
+        `Exact confirmed-reject second-attempt phrase is required: ${required}`,
+      );
+    }
+
+    const priorLockKey = confirmedRejectSecondAttemptLockKey(priorExecutionId);
+    const active = this.inFlight.get(previewId) ??
+      this.inFlight.get(priorLockKey);
+
+    if (active) {
+      return active;
+    }
+
+    const work = this.executeInternal(
+      previewId,
+      resolutionNote,
+      now,
+      {priorExecutionId},
+    ).finally(() => {
+      this.inFlight.delete(previewId);
+      this.inFlight.delete(priorLockKey);
+    });
+
+    this.inFlight.set(previewId, work);
+    this.inFlight.set(priorLockKey, work);
+    return work;
+  }
+
   getDiagnostics(now = Date.now()) {
     validateTime(now);
     const records = [...this.records.values()]
@@ -177,6 +240,8 @@ export class StrategyOneResidualRecoveryExecutionService {
       schemaVersion: "202.0" as const,
       generatedAt: now,
       records,
+      confirmedRejectSecondAttempts: records.map((record) =>
+        this.getSecondAttemptEligibilityFor(record)),
       summary: {
         total: records.length,
         prepared: records.filter((record) => record.state === "PREPARED").length,
@@ -186,10 +251,52 @@ export class StrategyOneResidualRecoveryExecutionService {
           record.state === "FAILED_SAFE").length,
         completedResolved: records.filter((record) =>
           record.state === "COMPLETED_RESOLVED").length,
-        inFlight: this.inFlight.size,
+        inFlight: new Set(this.inFlight.values()).size,
       },
       persistence: this.store.getDiagnostics(),
       safety: safety(),
+    });
+  }
+
+  private getSecondAttemptEligibilityFor(
+    prior: StrategyOneResidualRecoveryExecutionRecord,
+  ): StrategyOneConfirmedRejectSecondAttemptEligibility {
+    const reasons: string[] = [];
+    const attemptNumber = prior.attemptNumber ?? 1;
+    const secondAttempt = [...this.records.values()].find(
+      (record) => record.priorExecutionId === prior.id,
+    ) ?? null;
+    const secondAttemptGatewayRecord = secondAttempt
+      ? this.gateway.get(secondAttempt.idempotencyKey)
+      : null;
+    const reusablePreparedSecondAttempt = Boolean(
+      secondAttempt &&
+      secondAttempt.state === "PREPARED" &&
+      !secondAttempt.liveOrderSubmissionPerformed &&
+      secondAttemptGatewayRecord === null,
+    );
+    const gatewayRecord = this.gateway.get(prior.idempotencyKey);
+    const rejection = confirmedPreAcceptBinanceRejection(
+      prior,
+      gatewayRecord,
+    );
+
+    if (attemptNumber !== 1) {
+      reasons.push("Only the original recovery execution can authorize one second attempt.");
+    }
+    if (secondAttempt && !reusablePreparedSecondAttempt) {
+      reasons.push("A confirmed-reject second attempt is already durably journaled.");
+    }
+    reasons.push(...rejection.reasons);
+
+    return freeze({
+      priorExecutionId: prior.id,
+      sessionId: prior.sessionId,
+      eligible: reasons.length === 0,
+      confirmedExchangeHttpStatus: rejection.httpStatus,
+      confirmedExchangeCode: rejection.exchangeCode,
+      secondAttemptExecutionId: secondAttempt?.id ?? null,
+      reasons: unique(reasons),
     });
   }
 
@@ -197,13 +304,48 @@ export class StrategyOneResidualRecoveryExecutionService {
     previewId: string,
     resolutionNote: string,
     now: number,
+    secondAttempt: ConfirmedRejectSecondAttemptContext | null = null,
   ): Promise<StrategyOneResidualRecoveryExecutionRecord> {
     const previewRecord = [...this.records.values()].find(
       (record) => record.previewId === previewId,
     );
 
+    const prior = secondAttempt
+      ? [...this.records.values()].find(
+        (record) => record.id === secondAttempt.priorExecutionId,
+      ) ?? null
+      : null;
+
+    if (secondAttempt && !prior) {
+      throw new Error("Confirmed-reject prior recovery execution is unavailable.");
+    }
+
+    if (
+      secondAttempt &&
+      previewRecord &&
+      (
+        previewRecord.priorExecutionId !== secondAttempt.priorExecutionId ||
+        (previewRecord.attemptNumber ?? 1) !== 2
+      )
+    ) {
+      throw new Error(
+        "The approved preview is already owned by a different recovery execution.",
+      );
+    }
+
     if (previewRecord?.state === "COMPLETED_RESOLVED") {
       return clone(previewRecord);
+    }
+
+    if (secondAttempt && !previewRecord) {
+      const eligibility = this.getSecondAttemptEligibilityFor(
+        prior as StrategyOneResidualRecoveryExecutionRecord,
+      );
+      if (!eligibility.eligible) {
+        throw new Error(
+          `Confirmed-reject second attempt is blocked: ${eligibility.reasons.join(" | ")}`,
+        );
+      }
     }
 
     const account = this.account.getAccount();
@@ -229,10 +371,24 @@ export class StrategyOneResidualRecoveryExecutionService {
     const request = previewRecord?.request ?? requestFrom(
       boundary as StrategyOneApprovedResidualExecutionBoundary,
     );
-    const idempotencyKey = previewRecord?.idempotencyKey ?? recoveryIdempotencyKey(
-      approved?.sessionId ?? "",
-      approved?.sourceSessionFingerprint ?? "",
+    const idempotencyKey = previewRecord?.idempotencyKey ?? (
+      secondAttempt
+        ? secondAttemptIdempotencyKey(
+          (prior as StrategyOneResidualRecoveryExecutionRecord).idempotencyKey,
+        )
+        : recoveryIdempotencyKey(
+          approved?.sessionId ?? "",
+          approved?.sourceSessionFingerprint ?? "",
+        )
     );
+
+    if (secondAttempt && !previewRecord) {
+      assertSecondAttemptIntent(
+        prior as StrategyOneResidualRecoveryExecutionRecord,
+        boundary as StrategyOneApprovedResidualExecutionBoundary,
+        request,
+      );
+    }
     let existing = this.records.get(idempotencyKey);
 
     if (existing?.state === "COMPLETED_RESOLVED") {
@@ -281,6 +437,8 @@ export class StrategyOneResidualRecoveryExecutionService {
       request,
       idempotencyKey,
       now,
+      attemptNumber: secondAttempt ? 2 : 1,
+      priorExecutionId: secondAttempt?.priorExecutionId ?? null,
     });
     const gatewayRecord = ownedGatewayRecord ?? this.gateway.get(idempotencyKey);
 
@@ -398,6 +556,8 @@ export class StrategyOneResidualRecoveryExecutionService {
     readonly request: LiveExecutionRequest;
     readonly idempotencyKey: string;
     readonly now: number;
+    readonly attemptNumber: 1 | 2;
+    readonly priorExecutionId: string | null;
   }): StrategyOneResidualRecoveryExecutionRecord {
     const record = freeze({
       schemaVersion: "202.0" as const,
@@ -424,6 +584,8 @@ export class StrategyOneResidualRecoveryExecutionService {
       automaticCancelAllowed: false as const,
       automaticTransferAllowed: false as const,
       liveOrderSubmissionPerformed: false,
+      attemptNumber: input.attemptNumber,
+      priorExecutionId: input.priorExecutionId,
     });
 
     return this.persist(record);
@@ -512,8 +674,171 @@ function recoveryIdempotencyKey(
     .digest("hex")}`;
 }
 
+function secondAttemptIdempotencyKey(
+  priorIdempotencyKey: string,
+): string {
+  return `strategy-one:residual-recovery-second-attempt:${createHash("sha256")
+    .update(`${priorIdempotencyKey}:attempt:2`)
+    .digest("hex")}`;
+}
+
+function confirmedRejectSecondAttemptLockKey(
+  priorExecutionId: string,
+): string {
+  return `confirmed-reject-second-attempt:${priorExecutionId}`;
+}
+
 function requiredExecutionPhrase(previewId: string): string {
   return `EXECUTE ONE-TIME RECOVERY ${previewId}`;
+}
+
+function requiredSecondAttemptPhrase(
+  priorExecutionId: string,
+  previewId: string,
+): string {
+  return `EXECUTE CONFIRMED-REJECT SECOND ATTEMPT ${priorExecutionId} ${previewId}`;
+}
+
+function assertSecondAttemptIntent(
+  prior: StrategyOneResidualRecoveryExecutionRecord,
+  boundary: StrategyOneApprovedResidualExecutionBoundary,
+  current: LiveExecutionRequest,
+): void {
+  const approved = boundary.approvedPreview;
+  const tolerance = Math.max(1e-12, prior.request.quantity * 1e-9);
+  const sameLineage =
+    prior.sessionId === approved.sessionId &&
+    prior.sourceSessionFingerprint === approved.sourceSessionFingerprint;
+  const sameIntent =
+    normalizeExchange(prior.request.exchange) === normalizeExchange(current.exchange) &&
+    normalizeMarket(prior.request.market) === normalizeMarket(current.market) &&
+    prior.request.side === current.side &&
+    prior.request.orderType === "limit" &&
+    current.orderType === "limit" &&
+    prior.request.timeInForce === "FOK" &&
+    current.timeInForce === "FOK" &&
+    Math.abs(prior.request.quantity - current.quantity) <= tolerance &&
+    (prior.request.product ?? "SPOT") === "SPOT" &&
+    (current.product ?? "SPOT") === "SPOT";
+
+  if (!sameLineage || !sameIntent) {
+    throw new Error(
+      "Confirmed-reject second attempt requires unchanged session lineage, venue, market, side, exact quantity and FOK semantics.",
+    );
+  }
+}
+
+function confirmedPreAcceptBinanceRejection(
+  execution: StrategyOneResidualRecoveryExecutionRecord,
+  gateway: CentralLiveOrderGatewayRecord | null,
+): {
+  readonly httpStatus: number | null;
+  readonly exchangeCode: string | null;
+  readonly reasons: readonly string[];
+} {
+  const reasons: string[] = [];
+  const result = gateway?.result ?? null;
+  const parsed = parseBinanceOrderRejection(result?.failureReason ?? null);
+  const tolerance = Math.max(1e-12, execution.request.quantity * 1e-9);
+
+  if (execution.state !== "FAILED_SAFE") {
+    reasons.push("Prior recovery execution is not durably FAILED_SAFE.");
+  }
+  if (
+    execution.liveOrderSubmissionPerformed ||
+    execution.exchangeOrderId !== null ||
+    execution.filledQuantity !== 0
+  ) {
+    reasons.push("Prior execution has submission, order-ID or fill evidence.");
+  }
+  if (!gateway) {
+    reasons.push("Central gateway evidence for the prior execution is missing.");
+  } else {
+    if (
+      gateway.idempotencyKey !== execution.idempotencyKey ||
+      gateway.state !== "FEE_RECONCILED" ||
+      gateway.orderSubmissionPerformed ||
+      gateway.lastError !== null ||
+      !sameExactRecoveryRequest(gateway.request, execution.request)
+    ) {
+      reasons.push("Central gateway does not prove a clean terminal pre-accept rejection.");
+    }
+    if (
+      !result ||
+      result.success ||
+      result.status !== "FAILED" ||
+      result.orderId !== null ||
+      result.filledQuantity !== 0 ||
+      Math.abs(result.requestedQuantity - execution.request.quantity) > tolerance ||
+      Math.abs(result.remainingQuantity - execution.request.quantity) > tolerance ||
+      result.requestedPrice === null ||
+      execution.request.price === undefined ||
+      Math.abs(result.requestedPrice - execution.request.price) >
+        Math.max(1e-12, execution.request.price * 1e-9) ||
+      result.cancelled ||
+      result.timedOut ||
+      result.feeAmount !== 0 ||
+      normalizeExchange(result.exchange) !== "binance" ||
+      normalizeMarket(result.market) !== normalizeMarket(execution.request.market) ||
+      result.side !== execution.request.side
+    ) {
+      reasons.push("Gateway result is not an exact zero-fill, non-timeout Binance FAILED result.");
+    }
+  }
+  if (!parsed) {
+    reasons.push("A deterministic Binance HTTP 4xx order rejection code is required.");
+  }
+
+  return {
+    httpStatus: parsed?.httpStatus ?? null,
+    exchangeCode: parsed?.exchangeCode ?? null,
+    reasons: unique(reasons),
+  };
+}
+
+function sameExactRecoveryRequest(
+  first: LiveExecutionRequest,
+  second: LiveExecutionRequest,
+): boolean {
+  const quantityTolerance = Math.max(1e-12, second.quantity * 1e-9);
+  const firstPrice = first.price ?? null;
+  const secondPrice = second.price ?? null;
+  const priceTolerance = Math.max(1e-12, (secondPrice ?? 0) * 1e-9);
+
+  return normalizeExchange(first.exchange) === normalizeExchange(second.exchange) &&
+    normalizeMarket(first.market) === normalizeMarket(second.market) &&
+    first.side === second.side &&
+    first.orderType === second.orderType &&
+    first.timeInForce === second.timeInForce &&
+    (first.product ?? "SPOT") === (second.product ?? "SPOT") &&
+    Math.abs(first.quantity - second.quantity) <= quantityTolerance &&
+    firstPrice !== null &&
+    secondPrice !== null &&
+    Math.abs(firstPrice - secondPrice) <= priceTolerance;
+}
+
+function parseBinanceOrderRejection(
+  failureReason: string | null,
+): {readonly httpStatus: number; readonly exchangeCode: string} | null {
+  if (!failureReason) {
+    return null;
+  }
+
+  const match = /^Binance POST \/api\/v3\/order failed: status=(\d{3}), code=(-?\d+), message=.+$/u
+    .exec(failureReason.trim());
+  if (!match) {
+    return null;
+  }
+
+  const httpStatus = Number(match[1]);
+  if (![400, 401, 403, 409, 418, 429].includes(httpStatus)) {
+    return null;
+  }
+
+  return {
+    httpStatus,
+    exchangeCode: match[2] as string,
+  };
 }
 
 function requestHash(request: LiveExecutionRequest): string {
@@ -531,6 +856,9 @@ function safety() {
     exactFokLimitOnly: true as const,
     journalBeforeIo: true as const,
     stableSessionIdempotency: true as const,
+    confirmedRejectSecondAttemptRequiresFreshApproval: true as const,
+    confirmedRejectSecondAttemptMaximumCount: 1 as const,
+    uncertainOrAcceptedSecondAttemptAllowed: false as const,
     automaticRetryAllowed: false as const,
     automaticCancelAllowed: false as const,
     automaticTransferAllowed: false as const,

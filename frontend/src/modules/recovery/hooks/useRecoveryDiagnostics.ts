@@ -7,6 +7,8 @@ import {
 import {
   approveStrategyOneResidualRecovery,
   executeStrategyOneResidualRecovery,
+  executeStrategyOneConfirmedRejectSecondAttempt,
+  fetchStrategyOneResidualExecutionDiagnostics,
   fetchOrderLifecyclePersistence,
   fetchRecoveryOverview,
   fetchRuntimeRecovery,
@@ -39,6 +41,11 @@ const accountingKey = [
 const strategyOneTwoLegKey = [
   "recovery",
   "strategy-one-two-leg",
+] as const;
+
+const strategyOneResidualExecutionKey = [
+  "recovery",
+  "strategy-one-residual-execution",
 ] as const;
 
 export function useRecoveryOverview() {
@@ -180,6 +187,16 @@ export function useStrategyOneTwoLegRecovery(
   });
 }
 
+export function useStrategyOneResidualExecutionDiagnostics() {
+  return useQuery({
+    queryKey: strategyOneResidualExecutionKey,
+    queryFn: fetchStrategyOneResidualExecutionDiagnostics,
+    refetchInterval: 5_000,
+    staleTime: 3_000,
+    retry: 2,
+  });
+}
+
 export function useInspectStrategyOneResidualRecovery() {
   return useMutation({
     mutationFn: (sessionId: string) =>
@@ -221,6 +238,38 @@ export function useExecuteStrategyOneResidualRecovery() {
         queryClient.invalidateQueries({queryKey: overviewKey}),
         queryClient.invalidateQueries({queryKey: runtimeKey}),
         queryClient.invalidateQueries({queryKey: strategyOneTwoLegKey}),
+        queryClient.invalidateQueries({queryKey: strategyOneResidualExecutionKey}),
+      ]);
+    },
+  });
+}
+
+export function useExecuteStrategyOneConfirmedRejectSecondAttempt() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      priorExecutionId,
+      previewId,
+      confirmation,
+      resolutionNote,
+    }: {
+      priorExecutionId: string;
+      previewId: string;
+      confirmation: string;
+      resolutionNote: string;
+    }) => executeStrategyOneConfirmedRejectSecondAttempt(
+      priorExecutionId,
+      previewId,
+      confirmation,
+      resolutionNote,
+    ),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({queryKey: overviewKey}),
+        queryClient.invalidateQueries({queryKey: runtimeKey}),
+        queryClient.invalidateQueries({queryKey: strategyOneTwoLegKey}),
+        queryClient.invalidateQueries({queryKey: strategyOneResidualExecutionKey}),
       ]);
     },
   });
