@@ -188,13 +188,16 @@ export default function RecoveryDiagnosticsDashboard() {
 
   const parsedResidualLossCap = Number(residualLossCap);
 
+  const residualLossCapIsValid =
+    Number.isFinite(parsedResidualLossCap) &&
+    parsedResidualLossCap > 0 &&
+    parsedResidualLossCap <= 1;
+
   const requiredResidualLossAuthorization =
     residualLossBlocked &&
     residualPreview?.residual.side &&
     residualPreview.residual.exactQuantity > 0 &&
-    Number.isFinite(parsedResidualLossCap) &&
-    parsedResidualLossCap > 0 &&
-    parsedResidualLossCap <= 1
+    residualLossCapIsValid
       ? `APPROVE ONE-TIME ${residualPreview.market.endsWith("USDT")
         ? residualPreview.market.slice(0, -4)
         : residualPreview.market} RECOVERY ${residualPreview.residual.side} ${formatApprovalNumber(
@@ -954,7 +957,10 @@ export default function RecoveryDiagnosticsDashboard() {
                 </div>
               ) : null}
 
-              {residualLossBlocked && selectedSessionId ? (
+              {selectedSessionId &&
+              residualPreview?.state !== "BALANCED_NO_ACTION" &&
+              residualPreview?.state !== "READY_FOR_OPERATOR_REVIEW" &&
+              residualPreview?.state !== "OPERATOR_APPROVED_EVIDENCE_ONLY" ? (
                 <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-warning">
                     One-time loss ceiling — inspection only
@@ -996,14 +1002,33 @@ export default function RecoveryDiagnosticsDashboard() {
                         className="mt-3 w-full rounded-md border border-border-default bg-panel p-3 font-mono text-xs text-text-primary outline-none"
                       />
                     </>
+                  ) : (
+                    <p className="mt-3 text-xs leading-5 text-text-muted">
+                      Paste the exact operator authorization phrase. The
+                      backend derives the required market, side and quantity
+                      from the selected unresolved session and rejects any
+                      mismatch.
+                    </p>
+                  )}
+
+                  {!requiredResidualLossAuthorization ? (
+                    <input
+                      value={residualLossAuthorization}
+                      onChange={(event) =>
+                        setResidualLossAuthorization(event.target.value)}
+                      placeholder="APPROVE ONE-TIME … MAX LOSS … USDT"
+                      className="mt-3 w-full rounded-md border border-border-default bg-panel p-3 font-mono text-xs text-text-primary outline-none"
+                    />
                   ) : null}
 
                   <button
                     type="button"
                     disabled={
-                      !requiredResidualLossAuthorization ||
-                      residualLossAuthorization.trim() !==
-                        requiredResidualLossAuthorization ||
+                      !residualLossCapIsValid ||
+                      residualLossAuthorization.trim().length === 0 ||
+                      (requiredResidualLossAuthorization.length > 0 &&
+                        residualLossAuthorization.trim() !==
+                          requiredResidualLossAuthorization) ||
                       inspectResidualMutation.isPending
                     }
                     onClick={() =>
