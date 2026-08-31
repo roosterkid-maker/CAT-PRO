@@ -86,6 +86,7 @@ async function main(): Promise<void> {
   assert.equal(preview.executionPreview.requiredBalance, 2);
   assert.equal(preview.blockers.length, 0);
   assert.ok(preview.requiredApprovalPhrase);
+  assert.equal(preview.expiresAt, NOW + 120_000);
   assert.equal(preview.safety.orderSubmissionAllowed, false);
   assert.equal(preview.safety.orderSubmissionPerformed, false);
   assert.equal(preview.safety.automaticRetryAllowed, false);
@@ -294,7 +295,7 @@ async function main(): Promise<void> {
   );
 
   await assert.rejects(
-    service.getApprovedExecutionBoundary(preview.id, NOW + 30_001),
+    service.getApprovedExecutionBoundary(preview.id, NOW + 120_001),
     /expired/u,
   );
 

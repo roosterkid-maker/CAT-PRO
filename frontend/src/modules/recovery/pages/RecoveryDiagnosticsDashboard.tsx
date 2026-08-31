@@ -77,9 +77,15 @@ export default function RecoveryDiagnosticsDashboard() {
     useState("");
 
   const [
-    residualApprovalConfirmation,
-    setResidualApprovalConfirmation,
-  ] = useState("");
+    residualApprovalDraft,
+    setResidualApprovalDraft,
+  ] = useState<{
+    readonly requiredPhrase: string | null;
+    readonly value: string;
+  }>({
+    requiredPhrase: null,
+    value: "",
+  });
 
   const [
     residualLossCap,
@@ -181,6 +187,12 @@ export default function RecoveryDiagnosticsDashboard() {
     inspectResidualMutation.data?.data ??
     null;
 
+  const residualApprovalConfirmation =
+    residualApprovalDraft.requiredPhrase ===
+      residualPreview?.requiredApprovalPhrase
+      ? residualApprovalDraft.value
+      : "";
+
   const residualLossBlocked =
     residualPreview?.state === "BLOCKED" &&
     residualPreview.blockers.some((blocker) =>
@@ -241,7 +253,10 @@ export default function RecoveryDiagnosticsDashboard() {
     approveResidualMutation.reset();
     executeResidualMutation.reset();
     executeSecondAttemptMutation.reset();
-    setResidualApprovalConfirmation("");
+    setResidualApprovalDraft({
+      requiredPhrase: null,
+      value: "",
+    });
     setResidualLossAuthorization("");
     setResidualExecutionConfirmation("");
     setResidualExecutionNote("");
@@ -892,7 +907,10 @@ export default function RecoveryDiagnosticsDashboard() {
                   approveResidualMutation.reset();
                   executeResidualMutation.reset();
                   executeSecondAttemptMutation.reset();
-                  setResidualApprovalConfirmation("");
+                  setResidualApprovalDraft({
+                    requiredPhrase: null,
+                    value: "",
+                  });
                   setResidualExecutionConfirmation("");
                   setResidualExecutionAcknowledged(false);
                   inspectResidualMutation.mutate({
@@ -1054,13 +1072,34 @@ export default function RecoveryDiagnosticsDashboard() {
                   <p className="mt-2 break-all font-mono text-xs text-text-primary">
                     {residualPreview.requiredApprovalPhrase}
                   </p>
+                  <p className="mt-2 text-xs leading-5 text-text-secondary">
+                    This evidence-only preview remains current for 120 seconds.
+                    Execution still performs fresh action-time safety checks.
+                  </p>
                   <input
                     value={residualApprovalConfirmation}
                     onChange={(event) =>
-                      setResidualApprovalConfirmation(event.target.value)}
+                      setResidualApprovalDraft({
+                        requiredPhrase:
+                          residualPreview.requiredApprovalPhrase,
+                        value: event.target.value,
+                      })}
                     placeholder="Type the exact evidence approval phrase"
                     className="mt-3 w-full rounded-md border border-border-default bg-panel p-3 font-mono text-xs text-text-primary outline-none"
                   />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setResidualApprovalDraft({
+                        requiredPhrase:
+                          residualPreview.requiredApprovalPhrase,
+                        value:
+                          residualPreview.requiredApprovalPhrase ?? "",
+                      })}
+                    className="mt-3 rounded-md border border-border-default bg-panel px-3 py-2 text-xs font-semibold text-text-secondary"
+                  >
+                    Use current exact phrase — fills text only
+                  </button>
                   <button
                     type="button"
                     disabled={
@@ -1073,7 +1112,7 @@ export default function RecoveryDiagnosticsDashboard() {
                         previewId: residualPreview.id,
                         confirmation: residualApprovalConfirmation.trim(),
                       })}
-                    className="mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm font-semibold text-warning disabled:cursor-not-allowed disabled:opacity-50"
+                    className="ml-2 mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm font-semibold text-warning disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {approveResidualMutation.isPending
                       ? "Approving evidence..."

@@ -188,7 +188,7 @@ const DEFAULT_FILE =
 
 const DEFAULT_CONFIGURATION:
   StrategyOneResidualRecoveryAssistantConfiguration = {
-  previewTtlMs: 30_000,
+  previewTtlMs: 120_000,
   maximumCapabilityAgeMs: 300_000,
   maximumBalanceAgeMs: 15_000,
   maximumLossPercentOfResidual: 1,
