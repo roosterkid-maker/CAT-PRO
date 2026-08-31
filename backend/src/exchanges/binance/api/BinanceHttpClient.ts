@@ -18,6 +18,12 @@ import {
   type BinanceRequestParameters,
 } from "./BinanceSigner";
 
+import {
+  binanceRateLimitCooldownService,
+  type BinanceRateLimitCooldownDiagnostics,
+  type BinanceRateLimitCooldownService,
+} from "./BinanceRateLimitCooldownService";
+
 interface BinanceServerTimeResponse {
   serverTime?: unknown;
 }
@@ -49,6 +55,9 @@ export interface BinanceClockDiagnostics {
 
   lastSynchronizationError:
     string | null;
+
+  rateLimitCooldown:
+    BinanceRateLimitCooldownDiagnostics;
 }
 
 /*
@@ -111,6 +120,9 @@ export interface BinanceTimeSynchronizationDiagnostics {
   lastError:
     string | null;
 
+  rateLimitCooldown:
+    BinanceRateLimitCooldownDiagnostics;
+
   maximumAllowedAgeMs: number;
 
   maximumAllowedOffsetMs: number;
@@ -123,6 +135,9 @@ export interface BinanceTimeSynchronizationDiagnostics {
 export class BinanceHttpClient {
   private readonly client:
     AxiosInstance;
+
+  private readonly rateLimitCooldownService:
+    BinanceRateLimitCooldownService;
 
   private serverTimeOffsetMs =
     0;
@@ -139,9 +154,17 @@ export class BinanceHttpClient {
     string | null =
     null;
 
+  private synchronizationInFlight:
+    Promise<number> | null =
+    null;
+
   constructor(
     client?:
       AxiosInstance,
+
+    rateLimitCooldownService:
+      BinanceRateLimitCooldownService =
+      binanceRateLimitCooldownService,
   ) {
     this.client =
       client ??
@@ -157,6 +180,9 @@ export class BinanceHttpClient {
               "application/json",
           },
         });
+
+    this.rateLimitCooldownService =
+      rateLimitCooldownService;
   }
 
   async getPublic<T>(
@@ -168,6 +194,14 @@ export class BinanceHttpClient {
     config?:
       AxiosRequestConfig,
   ): Promise<T> {
+    this.rateLimitCooldownService
+      .assertRequestAllowed(
+        path,
+
+        path ===
+          BINANCE.REST.TIME,
+      );
+
     try {
       const response =
         await this.client.get<T>(
@@ -246,6 +280,33 @@ export class BinanceHttpClient {
 
   async synchronizeServerTime():
     Promise<number> {
+    if (
+      this.synchronizationInFlight
+    ) {
+      return this.synchronizationInFlight;
+    }
+
+    const synchronization =
+      this.performServerTimeSynchronization();
+
+    this.synchronizationInFlight =
+      synchronization;
+
+    try {
+      return await synchronization;
+    } finally {
+      if (
+        this.synchronizationInFlight ===
+        synchronization
+      ) {
+        this.synchronizationInFlight =
+          null;
+      }
+    }
+  }
+
+  private async performServerTimeSynchronization():
+    Promise<number> {
     const requestStartedAt =
       Date.now();
 
@@ -308,6 +369,9 @@ export class BinanceHttpClient {
       this.lastSynchronizationError =
         null;
 
+      this.rateLimitCooldownService
+        .markRecoverySuccessful();
+
       return this.serverTimeOffsetMs;
     } catch (
       error:
@@ -358,6 +422,10 @@ export class BinanceHttpClient {
 
       lastSynchronizationError:
         this.lastSynchronizationError,
+
+      rateLimitCooldown:
+        this.rateLimitCooldownService
+          .getDiagnostics(),
     };
   }
 
@@ -446,6 +514,10 @@ export class BinanceHttpClient {
       lastError:
         this.lastSynchronizationError,
 
+      rateLimitCooldown:
+        this.rateLimitCooldownService
+          .getDiagnostics(),
+
       maximumAllowedAgeMs:
         MAXIMUM_SIGNED_REQUEST_CLOCK_AGE_MS,
 
@@ -461,6 +533,14 @@ export class BinanceHttpClient {
 
   isClockSafeForSignedRequest():
     boolean {
+    if (
+      this.rateLimitCooldownService
+        .getDiagnostics()
+        .recoveryProbeRequired
+    ) {
+      return false;
+    }
+
     if (
       this.lastSynchronizedAt ===
       null
@@ -507,6 +587,11 @@ export class BinanceHttpClient {
     suppliedCredentials?:
       BinanceCredentials,
   ): Promise<T> {
+    this.rateLimitCooldownService
+      .assertRequestAllowed(
+        path,
+      );
+
     /*
      * VERSION 18 BUILD 9
      *
@@ -684,6 +769,32 @@ export class BinanceHttpClient {
       ].join(
         ", ",
       );
+
+      this.rateLimitCooldownService
+        .recordObservation({
+          statusCode:
+            typeof status ===
+              "number"
+              ? status
+              : null,
+
+          apiCode:
+            code,
+
+          message,
+
+          retryAfter:
+            this.toOptionalString(
+              error.response
+                ?.headers
+                ?.["retry-after"],
+            ),
+
+          method:
+            method.toUpperCase(),
+
+          path,
+        });
 
       return new Error(
         `Binance ${method.toUpperCase()} ${path} failed: ${details}`,

@@ -43,6 +43,10 @@ import {
   BINANCE,
 } from "./constants";
 
+import {
+  binanceRateLimitCooldownService,
+} from "./api/BinanceRateLimitCooldownService";
+
 import type {
   BinanceBookTicker,
   BinanceAggregateTrade,
@@ -87,6 +91,11 @@ const DEFAULT_PUBLIC_ORDER_BOOK_SNAPSHOT_FETCHER:
     market,
     timeoutMs,
   ): Promise<unknown> {
+    binanceRateLimitCooldownService
+      .assertRequestAllowed(
+        BINANCE.REST.ORDER_BOOK,
+      );
+
     const url =
       buildBinanceActionTimeOrderBookUrl(
         market,
@@ -106,8 +115,86 @@ const DEFAULT_PUBLIC_ORDER_BOOK_SNAPSHOT_FETCHER:
     if (
       !response.ok
     ) {
+      let apiCode:
+        string | null =
+        null;
+
+      let responseMessage =
+        `HTTP ${response.status}`;
+
+      try {
+        const payload =
+          await response.json() as {
+            code?:
+              unknown;
+
+            msg?:
+              unknown;
+
+            message?:
+              unknown;
+          };
+
+        if (
+          typeof payload.code ===
+            "string" ||
+          typeof payload.code ===
+            "number"
+        ) {
+          apiCode =
+            String(
+              payload.code,
+            );
+        }
+
+        const message =
+          typeof payload.msg ===
+            "string"
+            ? payload.msg
+            : typeof payload.message ===
+                "string"
+              ? payload.message
+              : null;
+
+        if (
+          message
+            ?.trim()
+        ) {
+          responseMessage =
+            message.trim();
+        }
+      } catch {
+        /*
+         * The HTTP status remains authoritative even
+         * when Binance returns a malformed error body.
+         */
+      }
+
+      binanceRateLimitCooldownService
+        .recordObservation({
+          statusCode:
+            response.status,
+
+          apiCode,
+
+          message:
+            responseMessage,
+
+          retryAfter:
+            response.headers
+              .get(
+                "retry-after",
+              ),
+
+          method:
+            "GET",
+
+          path:
+            BINANCE.REST.ORDER_BOOK,
+        });
+
       throw new Error(
-        `Binance public order-book refresh failed with HTTP ${response.status}.`,
+        `Binance public order-book refresh failed with HTTP ${response.status}: ${responseMessage}.`,
       );
     }
 

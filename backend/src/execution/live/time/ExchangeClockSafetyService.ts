@@ -55,6 +55,28 @@ export class ExchangeClockSafetyService {
       "HEALTHY";
 
     if (
+      diagnostics
+        .rateLimitCooldown
+        .active
+    ) {
+      health =
+        "FAILED";
+
+      reasons.push(
+        `Binance REST rate-limit cooldown is active until ${diagnostics.rateLimitCooldown.cooldownUntil} (${diagnostics.rateLimitCooldown.remainingMs} ms remaining); network probes are locally suppressed.`,
+      );
+    } else if (
+      diagnostics
+        .rateLimitCooldown
+        .recoveryProbeRequired
+    ) {
+      health =
+        "FAILED";
+
+      reasons.push(
+        "Binance REST rate-limit cooldown has elapsed; one controlled server-time recovery probe must succeed before other REST or signed requests are allowed.",
+      );
+    } else if (
       diagnostics.lastSynchronizationError
     ) {
       health =
