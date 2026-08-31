@@ -440,7 +440,9 @@ export class BinanceOrderApi {
         request.type,
 
       quantity:
-        request.quantity,
+        formatOrderDecimal(
+          request.quantity,
+        ),
 
       newOrderRespType:
         "FULL",
@@ -450,7 +452,9 @@ export class BinanceOrderApi {
       request.type === "LIMIT" || request.type === "LIMIT_MAKER"
     ) {
       parameters.price =
-        request.price as number;
+        formatOrderDecimal(
+          request.price as number,
+        );
       if (request.type === "LIMIT") {
         parameters.timeInForce = request.timeInForce ?? "GTC";
       }
@@ -835,6 +839,21 @@ export class BinanceOrderApi {
       return String(value);
     }
   }
+}
+
+function formatOrderDecimal(
+  value: number,
+): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(
+      "Binance order decimal must be positive and finite.",
+    );
+  }
+
+  return value
+    .toFixed(12)
+    .replace(/\.0+$/u, "")
+    .replace(/(\.\d*?)0+$/u, "$1");
 }
 
 export const binanceOrderApi =

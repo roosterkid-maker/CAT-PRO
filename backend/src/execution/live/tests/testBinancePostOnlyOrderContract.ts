@@ -44,7 +44,8 @@ async function main(): Promise<void> {
   });
 
   assert.equal(postCalls[0]?.parameters.type, "LIMIT_MAKER");
-  assert.equal(postCalls[0]?.parameters.price, 50_000);
+  assert.equal(postCalls[0]?.parameters.price, "50000");
+  assert.equal(postCalls[0]?.parameters.quantity, "0.001");
   assert.equal(postCalls[0]?.parameters.timeInForce, undefined);
 
   await api.createOrder({
@@ -70,6 +71,19 @@ async function main(): Promise<void> {
   assert.equal(postCalls[2]?.parameters.type, "LIMIT");
   assert.equal(postCalls[2]?.parameters.timeInForce, "FOK");
 
+  await api.createOrder({
+    symbol: "TUTUSDT",
+    side: "SELL",
+    type: "LIMIT",
+    quantity: 138,
+    price: 0.033530000000000004,
+    timeInForce: "FOK",
+  });
+
+  assert.equal(postCalls[3]?.parameters.quantity, "138");
+  assert.equal(postCalls[3]?.parameters.price, "0.03353");
+  assert.equal(postCalls[3]?.parameters.timeInForce, "FOK");
+
   await assert.rejects(
     api.createOrder({
       symbol: "BTCUSDT",
@@ -82,8 +96,8 @@ async function main(): Promise<void> {
     /LIMIT_MAKER is maker-only/u,
   );
 
-  assert.equal(postCalls.length, 3);
-  assert.equal(synchronizations, 3);
+  assert.equal(postCalls.length, 4);
+  assert.equal(synchronizations, 4);
   console.log("BINANCE POST-ONLY ORDER CONTRACT TEST PASSED.");
   console.log("LIMIT_MAKER used maker-only semantics without timeInForce; invalid combinations failed before signed I/O and no external request occurred.");
 }
