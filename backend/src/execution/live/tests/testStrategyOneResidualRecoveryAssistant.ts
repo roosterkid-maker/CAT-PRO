@@ -139,14 +139,15 @@ async function main(): Promise<void> {
     });
   const lossPair =
     new FakePairPort(lossSession);
+  const lossBook = {
+    timestamp: NOW - 25,
+    bids: [{price: 0.8, quantity: 3}],
+    asks: [{price: 0.81, quantity: 3}],
+  };
   const lossService =
     assistant(
       lossPair,
-      {
-        timestamp: NOW - 25,
-        bids: [{price: 0.8, quantity: 3}],
-        asks: [{price: 0.81, quantity: 3}],
-      },
+      lossBook,
       capability(1),
       5,
       "one-time-loss.jsonl",
@@ -202,6 +203,7 @@ async function main(): Promise<void> {
     oneTimeLossPreview.requiredApprovalPhrase ?? "",
     NOW + 1,
   );
+  lossBook.bids[0]!.price = 0.79;
   const oneTimeLossBoundary =
     await lossService.getApprovedExecutionBoundary(
       oneTimeLossPreview.id,
@@ -216,8 +218,49 @@ async function main(): Promise<void> {
     0.5,
   );
   assert.equal(
+    oneTimeLossBoundary.actionTimePreview.executionPreview.limitPrice,
+    0.79,
+  );
+  assert.ok(
+    (oneTimeLossBoundary.actionTimePreview.executionPreview.estimatedTotalLossQuote ??
+      0) >
+      (oneTimeLossPreview.executionPreview.estimatedTotalLossQuote ?? 0),
+  );
+  assert.equal(
     oneTimeLossBoundary.actionTimePreview.oneTimeLossAuthorization?.confirmation,
     "APPROVE ONE-TIME COTI RECOVERY SELL 2 MAX LOSS 0.50 USDT",
+  );
+
+  const strictPriceBook = {
+    timestamp: NOW - 25,
+    bids: [{price: 1.05, quantity: 3}],
+    asks: [{price: 1.06, quantity: 3}],
+  };
+  const strictPriceService =
+    assistant(
+      new FakePairPort(longResidualSession),
+      strictPriceBook,
+      capability(1),
+      5,
+      "strict-price.jsonl",
+    );
+  const strictPricePreview =
+    await strictPriceService.inspectSession(
+      longResidualSession.sessionId,
+      NOW,
+    );
+  strictPriceService.approvePreview(
+    strictPricePreview.id,
+    strictPricePreview.requiredApprovalPhrase ?? "",
+    NOW + 1,
+  );
+  strictPriceBook.bids[0]!.price = 1.04;
+  await assert.rejects(
+    strictPriceService.getApprovedExecutionBoundary(
+      strictPricePreview.id,
+      NOW + 2,
+    ),
+    /price is worse than the explicitly approved limit/u,
   );
 
   const materialPair =

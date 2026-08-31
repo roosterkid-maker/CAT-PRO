@@ -57,7 +57,11 @@ async function main(): Promise<void> {
   assert.equal(completed.request.orderType, "limit");
   assert.equal(completed.request.timeInForce, "FOK");
   assert.equal(completed.request.quantity, 138);
-  assert.equal(completed.request.price, 0.03698);
+  assert.equal(
+    completed.request.price,
+    0.03701,
+    "the journaled FOK request must use the revalidated action-time price",
+  );
   assert.equal(completed.liveOrderSubmissionPerformed, true);
   assert.equal(completed.automaticRetryAllowed, false);
   assert.equal(completed.automaticCancelAllowed, false);
@@ -287,11 +291,17 @@ function paperEmergencyAccount() {
 function boundary(
   previewId = PREVIEW_ID,
 ): StrategyOneApprovedResidualExecutionBoundary {
-  const approved = preview(previewId, "OPERATOR_APPROVED_EVIDENCE_ONLY", NOW);
+  const approved = preview(
+    previewId,
+    "OPERATOR_APPROVED_EVIDENCE_ONLY",
+    NOW,
+    0.03698,
+  );
   const actionTime = preview(
     `${previewId}-action-time-read-only`,
     "READY_FOR_OPERATOR_REVIEW",
     null,
+    0.03701,
   );
   return {approvedPreview: approved, actionTimePreview: actionTime};
 }
@@ -300,7 +310,11 @@ function preview(
   id: string,
   state: StrategyOneResidualRecoveryPreview["state"],
   approvedAt: number | null,
+  actionTimePrice: number,
 ): StrategyOneResidualRecoveryPreview {
+  const estimatedFeeQuote = 138 * actionTimePrice * 0.001;
+  const estimatedAdverseMoveLossQuote =
+    Math.max(0, 138 * 0.036 - 138 * actionTimePrice);
   return {
     schemaVersion: "142.0",
     id,
@@ -340,12 +354,13 @@ function preview(
       bookTimestamp: NOW - 10,
       bookAgeMs: 10,
       fillPercent: 100,
-      vwapPrice: 0.03698,
-      limitPrice: 0.03698,
+      vwapPrice: actionTimePrice,
+      limitPrice: actionTimePrice,
       takerFeePercent: 0.1,
-      estimatedFeeQuote: 0.00510324,
-      estimatedAdverseMoveLossQuote: 0,
-      estimatedTotalLossQuote: 0.00510324,
+      estimatedFeeQuote,
+      estimatedAdverseMoveLossQuote,
+      estimatedTotalLossQuote:
+        estimatedAdverseMoveLossQuote + estimatedFeeQuote,
       maximumAllowedLossQuote: 0.04968,
       balanceAsset: "TUT",
       requiredBalance: 138,

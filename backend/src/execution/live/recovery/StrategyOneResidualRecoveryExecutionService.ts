@@ -446,7 +446,7 @@ export class StrategyOneResidualRecoveryExecutionService {
 function requestFrom(
   boundary: StrategyOneApprovedResidualExecutionBoundary,
 ): LiveExecutionRequest {
-  const preview = boundary.approvedPreview;
+  const preview = boundary.actionTimePreview;
   const venue = preview.residual.venue;
   const side = preview.residual.side;
   const quantity = preview.residual.executableQuantity;

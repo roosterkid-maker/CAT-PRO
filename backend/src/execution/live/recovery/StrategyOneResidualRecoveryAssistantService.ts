@@ -1587,12 +1587,38 @@ function assertNoWorseRecoveryPrice(
   const currentPrice = current.executionPreview.limitPrice;
   const side = approved.residual.side;
 
+  const priceIsWorse =
+    (side === "SELL" &&
+      approvedPrice !== null &&
+      currentPrice !== null &&
+      currentPrice < approvedPrice) ||
+    (side === "BUY" &&
+      approvedPrice !== null &&
+      currentPrice !== null &&
+      currentPrice > approvedPrice);
+  const approvedAuthorization =
+    approved.oneTimeLossAuthorization;
+  const currentAuthorization =
+    current.oneTimeLossAuthorization;
+  const currentEstimatedLoss =
+    current.executionPreview.estimatedTotalLossQuote;
+  const authorizedWorsePrice =
+    priceIsWorse &&
+    approvedAuthorization !== null &&
+    currentAuthorization !== null &&
+    currentAuthorization.maximumLossQuote ===
+      approvedAuthorization.maximumLossQuote &&
+    currentAuthorization.confirmation ===
+      approvedAuthorization.confirmation &&
+    currentEstimatedLoss !== null &&
+    currentEstimatedLoss <=
+      approvedAuthorization.maximumLossQuote + 1e-12;
+
   if (
     approvedPrice === null ||
     currentPrice === null ||
-    (side === "SELL" && currentPrice < approvedPrice) ||
-    (side === "BUY" && currentPrice > approvedPrice) ||
-    (side !== "SELL" && side !== "BUY")
+    (side !== "SELL" && side !== "BUY") ||
+    (priceIsWorse && !authorizedWorsePrice)
   ) {
     throw new Error(
       "Action-time recovery price is worse than the explicitly approved limit; inspect and approve again.",
