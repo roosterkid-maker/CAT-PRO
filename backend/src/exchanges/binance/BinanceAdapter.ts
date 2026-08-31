@@ -44,8 +44,12 @@ import {
 } from "./constants";
 
 import {
-  binanceRateLimitCooldownService,
-} from "./api/BinanceRateLimitCooldownService";
+  binanceHttpClient,
+} from "./api/BinanceHttpClient";
+
+import {
+  binanceMarketRulesApi,
+} from "./api/BinanceMarketRulesApi";
 
 import type {
   BinanceBookTicker,
@@ -53,7 +57,6 @@ import type {
   BinanceCombinedAggregateTradeMessage,
   BinanceCombinedDepthMessage,
   BinanceCombinedStreamMessage,
-  BinanceExchangeInfoResponse,
   BinancePartialDepth,
   BinanceSubscriptionResponse,
   BinanceTicker24Hour,
@@ -91,114 +94,20 @@ const DEFAULT_PUBLIC_ORDER_BOOK_SNAPSHOT_FETCHER:
     market,
     timeoutMs,
   ): Promise<unknown> {
-    binanceRateLimitCooldownService
-      .assertRequestAllowed(
-        BINANCE.REST.ORDER_BOOK,
-      );
-
-    const url =
-      buildBinanceActionTimeOrderBookUrl(
-        market,
-      );
-
-    const response =
-      await fetch(
-        url,
+    return binanceHttpClient
+      .getPublic<unknown>(
+        `${BINANCE.REST.ACTION_TIME_PUBLIC_BASE_URL}${BINANCE.REST.ORDER_BOOK}`,
         {
-          signal:
-            AbortSignal.timeout(
-              timeoutMs,
-            ),
+          symbol:
+            market,
+          limit:
+            BINANCE.DEPTH.LEVELS,
+        },
+        {
+          timeout:
+            timeoutMs,
         },
       );
-
-    if (
-      !response.ok
-    ) {
-      let apiCode:
-        string | null =
-        null;
-
-      let responseMessage =
-        `HTTP ${response.status}`;
-
-      try {
-        const payload =
-          await response.json() as {
-            code?:
-              unknown;
-
-            msg?:
-              unknown;
-
-            message?:
-              unknown;
-          };
-
-        if (
-          typeof payload.code ===
-            "string" ||
-          typeof payload.code ===
-            "number"
-        ) {
-          apiCode =
-            String(
-              payload.code,
-            );
-        }
-
-        const message =
-          typeof payload.msg ===
-            "string"
-            ? payload.msg
-            : typeof payload.message ===
-                "string"
-              ? payload.message
-              : null;
-
-        if (
-          message
-            ?.trim()
-        ) {
-          responseMessage =
-            message.trim();
-        }
-      } catch {
-        /*
-         * The HTTP status remains authoritative even
-         * when Binance returns a malformed error body.
-         */
-      }
-
-      binanceRateLimitCooldownService
-        .recordObservation({
-          statusCode:
-            response.status,
-
-          apiCode,
-
-          message:
-            responseMessage,
-
-          retryAfter:
-            response.headers
-              .get(
-                "retry-after",
-              ),
-
-          method:
-            "GET",
-
-          path:
-            BINANCE.REST.ORDER_BOOK,
-        });
-
-      throw new Error(
-        `Binance public order-book refresh failed with HTTP ${response.status}: ${responseMessage}.`,
-      );
-    }
-
-    return response.json();
   },
 };
 
@@ -610,13 +519,17 @@ export class BinanceAdapter
       exchangeInfoResult,
       activityResult,
     ] = await Promise.allSettled([
-      fetch(
-        `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.EXCHANGE_INFO}`,
-        {signal: AbortSignal.timeout(BINANCE.PUBLIC_REST_TIMEOUT_MS)},
-      ),
-      fetch(
+      binanceMarketRulesApi
+        .getAllMarketRules(),
+      binanceHttpClient.getPublic<
+        BinanceTicker24Hour[]
+      >(
         `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.TICKER_24HR}`,
-        {signal: AbortSignal.timeout(BINANCE.PUBLIC_REST_TIMEOUT_MS)},
+        {},
+        {
+          timeout:
+            BINANCE.PUBLIC_REST_TIMEOUT_MS,
+        },
       ),
     ]);
 
@@ -624,26 +537,10 @@ export class BinanceAdapter
       throw exchangeInfoResult.reason;
     }
 
-    const response = exchangeInfoResult.value;
-
-    if (
-      !response.ok
-    ) {
-      throw new Error(
-        `ExchangeInfo failed with HTTP ${response.status}.`,
-      );
-    }
-
     const data =
-      (
-        await response.json()
-      ) as BinanceExchangeInfoResponse;
+      exchangeInfoResult.value;
 
-    if (
-      !Array.isArray(
-        data.symbols,
-      )
-    ) {
+    if (!Array.isArray(data)) {
       throw new Error(
         "Invalid Binance ExchangeInfo response.",
       );
@@ -656,7 +553,7 @@ export class BinanceAdapter
       ]);
 
     const activeSymbols =
-      data.symbols
+      data
       .filter(
         (
           symbol,
@@ -664,9 +561,7 @@ export class BinanceAdapter
           symbol.status ===
             "TRADING" &&
           allowedQuotes.has(symbol.quoteAsset.toUpperCase()) &&
-          symbol
-            .isSpotTradingAllowed !==
-            false,
+          symbol.spotTradingAllowed,
       )
       .map((symbol) => ({
         symbol: symbol.symbol.toUpperCase(),
@@ -685,10 +580,12 @@ export class BinanceAdapter
 
     if (
       activityResult.status === "fulfilled" &&
-      activityResult.value.ok
+      Array.isArray(
+        activityResult.value,
+      )
     ) {
       const activity =
-        (await activityResult.value.json()) as BinanceTicker24Hour[];
+        activityResult.value;
 
       if (Array.isArray(activity)) {
         activityEvidence = activity

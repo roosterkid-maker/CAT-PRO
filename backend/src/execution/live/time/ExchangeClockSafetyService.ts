@@ -77,6 +77,28 @@ export class ExchangeClockSafetyService {
         "Binance REST rate-limit cooldown has elapsed; one controlled server-time recovery probe must succeed before other REST or signed requests are allowed.",
       );
     } else if (
+      diagnostics
+        .requestWeightGovernor
+        .active
+    ) {
+      health =
+        "FAILED";
+
+      reasons.push(
+        `Binance proactive request-weight guard is active until ${diagnostics.requestWeightGovernor.holdUntil} (${diagnostics.requestWeightGovernor.remainingMs} ms remaining); REST was stopped before the exchange limit.`,
+      );
+    } else if (
+      diagnostics
+        .requestWeightGovernor
+        .recoveryProbeRequired
+    ) {
+      health =
+        "FAILED";
+
+      reasons.push(
+        "Binance proactive request-weight hold has elapsed; one controlled server-time recovery probe must succeed before other REST or signed requests are allowed.",
+      );
+    } else if (
       diagnostics.lastSynchronizationError
     ) {
       health =

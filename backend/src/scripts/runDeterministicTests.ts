@@ -56,6 +56,8 @@ const DETERMINISTIC_TESTS = [
   "exchanges/coinswitch/tests/testCoinSwitchPublicIntegration.js",
   "exchanges/binance/api/testBinanceTimestampResynchronization.js",
   "exchanges/binance/api/testBinanceRateLimitCooldown.js",
+  "exchanges/binance/api/testBinanceRequestWeightGovernor.js",
+  "exchanges/binance/api/testBinanceExchangeInfoCache.js",
   "exchanges/coindcx/tests/testCoinDCXCrossedBookIntegrity.js",
   "exchanges/coindcx/tests/testCoinDCXSharedMarketSelection.js",
   "exchanges/coindcx/tests/testCoinDCXProtectedRestOrderBookService.js",

@@ -10,6 +10,26 @@ import {
   exchangeClockSynchronizationRunner,
 } from "../time/ExchangeClockSynchronizationRunner";
 
+import {
+  binanceHttpClient,
+} from "../../../exchanges/binance/api/BinanceHttpClient";
+
+function getBinanceRestProtectionDiagnostics() {
+  const diagnostics =
+    binanceHttpClient
+      .getClockDiagnostics();
+
+  return {
+    rateLimitCooldown:
+      diagnostics
+        .rateLimitCooldown,
+
+    requestWeightGovernor:
+      diagnostics
+        .requestWeightGovernor,
+  };
+}
+
 const router =
   Router();
 
@@ -37,6 +57,9 @@ router.get(
         synchronization:
           exchangeClockSynchronizationRunner
             .getStatus(),
+
+        binanceRestProtection:
+          getBinanceRestProtectionDiagnostics(),
       },
     });
   },
@@ -77,6 +100,9 @@ router.post(
           synchronization:
             exchangeClockSynchronizationRunner
               .getStatus(),
+
+          binanceRestProtection:
+            getBinanceRestProtectionDiagnostics(),
         },
       });
     } catch (

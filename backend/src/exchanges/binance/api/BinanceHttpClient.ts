@@ -24,6 +24,12 @@ import {
   type BinanceRateLimitCooldownService,
 } from "./BinanceRateLimitCooldownService";
 
+import {
+  binanceRequestWeightGovernorService,
+  BinanceRequestWeightGovernorService,
+  type BinanceRequestWeightGovernorDiagnostics,
+} from "./BinanceRequestWeightGovernorService";
+
 interface BinanceServerTimeResponse {
   serverTime?: unknown;
 }
@@ -58,6 +64,9 @@ export interface BinanceClockDiagnostics {
 
   rateLimitCooldown:
     BinanceRateLimitCooldownDiagnostics;
+
+  requestWeightGovernor:
+    BinanceRequestWeightGovernorDiagnostics;
 }
 
 /*
@@ -123,6 +132,9 @@ export interface BinanceTimeSynchronizationDiagnostics {
   rateLimitCooldown:
     BinanceRateLimitCooldownDiagnostics;
 
+  requestWeightGovernor:
+    BinanceRequestWeightGovernorDiagnostics;
+
   maximumAllowedAgeMs: number;
 
   maximumAllowedOffsetMs: number;
@@ -138,6 +150,9 @@ export class BinanceHttpClient {
 
   private readonly rateLimitCooldownService:
     BinanceRateLimitCooldownService;
+
+  private readonly requestWeightGovernorService:
+    BinanceRequestWeightGovernorService;
 
   private serverTimeOffsetMs =
     0;
@@ -165,6 +180,9 @@ export class BinanceHttpClient {
     rateLimitCooldownService:
       BinanceRateLimitCooldownService =
       binanceRateLimitCooldownService,
+
+    requestWeightGovernorService?:
+      BinanceRequestWeightGovernorService,
   ) {
     this.client =
       client ??
@@ -183,6 +201,20 @@ export class BinanceHttpClient {
 
     this.rateLimitCooldownService =
       rateLimitCooldownService;
+
+    this.requestWeightGovernorService =
+      requestWeightGovernorService ??
+      (
+        rateLimitCooldownService ===
+          binanceRateLimitCooldownService
+          ? binanceRequestWeightGovernorService
+          : new BinanceRequestWeightGovernorService({
+              cooldownService:
+                rateLimitCooldownService,
+              filePath:
+                null,
+            })
+      );
   }
 
   async getPublic<T>(
@@ -194,13 +226,17 @@ export class BinanceHttpClient {
     config?:
       AxiosRequestConfig,
   ): Promise<T> {
-    this.rateLimitCooldownService
-      .assertRequestAllowed(
-        path,
-
-        path ===
-          BINANCE.REST.TIME,
-      );
+    const admission =
+      this.requestWeightGovernorService
+        .admitRequest({
+          method:
+            "GET",
+          path,
+          parameters,
+          recoveryProbe:
+            path ===
+              BINANCE.REST.TIME,
+        });
 
     try {
       const response =
@@ -213,6 +249,16 @@ export class BinanceHttpClient {
               parameters,
           },
         );
+
+      this.requestWeightGovernorService
+        .recordSuccessfulResponse({
+          admission,
+          usedWeightOneMinute:
+            this.readHeader(
+              response.headers,
+              "x-mbx-used-weight-1m",
+            ),
+        });
 
       return response.data;
     } catch (
@@ -310,6 +356,10 @@ export class BinanceHttpClient {
     const requestStartedAt =
       Date.now();
 
+    const recoveryEpoch =
+      this.requestWeightGovernorService
+        .getRecoveryEpoch();
+
     try {
       const response =
         await this.getPublic<
@@ -369,8 +419,10 @@ export class BinanceHttpClient {
       this.lastSynchronizationError =
         null;
 
-      this.rateLimitCooldownService
-        .markRecoverySuccessful();
+      this.requestWeightGovernorService
+        .markRecoverySuccessful(
+          recoveryEpoch,
+        );
 
       return this.serverTimeOffsetMs;
     } catch (
@@ -425,6 +477,10 @@ export class BinanceHttpClient {
 
       rateLimitCooldown:
         this.rateLimitCooldownService
+          .getDiagnostics(),
+
+      requestWeightGovernor:
+        this.requestWeightGovernorService
           .getDiagnostics(),
     };
   }
@@ -518,6 +574,10 @@ export class BinanceHttpClient {
         this.rateLimitCooldownService
           .getDiagnostics(),
 
+      requestWeightGovernor:
+        this.requestWeightGovernorService
+          .getDiagnostics(),
+
       maximumAllowedAgeMs:
         MAXIMUM_SIGNED_REQUEST_CLOCK_AGE_MS,
 
@@ -535,6 +595,14 @@ export class BinanceHttpClient {
     boolean {
     if (
       this.rateLimitCooldownService
+        .getDiagnostics()
+        .recoveryProbeRequired
+    ) {
+      return false;
+    }
+
+    if (
+      this.requestWeightGovernorService
         .getDiagnostics()
         .recoveryProbeRequired
     ) {
@@ -587,7 +655,7 @@ export class BinanceHttpClient {
     suppliedCredentials?:
       BinanceCredentials,
   ): Promise<T> {
-    this.rateLimitCooldownService
+    this.requestWeightGovernorService
       .assertRequestAllowed(
         path,
       );
@@ -620,6 +688,15 @@ export class BinanceHttpClient {
       attempt < 2;
       attempt += 1
     ) {
+      const admission =
+        this.requestWeightGovernorService
+          .admitRequest({
+            method:
+              method.toUpperCase(),
+            path,
+            parameters,
+          });
+
       const signedRequest =
         binanceSigner
           .createSignedTimestampRequest(
@@ -651,6 +728,16 @@ export class BinanceHttpClient {
               Accept:
                 "application/json",
             },
+          });
+
+        this.requestWeightGovernorService
+          .recordSuccessfulResponse({
+            admission,
+            usedWeightOneMinute:
+              this.readHeader(
+                response.headers,
+                "x-mbx-used-weight-1m",
+              ),
           });
 
         return response.data;
@@ -770,8 +857,8 @@ export class BinanceHttpClient {
         ", ",
       );
 
-      this.rateLimitCooldownService
-        .recordObservation({
+      this.requestWeightGovernorService
+        .recordRateLimitObservation({
           statusCode:
             typeof status ===
               "number"
@@ -837,6 +924,50 @@ export class BinanceHttpClient {
     }
 
     return null;
+  }
+
+  private readHeader(
+    headers: unknown,
+    name: string,
+  ): unknown {
+    if (
+      typeof headers !==
+        "object" ||
+      headers ===
+        null
+    ) {
+      return null;
+    }
+
+    const candidate =
+      headers as {
+        get?: (
+          key: string,
+        ) => unknown;
+        [key: string]: unknown;
+      };
+
+    if (
+      typeof candidate.get ===
+        "function"
+    ) {
+      const value =
+        candidate.get(
+          name,
+        );
+
+      if (value !== undefined) {
+        return value;
+      }
+    }
+
+    return candidate[
+      name
+    ] ??
+      candidate[
+        name.toLowerCase()
+      ] ??
+      null;
   }
 }
 

@@ -6,6 +6,14 @@ import {
   binanceHttpClient,
 } from "./BinanceHttpClient";
 
+import type {
+  BinanceRequestParameters,
+} from "./BinanceSigner";
+
+const DEFAULT_EXCHANGE_INFO_CACHE_MS =
+  5 *
+  60_000;
+
 export interface BinanceMarketRules {
   symbol: string;
 
@@ -45,11 +53,18 @@ export interface BinanceMarketRulesSource {
   ): Promise<BinanceMarketRules>;
 
   getAllMarketRules():
-    Promise<BinanceMarketRules[]>;
+    Promise<readonly BinanceMarketRules[]>;
 }
 
 interface BinanceExchangeInfoResponse {
   symbols?: unknown;
+}
+
+export interface BinanceMarketRulesHttpPort {
+  getPublic<T>(
+    path: string,
+    parameters?: BinanceRequestParameters,
+  ): Promise<T>;
 }
 
 interface BinanceSymbolResponse {
@@ -91,10 +106,97 @@ interface BinanceFilterResponse {
 export class BinanceMarketRulesApi
   implements BinanceMarketRulesSource
 {
+  private cachedRules:
+    readonly BinanceMarketRules[] | null = null;
+
+  private cachedAt:
+    number | null = null;
+
+  private synchronizationPromise:
+    Promise<readonly BinanceMarketRules[]> | null = null;
+
+  constructor(
+    private readonly http:
+      BinanceMarketRulesHttpPort =
+      binanceHttpClient,
+    private readonly now:
+      () => number =
+      Date.now,
+    private readonly cacheDurationMs:
+      number =
+      DEFAULT_EXCHANGE_INFO_CACHE_MS,
+  ) {
+    if (
+      !Number.isSafeInteger(
+        this.cacheDurationMs,
+      ) ||
+      this.cacheDurationMs <
+        1_000
+    ) {
+      throw new Error(
+        "Binance exchange-info cache duration must be a safe integer of at least 1000 ms.",
+      );
+    }
+  }
+
   async getAllMarketRules():
-    Promise<BinanceMarketRules[]> {
+    Promise<readonly BinanceMarketRules[]> {
+    if (
+      this.cachedRules &&
+      this.cachedAt !==
+        null &&
+      this.now() -
+          this.cachedAt <
+        this.cacheDurationMs
+    ) {
+      return structuredClone(
+        this.cachedRules,
+      );
+    }
+
+    if (
+      this.synchronizationPromise
+    ) {
+      return structuredClone(
+        await this.synchronizationPromise,
+      );
+    }
+
+    const synchronization =
+      this.fetchAllMarketRules();
+
+    this.synchronizationPromise =
+      synchronization;
+
+    try {
+      const rules =
+        await synchronization;
+
+      this.cachedRules =
+        structuredClone(
+          rules,
+        );
+      this.cachedAt =
+        this.now();
+
+      return structuredClone(
+        rules,
+      );
+    } finally {
+      if (
+        this.synchronizationPromise ===
+          synchronization
+      ) {
+        this.synchronizationPromise =
+          null;
+      }
+    }
+  }
+
+  private async fetchAllMarketRules():
+    Promise<readonly BinanceMarketRules[]> {
     const response =
-      await binanceHttpClient.getPublic<
+      await this.http.getPublic<
         BinanceExchangeInfoResponse
       >(
         `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.EXCHANGE_INFO}`,
@@ -138,52 +240,24 @@ export class BinanceMarketRulesApi
         symbol,
       );
 
-    const response =
-      await binanceHttpClient.getPublic<
-        BinanceExchangeInfoResponse
-      >(
-        `${BINANCE.REST.PUBLIC_BASE_URL}${BINANCE.REST.EXCHANGE_INFO}`,
-        {
-          symbol:
-            normalizedSymbol,
-        },
+    const rules =
+      await this.getAllMarketRules();
+
+    const marketRules =
+      rules.find(
+        (candidate) =>
+          candidate.symbol ===
+          normalizedSymbol,
       );
 
-    if (
-      !Array.isArray(
-        response.symbols,
-      )
-    ) {
-      throw new Error(
-        "Invalid Binance exchange-info response.",
-      );
-    }
-
-    const rawSymbol =
-      response.symbols.find(
-        (value) => {
-          if (!this.isRecord(value)) {
-            return false;
-          }
-
-          return (
-            this.toOptionalString(
-              value.symbol,
-            )
-              ?.toUpperCase() ===
-            normalizedSymbol
-          );
-        },
-      );
-
-    if (!rawSymbol) {
+    if (!marketRules) {
       throw new Error(
         `Binance market rules not found: ${normalizedSymbol}`,
       );
     }
 
-    return this.normalizeRules(
-      rawSymbol,
+    return structuredClone(
+      marketRules,
     );
   }
 
