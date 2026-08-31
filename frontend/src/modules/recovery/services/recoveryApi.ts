@@ -79,22 +79,44 @@ export async function fetchStrategyOneTwoLegRecovery(): Promise<StrategyOneTwoLe
 }
 
 export async function inspectStrategyOneResidualRecovery(
-  sessionId: string,
+  request: {
+    sessionId: string;
+    maximumLossQuote?: number;
+    lossAuthorization?: string;
+  },
 ): Promise<StrategyOneResidualRecoveryPreviewResponse> {
-  return recoveryRequest(
-    async () => {
-      const response =
-        await api.post<StrategyOneResidualRecoveryPreviewResponse>(
-          `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
-            sessionId,
-          )}/inspect`,
-          {},
-        );
+  try {
+    const response =
+      await api.post<StrategyOneResidualRecoveryPreviewResponse>(
+        `/api/execution/recovery/strategy-one-residual-assistant/${encodeURIComponent(
+          request.sessionId,
+        )}/inspect`,
+        request.maximumLossQuote !== undefined ||
+          request.lossAuthorization !== undefined
+          ? {
+            maximumLossQuote: request.maximumLossQuote,
+            lossAuthorization: request.lossAuthorization,
+          }
+          : {},
+      );
 
-      return response.data;
-    },
-    "Strategy #1 residual recovery inspection failed closed.",
-  );
+    return response.data;
+  } catch (error: unknown) {
+    if (
+      axios.isAxiosError<StrategyOneResidualRecoveryPreviewResponse>(error) &&
+      error.response?.status === 409 &&
+      error.response.data?.data
+    ) {
+      return error.response.data;
+    }
+
+    return recoveryRequest(
+      async () => {
+        throw error;
+      },
+      "Strategy #1 residual recovery inspection failed closed.",
+    );
+  }
 }
 
 export async function approveStrategyOneResidualRecovery(

@@ -82,6 +82,16 @@ export default function RecoveryDiagnosticsDashboard() {
   ] = useState("");
 
   const [
+    residualLossCap,
+    setResidualLossCap,
+  ] = useState("0.55");
+
+  const [
+    residualLossAuthorization,
+    setResidualLossAuthorization,
+  ] = useState("");
+
+  const [
     residualExecutionConfirmation,
     setResidualExecutionConfirmation,
   ] = useState("");
@@ -171,6 +181,27 @@ export default function RecoveryDiagnosticsDashboard() {
     inspectResidualMutation.data?.data ??
     null;
 
+  const residualLossBlocked =
+    residualPreview?.state === "BLOCKED" &&
+    residualPreview.blockers.some((blocker) =>
+      blocker.startsWith("Estimated recovery loss "));
+
+  const parsedResidualLossCap = Number(residualLossCap);
+
+  const requiredResidualLossAuthorization =
+    residualLossBlocked &&
+    residualPreview?.residual.side &&
+    residualPreview.residual.exactQuantity > 0 &&
+    Number.isFinite(parsedResidualLossCap) &&
+    parsedResidualLossCap > 0 &&
+    parsedResidualLossCap <= 1
+      ? `APPROVE ONE-TIME ${residualPreview.market.endsWith("USDT")
+        ? residualPreview.market.slice(0, -4)
+        : residualPreview.market} RECOVERY ${residualPreview.residual.side} ${formatApprovalNumber(
+        residualPreview.residual.exactQuantity,
+      )} MAX LOSS ${parsedResidualLossCap.toFixed(2)} USDT`
+      : "";
+
   const confirmedRejectSecondAttempt =
     residualExecutionQuery.data?.data
       .confirmedRejectSecondAttempts
@@ -208,6 +239,7 @@ export default function RecoveryDiagnosticsDashboard() {
     executeResidualMutation.reset();
     executeSecondAttemptMutation.reset();
     setResidualApprovalConfirmation("");
+    setResidualLossAuthorization("");
     setResidualExecutionConfirmation("");
     setResidualExecutionNote("");
     setResidualExecutionAcknowledged(false);
@@ -860,7 +892,9 @@ export default function RecoveryDiagnosticsDashboard() {
                   setResidualApprovalConfirmation("");
                   setResidualExecutionConfirmation("");
                   setResidualExecutionAcknowledged(false);
-                  inspectResidualMutation.mutate(selectedSessionId);
+                  inspectResidualMutation.mutate({
+                    sessionId: selectedSessionId,
+                  });
                 }}
                 className="mt-3 w-full rounded-md border border-border-default bg-panel-light px-3 py-2 text-sm font-semibold text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -917,6 +951,72 @@ export default function RecoveryDiagnosticsDashboard() {
                       ))}
                     </div>
                   ) : null}
+                </div>
+              ) : null}
+
+              {residualLossBlocked && selectedSessionId ? (
+                <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-warning">
+                    One-time loss ceiling — inspection only
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-text-muted">
+                    This does not arm the scanner or place an order. It permits
+                    one fresh preview only when the exact session, side,
+                    quantity and typed maximum loss match. The hard ceiling is
+                    1.00 USDT and execution still requires separate evidence
+                    approval plus final LIVE confirmation.
+                  </p>
+
+                  <label className="mt-3 block text-xs font-semibold text-text-muted">
+                    Maximum accepted recovery loss (USDT)
+                  </label>
+                  <input
+                    type="number"
+                    min="0.01"
+                    max="1"
+                    step="0.01"
+                    value={residualLossCap}
+                    onChange={(event) => {
+                      setResidualLossCap(event.target.value);
+                      setResidualLossAuthorization("");
+                    }}
+                    className="mt-2 w-full rounded-md border border-border-default bg-panel p-3 font-mono text-xs text-text-primary outline-none"
+                  />
+
+                  {requiredResidualLossAuthorization ? (
+                    <>
+                      <p className="mt-3 break-all font-mono text-xs text-text-primary">
+                        {requiredResidualLossAuthorization}
+                      </p>
+                      <input
+                        value={residualLossAuthorization}
+                        onChange={(event) =>
+                          setResidualLossAuthorization(event.target.value)}
+                        placeholder="Type the exact one-time loss authorization phrase"
+                        className="mt-3 w-full rounded-md border border-border-default bg-panel p-3 font-mono text-xs text-text-primary outline-none"
+                      />
+                    </>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    disabled={
+                      !requiredResidualLossAuthorization ||
+                      residualLossAuthorization.trim() !==
+                        requiredResidualLossAuthorization ||
+                      inspectResidualMutation.isPending
+                    }
+                    onClick={() =>
+                      inspectResidualMutation.mutate({
+                        sessionId: selectedSessionId,
+                        maximumLossQuote: parsedResidualLossCap,
+                        lossAuthorization:
+                          residualLossAuthorization.trim(),
+                      })}
+                    className="mt-3 rounded-md border border-warning/40 bg-panel px-3 py-2 text-sm font-semibold text-warning disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Re-inspect with exact one-time ceiling
+                  </button>
                 </div>
               ) : null}
 
@@ -1525,6 +1625,14 @@ function yesNo(
   return value
     ? "YES"
     : "NO";
+}
+
+function formatApprovalNumber(
+  value: number,
+): string {
+  return Number.isInteger(value)
+    ? value.toFixed(0)
+    : value.toString();
 }
 
 function severityClass(

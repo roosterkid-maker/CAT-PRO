@@ -199,8 +199,11 @@ export function useStrategyOneResidualExecutionDiagnostics() {
 
 export function useInspectStrategyOneResidualRecovery() {
   return useMutation({
-    mutationFn: (sessionId: string) =>
-      inspectStrategyOneResidualRecovery(sessionId),
+    mutationFn: (request: {
+      sessionId: string;
+      maximumLossQuote?: number;
+      lossAuthorization?: string;
+    }) => inspectStrategyOneResidualRecovery(request),
   });
 }
 

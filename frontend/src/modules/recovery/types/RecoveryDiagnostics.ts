@@ -547,6 +547,11 @@ export interface StrategyOneResidualRecoveryPreview {
     availableBalance: number | null;
     balanceAgeMs: number | null;
   };
+  oneTimeLossAuthorization: {
+    maximumLossQuote: number;
+    confirmation: string;
+    authorizedAt: number;
+  } | null;
   blockers: string[];
   requiredApprovalPhrase: string | null;
 }
