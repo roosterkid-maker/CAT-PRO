@@ -352,6 +352,7 @@ function preview(
       availableBalance: 506.493,
       balanceAgeMs: 20,
     },
+    oneTimeLossAuthorization: null,
     blockers: [],
     requiredApprovalPhrase: state === "READY_FOR_OPERATOR_REVIEW"
       ? `APPROVE RECOVERY PREVIEW ${id}`
