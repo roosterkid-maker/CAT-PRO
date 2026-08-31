@@ -7,6 +7,11 @@ import type {
   DerivativePublicProvider,
 } from "./DerivativePublicProvider";
 
+import {
+  binanceUsdMHttpClient,
+  type BinanceUsdMHttpClient,
+} from "../../exchanges/binance/api/BinanceUsdMHttpClient";
+
 interface BinanceDerivativeFilter {
   filterType?: string;
   minPrice?: string;
@@ -50,7 +55,6 @@ interface BinanceBookTicker {
   time?: number;
 }
 
-const BASE_URL = "https://fapi.binance.com";
 const METADATA_TTL_MS = 15 * 60 * 1_000;
 
 export class BinanceUsdMPerpetualPublicProvider
@@ -59,6 +63,10 @@ implements DerivativePublicProvider {
 
   private metadata: BinanceDerivativeSymbol[] = [];
   private metadataLoadedAt = 0;
+
+  constructor(
+    private readonly client: BinanceUsdMHttpClient = binanceUsdMHttpClient,
+  ) {}
 
   async fetchSnapshot(now = Date.now()): Promise<DerivativeVenuePublicSnapshot> {
     const metadataPromise =
@@ -285,15 +293,7 @@ implements DerivativePublicProvider {
   }
 
   private async fetchJson<T>(path: string): Promise<T> {
-    const response = await fetch(`${BASE_URL}${path}`, {
-      signal: AbortSignal.timeout(12_000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Binance USD-M ${path} failed with HTTP ${response.status}.`);
-    }
-
-    return (await response.json()) as T;
+    return this.client.getPublic<T>(path, {}, 12_000);
   }
 
   private symbol(value: unknown): string {

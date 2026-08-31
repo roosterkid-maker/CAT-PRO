@@ -6,6 +6,10 @@ import type {
 } from "../models/DerivativeDepthEvidence";
 import {CoinSwitchReadOnlyHttpClient} from "../../exchanges/coinswitch/api/CoinSwitchReadOnlyHttpClient";
 import {DERIVATIVE_CANDIDATE_MARKETS} from "../providers/DerivativeProviderUtilities";
+import {
+  binanceUsdMHttpClient,
+  type BinanceUsdMHttpClient,
+} from "../../exchanges/binance/api/BinanceUsdMHttpClient";
 
 export interface DerivativeDepthFetcher {
   readonly exchange: string;
@@ -32,27 +36,26 @@ const DEFAULT_CONFIGURATION: DerivativeDepthServiceConfiguration = {
 class BinanceDerivativeDepthFetcher implements DerivativeDepthFetcher {
   readonly exchange = "binance";
 
+  constructor(
+    private readonly client: BinanceUsdMHttpClient = binanceUsdMHttpClient,
+  ) {}
+
   async fetch(
     markets: readonly string[],
     now = Date.now(),
   ): Promise<DerivativeDepthVenueResult> {
     const responses = await Promise.all(
       markets.map(async (market) => {
-        const response = await fetch(
-          `https://fapi.binance.com/fapi/v1/depth?symbol=${encodeURIComponent(market)}&limit=100`,
-          {signal: AbortSignal.timeout(10_000)},
-        );
-
-        if (!response.ok) {
-          throw new Error(`Binance USD-M depth ${market} failed with HTTP ${response.status}.`);
-        }
-
-        const payload = await response.json() as {
+        const payload = await this.client.getPublic<{
           E?: unknown;
           T?: unknown;
           bids?: unknown;
           asks?: unknown;
-        };
+        }>(
+          "/fapi/v1/depth",
+          {symbol: market, limit: 100},
+          10_000,
+        );
 
         return normalizeBook(
           this.exchange,

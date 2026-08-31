@@ -121,7 +121,7 @@ export class BinanceRequestWeightGovernorError
 }
 
 /**
- * Shared fail-closed admission control for every Binance Spot REST caller.
+ * Shared fail-closed admission control for every Binance REST caller.
  *
  * Binance's limit is IP-wide, so a per-feature timer cannot protect the
  * process. This governor combines conservative local accounting with the
@@ -369,11 +369,24 @@ export class BinanceRequestWeightGovernorService {
     const observedAt =
       this.now();
 
-    this.upstreamUsedWeightOneMinute =
-      usedWeight;
+    /*
+     * Spot and USD-M responses can arrive concurrently. Keep the strongest
+     * authoritative observation seen inside the local rolling minute so a
+     * lower counter from another Binance surface cannot accidentally erase
+     * an already-dangerous IP-weight reading.
+     */
+    const previousIsFresh =
+      this.upstreamWeightObservedAt !== null &&
+      observedAt - this.upstreamWeightObservedAt < REQUEST_WEIGHT_WINDOW_MS &&
+      this.upstreamUsedWeightOneMinute !== null;
 
-    this.upstreamWeightObservedAt =
-      observedAt;
+    if (
+      !previousIsFresh ||
+      usedWeight >= (this.upstreamUsedWeightOneMinute ?? 0)
+    ) {
+      this.upstreamUsedWeightOneMinute = usedWeight;
+      this.upstreamWeightObservedAt = observedAt;
+    }
 
     if (
       usedWeight >=
@@ -901,6 +914,48 @@ export function estimateBinanceSpotRequestWeight(
 
     case "/sapi/v1/account/apiRestrictions":
       return 20;
+
+    case "/fapi/v1/time":
+    case "/fapi/v1/exchangeInfo":
+      return 1;
+
+    case "/fapi/v1/premiumIndex":
+      return parameters.symbol !== undefined
+        ? 1
+        : 10;
+
+    case "/fapi/v1/ticker/bookTicker":
+      return parameters.symbol !== undefined
+        ? 2
+        : 5;
+
+    case "/fapi/v1/depth": {
+      const limit = Number(parameters.limit ?? 100);
+
+      if (limit <= 50) {
+        return 2;
+      }
+
+      if (limit <= 100) {
+        return 5;
+      }
+
+      if (limit <= 500) {
+        return 10;
+      }
+
+      return 20;
+    }
+
+    case "/fapi/v1/fundingRate":
+      return 1;
+
+    case "/fapi/v3/balance":
+    case "/fapi/v3/positionRisk":
+      return 10;
+
+    case "/fapi/v1/order":
+      return 1;
 
     default:
       return method ===

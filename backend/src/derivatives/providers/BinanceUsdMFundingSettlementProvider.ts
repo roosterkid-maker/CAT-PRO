@@ -7,6 +7,10 @@ import type {
   DerivativeFundingSettlementProviderResult,
 } from "./DerivativeFundingSettlementProvider";
 
+import {
+  binanceUsdMHttpClient,
+} from "../../exchanges/binance/api/BinanceUsdMHttpClient";
+
 interface BinanceFundingRecord {
   symbol?: string;
   fundingRate?: string;
@@ -69,9 +73,9 @@ function normalizeRecord(record: BinanceFundingRecord, requestedMarket: string, 
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, {signal: AbortSignal.timeout(12_000)});
-  if (!response.ok) throw new Error(`Binance public funding request failed with HTTP ${response.status}.`);
-  return await response.json() as T;
+  const parsed = new URL(url);
+  const parameters = Object.fromEntries(parsed.searchParams.entries());
+  return binanceUsdMHttpClient.getPublic<T>(parsed.pathname, parameters, 12_000);
 }
 function normalizeMarkets(markets: readonly string[]): readonly string[] {
   const normalized = [...new Set(markets.map(symbol).filter(Boolean))];

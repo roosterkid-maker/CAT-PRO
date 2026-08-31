@@ -1,10 +1,11 @@
-import {
-  sensitiveDataRedactor,
-} from "../../core/security/SensitiveDataRedactor";
-
 import type {
   BinanceCredentials,
 } from "../../exchanges/binance/api/BinanceCredentialsProvider";
+
+import {
+  binanceUsdMHttpClient,
+  type BinanceUsdMHttpClient,
+} from "../../exchanges/binance/api/BinanceUsdMHttpClient";
 
 import {
   binanceUsdMCredentialsProvider,
@@ -61,12 +62,12 @@ interface BinanceUsdMCredentialsSource {
 
 class DefaultBinanceUsdMSignedGetPort
 implements BinanceUsdMSignedGetPort {
-  private readonly baseUrl =
-    process.env.BINANCE_USDM_REST_BASE_URL?.trim() ||
-    "https://fapi.binance.com";
+  constructor(
+    private readonly client: BinanceUsdMHttpClient = binanceUsdMHttpClient,
+  ) {}
 
   async getPublic<T>(path: string): Promise<T> {
-    return this.request<T>(path, {});
+    return this.client.getPublic<T>(path);
   }
 
   async getSigned<T>(
@@ -81,35 +82,11 @@ implements BinanceUsdMSignedGetPort {
       {timestamp: serverTimestamp, recvWindow: 5_000},
     );
 
-    return this.request<T>(
-      `${path}?${signed.signedQueryString}`,
-      {"X-MBX-APIKEY": credentials.apiKey},
-    );
-  }
-
-  private async request<T>(
-    path: string,
-    headers: Readonly<Record<string, string>>,
-  ): Promise<T> {
-    try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        method: "GET",
-        headers: {Accept: "application/json", ...headers},
-        signal: AbortSignal.timeout(10_000),
-      });
-
-      if (!response.ok) {
-        const body = sensitiveDataRedactor.redactString(await response.text());
-        throw new Error(`HTTP ${response.status}: ${body}`);
-      }
-
-      return await response.json() as T;
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "unknown request failure";
-      throw new Error(
-        sensitiveDataRedactor.redactString(`Binance USD-M GET ${path.split("?")[0]} failed: ${message}`),
-      );
-    }
+    return this.client.request<T>("GET", path, {
+      parameters: signed.parameters,
+      queryString: signed.signedQueryString,
+      headers: {"X-MBX-APIKEY": credentials.apiKey},
+    });
   }
 }
 

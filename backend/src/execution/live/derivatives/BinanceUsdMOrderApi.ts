@@ -1,6 +1,6 @@
-import {sensitiveDataRedactor} from "../../../core/security/SensitiveDataRedactor";
 import {binanceUsdMCredentialsProvider} from "../../../derivatives/providers/BinanceUsdMCredentialsProvider";
 import type {BinanceCredentials} from "../../../exchanges/binance/api/BinanceCredentialsProvider";
+import {binanceUsdMHttpClient, type BinanceUsdMHttpClient} from "../../../exchanges/binance/api/BinanceUsdMHttpClient";
 import {binanceSigner, type BinanceRequestParameters} from "../../../exchanges/binance/api/BinanceSigner";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
 import type {DerivativeOrderApi, DerivativeVenueOrder} from "./DerivativeOrderContract";
@@ -21,7 +21,7 @@ export interface BinanceUsdMOrderPort {
 interface BinanceCredentialsSource {getCredentials(): BinanceCredentials;}
 
 export class DefaultBinanceUsdMOrderPort implements BinanceUsdMOrderPort {
-  private readonly baseUrl = process.env.BINANCE_USDM_REST_BASE_URL?.trim() || "https://fapi.binance.com";
+  constructor(private readonly client: BinanceUsdMHttpClient = binanceUsdMHttpClient) {}
   getPublic<T>(path: string): Promise<T> { return this.request<T>("GET", path, undefined, {}); }
   postSigned<T>(path: string, parameters: BinanceRequestParameters, credentials: BinanceCredentials, timestamp: number): Promise<T> {
     return this.signed<T>("POST", path, parameters, credentials, timestamp);
@@ -44,15 +44,13 @@ export class DefaultBinanceUsdMOrderPort implements BinanceUsdMOrderPort {
   }
   private async request<T>(method: string, path: string, body: string | undefined,
     headers: Readonly<Record<string, string>>): Promise<T> {
-    try {
-      const response = await fetch(`${this.baseUrl}${path}`, {method, headers: {Accept: "application/json", ...headers},
-        ...(body ? {body} : {}), signal: AbortSignal.timeout(10_000)});
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${sensitiveDataRedactor.redactString(await response.text())}`);
-      return await response.json() as T;
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "unknown request failure";
-      throw new Error(sensitiveDataRedactor.redactString(`Binance USD-M ${method} ${path.split("?")[0]} failed: ${message}`));
-    }
+    const [canonicalPath, queryString = ""] = path.split("?", 2);
+    return this.client.request<T>(method as "GET" | "POST" | "DELETE", canonicalPath!, {
+      queryString,
+      body,
+      headers,
+      parameters: Object.fromEntries(new URLSearchParams(queryString).entries()),
+    });
   }
 }
 
