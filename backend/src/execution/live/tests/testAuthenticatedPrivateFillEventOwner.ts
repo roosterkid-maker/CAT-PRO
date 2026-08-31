@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 
 import {
+  mkdtempSync,
   readFileSync,
+  rmSync,
 } from "node:fs";
 
 import {
+  tmpdir,
+} from "node:os";
+
+import {
+  join,
   resolve,
 } from "node:path";
 
@@ -24,6 +31,7 @@ async function main(): Promise<void> {
   testBybitExecutionOwnershipAndCancelRace();
   testCoinDCXBindingOwnedTradeWithoutPayloadSide();
   testJournalBeforeMutationAndRestartReplay();
+  testConfirmedPreAcceptRejectionTerminalizationAndRestart();
 
   console.log(
     "AUTHENTICATED PRIVATE FILL EVENT OWNER TEST PASSED.",
@@ -31,6 +39,198 @@ async function main(): Promise<void> {
   console.log(
     "Binance/Bybit/CoinDCX SPOT fixtures proved acknowledgement-is-not-fill, exact execution-ID dedupe, CoinDCX binding-owned side resolution, delayed-fill convergence, reconnect isolation, additional-fee preservation, cancel-race monotonicity and durable replay without any order submission.",
   );
+}
+
+function testConfirmedPreAcceptRejectionTerminalizationAndRestart(): void {
+  const directory =
+    mkdtempSync(
+      join(
+        tmpdir(),
+        "cat-pro-confirmed-reject-private-fill-",
+      ),
+    );
+  const filePath =
+    join(
+      directory,
+      "private-fills.jsonl",
+    );
+
+  try {
+    const owner =
+      new AuthenticatedPrivateFillEventOwner({
+        filePath,
+      });
+
+    owner.registerOrder({
+      lifecycleOrderId:
+        "confirmed-reject-order",
+      venue:
+        "binance",
+      accountFingerprint:
+        account,
+      market:
+        "TUTUSDT",
+      side:
+        "sell",
+      requestedQuantity:
+        138,
+      clientOrderId:
+        "confirmed-reject-client",
+      exchangeOrderId:
+        null,
+      registeredAt:
+        now,
+    });
+
+    assert.equal(
+      owner.listBackfillCandidates(
+        "binance",
+        account,
+      ).length,
+      1,
+    );
+
+    const proof = {
+      lifecycleOrderId:
+        "confirmed-reject-order",
+      exchangeHttpStatus:
+        400,
+      exchangeCode:
+        "-1111",
+      evidenceDigest:
+        "a".repeat(
+          64,
+        ),
+      capturedAt:
+        now +
+        10,
+    } as const;
+    const rejected =
+      owner.recordConfirmedPreAcceptRejection(
+        proof,
+      );
+
+    assert.equal(
+      rejected.status,
+      "REJECTED",
+    );
+    assert.equal(
+      rejected.filledQuantity,
+      0,
+    );
+    assert.equal(
+      rejected.remainingQuantity,
+      138,
+    );
+    assert.equal(
+      rejected.authoritativeTerminal,
+      true,
+    );
+    assert.equal(
+      owner.listBackfillCandidates(
+        "binance",
+        account,
+      ).length,
+      0,
+    );
+    assert.equal(
+      owner.getDiagnostics(
+        now +
+        20,
+      ).confirmedPreAcceptRejections,
+      1,
+    );
+
+    owner.recordConfirmedPreAcceptRejection(
+      proof,
+    );
+    assert.equal(
+      readFileSync(
+        filePath,
+        "utf8",
+      )
+        .trim()
+        .split(
+          /\r?\n/u,
+        ).length,
+      2,
+    );
+    assert.throws(
+      () =>
+        owner.recordConfirmedPreAcceptRejection({
+          ...proof,
+          exchangeCode:
+            "-2010",
+        }),
+      /evidence is immutable/u,
+    );
+
+    const replayed =
+      new AuthenticatedPrivateFillEventOwner({
+        filePath,
+      });
+    assert.equal(
+      replayed.getOrder(
+        "confirmed-reject-order",
+      )?.authoritativeTerminal,
+      true,
+    );
+    assert.equal(
+      replayed.listBackfillCandidates(
+        "binance",
+        account,
+      ).length,
+      0,
+    );
+
+    const unsafe =
+      new AuthenticatedPrivateFillEventOwner({
+        filePath:
+          join(
+            directory,
+            "accepted-order.jsonl",
+          ),
+      });
+    unsafe.registerOrder({
+      lifecycleOrderId:
+        "accepted-order",
+      venue:
+        "binance",
+      accountFingerprint:
+        account,
+      market:
+        "TUTUSDT",
+      side:
+        "sell",
+      requestedQuantity:
+        138,
+      clientOrderId:
+        "accepted-client",
+      exchangeOrderId:
+        "venue-order-1",
+      registeredAt:
+        now,
+    });
+    assert.throws(
+      () =>
+        unsafe.recordConfirmedPreAcceptRejection({
+          ...proof,
+          lifecycleOrderId:
+            "accepted-order",
+        }),
+      /without an exchange order ID/u,
+    );
+  } finally {
+    rmSync(
+      directory,
+      {
+        recursive:
+          true,
+        force:
+          true,
+      },
+    );
+  }
 }
 
 function testCoinDCXBindingOwnedTradeWithoutPayloadSide(): void {

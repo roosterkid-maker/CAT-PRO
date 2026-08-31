@@ -12,6 +12,7 @@ import {
   type OrderFillFeeEvidenceService,
 } from "../evidence/OrderFillFeeEvidenceService";
 import {authenticatedPrivateFillEventOwner} from "../fills/AuthenticatedPrivateFillEventOwner";
+import {parseBinancePreAcceptRejection} from "./BinancePreAcceptRejectionEvidence";
 
 export type CentralLiveOrderGatewayState =
   | "PREPARED"
@@ -54,6 +55,8 @@ export interface CentralPrivateFillOwnershipPort {
     readonly registeredAt: number}): void;
   attachExchangeOrderId(input: {readonly lifecycleOrderId: string; readonly exchangeOrderId: string;
     readonly capturedAt: number}): void;
+  recordConfirmedPreAcceptRejection(input: {readonly lifecycleOrderId: string; readonly exchangeHttpStatus: number;
+    readonly exchangeCode: string; readonly evidenceDigest: string; readonly capturedAt: number}): void;
 }
 
 export interface CentralLiveOrderTimingPort {
@@ -86,6 +89,7 @@ export class CentralLiveOrderExecutionGateway {
     this.store = new JsonlSnapshotStore({filePath, isPayload: isSnapshot});
     const latest = this.store.readAll().at(-1);
     if (latest) for (const record of latest.records) this.records.set(record.idempotencyKey, freeze(clone(record)));
+    this.restoreConfirmedPreAcceptRejections();
   }
 
   setTimingEvidence(timingEvidence: CentralLiveOrderTimingPort | null): void {
@@ -136,6 +140,20 @@ export class CentralLiveOrderExecutionGateway {
           this.set(incomplete); this.persist(incomplete.updatedAt);
           return this.response("EVIDENCE_INCOMPLETE", incomplete,
             ["Exchange acknowledged the order, but durable private fill identity attachment failed.", incomplete.lastError as string]);
+        }
+      }
+      const confirmedRejection = confirmedPreAcceptRejectionEvidence(recorded);
+      if (this.privateFillOwnership && confirmedRejection) {
+        try {
+          this.privateFillOwnership.recordConfirmedPreAcceptRejection({lifecycleOrderId: prepared.id,
+            exchangeHttpStatus: confirmedRejection.httpStatus, exchangeCode: confirmedRejection.exchangeCode,
+            evidenceDigest: confirmedRejection.evidenceDigest, capturedAt: confirmedRejection.capturedAt});
+        } catch (error: unknown) {
+          const incomplete = freeze({...clone(recorded), state: "EVIDENCE_INCOMPLETE" as const,
+            lastError: message(error), updatedAt: recorded.updatedAt});
+          this.set(incomplete); this.persist(incomplete.updatedAt);
+          return this.response("EVIDENCE_INCOMPLETE", incomplete,
+            ["Confirmed exchange rejection could not terminalize durable private fill ownership.", incomplete.lastError as string]);
         }
       }
       return this.enrich(recorded, recorded.updatedAt);
@@ -253,6 +271,17 @@ export class CentralLiveOrderExecutionGateway {
     if (request.reduceOnly && !status.capabilities.supportsReduceOnly) throw new Error("Reduce-only capability is unavailable.");
   }
 
+  private restoreConfirmedPreAcceptRejections(): void {
+    if (!this.privateFillOwnership) return;
+    for (const record of this.records.values()) {
+      const evidence = confirmedPreAcceptRejectionEvidence(record);
+      if (!evidence) continue;
+      this.privateFillOwnership.recordConfirmedPreAcceptRejection({lifecycleOrderId: record.id,
+        exchangeHttpStatus: evidence.httpStatus, exchangeCode: evidence.exchangeCode,
+        evidenceDigest: evidence.evidenceDigest, capturedAt: evidence.capturedAt});
+    }
+  }
+
   private withDurableClientOrderId(request: LiveExecutionRequest, key: string): LiveExecutionRequest {
     if (!isPrivateFillSpotRequest(request) || request.clientOrderId?.trim()) return request;
     return freeze({...clone(request), clientOrderId: `cat-${createHash("sha256").update(key).digest("hex").slice(0, 28)}`});
@@ -299,6 +328,37 @@ function normalizeMarket(value: string): string { return value.trim().toUpperCas
 function terminal(value: LiveExecutionResult["status"]): boolean { return value === "FILLED" || value === "CANCELLED" || value === "REJECTED" || value === "FAILED"; }
 function isPrivateFillSpotRequest(request: LiveExecutionRequest): boolean { const exchange = normalize(request.exchange);
   return (request.product ?? "SPOT") === "SPOT" && (exchange === "binance" || exchange === "bybit"); }
+function confirmedPreAcceptRejectionEvidence(record: CentralLiveOrderGatewayRecord): {
+  readonly httpStatus: number; readonly exchangeCode: string; readonly evidenceDigest: string; readonly capturedAt: number;
+} | null {
+  const request = record.request; const result = record.result;
+  if (!result || normalize(request.exchange) !== "binance" || !isPrivateFillSpotRequest(request) ||
+    (record.state !== "ORDER_RECORDED" && record.state !== "FEE_RECONCILED") || record.orderSubmissionPerformed ||
+    record.lastError !== null || result.success || result.status !== "FAILED" || result.orderId !== null ||
+    result.clientOrderId !== (request.clientOrderId ?? null) || result.filledQuantity !== 0 || result.averageFillPrice !== 0 ||
+    result.cancelled || result.timedOut || result.feeAmount !== 0 || normalize(result.exchange) !== "binance" ||
+    normalizeMarket(result.market) !== normalizeMarket(request.market) || result.side !== request.side ||
+    !Number.isSafeInteger(result.startedAt) || !Number.isSafeInteger(result.completedAt) ||
+    result.startedAt < record.preparedAt || result.completedAt < result.startedAt ||
+    result.executionTimeMs !== result.completedAt - result.startedAt) return null;
+  const quantityTolerance = Math.max(1e-12, request.quantity * 1e-9);
+  const priceTolerance = Math.max(1e-12, (request.price ?? 0) * 1e-9);
+  if (Math.abs(result.requestedQuantity - request.quantity) > quantityTolerance ||
+    Math.abs(result.remainingQuantity - request.quantity) > quantityTolerance ||
+    (request.price === undefined ? result.requestedPrice !== null :
+      result.requestedPrice === null || Math.abs(result.requestedPrice - request.price) > priceTolerance)) return null;
+  const parsed = parseBinancePreAcceptRejection(result.failureReason);
+  if (!parsed) return null;
+  const evidenceDigest = createHash("sha256").update(JSON.stringify({lifecycleOrderId: record.id,
+    requestHash: record.requestHash, result: {success: result.success, exchange: result.exchange,
+      market: result.market, side: result.side, orderId: result.orderId, clientOrderId: result.clientOrderId,
+      status: result.status, requestedQuantity: result.requestedQuantity, filledQuantity: result.filledQuantity,
+      remainingQuantity: result.remainingQuantity, requestedPrice: result.requestedPrice,
+      averageFillPrice: result.averageFillPrice, feeAmount: result.feeAmount, cancelled: result.cancelled,
+      timedOut: result.timedOut, startedAt: result.startedAt, completedAt: result.completedAt,
+      failureReason: result.failureReason}})).digest("hex");
+  return freeze({...parsed, evidenceDigest, capturedAt: result.completedAt});
+}
 function message(error: unknown): string { return error instanceof Error ? error.message : "Unknown central LIVE order gateway failure."; }
 function clone<T>(value: T): T { return structuredClone(value); }
 function freeze<T>(value: T): T { if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value; for (const nested of Object.values(value)) freeze(nested); return Object.freeze(value); }
@@ -318,6 +378,10 @@ class DefaultCentralPrivateFillOwnership implements CentralPrivateFillOwnershipP
   attachExchangeOrderId(input: {readonly lifecycleOrderId: string; readonly exchangeOrderId: string;
     readonly capturedAt: number}): void {
     authenticatedPrivateFillEventOwner.attachExchangeOrderId(input.lifecycleOrderId, input.exchangeOrderId, input.capturedAt);
+  }
+  recordConfirmedPreAcceptRejection(input: {readonly lifecycleOrderId: string; readonly exchangeHttpStatus: number;
+    readonly exchangeCode: string; readonly evidenceDigest: string; readonly capturedAt: number}): void {
+    authenticatedPrivateFillEventOwner.recordConfirmedPreAcceptRejection(input);
   }
 }
 

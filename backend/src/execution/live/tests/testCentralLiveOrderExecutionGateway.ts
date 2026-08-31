@@ -3,7 +3,7 @@ import {mkdtempSync, rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type {LiveExecutionAdapter} from "../contracts/LiveExecutionAdapter";
-import {CentralLiveOrderExecutionGateway} from "../central/CentralLiveOrderExecutionGateway";
+import {CentralLiveOrderExecutionGateway, type CentralPrivateFillOwnershipPort} from "../central/CentralLiveOrderExecutionGateway";
 import type {OrderFillFeeEvidence} from "../evidence/OrderFillFeeEvidenceService";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
 import type {LiveExecutionResult} from "../models/LiveExecutionResult";
@@ -17,6 +17,8 @@ async function main(): Promise<void> {
     await testUnknownSubmissionNeverRetries(join(directory, "uncertain.jsonl"));
     await testDisabledGatewayPerformsNoIo(join(directory, "disabled.jsonl"));
     await testPrivateFillIdentityBeforeIo(join(directory, "private-fill-identity.jsonl"));
+    await testConfirmedPreAcceptRejectionDisposesOwnershipAndReplays(join(directory, "confirmed-reject.jsonl"),
+      join(directory, "unconfirmed-failure.jsonl"));
     await testTimingObserverCannotChangeOutcome(join(directory, "timing-failure.jsonl"));
     console.log("CENTRAL LIVE ORDER EXECUTION GATEWAY TEST PASSED.");
     console.log("Journal-before-I/O, exact request hashing, restart reconciliation, authoritative fill-fee binding, and no automatic retry after unknown submission passed using fixtures; no external order occurred.");
@@ -58,6 +60,8 @@ async function testPrivateFillIdentityBeforeIo(file: string): Promise<void> {
     sequence.push("private-binding"); assert.ok(input.request.clientOrderId); durableClientOrderId = input.request.clientOrderId ?? null;
   }, attachExchangeOrderId(input: {readonly exchangeOrderId: string}) {
     sequence.push("exchange-id-attached"); assert.equal(input.exchangeOrderId, "12345");
+  }, recordConfirmedPreAcceptRejection() {
+    throw new Error("Accepted order must not be terminalized as a confirmed rejection.");
   }};
   const gateway = new CentralLiveOrderExecutionGateway({enabled: true}, createRuntime(adapter),
     {async inspect() { return feeEvidence(); }}, file, ownership);
@@ -67,6 +71,64 @@ async function testPrivateFillIdentityBeforeIo(file: string): Promise<void> {
   assert.deepEqual(sequence, ["private-binding", "exchange-io", "exchange-id-attached"]);
   assert.match(durableClientOrderId ?? "", /^cat-[a-f0-9]{28}$/u);
   assert.equal(response.record?.request.clientOrderId, durableClientOrderId);
+}
+
+async function testConfirmedPreAcceptRejectionDisposesOwnershipAndReplays(
+  confirmedFile: string, unconfirmedFile: string,
+): Promise<void> {
+  const request: LiveExecutionRequest = {exchange: "binance", product: "SPOT", market: "TUTUSDT", side: "sell",
+    orderType: "limit", timeInForce: "FOK", quantity: 138, price: 0.03572,
+    clientOrderId: "confirmed-reject-client", cancelOnTimeout: false};
+  const adapter = createAdapter({async execute(input) { return failedResult(input,
+    "Binance POST /api/v3/order failed: status=400, code=-1111, message=Parameter 'price' has too much precision."); }});
+  const initialOwnership = rejectionOwnership();
+  const gateway = new CentralLiveOrderExecutionGateway({enabled: true}, createRuntime(adapter),
+    {async inspect() { return feeEvidence(); }}, confirmedFile, initialOwnership.port);
+  const response = await gateway.executeOrReconcile({request,
+    idempotencyKey: "recovery:confirmed-reject:binance", allowNewSubmission: true, now});
+
+  assert.equal(response.state, "READY");
+  assert.equal(response.record?.state, "FEE_RECONCILED");
+  assert.equal(initialOwnership.registrations.length, 1);
+  assert.equal(initialOwnership.rejections.length, 1);
+  assert.equal(initialOwnership.rejections[0]?.lifecycleOrderId, response.record?.id);
+  assert.equal(initialOwnership.rejections[0]?.exchangeHttpStatus, 400);
+  assert.equal(initialOwnership.rejections[0]?.exchangeCode, "-1111");
+  assert.match(initialOwnership.rejections[0]?.evidenceDigest ?? "", /^[a-f0-9]{64}$/u);
+
+  const restoredOwnership = rejectionOwnership();
+  new CentralLiveOrderExecutionGateway({enabled: true}, createRuntime(adapter),
+    {async inspect() { return feeEvidence(); }}, confirmedFile, restoredOwnership.port);
+  assert.equal(restoredOwnership.registrations.length, 0);
+  assert.equal(restoredOwnership.rejections.length, 1);
+  assert.deepEqual(restoredOwnership.rejections[0], initialOwnership.rejections[0]);
+
+  const unconfirmedOwnership = rejectionOwnership();
+  const unconfirmedAdapter = createAdapter({async execute(input) { return failedResult(input,
+    "Binance POST /api/v3/order failed: status=500, code=-1000, message=Unknown server error."); }});
+  const unconfirmed = new CentralLiveOrderExecutionGateway({enabled: true}, createRuntime(unconfirmedAdapter),
+    {async inspect() { return feeEvidence(); }}, unconfirmedFile, unconfirmedOwnership.port);
+  await unconfirmed.executeOrReconcile({request: {...request, clientOrderId: "unconfirmed-failure-client"},
+    idempotencyKey: "recovery:unconfirmed-failure:binance", allowNewSubmission: true, now});
+  assert.equal(unconfirmedOwnership.registrations.length, 1);
+  assert.equal(unconfirmedOwnership.rejections.length, 0);
+}
+
+function rejectionOwnership(): {
+  readonly port: CentralPrivateFillOwnershipPort;
+  readonly registrations: Array<{readonly lifecycleOrderId: string}>;
+  readonly rejections: Array<{readonly lifecycleOrderId: string; readonly exchangeHttpStatus: number;
+    readonly exchangeCode: string; readonly evidenceDigest: string; readonly capturedAt: number}>;
+} {
+  const registrations: Array<{readonly lifecycleOrderId: string}> = [];
+  const rejections: Array<{readonly lifecycleOrderId: string; readonly exchangeHttpStatus: number;
+    readonly exchangeCode: string; readonly evidenceDigest: string; readonly capturedAt: number}> = [];
+  const port: CentralPrivateFillOwnershipPort = {
+    registerBeforeIo(input) { registrations.push({lifecycleOrderId: input.lifecycleOrderId}); },
+    attachExchangeOrderId() { throw new Error("Confirmed reject fixture must not receive an exchange order ID."); },
+    recordConfirmedPreAcceptRejection(input) { rejections.push({...input}); },
+  };
+  return {port, registrations, rejections};
 }
 
 async function testJournalBeforeIoAndRestartReconciliation(file: string): Promise<void> {
@@ -149,6 +211,15 @@ function result(request: LiveExecutionRequest): LiveExecutionResult {
     filledQuantity: request.quantity, remainingQuantity: 0, requestedPrice: null, averageFillPrice: 50_000,
     feeAmount: 0, cancelled: false, timedOut: false, startedAt: now, completedAt: now,
     executionTimeMs: 0, failureReason: null, reasons: []};
+}
+
+function failedResult(request: LiveExecutionRequest, failureReason: string): LiveExecutionResult {
+  return {success: false, exchange: request.exchange, product: request.product, market: request.market,
+    side: request.side, orderId: null, clientOrderId: request.clientOrderId ?? null, status: "FAILED",
+    requestedQuantity: request.quantity, filledQuantity: 0, remainingQuantity: request.quantity,
+    requestedPrice: request.price ?? null, averageFillPrice: 0, feeAmount: 0, cancelled: false, timedOut: false,
+    startedAt: now, completedAt: now + 1, executionTimeMs: 1, failureReason,
+    reasons: ["Fixture exchange rejection."]};
 }
 
 function feeEvidence(): OrderFillFeeEvidence {

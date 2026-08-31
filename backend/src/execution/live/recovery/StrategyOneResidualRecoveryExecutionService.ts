@@ -8,6 +8,7 @@ import {
   type CentralLiveOrderGatewayRecord,
   type CentralLiveOrderGatewayResponse,
 } from "../central/CentralLiveOrderExecutionGateway";
+import {parseBinancePreAcceptRejection} from "../central/BinancePreAcceptRejectionEvidence";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
 import {
   strategyOneResidualRecoveryAssistantService,
@@ -738,7 +739,7 @@ function confirmedPreAcceptBinanceRejection(
 } {
   const reasons: string[] = [];
   const result = gateway?.result ?? null;
-  const parsed = parseBinanceOrderRejection(result?.failureReason ?? null);
+  const parsed = parseBinancePreAcceptRejection(result?.failureReason ?? null);
   const tolerance = Math.max(1e-12, execution.request.quantity * 1e-9);
 
   if (execution.state !== "FAILED_SAFE") {
@@ -815,30 +816,6 @@ function sameExactRecoveryRequest(
     firstPrice !== null &&
     secondPrice !== null &&
     Math.abs(firstPrice - secondPrice) <= priceTolerance;
-}
-
-function parseBinanceOrderRejection(
-  failureReason: string | null,
-): {readonly httpStatus: number; readonly exchangeCode: string} | null {
-  if (!failureReason) {
-    return null;
-  }
-
-  const match = /^Binance POST \/api\/v3\/order failed: status=(\d{3}), code=(-?\d+), message=.+$/u
-    .exec(failureReason.trim());
-  if (!match) {
-    return null;
-  }
-
-  const httpStatus = Number(match[1]);
-  if (![400, 401, 403, 409, 418, 429].includes(httpStatus)) {
-    return null;
-  }
-
-  return {
-    httpStatus,
-    exchangeCode: match[2] as string,
-  };
 }
 
 function requestHash(request: LiveExecutionRequest): string {

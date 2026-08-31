@@ -178,10 +178,21 @@ interface ExchangeOrderBindingJournalRecord {
   readonly exchangeOrderId: string;
 }
 
+interface PreAcceptRejectionJournalRecord {
+  readonly version: "106.0";
+  readonly type: "PRE_ACCEPT_REJECTION";
+  readonly capturedAt: number;
+  readonly lifecycleOrderId: string;
+  readonly exchangeHttpStatus: number;
+  readonly exchangeCode: string;
+  readonly evidenceDigest: string;
+}
+
 type PrivateFillJournalRecord =
   | BindingJournalRecord
   | EventJournalRecord
-  | ExchangeOrderBindingJournalRecord;
+  | ExchangeOrderBindingJournalRecord
+  | PreAcceptRejectionJournalRecord;
 
 export interface PrivateFillBackfillRecord {
   readonly executionId: string;
@@ -251,6 +262,9 @@ export class AuthenticatedPrivateFillEventOwner {
 
   private readonly eventKeys =
     new Set<string>();
+
+  private readonly preAcceptRejections =
+    new Map<string, PreAcceptRejectionJournalRecord>();
 
   private readonly store:
     JsonlSnapshotStore<PrivateFillJournalRecord>;
@@ -587,6 +601,68 @@ export class AuthenticatedPrivateFillEventOwner {
         lifecycleId,
         exchangeId,
         capturedAt,
+      ),
+    );
+  }
+
+  recordConfirmedPreAcceptRejection(
+    input: {
+      readonly lifecycleOrderId: string;
+      readonly exchangeHttpStatus: number;
+      readonly exchangeCode: string;
+      readonly evidenceDigest: string;
+      readonly capturedAt: number;
+    },
+  ): AuthenticatedPrivateOrderState {
+    const record =
+      normalizePreAcceptRejection({
+        version:
+          "106.0",
+        type:
+          "PRE_ACCEPT_REJECTION",
+        capturedAt:
+          input.capturedAt,
+        lifecycleOrderId:
+          input.lifecycleOrderId,
+        exchangeHttpStatus:
+          input.exchangeHttpStatus,
+        exchangeCode:
+          input.exchangeCode,
+        evidenceDigest:
+          input.evidenceDigest,
+      });
+    const existing =
+      this.preAcceptRejections.get(
+        record.lifecycleOrderId,
+      );
+
+    if (existing) {
+      if (
+        canonical(existing) !==
+          canonical(record)
+      ) {
+        throw new Error(
+          "Private fill owner confirmed-reject evidence is immutable.",
+        );
+      }
+
+      return clone(
+        this.requireOrderState(
+          record.lifecycleOrderId,
+        ),
+      );
+    }
+
+    this.assertPreAcceptRejectionSafe(
+      record.lifecycleOrderId,
+    );
+    this.append(
+      record,
+    );
+
+    return clone(
+      this.applyPreAcceptRejection(
+        record,
       ),
     );
   }
@@ -993,6 +1069,8 @@ export class AuthenticatedPrivateFillEventOwner {
           (order) =>
             order.authoritativeTerminal,
         ).length,
+      confirmedPreAcceptRejections:
+        this.preAcceptRejections.size,
       activeSessions:
         sessions.filter(
           (session) =>
@@ -1422,6 +1500,17 @@ export class AuthenticatedPrivateFillEventOwner {
     }
 
     if (
+      record.type ===
+      "PRE_ACCEPT_REJECTION"
+    ) {
+      this.applyPreAcceptRejection(
+        record,
+      );
+
+      return;
+    }
+
+    if (
       this.eventKeys.has(
         record.eventKey,
       )
@@ -1577,6 +1666,121 @@ export class AuthenticatedPrivateFillEventOwner {
     );
 
     return updated;
+  }
+
+  private applyPreAcceptRejection(
+    record:
+      PreAcceptRejectionJournalRecord,
+  ): AuthenticatedPrivateOrderState {
+    const normalized =
+      normalizePreAcceptRejection(
+        record,
+      );
+    const existing =
+      this.preAcceptRejections.get(
+        normalized.lifecycleOrderId,
+      );
+
+    if (existing) {
+      if (
+        canonical(existing) !==
+          canonical(normalized)
+      ) {
+        throw new Error(
+          "Private fill owner journal contains conflicting confirmed-reject evidence.",
+        );
+      }
+
+      return this.requireOrderState(
+        normalized.lifecycleOrderId,
+      );
+    }
+
+    this.assertPreAcceptRejectionSafe(
+      normalized.lifecycleOrderId,
+    );
+    const state =
+      this.states.get(
+        normalized.lifecycleOrderId,
+      ) as MutableOrderState;
+
+    state.status =
+      "REJECTED";
+    state.reportedCumulativeQuantity =
+      0;
+    state.reportedRemainingQuantity =
+      state.binding.requestedQuantity;
+    state.lastStatusEventAt =
+      normalized.capturedAt;
+    state.updatedAt =
+      Math.max(
+        state.updatedAt,
+        normalized.capturedAt,
+      );
+    this.preAcceptRejections.set(
+      normalized.lifecycleOrderId,
+      freeze(
+        clone(normalized),
+      ),
+    );
+
+    return this.buildState(
+      state,
+    );
+  }
+
+  private assertPreAcceptRejectionSafe(
+    lifecycleOrderId: string,
+  ): void {
+    const state =
+      this.states.get(
+        lifecycleOrderId,
+      );
+
+    if (!state) {
+      throw new Error(
+        "Private fill owner cannot terminalize a confirmed rejection without a durable lifecycle binding.",
+      );
+    }
+
+    const current =
+      this.buildState(
+        state,
+      );
+
+    if (
+      current.exchangeOrderId !==
+        null ||
+      current.filledQuantity !==
+        0 ||
+      current.fills.length !==
+        0 ||
+      current.status !==
+        "OPEN"
+    ) {
+      throw new Error(
+        "Private fill owner confirmed-reject terminalization requires an open zero-fill binding without an exchange order ID.",
+      );
+    }
+  }
+
+  private requireOrderState(
+    lifecycleOrderId: string,
+  ): AuthenticatedPrivateOrderState {
+    const state =
+      this.states.get(
+        lifecycleOrderId,
+      );
+
+    if (!state) {
+      throw new Error(
+        "Private fill owner lifecycle state is unavailable.",
+      );
+    }
+
+    return this.buildState(
+      state,
+    );
   }
 
   private applyEvent(
@@ -2754,6 +2958,77 @@ function normalizeBinding(
         input.registeredAt,
         "private order registration",
       ),
+  });
+}
+
+function normalizePreAcceptRejection(
+  input:
+    PreAcceptRejectionJournalRecord,
+): PreAcceptRejectionJournalRecord {
+  const exchangeHttpStatus =
+    numberValue(
+      input.exchangeHttpStatus,
+      "confirmed-reject HTTP status",
+    );
+  const exchangeCode =
+    requireText(
+      input.exchangeCode,
+      "confirmed-reject exchange code",
+    );
+  const evidenceDigest =
+    requireText(
+      input.evidenceDigest,
+      "confirmed-reject evidence digest",
+    ).toLowerCase();
+
+  if (
+    input.version !==
+      "106.0" ||
+    input.type !==
+      "PRE_ACCEPT_REJECTION" ||
+    !Number.isSafeInteger(
+      exchangeHttpStatus,
+    ) ||
+    ![
+      400,
+      401,
+      403,
+      409,
+      418,
+      429,
+    ].includes(
+      exchangeHttpStatus,
+    ) ||
+    !/^-?\d{1,12}$/u.test(
+      exchangeCode,
+    ) ||
+    !/^[a-f0-9]{64}$/u.test(
+      evidenceDigest,
+    )
+  ) {
+    throw new Error(
+      "Confirmed pre-accept rejection evidence is invalid.",
+    );
+  }
+
+  return freeze({
+    version:
+      "106.0",
+    type:
+      "PRE_ACCEPT_REJECTION",
+    capturedAt:
+      requireTime(
+        input.capturedAt,
+        "confirmed-reject capture",
+      ),
+    lifecycleOrderId:
+      requireId(
+        input.lifecycleOrderId,
+        "confirmed-reject lifecycle order",
+      ),
+    exchangeHttpStatus,
+    exchangeCode,
+    evidenceDigest,
   });
 }
 
@@ -4002,7 +4277,9 @@ function isJournalRecord(
       record.version !==
         "104.0" &&
       record.version !==
-        "105.0"
+        "105.0" &&
+      record.version !==
+        "106.0"
     ) ||
     (
       record.type !==
@@ -4010,7 +4287,9 @@ function isJournalRecord(
       record.type !==
         "PRIVATE_EVENT" &&
       record.type !==
-        "EXCHANGE_ORDER_BINDING"
+        "EXCHANGE_ORDER_BINDING" &&
+      record.type !==
+        "PRE_ACCEPT_REJECTION"
     )
   ) {
     return false;
@@ -4033,7 +4312,8 @@ function isJournalRecord(
         record.binding as PrivateFillOrderBinding,
       );
 
-      return true;
+      return record.version ===
+        "104.0";
     }
 
     if (
@@ -4052,6 +4332,18 @@ function isJournalRecord(
           "journal exchange order",
         ).length >
           0;
+    }
+
+    if (
+      record.type ===
+      "PRE_ACCEPT_REJECTION"
+    ) {
+      normalizePreAcceptRejection(
+        record as unknown as PreAcceptRejectionJournalRecord,
+      );
+
+      return record.version ===
+        "106.0";
     }
 
     const lifecycleOrderId =
@@ -4078,6 +4370,8 @@ function isJournalRecord(
 
     return lifecycleOrderId.length >
         0 &&
+      record.version ===
+        "104.0" &&
       eventKey.length <=
         1_000 &&
       !/[\r\n]/u.test(
