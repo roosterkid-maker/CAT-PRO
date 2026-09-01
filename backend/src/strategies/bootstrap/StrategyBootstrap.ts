@@ -145,10 +145,32 @@ strategyRegistry.register(
   spotPerpetualBasisStrategyController,
 );
 
+/*
+ * Per-route target notional for Strategy #5 (funding-rate arbitrage).
+ * Defaults to $1,000 (matching createFundingRateArbitrageConfiguration's own
+ * default) when unset; override with CAT_PRO_FUNDING_RATE_ARBITRAGE_TARGET_QUOTE_NOTIONAL
+ * to test with a smaller funded amount before committing full margin on both
+ * venues. An invalid override is intentionally fail-closed: it's left
+ * undefined so createFundingRateArbitrageConfiguration's own `positive()`
+ * validation runs against the untouched default instead of a bad number.
+ */
+function resolveFundingRateArbitrageTargetQuoteNotional(): number | undefined {
+  const rawValue =
+    process.env.CAT_PRO_FUNDING_RATE_ARBITRAGE_TARGET_QUOTE_NOTIONAL;
+
+  if (rawValue === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /* V88 bounded carry extension of Strategy #5, operator-enabled and SHADOW-only. */
 export const fundingRateArbitrageStrategyController =
   new FundingRateArbitrageStrategyController({
     enabled: strategyRuntimeOperatorConfiguration.controllerEnabled["funding-rate-arbitrage"],
+    targetQuoteNotional: resolveFundingRateArbitrageTargetQuoteNotional(),
   });
 
 strategyRegistry.register(
