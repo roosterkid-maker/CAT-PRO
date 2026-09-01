@@ -1408,7 +1408,9 @@ function shouldRefreshApprovedDynamicRoute(
  * Preserve a still-current route leg and refresh only the stale side. The
  * original timestamps are evidence floors, not replacements: exact-route
  * reevaluation reads the current validated stores and the next preview still
- * enforces the unchanged 240 ms dispatch reserve and 250 ms skew ceiling.
+ * enforces the dispatch reserve and skew ceiling in effect at that time
+ * (see STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS and
+ * STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS).
  */
 function actionTimeRefreshRequest(
   candidate:

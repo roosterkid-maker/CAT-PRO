@@ -10,21 +10,23 @@ import {PROFIT_TIER_POLICY} from "../config/profitTiers";
 import type {ArbitrageOpportunity} from "../models/ArbitrageOpportunity";
 import type {OpportunitySnapshot} from "../services/OpportunityService";
 
-export const STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS = 300;
-export const STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS = 250;
+export const STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS = 560;
+export const STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS = 500;
 
 /*
- * The operator-reviewed absolute 300 ms pilot ceiling gives the action-time
- * lane 50 ms more tolerance without changing timestamp-skew policy. The lane
- * also needs room for the measured decision-to-dispatch path (target P99
- * 40 ms). The independently enforced action-time cohort therefore stays
- * 60 ms below the absolute ceiling, matching the previous dispatch reserve.
- * The route-specific controlled timing profile still uses a 5 ms dispatch
- * reserve and requires a further 5 ms measured operating reserve.
- * Generations above this stricter boundary remain valid historical 300 ms
- * evidence, but cannot enter the dispatch-reserved calibration cohort.
+ * Operator-approved relaxation (2026-09-01): the absolute ceiling and
+ * dispatch-reserved limit were raised from 300/240 ms to 560/500 ms, and
+ * skew from 250 to 500 ms, to trade some staleness tolerance for a higher
+ * live-dispatch hit rate on this tiny (Rs500-1000/leg) pilot - the bounded
+ * per-trade size keeps a stale-book mispricing outcome small in absolute
+ * rupee terms. The 60 ms gap between the absolute ceiling and the
+ * dispatch-reserved limit is preserved from the original design: it still
+ * reserves room for the measured decision-to-dispatch path (target P99
+ * 40 ms) below the absolute ceiling. Generations above the dispatch-reserved
+ * limit remain valid historical evidence up to the absolute ceiling, but
+ * cannot enter the dispatch-reserved calibration cohort.
  */
-export const STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS = 240;
+export const STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS = 500;
 
 export type StrategyOnePilotExchange =
   | "binance"
@@ -98,7 +100,7 @@ export interface StrategyOnePilotEquivalentRouteReport {
   readonly executionGradeBuyAgeMs: StrategyOnePilotTimingDistribution;
   readonly executionGradeSellAgeMs: StrategyOnePilotTimingDistribution;
   readonly dispatchReserved: {
-    readonly maximumBookAgeMs: 240;
+    readonly maximumBookAgeMs: 500;
     readonly firstGenerationAt: number | null;
     readonly lastGenerationAt: number | null;
     readonly generations: number;
@@ -135,9 +137,9 @@ export interface StrategyOnePilotEquivalentPaperEvidenceReport {
   readonly eligibleVenueOpportunities: number;
   readonly invalidObservationsRejected: number;
   readonly observerFailures: number;
-  readonly maximumBookAgeMs: 300;
-  readonly maximumBookSkewMs: 250;
-  readonly dispatchReservedMaximumBookAgeMs: 240;
+  readonly maximumBookAgeMs: 560;
+  readonly maximumBookSkewMs: 500;
+  readonly dispatchReservedMaximumBookAgeMs: 500;
   readonly minimumExecutionGradeGenerations: number;
   readonly minimumObservationSpanMs: number;
   readonly maximumSamplesPerDistribution: number;
@@ -329,7 +331,11 @@ export class StrategyOnePilotEquivalentPaperEvidenceService {
     this.maximumGenerationKeysPerRoute = configuration.maximumGenerationKeysPerRoute ?? 4_096;
     this.persistenceIntervalMs = configuration.persistenceIntervalMs ?? 300_000;
     this.maximumPersistedSnapshots = configuration.maximumPersistedSnapshots ?? 2;
-    this.minimumExecutionGradeGenerations = configuration.minimumExecutionGradeGenerations ?? 512;
+    // Operator-approved relaxation (2026-09-01): lowered from 512 to widen
+    // which routes qualify as "sufficiently proven" sooner, alongside the
+    // book-age/skew relaxation above - same rationale (tiny bounded
+    // per-trade size, more dispatch attempts) applies here.
+    this.minimumExecutionGradeGenerations = configuration.minimumExecutionGradeGenerations ?? 256;
     this.minimumObservationSpanMs = configuration.minimumObservationSpanMs ?? 60 * 60 * 1_000;
     this.maximumSamplesPerDistribution = configuration.maximumSamplesPerDistribution ?? 512;
     this.validateConfiguration();

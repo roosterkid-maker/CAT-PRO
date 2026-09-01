@@ -145,11 +145,11 @@ function main(): void {
     authorizedLastLookRegistry.getAuthorizedOrderTimeSafetyContract(
       "bybit",
       sandRoute,
-      301,
+      561,
       1_786_812_800_000,
     ),
     null,
-    "An authorized TTL above the operator-reviewed 300 ms ceiling must fail closed.",
+    "An authorized TTL above the operator-reviewed 560 ms ceiling must fail closed.",
   );
   assert.equal(historicalTimingLookups, 0);
 

@@ -129,9 +129,9 @@ export interface StrategyOnePilotPreviewReport {
   readonly minimumTwoLegInventoryInr: number;
   readonly minimumCurrentNetProfitPercent: number;
   readonly maximumOpportunityAgeMs: number;
-  readonly maximumExecutionGradeBookAgeMs: 300;
-  readonly maximumDispatchReservedBookAgeMs: 240;
-  readonly maximumExecutionGradeBookSkewMs: 250;
+  readonly maximumExecutionGradeBookAgeMs: 560;
+  readonly maximumDispatchReservedBookAgeMs: 500;
+  readonly maximumExecutionGradeBookSkewMs: 500;
   readonly evidence: {
     readonly currentFreshExecuteOpportunities: number;
     readonly historicalAdapterReadyRoutes: number;
@@ -889,7 +889,7 @@ export class StrategyOnePilotPreflightService {
         "PILOT_TIMING_HEADROOM",
         timing.state ===
           "READY",
-        "Mature execution-grade quote timing preserves dispatch budget plus operational headroom inside the operator-reviewed 300 ms ceiling.",
+        `Mature execution-grade quote timing preserves dispatch budget plus operational headroom inside the operator-reviewed ${STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS} ms ceiling.`,
         timing.blockers,
       ),
       check(

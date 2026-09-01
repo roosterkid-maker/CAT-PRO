@@ -59,6 +59,8 @@ import {
   assessStrategyOnePilotDispatchReservedFreshness,
   isExactStrategyOnePilotRoute,
   STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
 } from "../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
 
 const DEFAULT_CONFIG:
@@ -602,9 +604,9 @@ export class CandidateQualificationService {
       currentValue:
         `score=${candidate.latest.freshnessScore}; buyAge=${pilot.buyAgeMs}ms; sellAge=${pilot.sellAgeMs}ms; skew=${pilot.skewMs}ms`,
       requiredValue:
-        `score>=${this.config.minimumFreshnessScore}; ages<=${STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS}ms; skew<=250ms; no fallback`,
+        `score>=${this.config.minimumFreshnessScore}; ages<=${STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS}ms; skew<=${STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS}ms; no fallback`,
       reason: scorePassed && pilot.passed
-        ? "Binance/Bybit pilot quote generation satisfies the dispatch-reserved age boundary inside the operator-reviewed 300 ms ceiling."
+        ? `Binance/Bybit pilot quote generation satisfies the dispatch-reserved age boundary inside the operator-reviewed ${STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS} ms ceiling.`
         : `Binance/Bybit pilot freshness failed: ${pilot.reasons.join(", ") || "FRESHNESS_SCORE"}.`,
     };
   }

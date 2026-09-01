@@ -331,7 +331,7 @@ export class StrategyOneOrderTimeSafetyService {
       )
     ) {
       reasons.push(
-        "Authorized order-book TTL is invalid or exceeds the operator-reviewed 300 ms ceiling.",
+        `Authorized order-book TTL is invalid or exceeds the operator-reviewed ${STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS} ms ceiling.`,
       );
     }
 

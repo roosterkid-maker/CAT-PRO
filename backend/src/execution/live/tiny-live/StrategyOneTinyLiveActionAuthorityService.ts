@@ -347,7 +347,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
       calibration.maximumBookAgeMs >
         STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
     ) {
-      blockers.push("Qualified route TTL is invalid or exceeds the operator-reviewed 300 ms ceiling.");
+      blockers.push(`Qualified route TTL is invalid or exceeds the operator-reviewed ${STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS} ms ceiling.`);
     } else if (
       calibration.scope === "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT" &&
       routeAttempts > 0
@@ -719,7 +719,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
       calibration.maximumBookAgeMs >
         STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
     ) {
-      throw new Error("Fresh route TTL is invalid or exceeds the operator-reviewed 300 ms ceiling.");
+      throw new Error(`Fresh route TTL is invalid or exceeds the operator-reviewed ${STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS} ms ceiling.`);
     }
     const maximumConvertedQuoteCapital =
       selected.funding.maximumConvertedQuoteCapital;

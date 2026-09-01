@@ -97,7 +97,7 @@ export interface StrategyOneTimingHeadroomReview {
   readonly buyExchange: string;
   readonly sellExchange: string;
   readonly state: "READY" | "BLOCKED";
-  readonly absoluteBookAgeCeilingMs: 300;
+  readonly absoluteBookAgeCeilingMs: 560;
   readonly dispatchSafetyMarginMs: number;
   readonly requiredOperationalHeadroomMs: number;
   readonly timingBasis: "TINY_LIVE_TRIGGER_BOOK_AGE";
@@ -129,15 +129,18 @@ const DEFAULT_FILE = resolve(
 
 /*
  * Controlled pilot timing profile. These reserves are fixed in code and are
- * not operator-adjustable. They only divide the operator-reviewed 300 ms absolute
- * quote-age budget; they do not change action-time freshness, timestamp skew,
- * economics, inventory, depth, last-look or order-policy gates.
+ * not operator-adjustable. They only divide the operator-reviewed
+ * STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS absolute quote-age budget; they do
+ * not change action-time freshness, timestamp skew, economics, inventory,
+ * depth, last-look or order-policy gates.
  */
 const BOOTSTRAP_DISPATCH_SAFETY_MARGIN_MS = 5;
 const MINIMUM_CALIBRATED_BOOK_AGE_MS = 25;
 const REQUIRED_OPERATIONAL_HEADROOM_MS = 5;
+// Bumped V3 -> V4 for the 2026-09-01 operator-approved 300/240/250 ms ->
+// 560/500/500 ms relaxation (see StrategyOnePilotEquivalentPaperEvidenceService).
 const CONTROLLED_PILOT_TIMING_POLICY_REVISION =
-  "STRATEGY_ONE_TRIGGER_SYNC_5MS_300MS_V3";
+  "STRATEGY_ONE_TRIGGER_SYNC_5MS_560MS_V4";
 const CONTROLLED_BATCH_ATTEMPTS = 2;
 const CONTROLLED_BATCH_APPROVAL_DURATION_MS = 3 * 60 * 60 * 1_000;
 

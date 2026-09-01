@@ -127,9 +127,9 @@ function main(): void {
       persistenceIntervalMs: 60_000,
     });
     noHeadroomEvidence.observeSnapshot({generatedAt: NOW,
-      opportunities: [opportunity(NOW, 245, 245)]}, NOW + 5);
+      opportunities: [opportunity(NOW, 505, 505)]}, NOW + 5);
     noHeadroomEvidence.observeSnapshot({generatedAt: NOW + 1_000,
-      opportunities: [opportunity(NOW + 1_000, 245, 245)]}, NOW + 1_005);
+      opportunities: [opportunity(NOW + 1_000, 505, 505)]}, NOW + 1_005);
     const noHeadroomService = new StrategyOneTimingCalibrationService(
       evidence,
       join(directory, "no-headroom-calibrations.jsonl"),
@@ -183,8 +183,8 @@ function main(): void {
       240,
     );
     assert.equal(thinMarginReview.dispatchBudgetMs, 5);
-    assert.equal(thinMarginReview.maximumBookAgeMs, 295);
-    assert.equal(thinMarginReview.residualOperationalHeadroomMs, 105);
+    assert.equal(thinMarginReview.maximumBookAgeMs, 555);
+    assert.equal(thinMarginReview.residualOperationalHeadroomMs, 365);
     assert.deepEqual(thinMarginReview.blockers, [],
       "Downstream PAPER execution delay must not be charged again after book age was already measured at the Tiny-LIVE trigger.");
 
@@ -223,11 +223,11 @@ function main(): void {
       sellExchange: "bybit",
     }, NOW + 1_500);
     assert.equal(controlledBoundaryReview.state, "READY");
-    assert.equal(controlledBoundaryReview.absoluteBookAgeCeilingMs, 300);
+    assert.equal(controlledBoundaryReview.absoluteBookAgeCeilingMs, 560);
     assert.equal(controlledBoundaryReview.dispatchSafetyMarginMs, 5);
     assert.equal(controlledBoundaryReview.requiredOperationalHeadroomMs, 5);
-    assert.equal(controlledBoundaryReview.maximumBookAgeMs, 295);
-    assert.equal(controlledBoundaryReview.residualOperationalHeadroomMs, 105,
+    assert.equal(controlledBoundaryReview.maximumBookAgeMs, 555);
+    assert.equal(controlledBoundaryReview.residualOperationalHeadroomMs, 365,
       "Trigger-time freshness retains the fixed 5 ms post-trigger safety reserve without charging later PAPER work twice.");
 
     const pilotEvidence = new StrategyOnePilotEquivalentPaperEvidenceService({
@@ -251,8 +251,8 @@ function main(): void {
       sellExchange: "bybit",
     }, NOW + 1_500);
     assert.equal(review.state, "READY");
-    assert.equal(review.maximumBookAgeMs, 295);
-    assert.equal(review.residualOperationalHeadroomMs, 270);
+    assert.equal(review.maximumBookAgeMs, 555);
+    assert.equal(review.residualOperationalHeadroomMs, 530);
     assert.equal(review.safety.thresholdRelaxationAllowed, false);
     let timingReportReads = 0;
     let pilotReportReads = 0;
@@ -324,7 +324,7 @@ function main(): void {
     );
     assert.equal(dynamicQualification.evidenceRouteKey, "BTCUSDT:binance->bybit");
     assert.equal(dynamicQualification.venueLaneKey, "binance->bybit");
-    assert.equal(dynamicQualification.maximumBookAgeMs, 295);
+    assert.equal(dynamicQualification.maximumBookAgeMs, 555);
     assert.equal(dynamicQualification.perRouteOperatorApprovalRequired, false);
     assert.equal(dynamicQualification.liveOrderSubmissionAuthorized, false);
     assert.equal(
@@ -365,10 +365,10 @@ function main(): void {
     assert.equal(proposal.status, "PROPOSED");
     assert.equal(
       proposal.timingPolicyRevision,
-      "STRATEGY_ONE_TRIGGER_SYNC_5MS_300MS_V3",
+      "STRATEGY_ONE_TRIGGER_SYNC_5MS_560MS_V4",
     );
-    assert.equal(proposal.maximumBookAgeMs, 295,
-      "300 ms ceiling minus the fixed 5 ms post-trigger safety reserve must leave synchronized LIVE headroom.");
+    assert.equal(proposal.maximumBookAgeMs, 555,
+      "560 ms ceiling minus the fixed 5 ms post-trigger safety reserve must leave synchronized LIVE headroom.");
     assert.equal(proposal.scope, "BOOTSTRAP_FIRST_TINY_LIVE_ATTEMPT");
     assert.equal(proposal.automaticActivationAllowed, false);
     assert.equal(
@@ -406,7 +406,7 @@ function main(): void {
     assert.equal(
       registry.getOrderTimeSafetyContract("binance", context, NOW + 1_503)
         ?.maximumOrderBookAgeMs,
-      295,
+      555,
     );
     assert.equal(
       registry.getOrderTimeSafetyContract("binance", context, NOW + 2_503)

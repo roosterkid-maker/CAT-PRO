@@ -448,7 +448,7 @@ function testFreshMultiLevelMinimumOrderCushion(): void {
     "coindcx:BTCUSDT",
     orderBook(
       "coindcx",
-      NOW - 241,
+      NOW - 501,
       [[0.000582, 20_000]],
       [[0.0005834, 666], [0.000584, 9_000]],
     ),
@@ -633,11 +633,11 @@ function testFinalPaperStressGate(): void {
 
   books.set(
     "binance:BTCUSDT",
-    orderBook("binance", NOW - 241, [[99.9, 20]], [[100, 20]]),
+    orderBook("binance", NOW - 501, [[99.9, 20]], [[100, 20]]),
   );
   books.set(
     "bybit:BTCUSDT",
-    orderBook("bybit", NOW - 241, [[101.2, 20]], [[101.3, 20]]),
+    orderBook("bybit", NOW - 501, [[101.2, 20]], [[101.3, 20]]),
   );
   const basePilot = opportunity("pilot-stale", 20);
   const pilotStale = gate.evaluate({
@@ -653,8 +653,8 @@ function testFinalPaperStressGate(): void {
     now: NOW,
   });
   assert.equal(pilotStale.status, "BLOCKED");
-  assert.match(pilotStale.reasons.join(" "), /maximum 240 ms/i,
-    "Exact Binance/Bybit PAPER last-look must reserve dispatch headroom inside the operator-reviewed 300 ms ceiling.");
+  assert.match(pilotStale.reasons.join(" "), /maximum 500 ms/i,
+    "Exact Binance/Bybit PAPER last-look must reserve dispatch headroom inside the operator-reviewed 560 ms ceiling.");
 }
 
 function opportunity(id: string, depth: number): ArbitrageOpportunity {
