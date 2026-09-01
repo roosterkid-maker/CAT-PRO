@@ -67,6 +67,10 @@ import {
   automationSchedulerService,
 } from "./automation/services/AutomationSchedulerService";
 
+import {
+  rebalancingExecutionRunner,
+} from "./rebalancing/execution/RebalancingExecutionRunner";
+
 import candidateBoardRoutes
   from "./candidates/routes/candidateBoardRoutes";
 
@@ -888,6 +892,18 @@ server.listen(
        * evidence and explicit controls permit more.
        */
       automationSchedulerService
+        .start();
+
+      /*
+       * Automated Capital Rebalancer (Phase D). Starting this timer is
+       * always safe: RebalancingExecutionService checks
+       * CAT_PRO_REBALANCER_ENABLED (and the same/cross-exchange phase
+       * flags) on every tick before touching any exchange, and both
+       * default OFF. Nothing moves until the operator has provisioned the
+       * dedicated withdrawal-capable Binance key and populated the
+       * withdrawal whitelist.
+       */
+      rebalancingExecutionRunner
         .start();
 
       void websocketManager

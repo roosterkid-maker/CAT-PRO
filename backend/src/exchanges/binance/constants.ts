@@ -61,6 +61,32 @@ export const BINANCE = {
 
   OPEN_ORDERS:
     "/api/v3/openOrders",
+
+  /*
+   * Rebalancing execution (Strategy: Automated Capital Rebalancer).
+   * UNIVERSAL_TRANSFER moves funds between wallet types on the SAME
+   * account (e.g. MAIN -> UMFUTURE) - no withdrawal permission needed.
+   * WITHDRAW/WITHDRAW_HISTORY/DEPOSIT_ADDRESS require the withdrawal
+   * permission this codebase otherwise keeps off every other key; only
+   * a key explicitly provisioned for the rebalancer should ever carry it.
+   */
+  UNIVERSAL_TRANSFER:
+    "/sapi/v1/asset/transfer",
+
+  WITHDRAW:
+    "/sapi/v1/capital/withdraw/apply",
+
+  WITHDRAW_HISTORY:
+    "/sapi/v1/capital/withdraw/history",
+
+  DEPOSIT_ADDRESS:
+    "/sapi/v1/capital/deposit/address",
+
+  ASSET_CONFIG:
+    "/sapi/v1/capital/config/getall",
+
+  WITHDRAW_ADDRESS_LIST:
+    "/sapi/v1/capital/withdraw/address/list",
 },
 
   SOCKET: {
