@@ -62,7 +62,13 @@ export class CoinDCXExecutionAdapter
     const startedAt =
       Date.now();
 
-    await this.safeAudit(() =>
+    // Fire-and-forget: safeAudit already swallows and logs its own
+    // errors (never rejects), so there's nothing an await here protects
+    // against - it was only adding a disk write's latency directly in
+    // front of order submission, on the one path where every millisecond
+    // is budgeted. The order itself carries its own audit trail via
+    // orderCreated below; this is best-effort observability, not it.
+    void this.safeAudit(() =>
       executionAuditLogger.executionStarted(
         request,
       ),
