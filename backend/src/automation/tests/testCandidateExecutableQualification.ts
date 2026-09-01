@@ -338,6 +338,75 @@ function main(): void {
     "A genuine venue book-timestamp change must advance HFT PAPER evidence exactly once.",
   );
 
+  const rollingCandidate =
+    candidate();
+
+  rollingCandidate.latest.netProfitPercent =
+    1.05;
+  rollingCandidate.best.netProfitPercent =
+    4.2;
+  rollingCandidate.recentNetProfitObservations = [
+    {
+      netProfitPercent:
+        4.2,
+      observedAt:
+        NOW -
+        2,
+      opportunityId:
+        "rolling-spike",
+      buyQuoteTimestamp:
+        NOW -
+        2,
+      sellQuoteTimestamp:
+        NOW -
+        2,
+    },
+    {
+      netProfitPercent:
+        1.2,
+      observedAt:
+        NOW -
+        1,
+      opportunityId:
+        "rolling-plateau-1",
+      buyQuoteTimestamp:
+        NOW -
+        1,
+      sellQuoteTimestamp:
+        NOW -
+        1,
+    },
+    {
+      netProfitPercent:
+        1.05,
+      observedAt:
+        NOW,
+      opportunityId:
+        "rolling-plateau-2",
+      buyQuoteTimestamp:
+        NOW,
+      sellQuoteTimestamp:
+        NOW,
+    },
+  ];
+
+  const rollingQualified =
+    hftService.evaluate(
+      rollingCandidate,
+      NOW,
+    );
+
+  assert.equal(
+    rollingQualified.checks.profitStability.passed,
+    true,
+    "One transient profit spike must not permanently reject a later stable synchronized plateau.",
+  );
+  assert.equal(
+    rollingQualified.profitDrawdownPercent,
+    12.5,
+    "Rolling stability must use the bounded upper-quartile reference once three distinct generations exist.",
+  );
+
   const explicitLegacyMode =
     new CandidateQualificationService(
       {

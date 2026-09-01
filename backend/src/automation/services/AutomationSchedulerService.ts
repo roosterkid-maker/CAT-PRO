@@ -75,6 +75,10 @@ import {
   strategyOneTinyLivePreArmService,
 } from "../../execution/live/tiny-live/StrategyOneTinyLivePreArmService";
 
+import {
+  paperOpportunityBookRefreshCoordinatorService,
+} from "./PaperOpportunityBookRefreshCoordinatorService";
+
 export interface AutomationSchedulerConfig {
   intervalMs: number;
 
@@ -1125,10 +1129,27 @@ export class AutomationSchedulerService {
           completedAt;
       };
 
+    /*
+     * Automatic PAPER gets one fair, rate-bounded stale-route rescue before
+     * qualification. The coordinator is market-agnostic, public-read-only and
+     * returns the original immutable snapshot unless an exact synchronized
+     * replacement is available. Tiny-LIVE already observed the untouched
+     * source snapshot above and receives no authority from this PAPER path.
+     */
+    const paperSnapshot =
+      await paperOpportunityBookRefreshCoordinatorService
+        .refreshSnapshot(
+          snapshot,
+        );
+
+    completeStage(
+      "paperBookRefresh",
+    );
+
     const strategyAttributions =
       strategyAttributionService
         .resolveSnapshot(
-          snapshot,
+          paperSnapshot,
         );
 
     completeStage(
@@ -1137,8 +1158,8 @@ export class AutomationSchedulerService {
 
     opportunityMonitorService
       .observeSnapshot(
-        snapshot.opportunities,
-        snapshot.generatedAt,
+        paperSnapshot.opportunities,
+        paperSnapshot.generatedAt,
         strategyAttributions,
       );
 
@@ -1163,7 +1184,7 @@ export class AutomationSchedulerService {
 
     executionCandidateQueueService
       .synchronize(
-        snapshot.generatedAt,
+        paperSnapshot.generatedAt,
         qualifications,
       );
 
@@ -1182,7 +1203,7 @@ export class AutomationSchedulerService {
 
     strategyOneExecutionTimingEvidenceService
       .observePaperStage(
-        snapshot,
+        paperSnapshot,
         "QUEUE_READY",
         Date.now(),
       );
@@ -1203,7 +1224,7 @@ export class AutomationSchedulerService {
 
     strategyOneExecutionTimingEvidenceService
       .observePaperStage(
-        snapshot,
+        paperSnapshot,
         "EXECUTION_START",
         Date.now(),
       );
@@ -1211,7 +1232,7 @@ export class AutomationSchedulerService {
     try {
       await unifiedAutomatedExecutionOrchestratorService
         .run(
-          snapshot.generatedAt,
+          paperSnapshot.generatedAt,
         );
     } finally {
       /*
@@ -1223,7 +1244,7 @@ export class AutomationSchedulerService {
        */
       strategyOnePilotEquivalentPaperEvidenceService
         .observeSnapshot(
-          snapshot,
+          paperSnapshot,
           pipelineStartedAt,
         );
     }
@@ -1243,7 +1264,7 @@ export class AutomationSchedulerService {
 
     strategyOneExecutionTimingEvidenceService
       .observePaperStage(
-        snapshot,
+        paperSnapshot,
         "EXECUTION_COMPLETE",
         Date.now(),
       );
@@ -1255,7 +1276,7 @@ export class AutomationSchedulerService {
      */
     candidateEvidenceAccumulatorService
       .observeSnapshot(
-        snapshot.generatedAt,
+        paperSnapshot.generatedAt,
         qualifications,
       );
 
@@ -1265,7 +1286,7 @@ export class AutomationSchedulerService {
 
     capitalAwareQualificationEvidenceService
       .capture(
-        snapshot.generatedAt,
+        paperSnapshot.generatedAt,
         qualifications,
       );
 
@@ -1276,7 +1297,7 @@ export class AutomationSchedulerService {
     const recoveryHandoffSnapshot =
       hedgeInventoryManagementStrategyController
         .getHedgeRecoveryActionHandoffSnapshot(
-          snapshot.generatedAt,
+          paperSnapshot.generatedAt,
         );
 
     completeStage(
@@ -1294,8 +1315,8 @@ export class AutomationSchedulerService {
                     assessment.handoff,
                   ]
                 : [],
-          ),
-        snapshot.generatedAt,
+        ),
+        paperSnapshot.generatedAt,
       );
 
     completeStage(
@@ -1318,11 +1339,11 @@ export class AutomationSchedulerService {
     ) {
       shadowLearningEvidenceArchiveService
         .capture(
-          snapshot.generatedAt,
+          paperSnapshot.generatedAt,
         );
 
       this.lastShadowArchiveCaptureAt =
-        snapshot.generatedAt;
+        paperSnapshot.generatedAt;
     }
 
     completeStage(

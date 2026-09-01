@@ -30,6 +30,14 @@ import {
 
 import DecisionBadge from "@/shared/components/DecisionBadge";
 
+import {
+  usePersonalStrategyOneBot,
+} from "@/modules/strategies/hooks/useStrategies";
+
+import type {
+  PersonalOpportunityCandidateConversion,
+} from "@/modules/strategies/types/PersonalStrategyOneBot";
+
 import MetricBar from "@/shared/components/MetricBar";
 
 import ScoreBadge from "@/shared/components/ScoreBadge";
@@ -66,6 +74,9 @@ export default function Arbitrage() {
   const nearMissQuery =
     useOpportunityNearMissAnalytics();
 
+  const personalBotQuery =
+    usePersonalStrategyOneBot();
+
   const [
     search,
     setSearch,
@@ -99,6 +110,40 @@ export default function Arbitrage() {
 
   const nearMissReport =
     nearMissQuery.data?.data;
+
+  const paperCandidateByRoute =
+    useMemo(
+      () =>
+        new Map(
+          (
+            personalBotQuery
+              .data
+              ?.data
+              .conversion
+              .currentCandidates ??
+            []
+          )
+            .map(
+              (
+                candidate,
+              ) => [
+                paperRouteKey(
+                  candidate.market,
+                  candidate.buyExchange,
+                  candidate.sellExchange,
+                ),
+                candidate,
+              ] as const,
+            ),
+        ),
+      [
+        personalBotQuery
+          .data
+          ?.data
+          .conversion
+          .currentCandidates,
+      ],
+    );
 
   const filteredOpportunities =
     useMemo(
@@ -497,6 +542,18 @@ export default function Arbitrage() {
                               opportunity.decision
                             }
                             scope="ANALYTICAL"
+                            analyticalStatus={
+                              paperCandidateStatus(
+                                paperCandidateByRoute
+                                  .get(
+                                    paperRouteKey(
+                                      opportunity.market,
+                                      opportunity.buyExchange,
+                                      opportunity.sellExchange,
+                                    ),
+                                  ),
+                              )
+                            }
                           />
                         </TableCell>
 
@@ -618,6 +675,18 @@ export default function Arbitrage() {
             opportunity={
               selectedOpportunity
             }
+            analyticalStatus={
+              paperCandidateStatus(
+                paperCandidateByRoute
+                  .get(
+                    paperRouteKey(
+                      selectedOpportunity.market,
+                      selectedOpportunity.buyExchange,
+                      selectedOpportunity.sellExchange,
+                    ),
+                  ),
+              )
+            }
           />
 
           <OpportunityLastLookPanel
@@ -637,10 +706,133 @@ export default function Arbitrage() {
   );
 }
 
+function paperRouteKey(
+  market:
+    string,
+  buyExchange:
+    string,
+  sellExchange:
+    string,
+): string {
+  return `${market.trim().toUpperCase()}|${buyExchange.trim().toLowerCase()}|${sellExchange.trim().toLowerCase()}`;
+}
+
+function paperCandidateStatus(
+  candidate:
+    PersonalOpportunityCandidateConversion |
+    undefined,
+) {
+  if (
+    !candidate
+  ) {
+    return {
+      state:
+        "CHECKING" as const,
+      label:
+        "ENGINE PASS · PAPER CHECKING",
+      reason:
+        "The analytical opportunity passed. PAPER persistence and exact execution gates are still being synchronized.",
+    };
+  }
+
+  if (
+    candidate.selectableForPaper
+  ) {
+    return {
+      state:
+        "READY" as const,
+      label:
+        "PAPER READY",
+      reason:
+        candidate.reason,
+    };
+  }
+
+  const firstFailure =
+    candidate.failedCheckDetails[0];
+  const blocker =
+    candidate.failedChecks[0] ??
+    candidate.currentStage;
+
+  return {
+    state:
+      "WAITING" as const,
+    label:
+      `PAPER WAIT · ${paperBlockerLabel(
+        blocker,
+      )}`,
+    reason:
+      firstFailure
+        ? `${candidate.reason} ${firstFailure.reason}`
+        : candidate.reason,
+  };
+}
+
+function paperBlockerLabel(
+  blocker:
+    string,
+): string {
+  const normalized =
+    blocker
+      .trim()
+      .toLowerCase();
+
+  if (
+    normalized.includes(
+      "fresh",
+    )
+  ) {
+    return "BOOK SYNC";
+  }
+
+  if (
+    normalized.includes(
+      "liquid",
+    )
+  ) {
+    return "DEPTH";
+  }
+
+  if (
+    normalized.includes(
+      "profitstability",
+    ) ||
+    normalized.includes(
+      "profit_stability",
+    )
+  ) {
+    return "PROFIT STABILITY";
+  }
+
+  if (
+    normalized.includes(
+      "consecutive",
+    ) ||
+    normalized.includes(
+      "persistence",
+    )
+  ) {
+    return "PERSISTENCE";
+  }
+
+  return normalized
+    .replaceAll(
+      "_",
+      " ",
+    )
+    .toUpperCase();
+}
+
 function OpportunityInspector({
   opportunity,
+  analyticalStatus,
 }: {
   opportunity: Opportunity;
+
+  analyticalStatus:
+    ReturnType<
+      typeof paperCandidateStatus
+    >;
 }) {
   return (
     <section className="rounded-xl border border-border-default bg-panel p-5">
@@ -679,6 +871,9 @@ function OpportunityInspector({
               opportunity.decision
             }
             scope="ANALYTICAL"
+            analyticalStatus={
+              analyticalStatus
+            }
           />
 
           <ScoreBadge

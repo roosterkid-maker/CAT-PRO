@@ -38,6 +38,7 @@ const DETERMINISTIC_TESTS = [
   "automation/tests/testAutomationOpportunitySnapshotHandoff.js",
   "automation/tests/testAutomationEvidenceRetention.js",
   "automation/tests/testCandidateExecutableQualification.js",
+  "automation/tests/testPaperOpportunityBookRefreshCoordinator.js",
   "automation/tests/testCandidateEvidenceBoundedPersistence.js",
   "automation/tests/testPaperTradingReadinessService.js",
   "workflows/cross-exchange-arbitrage/tests/testUnifiedAutomatedExecutionOrchestrator.js",

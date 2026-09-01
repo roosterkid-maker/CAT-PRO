@@ -31,6 +31,12 @@ export class OpportunityMonitorService {
   private static readonly MAXIMUM_PROCESSED_SNAPSHOT_HISTORY =
     250;
 
+  private static readonly MAXIMUM_RECENT_PROFIT_OBSERVATIONS =
+    32;
+
+  private static readonly RECENT_PROFIT_OBSERVATION_WINDOW_MS =
+    60_000;
+
   private readonly candidates =
     new Map<
       string,
@@ -182,6 +188,20 @@ export class OpportunityMonitorService {
 
         existing.consecutiveDistinctBookObservations =
           0;
+
+        existing.best = {
+          netProfit:
+            opportunity.netProfit,
+          netProfitPercent:
+            opportunity.netProfitPercent,
+          observedAt:
+            snapshotGeneratedAt,
+          opportunityId:
+            opportunity.id,
+        };
+
+        existing.recentNetProfitObservations =
+          [];
       }
 
       const distinctBookGeneration =
@@ -228,6 +248,12 @@ export class OpportunityMonitorService {
             0
           ) +
           1;
+
+        this.recordRecentProfitObservation(
+          existing,
+          opportunity,
+          snapshotGeneratedAt,
+        );
       }
 
       existing.missedSnapshots =
@@ -720,6 +746,79 @@ export class OpportunityMonitorService {
         opportunityId:
           opportunity.id,
       },
+
+      recentNetProfitObservations: [
+        this.toRecentProfitObservation(
+          opportunity,
+          observedAt,
+        ),
+      ],
+    };
+  }
+
+  private recordRecentProfitObservation(
+    candidate:
+      MonitoredOpportunityCandidate,
+    opportunity:
+      ArbitrageOpportunity,
+    observedAt:
+      number,
+  ): void {
+    const observations =
+      candidate.recentNetProfitObservations ??
+      [];
+
+    observations.push(
+      this.toRecentProfitObservation(
+        opportunity,
+        observedAt,
+      ),
+    );
+
+    const minimumObservedAt =
+      observedAt -
+      OpportunityMonitorService
+        .RECENT_PROFIT_OBSERVATION_WINDOW_MS;
+
+    while (
+      observations.length >
+        OpportunityMonitorService
+          .MAXIMUM_RECENT_PROFIT_OBSERVATIONS ||
+      (
+        observations.length >
+          1 &&
+        observations[0]!
+          .observedAt <
+          minimumObservedAt
+      )
+    ) {
+      observations.shift();
+    }
+
+    candidate.recentNetProfitObservations =
+      observations;
+  }
+
+  private toRecentProfitObservation(
+    opportunity:
+      ArbitrageOpportunity,
+    observedAt:
+      number,
+  ): NonNullable<
+    MonitoredOpportunityCandidate[
+      "recentNetProfitObservations"
+    ]
+  >[number] {
+    return {
+      netProfitPercent:
+        opportunity.netProfitPercent,
+      observedAt,
+      opportunityId:
+        opportunity.id,
+      buyQuoteTimestamp:
+        opportunity.pair.buy.timestamp,
+      sellQuoteTimestamp:
+        opportunity.pair.sell.timestamp,
     };
   }
 

@@ -382,7 +382,7 @@ export class CandidateQualificationService {
 
         "<=",
 
-        `Profit drawdown from the candidate's best observation must remain at or below ${this.config.maximumProfitDrawdownPercent}%.`,
+        `Profit drawdown from the candidate's rolling synchronized reference must remain at or below ${this.config.maximumProfitDrawdownPercent}%.`,
       );
 
     const checks = {
@@ -1480,10 +1480,59 @@ export class CandidateQualificationService {
     candidate:
       MonitoredOpportunityCandidate,
   ): number {
-    const best =
-      candidate
-        .best
-        .netProfitPercent;
+    const recent =
+      (
+        candidate
+          .recentNetProfitObservations ??
+        []
+      )
+        .map(
+          (
+            observation,
+          ) =>
+            observation.netProfitPercent,
+        )
+        .filter(
+          (
+            value,
+          ) =>
+            Number.isFinite(
+              value,
+            ) &&
+            value >
+              0,
+        )
+        .sort(
+          (
+            first,
+            second,
+          ) =>
+            first -
+            second,
+        );
+
+    /*
+     * Three distinct synchronized generations are enough to stop a single
+     * transient spread spike becoming a permanent session watermark. The
+     * upper quartile remains conservative when the route is genuinely
+     * deteriorating, while still allowing a stable lower plateau to be
+     * evaluated on its own current economics.
+     */
+    const reference =
+      recent.length >=
+        3
+        ? recent[
+            Math.floor(
+              (
+                recent.length -
+                1
+              ) *
+                0.75,
+            )
+          ]!
+        : candidate
+            .best
+            .netProfitPercent;
 
     const latest =
       candidate
@@ -1492,9 +1541,9 @@ export class CandidateQualificationService {
 
     if (
       !Number.isFinite(
-        best,
+        reference,
       ) ||
-      best <=
+      reference <=
         0
     ) {
       return 100;
@@ -1502,7 +1551,7 @@ export class CandidateQualificationService {
 
     if (
       latest >=
-      best
+        reference
     ) {
       return 0;
     }
@@ -1513,10 +1562,10 @@ export class CandidateQualificationService {
 
         (
           (
-            best -
+            reference -
             latest
           ) /
-          best
+          reference
         ) *
           100,
       ),

@@ -90,6 +90,25 @@ export interface MonitoredOpportunityCandidate {
 
     opportunityId: string;
   };
+
+  /**
+   * Bounded, distinct-book profit observations for the current continuous
+   * route episode. Qualification uses this window instead of a permanent
+   * session-high watermark, so one transient top-of-book spike cannot block
+   * every later synchronized generation. Optional for persisted legacy/test
+   * evidence created before the rolling window existed.
+   */
+  recentNetProfitObservations?: Array<{
+    netProfitPercent: number;
+
+    observedAt: number;
+
+    opportunityId: string;
+
+    buyQuoteTimestamp: number;
+
+    sellQuoteTimestamp: number;
+  }>;
 }
 
 export interface OpportunityMonitorDiagnostics {
