@@ -145,7 +145,11 @@ export class BinanceExecutionAdapter
           null,
         );
 
-      await this.safeAudit(() =>
+      // Same reasoning as executionStarted above: don't let a disk write
+      // delay when fill-status polling starts. Lower stakes than the
+      // pre-submission one (polling already runs on a ~1s cadence), but
+      // free to remove for the same reason.
+      void this.safeAudit(() =>
         executionAuditLogger.orderCreated(
           request,
           initialResult,
