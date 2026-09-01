@@ -258,18 +258,31 @@ export class StrategyOneFundedRouteService {
      * number of shared quantity steps required by both venues. It remains
      * bounded by the hard capital cap, fresh synchronized multi-level depth,
      * authenticated balances and any explicit quantity cap. If that stronger
-     * L2 evidence is unavailable, the original top-of-book ceiling remains.
+     * L2 evidence is unavailable, the original top-of-book ceiling remains —
+     * but only when the opportunity snapshot itself is still within the same
+     * dispatch-reserved freshness budget the multi-level path enforces via
+     * buyBookAgeMs/sellBookAgeMs/bookSkewMs. Without this, a stale snapshot's
+     * buyAvailableQty/sellAvailableQty/availableExecutableQty could size the
+     * minimum-order cushion off top-of-book depth that no longer exists.
      */
+    const opportunitySnapshotAgeMs = Number.isFinite(opportunity.timestamp)
+      ? now - opportunity.timestamp
+      : null;
+    const opportunitySnapshotIsFresh =
+      opportunitySnapshotAgeMs !== null &&
+      opportunitySnapshotAgeMs >= 0 &&
+      opportunitySnapshotAgeMs <= STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS &&
+      opportunity.quotesAreFresh !== false;
     const availableDepthInputs = [
       opportunity.availableExecutableQty,
       opportunity.buyAvailableQty,
       opportunity.sellAvailableQty,
     ];
-    const topOfBookAvailableDepthQuantity = availableDepthInputs.every(
-      (quantity) => Number.isFinite(quantity) && quantity > 0,
-    )
-      ? Math.min(...availableDepthInputs)
-      : null;
+    const topOfBookAvailableDepthQuantity =
+      opportunitySnapshotIsFresh &&
+      availableDepthInputs.every((quantity) => Number.isFinite(quantity) && quantity > 0)
+        ? Math.min(...availableDepthInputs)
+        : null;
     const multiLevelDepthEvidence =
       fundingBoundary === "AUTHENTICATED_LIVE_READINESS" &&
       minimumOrderCushionPolicyEnabled
