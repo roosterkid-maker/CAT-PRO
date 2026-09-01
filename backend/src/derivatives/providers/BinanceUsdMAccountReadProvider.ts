@@ -175,7 +175,16 @@ function normalizeBinancePositions(
   }
   const matching = records.filter((item) => symbol(item.symbol) === market);
   if (matching.length === 0) {
-    throw new Error(`Binance USD-M position evidence is missing for ${market}.`);
+    // Binance's own positionRisk behavior varies by account configuration
+    // (confirmed live: a Multi-Assets Margin account can omit a symbol from
+    // the response entirely — even from the unfiltered all-symbols call —
+    // once it has zero open exposure there, rather than returning a
+    // positionAmt=0 placeholder row the way a standard account does).
+    // Treating that omission as "evidence missing" made every genuinely
+    // flat account permanently DERIVATIVE_EVIDENCE_BLOCKED — indistinguishable
+    // from a real API failure. No row for the symbol is itself the evidence
+    // of a flat (zero) position; synthesize one rather than erroring.
+    return [positionEvidence(market, 0, "FLAT", {}, now)];
   }
   const long = matching.find((item) => symbol(item.positionSide) === "LONG");
   const short = matching.find((item) => symbol(item.positionSide) === "SHORT");
