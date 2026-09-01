@@ -44,6 +44,7 @@ import {
 } from "../../trading/services/PostGuardProfitValidationLedgerService";
 
 import {
+  PAPER_CAPITAL_SAFETY_ENVELOPE,
   paperCapitalConfigurationService,
 } from "../../trading/capital/PaperCapitalConfigurationService";
 
@@ -77,13 +78,18 @@ const DEFAULT_CONFIG:
   maximumCandidatesConsidered:
     20,
 
+  minimumCapitalPerTrade:
+    PAPER_CAPITAL_SAFETY_ENVELOPE
+      .minimumCapitalPerTrade,
+
   /*
    * This remains a hard scheduler ceiling.
    *
    * Version 16.3 may allocate LESS.
    */
   maximumCapitalPerTrade:
-    1_000,
+    PAPER_CAPITAL_SAFETY_ENVELOPE
+      .maximumCapitalPerTrade,
 
   maximumBatchCapital:
     3_000,
@@ -810,13 +816,14 @@ export class MultiOpportunityPaperSchedulerService {
           );
 
         if (
-          capital <=
-          0
+          capital <
+          this.config
+            .minimumCapitalPerTrade
         ) {
           skipped.push(
             this.toSkipped(
               qualification,
-              "Adaptive allocation left no usable batch capital.",
+              `Adaptive allocation is below the ${this.config.minimumCapitalPerTrade} minimum PAPER capital per trade.`,
             ),
           );
 
@@ -1619,6 +1626,21 @@ export class MultiOpportunityPaperSchedulerService {
     if (
       !Number.isFinite(
         this.config
+          .minimumCapitalPerTrade,
+      ) ||
+      this.config
+        .minimumCapitalPerTrade <
+        PAPER_CAPITAL_SAFETY_ENVELOPE
+          .minimumCapitalPerTrade
+    ) {
+      throw new Error(
+        `minimumCapitalPerTrade cannot be below ${PAPER_CAPITAL_SAFETY_ENVELOPE.minimumCapitalPerTrade}.`,
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        this.config
           .maximumCapitalPerTrade,
       ) ||
       this.config
@@ -1627,6 +1649,28 @@ export class MultiOpportunityPaperSchedulerService {
     ) {
       throw new Error(
         "maximumCapitalPerTrade must be positive.",
+      );
+    }
+
+    if (
+      this.config
+        .maximumCapitalPerTrade >
+      PAPER_CAPITAL_SAFETY_ENVELOPE
+        .maximumCapitalPerTrade
+    ) {
+      throw new Error(
+        `maximumCapitalPerTrade cannot exceed ${PAPER_CAPITAL_SAFETY_ENVELOPE.maximumCapitalPerTrade}.`,
+      );
+    }
+
+    if (
+      this.config
+        .maximumCapitalPerTrade <
+      this.config
+        .minimumCapitalPerTrade
+    ) {
+      throw new Error(
+        "maximumCapitalPerTrade must be at least minimumCapitalPerTrade.",
       );
     }
 
@@ -1717,6 +1761,9 @@ export const multiOpportunityPaperSchedulerService =
       return {
         maximumExecutionsPerBatch:
           configuration.maximumExecutionsPerBatch,
+
+        minimumCapitalPerTrade:
+          configuration.minimumCapitalPerTrade,
 
         maximumCapitalPerTrade:
           configuration.maximumCapitalPerTrade,

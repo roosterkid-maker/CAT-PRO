@@ -3,10 +3,15 @@ interface DecisionBadgeProps {
     | "EXECUTE"
     | "REVIEW"
     | "SKIP";
+
+  scope?:
+    | "DEFAULT"
+    | "ANALYTICAL";
 }
 
 export default function DecisionBadge({
   decision,
+  scope = "DEFAULT",
 }: DecisionBadgeProps) {
   const styles = {
     EXECUTE:
@@ -27,13 +32,31 @@ export default function DecisionBadge({
     SKIP: "🔴",
   };
 
+  const label =
+    scope === "ANALYTICAL" &&
+    decision === "EXECUTE"
+      ? "ENGINE EXECUTE · NO ORDER"
+      : decision;
+
+  const style =
+    scope === "ANALYTICAL" &&
+    decision === "EXECUTE"
+      ? "bg-brand/15 text-brand border-brand/30"
+      : styles[decision];
+
+  const icon =
+    scope === "ANALYTICAL" &&
+    decision === "EXECUTE"
+      ? "◉"
+      : icons[decision];
+
   return (
     <div
-      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1 text-sm font-semibold ${styles[decision]}`}
+      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1 text-sm font-semibold ${style}`}
     >
-      <span>{icons[decision]}</span>
+      <span>{icon}</span>
 
-      <span>{decision}</span>
+      <span>{label}</span>
     </div>
   );
 }

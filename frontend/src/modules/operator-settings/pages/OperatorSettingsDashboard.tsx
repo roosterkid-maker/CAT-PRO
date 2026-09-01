@@ -1479,6 +1479,8 @@ function PaperCapitalConfigurationCard({
           <CapitalInput
             label="Minimum / trade"
             value={form.minimumCapitalPerTrade}
+            min={100}
+            max={1_000}
             onChange={
               (
                 value,
@@ -1494,6 +1496,8 @@ function PaperCapitalConfigurationCard({
           <CapitalInput
             label="Maximum / trade"
             value={form.maximumCapitalPerTrade}
+            min={100}
+            max={1_000}
             onChange={
               (
                 value,
@@ -1503,7 +1507,7 @@ function PaperCapitalConfigurationCard({
                   value,
                 )
             }
-            detail="Effective automation ceiling"
+            detail="Hard safety ceiling ₹1,000"
           />
 
           <CapitalInput
@@ -1646,6 +1650,8 @@ function CapitalInput({
   detail,
   onChange,
   prefix = "₹",
+  min = 1,
+  max,
 }: {
   label: string;
   value: string;
@@ -1655,6 +1661,8 @@ function CapitalInput({
       string,
   ) => void;
   prefix?: string;
+  min?: number;
+  max?: number;
 }) {
   return (
     <label className="rounded-lg border border-border-default bg-panel-light/35 p-3">
@@ -1675,7 +1683,8 @@ function CapitalInput({
 
         <input
           type="number"
-          min="1"
+          min={min}
+          max={max}
           step="1"
           value={
             value

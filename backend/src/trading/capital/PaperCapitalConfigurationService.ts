@@ -9,6 +9,14 @@ import {
 export const PAPER_CAPITAL_UPDATE_CONFIRMATION =
   "UPDATE_PAPER_CAPITAL_CONFIGURATION";
 
+export const PAPER_CAPITAL_SAFETY_ENVELOPE = {
+  minimumCapitalPerTrade:
+    100,
+
+  maximumCapitalPerTrade:
+    1_000,
+} as const;
+
 export interface PaperCapitalConfigurationValues {
   capitalBudgetInr: number;
 
@@ -293,10 +301,21 @@ function validateValues(
 
   if (
     values.minimumCapitalPerTrade <
-      100
+      PAPER_CAPITAL_SAFETY_ENVELOPE
+        .minimumCapitalPerTrade
   ) {
     throw new Error(
       "Minimum PAPER capital per trade cannot be below ₹100.",
+    );
+  }
+
+  if (
+    values.maximumCapitalPerTrade >
+      PAPER_CAPITAL_SAFETY_ENVELOPE
+        .maximumCapitalPerTrade
+  ) {
+    throw new Error(
+      "Maximum PAPER capital per trade cannot exceed ₹1,000.",
     );
   }
 

@@ -725,6 +725,9 @@ export interface PersonalOpportunityCandidateConversion {
   modeledNetProfitInr: number | null;
   economicEvidence: "FULL_DEPTH_VALIDATION" | "CURRENT_OPPORTUNITY" | "UNAVAILABLE";
   queuePriorityScore: number | null;
+  paperSelectionState: "SELECTABLE" | "NOT_AUTHORIZED";
+  consecutiveObservations: number;
+  persistenceMs: number;
   currentStage: PersonalOpportunityConversionStageKey;
   qualificationStatus: "NOT_OBSERVED" | "OBSERVING" | "QUALIFIED" | "REJECTED" | "EXPIRED";
   queueStatus: "READY" | "EXPIRED" | "CANCELLED" | "REMOVED" | "CONSUMED" | null;
@@ -735,6 +738,12 @@ export interface PersonalOpportunityCandidateConversion {
   paperAdmissionAllowed: boolean;
   selectableForPaper: boolean;
   failedChecks: string[];
+  failedCheckDetails: Array<{
+    check: string;
+    reason: string;
+    currentValue: number | string | boolean;
+    requiredValue: number | string | boolean;
+  }>;
   reason: string;
 }
 

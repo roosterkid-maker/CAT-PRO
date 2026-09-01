@@ -673,7 +673,7 @@ function createPaperController(): AutomatedPaperExecutionControllerDiagnostics {
     paperExecutionAllowed: true, liveExecutionAllowed: false,
     armingAuthority: "PERSISTED_DASHBOARD_CONTROL",
     confirmationVariable: null,
-    config: {maximumCapitalPerTrade: 1_000, minimumNetProfitPercent: 0.1, maximumSnapshotAgeMs: 5_000,
+    config: {minimumCapitalPerTrade: 100, maximumCapitalPerTrade: 1_000, minimumNetProfitPercent: 0.1, maximumSnapshotAgeMs: 5_000,
       routeCooldownMs: 1_000, maximumHistory: 100}, runningCycle: false, totalCycles: 10,
     blockedReadiness: 0, blockedNotArmed: 0, accountBlocked: 0, noCandidate: 4, executionAttempts: 6,
     executed: 6, executionRejected: 0, attemptedCandidateGenerations: 6, lastCycleAt: NOW,

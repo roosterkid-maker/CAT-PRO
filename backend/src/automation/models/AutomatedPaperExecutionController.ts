@@ -84,6 +84,8 @@ export interface AutomatedPaperControllerCycleResult {
 }
 
 export interface AutomatedPaperExecutionControllerConfig {
+  minimumCapitalPerTrade: number;
+
   maximumCapitalPerTrade: number;
 
   minimumNetProfitPercent: number;

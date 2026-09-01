@@ -78,6 +78,9 @@ export interface PersonalOpportunityCandidateConversion {
   modeledNetProfitInr: number | null;
   economicEvidence: "FULL_DEPTH_VALIDATION" | "CURRENT_OPPORTUNITY" | "UNAVAILABLE";
   queuePriorityScore: number | null;
+  paperSelectionState: "SELECTABLE" | "NOT_AUTHORIZED";
+  consecutiveObservations: number;
+  persistenceMs: number;
   currentStage: PersonalOpportunityConversionStageKey;
   qualificationStatus: "NOT_OBSERVED" | "OBSERVING" | "QUALIFIED" | "REJECTED" | "EXPIRED";
   queueStatus: "READY" | "EXPIRED" | "CANCELLED" | "REMOVED" | "CONSUMED" | null;
@@ -88,6 +91,12 @@ export interface PersonalOpportunityCandidateConversion {
   paperAdmissionAllowed: boolean;
   selectableForPaper: boolean;
   failedChecks: readonly string[];
+  failedCheckDetails: ReadonlyArray<{
+    check: string;
+    reason: string;
+    currentValue: number | string | boolean;
+    requiredValue: number | string | boolean;
+  }>;
   reason: string;
 }
 
@@ -518,15 +527,34 @@ export class PersonalOpportunityConversionService {
     const queueItem = input.queue.items.find((item) => item.candidateKey === candidateKey) ?? null;
     const profitRoute = input.profitValidation.routes.find((item) => item.routeKey === profitRouteKey) ?? null;
     const economics = resolveModeledEconomics(opportunity, qualification);
-    const failedChecks = qualification
-      ? Object.entries(qualification.checks).filter(([, check]) => !check.passed).map(([check]) => check)
+    const failedCheckDetails = qualification
+      ? Object.entries(qualification.checks)
+        .filter(([, check]) => !check.passed)
+        .map(([check, evidence]) => ({
+          check,
+          reason: evidence.reason,
+          currentValue: evidence.currentValue,
+          requiredValue: evidence.requiredValue,
+        }))
       : [];
+    const failedChecks = failedCheckDetails.map((failure) => failure.check);
+    const waitingOnPersistence = qualification?.status === "OBSERVING" || (
+      failedChecks.length > 0 &&
+      failedChecks.every((check) => ["active", "consecutiveObservations", "persistence"].includes(check))
+    );
+    const selectableForPaper =
+      opportunity.decision === "EXECUTE" &&
+      qualification?.qualified === true &&
+      queueItem?.status === "READY" &&
+      (profitRoute?.paperAdmissionAllowed ?? true);
     const currentStage: PersonalOpportunityConversionStageKey = queueItem?.status === "READY"
       ? "CENTRAL_QUEUE"
       : qualification?.qualified
         ? "CANDIDATE_QUALIFICATION"
         : qualification
-          ? "PERSISTENCE_MONITOR"
+          ? waitingOnPersistence
+            ? "PERSISTENCE_MONITOR"
+            : "CANDIDATE_QUALIFICATION"
           : opportunity.decision === "EXECUTE"
             ? "PROFIT_QUALIFICATION"
             : "ENGINE_ACCEPTANCE";
@@ -536,7 +564,11 @@ export class PersonalOpportunityConversionService {
         ? "Candidate is READY for the central Strategy #1 execution owner."
         : qualification?.qualified
           ? "Candidate passed qualification and is awaiting/has completed queue handoff."
-          : qualification?.reasons[0]
+          : failedCheckDetails.length > 0
+            ? failedCheckDetails
+              .map((failure) => `${failure.check}: ${failure.reason}`)
+              .join(" | ")
+            : qualification?.reasons[0]
             ?? opportunity.analysisSummary[0]
             ?? "Accepted engine opportunity is awaiting persistence evidence.";
 
@@ -556,6 +588,9 @@ export class PersonalOpportunityConversionService {
       modeledNetProfitInr: economics.netProfitInr,
       economicEvidence: economics.source,
       queuePriorityScore: queueItem?.priorityScore ?? null,
+      paperSelectionState: selectableForPaper ? "SELECTABLE" : "NOT_AUTHORIZED",
+      consecutiveObservations: qualification?.candidate.consecutiveObservations ?? 0,
+      persistenceMs: qualification?.candidate.lifetimeMs ?? 0,
       currentStage,
       qualificationStatus: qualification?.status ?? "NOT_OBSERVED",
       queueStatus: queueItem?.status ?? null,
@@ -564,12 +599,9 @@ export class PersonalOpportunityConversionService {
       routeExpectancyInr: profitRoute?.metrics.expectancyPerTrade ?? null,
       routeAverageNetReturnPercent: profitRoute?.metrics.averageNetReturnPercent ?? null,
       paperAdmissionAllowed: profitRoute?.paperAdmissionAllowed ?? true,
-      selectableForPaper:
-        opportunity.decision === "EXECUTE" &&
-        qualification?.qualified === true &&
-        queueItem?.status === "READY" &&
-        (profitRoute?.paperAdmissionAllowed ?? true),
+      selectableForPaper,
       failedChecks,
+      failedCheckDetails,
       reason,
     };
   }

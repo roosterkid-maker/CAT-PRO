@@ -52,6 +52,7 @@ import {
 } from "../../strategies/services/PersonalBotRuntimeControlService";
 
 import {
+  PAPER_CAPITAL_SAFETY_ENVELOPE,
   paperCapitalConfigurationService,
 } from "../../trading/capital/PaperCapitalConfigurationService";
 
@@ -65,8 +66,13 @@ import {
 
 const DEFAULT_CONFIG:
   AutomatedPaperExecutionControllerConfig = {
+  minimumCapitalPerTrade:
+    PAPER_CAPITAL_SAFETY_ENVELOPE
+      .minimumCapitalPerTrade,
+
   maximumCapitalPerTrade:
-    1_000,
+    PAPER_CAPITAL_SAFETY_ENVELOPE
+      .maximumCapitalPerTrade,
 
   minimumNetProfitPercent:
     PROFIT_TIER_POLICY.qualificationMinimumNetProfitPercent,
@@ -1353,6 +1359,16 @@ export class AutomatedPaperExecutionControllerService {
       }
 
       if (
+        requestedCapitalOverride <
+        this.config
+          .minimumCapitalPerTrade
+      ) {
+        reasons.push(
+          `Minimum automated PAPER capital per trade is ${this.config.minimumCapitalPerTrade}.`,
+        );
+      }
+
+      if (
         requestedCapitalOverride >
         this.config
           .maximumCapitalPerTrade
@@ -1410,15 +1426,16 @@ export class AutomatedPaperExecutionControllerService {
       !Number.isFinite(
         capital,
       ) ||
-      capital <=
-        0
+      capital <
+        this.config
+          .minimumCapitalPerTrade
     ) {
       return {
         capital:
           0,
 
         reasons: [
-          "No positive PAPER capital is available for automated execution.",
+          `At least ${this.config.minimumCapitalPerTrade} PAPER capital is required for automated execution.`,
         ],
       };
     }
@@ -1700,6 +1717,21 @@ export class AutomatedPaperExecutionControllerService {
     if (
       !Number.isFinite(
         this.config
+          .minimumCapitalPerTrade,
+      ) ||
+      this.config
+        .minimumCapitalPerTrade <
+        PAPER_CAPITAL_SAFETY_ENVELOPE
+          .minimumCapitalPerTrade
+    ) {
+      throw new Error(
+        `Paper controller minimumCapitalPerTrade cannot be below ${PAPER_CAPITAL_SAFETY_ENVELOPE.minimumCapitalPerTrade}.`,
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        this.config
           .maximumCapitalPerTrade,
       ) ||
       this.config
@@ -1708,6 +1740,28 @@ export class AutomatedPaperExecutionControllerService {
     ) {
       throw new Error(
         "Paper controller maximumCapitalPerTrade must be positive.",
+      );
+    }
+
+    if (
+      this.config
+        .maximumCapitalPerTrade >
+      PAPER_CAPITAL_SAFETY_ENVELOPE
+        .maximumCapitalPerTrade
+    ) {
+      throw new Error(
+        `Paper controller maximumCapitalPerTrade cannot exceed ${PAPER_CAPITAL_SAFETY_ENVELOPE.maximumCapitalPerTrade}.`,
+      );
+    }
+
+    if (
+      this.config
+        .maximumCapitalPerTrade <
+      this.config
+        .minimumCapitalPerTrade
+    ) {
+      throw new Error(
+        "Paper controller maximumCapitalPerTrade must be at least minimumCapitalPerTrade.",
       );
     }
 
@@ -1780,6 +1834,11 @@ export const automatedPaperExecutionControllerService =
           .paper;
 
       return {
+        minimumCapitalPerTrade:
+          paperCapitalConfigurationService
+            .getConfiguration()
+            .minimumCapitalPerTrade,
+
         maximumCapitalPerTrade:
           paperCapitalConfigurationService
             .getConfiguration()

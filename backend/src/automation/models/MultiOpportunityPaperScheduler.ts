@@ -98,6 +98,8 @@ export interface MultiOpportunityPaperSchedulerConfig {
 
   maximumCandidatesConsidered: number;
 
+  minimumCapitalPerTrade: number;
+
   maximumCapitalPerTrade: number;
 
   maximumBatchCapital: number;

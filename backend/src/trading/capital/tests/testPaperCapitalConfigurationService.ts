@@ -113,17 +113,58 @@ try {
       service.updateConfiguration(
         {
           capitalBudgetInr:
-            1_000,
+            50_000,
           minimumCapitalPerTrade:
             100,
           maximumCapitalPerTrade:
-            1_500,
+            1_001,
           capitalStep:
             100,
           maximumExecutionsPerBatch:
             2,
           maximumBatchCapital:
-            1_000,
+            2_000,
+        },
+        PAPER_CAPITAL_UPDATE_CONFIRMATION,
+        2_000,
+      ),
+    /cannot exceed ₹1,000/,
+  );
+
+  assert.throws(
+    () =>
+      new AutomatedPaperExecutionControllerService({
+        maximumCapitalPerTrade:
+          1_001,
+      }),
+    /cannot exceed 1000/,
+  );
+
+  assert.throws(
+    () =>
+      new MultiOpportunityPaperSchedulerService({
+        minimumCapitalPerTrade:
+          99,
+      }),
+    /cannot be below 100/,
+  );
+
+  assert.throws(
+    () =>
+      service.updateConfiguration(
+        {
+          capitalBudgetInr:
+            800,
+          minimumCapitalPerTrade:
+            100,
+          maximumCapitalPerTrade:
+            900,
+          capitalStep:
+            100,
+          maximumExecutionsPerBatch:
+            2,
+          maximumBatchCapital:
+            900,
         },
         PAPER_CAPITAL_UPDATE_CONFIRMATION,
         2_000,
@@ -139,13 +180,13 @@ try {
         minimumCapitalPerTrade:
           200,
         maximumCapitalPerTrade:
-          1_500,
+          1_000,
         capitalStep:
           100,
         maximumExecutionsPerBatch:
           2,
         maximumBatchCapital:
-          3_000,
+          2_000,
       },
       PAPER_CAPITAL_UPDATE_CONFIRMATION,
       3_000,
@@ -192,6 +233,8 @@ try {
       () => ({
         maximumExecutionsPerBatch:
           service.getConfiguration().maximumExecutionsPerBatch,
+        minimumCapitalPerTrade:
+          service.getConfiguration().minimumCapitalPerTrade,
         maximumCapitalPerTrade:
           service.getConfiguration().maximumCapitalPerTrade,
         maximumBatchCapital:
@@ -203,6 +246,8 @@ try {
     new AutomatedPaperExecutionControllerService(
       {},
       () => ({
+        minimumCapitalPerTrade:
+          service.getConfiguration().minimumCapitalPerTrade,
         maximumCapitalPerTrade:
           service.getConfiguration().maximumCapitalPerTrade,
       }),
@@ -218,11 +263,19 @@ try {
   );
   assert.equal(
     scheduler.getDiagnostics().config.maximumBatchCapital,
-    3_000,
+    2_000,
   );
   assert.equal(
     controller.getDiagnostics().config.maximumCapitalPerTrade,
-    1_500,
+    1_000,
+  );
+  assert.equal(
+    scheduler.getDiagnostics().config.minimumCapitalPerTrade,
+    200,
+  );
+  assert.equal(
+    controller.getDiagnostics().config.minimumCapitalPerTrade,
+    200,
   );
 
   service.updateConfiguration(

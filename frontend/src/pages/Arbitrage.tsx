@@ -496,6 +496,7 @@ export default function Arbitrage() {
                             decision={
                               opportunity.decision
                             }
+                            scope="ANALYTICAL"
                           />
                         </TableCell>
 
@@ -677,6 +678,7 @@ function OpportunityInspector({
             decision={
               opportunity.decision
             }
+            scope="ANALYTICAL"
           />
 
           <ScoreBadge

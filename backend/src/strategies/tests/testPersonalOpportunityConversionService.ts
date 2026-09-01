@@ -62,7 +62,11 @@ function verifyQualificationBottleneck(): void {
   assert.equal(report.primaryBottleneck?.code, "LIQUIDITY");
   assert.equal(report.currentCandidates[0]?.qualificationStatus, "REJECTED");
   assert.ok(report.currentCandidates[0]?.failedChecks.includes("liquidity"));
-  assert.equal(report.currentCandidates[0]?.currentStage, "PERSISTENCE_MONITOR");
+  assert.equal(report.currentCandidates[0]?.failedCheckDetails[0]?.reason, "Liquidity failed.");
+  assert.equal(report.currentCandidates[0]?.currentStage, "CANDIDATE_QUALIFICATION");
+  assert.equal(report.currentCandidates[0]?.paperSelectionState, "NOT_AUTHORIZED");
+  assert.equal(report.currentCandidates[0]?.consecutiveObservations, 5);
+  assert.equal(report.currentCandidates[0]?.persistenceMs, 10_000);
 }
 
 function verifySuccessfulConversionTrace(): void {
@@ -99,6 +103,7 @@ function verifySuccessfulConversionTrace(): void {
   assert.equal(report.currentCandidates[0]?.modeledCapitalInr, 100);
   assert.equal(report.currentCandidates[0]?.modeledNetProfitInr, 0.8);
   assert.equal(report.currentCandidates[0]?.selectableForPaper, true);
+  assert.equal(report.currentCandidates[0]?.paperSelectionState, "SELECTABLE");
   assert.equal(report.arbitration.paperWinnerCandidateKey, "BTCUSDT|coindcx|binance");
   assert.equal(report.stages.find((stage) => stage.key === "POST_GUARD_SETTLEMENT")?.status, "PASSED");
 }
@@ -474,7 +479,7 @@ function createController(): AutomatedPaperExecutionControllerDiagnostics {
     liveExecutionAllowed: false,
     armingAuthority: "PERSISTED_DASHBOARD_CONTROL",
     confirmationVariable: null,
-    config: {maximumCapitalPerTrade: 1_000, minimumNetProfitPercent: 0.2, maximumSnapshotAgeMs: 5_000, routeCooldownMs: 1_000, maximumHistory: 100},
+    config: {minimumCapitalPerTrade: 100, maximumCapitalPerTrade: 1_000, minimumNetProfitPercent: 0.2, maximumSnapshotAgeMs: 5_000, routeCooldownMs: 1_000, maximumHistory: 100},
     runningCycle: false,
     totalCycles: 0,
     blockedReadiness: 0,
