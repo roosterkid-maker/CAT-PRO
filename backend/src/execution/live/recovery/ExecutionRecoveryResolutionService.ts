@@ -746,13 +746,19 @@ export class ExecutionRecoveryResolutionService {
     quantity:
       number,
   ): number {
+    // Every other "is this position balanced?" check in this module
+    // (ExecutionRecoveryEngine, StrategyOneTwoLegRecoveryResolutionService,
+    // StrategyOneResidualRecoveryAssistantService/ExecutionService) uses
+    // Math.max(1e-12, quantity * 1e-9). This service must agree - a
+    // looser tolerance here could accept an imbalance as "balanced" that
+    // every sibling recovery path would still flag as a real residual.
     return Math.max(
-      1e-10,
+      1e-12,
 
       Math.abs(
         quantity,
       ) *
-        1e-8,
+        1e-9,
     );
   }
 

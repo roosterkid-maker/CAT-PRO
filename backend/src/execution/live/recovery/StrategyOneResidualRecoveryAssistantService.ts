@@ -1457,12 +1457,9 @@ function validateOneTimeLossAuthorization(
     return null;
   }
 
-  const baseAsset =
-    market.endsWith("USDT")
-      ? market.slice(0, -4)
-      : market;
+  const {baseAsset, quoteAsset} = splitMarketAssets(market);
   const expected =
-    `APPROVE ONE-TIME ${baseAsset} RECOVERY ${side} ${formatApprovalNumber(exactQuantity)} MAX LOSS ${requested.maximumLossQuote.toFixed(2)} USDT`;
+    `APPROVE ONE-TIME ${baseAsset} RECOVERY ${side} ${formatApprovalNumber(exactQuantity)} MAX LOSS ${requested.maximumLossQuote.toFixed(2)} ${quoteAsset}`;
 
   if (requested.confirmation.trim() !== expected) {
     blockers.push(
@@ -1480,6 +1477,34 @@ function validateOneTimeLossAuthorization(
         ? requested.authorizedAt as number
         : now,
   });
+}
+
+// The one-time operator loss-authorization phrase must name the exact asset
+// and quote unit being risked - a USDT-only assumption here would print
+// (and require the operator to type back) a wrong base asset and a
+// misleading currency unit for any non-USDT-quote market.
+const KNOWN_QUOTE_ASSETS = [
+  "USDT",
+  "USDC",
+  "BUSD",
+  "INR",
+  "BTC",
+  "ETH",
+];
+
+function splitMarketAssets(
+  market: string,
+): {baseAsset: string; quoteAsset: string} {
+  for (const quoteAsset of KNOWN_QUOTE_ASSETS) {
+    if (market.endsWith(quoteAsset) && market.length > quoteAsset.length) {
+      return {
+        baseAsset: market.slice(0, -quoteAsset.length),
+        quoteAsset,
+      };
+    }
+  }
+
+  return {baseAsset: market, quoteAsset: "QUOTE"};
 }
 
 function formatApprovalNumber(value: number): string {

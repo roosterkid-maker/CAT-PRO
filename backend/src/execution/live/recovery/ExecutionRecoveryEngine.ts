@@ -3,6 +3,14 @@ import {
 } from "node:crypto";
 
 import {
+  resolve,
+} from "node:path";
+
+import {
+  JsonlSnapshotStore,
+} from "../../../core/persistence/JsonlSnapshotStore";
+
+import {
   liveExecutionCoordinator,
 } from "../coordinator/LiveExecutionCoordinator";
 
@@ -32,9 +40,57 @@ import type {
   ExecutionRecoveryDiagnostics,
   ExecutionRecoveryEvaluation,
   ExecutionRecoveryIncident,
+  ExecutionRecoveryIncidentStatus,
   ExecutionRecoverySeverity,
   ExecutionRecoveryStrategy,
 } from "./ExecutionRecoveryRecord";
+
+const DEFAULT_FILE =
+  resolve(
+    process.cwd(),
+    "logs",
+    "live",
+    "execution-recovery-incidents.jsonl",
+  );
+
+const INCIDENT_STATUSES:
+  readonly ExecutionRecoveryIncidentStatus[] = [
+    "OPEN",
+    "ACKNOWLEDGED",
+    "RESOLVED",
+  ];
+
+function isIncidentRecord(
+  value: unknown,
+): value is ExecutionRecoveryIncident {
+  if (
+    typeof value !==
+      "object" ||
+    value ===
+      null
+  ) {
+    return false;
+  }
+
+  const item =
+    value as Partial<ExecutionRecoveryIncident>;
+
+  return typeof item.id ===
+      "string" &&
+    item.id.length >
+      0 &&
+    typeof item.sessionId ===
+      "string" &&
+    INCIDENT_STATUSES.includes(
+      item.status as ExecutionRecoveryIncidentStatus,
+    ) &&
+    Number.isSafeInteger(
+      item.createdAt,
+    ) &&
+    Number.isSafeInteger(
+      item.updatedAt,
+    );
+}
 
 export class ExecutionRecoveryEngine {
   private static readonly SCAN_INTERVAL_MS =
@@ -49,6 +105,14 @@ export class ExecutionRecoveryEngine {
   private static readonly MAXIMUM_HISTORY =
     250;
 
+  private static readonly SEVERITY_RANK: Readonly<
+    Record<ExecutionRecoverySeverity, number>
+  > = {
+    INFO: 0,
+    WARNING: 1,
+    CRITICAL: 2,
+  };
+
   private readonly incidents =
     new Map<
       string,
@@ -60,6 +124,15 @@ export class ExecutionRecoveryEngine {
       string,
       string
     >();
+
+  // Durable, delta-per-mutation journal for incidents. Every sibling
+  // recovery service in this directory uses JsonlSnapshotStore precisely
+  // because liveExecutionCoordinator's in-memory session state does not
+  // survive a restart - without this, every incident/severity/
+  // acknowledgement/resolution this engine ever produced was lost on
+  // every process restart.
+  private readonly store:
+    JsonlSnapshotStore<ExecutionRecoveryIncident>;
 
   private timer:
     ReturnType<typeof setInterval> |
@@ -82,6 +155,59 @@ export class ExecutionRecoveryEngine {
 
   private recoveryDetections =
     0;
+
+  constructor(
+    filePath =
+      DEFAULT_FILE,
+  ) {
+    this.store =
+      new JsonlSnapshotStore({
+        filePath,
+        isPayload:
+          isIncidentRecord,
+      });
+
+    for (
+      const record
+      of this.store
+        .readAll()
+    ) {
+      const current =
+        this.incidents.get(
+          record.id,
+        );
+
+      if (
+        !current ||
+        record.updatedAt >=
+          current.updatedAt
+      ) {
+        this.incidents.set(
+          record.id,
+          structuredClone(
+            record,
+          ),
+        );
+      }
+    }
+
+    for (
+      const incident
+      of this.incidents.values()
+    ) {
+      if (
+        incident.status !==
+        "RESOLVED"
+      ) {
+        this.activeIncidentBySession.set(
+          incident.sessionId,
+          incident.id,
+        );
+      }
+    }
+
+    this.trimHistory();
+  }
 
   start(): void {
     if (
@@ -140,6 +266,14 @@ export class ExecutionRecoveryEngine {
     this.scans +=
       1;
 
+    // failInternal() can move ANY active session (including one already
+    // mid-flight with a real fill on one leg) straight to FAILED - it
+    // never requires the legs to be flat first. A session that leaves
+    // RUNNING this way still needs exposure monitoring, so FAILED must
+    // stay in scope here too; only pre-submission (VALIDATING/RESERVED/
+    // READY_FOR_SUBMISSION) and genuinely order-free terminal states
+    // (COMPLETED, CANCELLED - cancel() refuses a RUNNING session -,
+    // EXPIRED - only reachable before order submission) are safe to skip.
     const sessions =
       liveExecutionCoordinator
         .getDiagnostics()
@@ -149,7 +283,9 @@ export class ExecutionRecoveryEngine {
             session,
           ) =>
             session.status ===
-            "RUNNING",
+              "RUNNING" ||
+            session.status ===
+              "FAILED",
         );
 
     let detections =
@@ -474,6 +610,10 @@ export class ExecutionRecoveryEngine {
 
       incident.updatedAt =
         incident.acknowledgedAt;
+
+      this.persist(
+        incident,
+      );
     }
 
     return structuredClone(
@@ -544,6 +684,10 @@ export class ExecutionRecoveryEngine {
           incident.sessionId,
         );
     }
+
+    this.persist(
+      incident,
+    );
 
     return structuredClone(
       incident,
@@ -976,6 +1120,25 @@ export class ExecutionRecoveryEngine {
       existing.status !==
         "RESOLVED"
     ) {
+      // An operator who acknowledged this incident acknowledged it at its
+      // PRIOR severity. If it has since escalated (e.g. WARNING ->
+      // CRITICAL as the counter-leg grace window expires), that
+      // acknowledgement no longer covers the current risk - re-open it so
+      // diagnostics/alerting that key off status==="OPEN" see it again.
+      if (
+        existing.status ===
+          "ACKNOWLEDGED" &&
+        ExecutionRecoveryEngine.SEVERITY_RANK[
+          input.severity
+        ] >
+          ExecutionRecoveryEngine.SEVERITY_RANK[
+            existing.severity
+          ]
+      ) {
+        existing.status =
+          "OPEN";
+      }
+
       existing.severity =
         input.severity;
 
@@ -1022,6 +1185,10 @@ export class ExecutionRecoveryEngine {
 
       existing.updatedAt =
         input.now;
+
+      this.persist(
+        existing,
+      );
 
       return structuredClone(
         existing,
@@ -1121,6 +1288,10 @@ export class ExecutionRecoveryEngine {
         incident.id,
       );
 
+    this.persist(
+      incident,
+    );
+
     this.trimHistory();
 
     return structuredClone(
@@ -1177,6 +1348,10 @@ export class ExecutionRecoveryEngine {
 
     incident.resolutionNote =
       "Automatically resolved because buy and sell filled quantities became balanced.";
+
+    this.persist(
+      incident,
+    );
 
     this.activeIncidentBySession
       .delete(
@@ -1321,16 +1496,21 @@ export class ExecutionRecoveryEngine {
     now:
       number,
   ): number {
+    // Exposure age must measure how long the imbalance itself has existed,
+    // not how long the session has existed. session.startedAt/updatedAt
+    // are deliberately excluded: a session that ran balanced for a while
+    // before one leg was cancelled must not inherit that leg's whole
+    // lifetime as its exposure age. The most recent of the two legs'
+    // updatedAt is the moment the current (im)balance was created, so it
+    // is the correct reference point - not the oldest (Math.min), which
+    // would skip the counter-leg grace window entirely for any session
+    // that had been running for a while before the imbalance appeared.
     const candidateTimes = [
       buyOrder
         ?.updatedAt,
 
       sellOrder
         ?.updatedAt,
-
-      session.startedAt,
-
-      session.updatedAt,
     ].filter(
       (
         value,
@@ -1347,7 +1527,7 @@ export class ExecutionRecoveryEngine {
     const reference =
       candidateTimes.length >
       0
-        ? Math.min(
+        ? Math.max(
             ...candidateTimes,
           )
         : session.createdAt;
@@ -1410,6 +1590,16 @@ export class ExecutionRecoveryEngine {
     }
 
     return incident;
+  }
+
+  private persist(
+    incident: ExecutionRecoveryIncident,
+  ): void {
+    this.store.append(
+      structuredClone(
+        incident,
+      ),
+    );
   }
 
   private trimHistory():

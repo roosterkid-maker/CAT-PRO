@@ -420,8 +420,16 @@ export class AuthoritativeRecoveryInspectionService {
       status ===
         "PENDING" ||
       status ===
-        "OPEN"
+        "OPEN" ||
+      status ===
+        "TIMED_OUT"
     ) {
+      // A TIMED_OUT authoritative query means the exchange's outcome could
+      // not be confirmed in time - it is not proof the order is settled.
+      // ExecutionRestartRecoveryGateService.POSSIBLY_OPEN_STATUSES already
+      // treats a persisted TIMED_OUT order as possibly still open; this
+      // must agree, or resolveSession() could mark a session resolved on
+      // an order whose real exchange state was never actually confirmed.
       return "CONFIRMED_OPEN";
     }
 

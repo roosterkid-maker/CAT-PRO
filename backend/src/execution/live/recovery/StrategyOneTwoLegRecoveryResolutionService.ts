@@ -74,6 +74,13 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     JsonlSnapshotStore<StrategyOneTwoLegRecoveryResolutionRecord>;
   private readonly latest =
     new Map<string, StrategyOneTwoLegRecoveryResolutionRecord>();
+  // Shared by resolveSession() and resolveCompensatingOrder() so the two
+  // entry points can never race each other for the same session - without
+  // this, two concurrent resolution attempts (e.g. an operator retry
+  // overlapping an in-progress residual-recovery compensating order) could
+  // each independently validate and persist() for the same sessionId.
+  private readonly inFlight =
+    new Map<string, Promise<StrategyOneTwoLegRecoveryResolutionRecord>>();
 
   constructor(
     private readonly pairs: PairPort = strategyOneTwoLegLiveExecutionService,
@@ -94,7 +101,7 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     }
   }
 
-  async resolveSession(
+  resolveSession(
     sessionIdValue: string,
     resolutionNoteValue: string,
     now = Date.now(),
@@ -102,6 +109,30 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     const sessionId = requireText(sessionIdValue, "sessionId");
     const resolutionNote = requireText(resolutionNoteValue, "resolutionNote");
     validateTime(now);
+
+    const active = this.inFlight.get(sessionId);
+
+    if (active) {
+      return active;
+    }
+
+    const work = this.resolveSessionInternal(
+      sessionId,
+      resolutionNote,
+      now,
+    ).finally(() => {
+      this.inFlight.delete(sessionId);
+    });
+
+    this.inFlight.set(sessionId, work);
+    return work;
+  }
+
+  private async resolveSessionInternal(
+    sessionId: string,
+    resolutionNote: string,
+    now: number,
+  ): Promise<StrategyOneTwoLegRecoveryResolutionRecord> {
     const existing = this.pairs.getSession(sessionId);
 
     if (!existing) {
@@ -146,7 +177,7 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     });
   }
 
-  async resolveCompensatingOrder(
+  resolveCompensatingOrder(
     sessionIdValue: string,
     evidenceValue: StrategyOneCompensatingOrderEvidence,
     resolutionNoteValue: string,
@@ -156,6 +187,32 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     const resolutionNote = requireText(resolutionNoteValue, "resolutionNote");
     validateTime(now);
     const evidence = validateCompensatingEvidence(evidenceValue);
+
+    const active = this.inFlight.get(sessionId);
+
+    if (active) {
+      return active;
+    }
+
+    const work = this.resolveCompensatingOrderInternal(
+      sessionId,
+      evidence,
+      resolutionNote,
+      now,
+    ).finally(() => {
+      this.inFlight.delete(sessionId);
+    });
+
+    this.inFlight.set(sessionId, work);
+    return work;
+  }
+
+  private async resolveCompensatingOrderInternal(
+    sessionId: string,
+    evidence: StrategyOneCompensatingOrderEvidence,
+    resolutionNote: string,
+    now: number,
+  ): Promise<StrategyOneTwoLegRecoveryResolutionRecord> {
     const existing = this.pairs.getSession(sessionId);
 
     if (!existing) {
@@ -262,7 +319,15 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     });
 
     this.store.append(record);
-    this.latest.set(record.sessionId, record);
+
+    // Mirror the constructor's restore() ordering guard: never let an
+    // older resolution silently clobber a newer one already in memory.
+    const current = this.latest.get(record.sessionId);
+
+    if (!current || record.resolvedAt >= current.resolvedAt) {
+      this.latest.set(record.sessionId, record);
+    }
+
     return clone(record);
   }
 }

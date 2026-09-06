@@ -511,6 +511,15 @@ export class StrategyOneResidualRecoveryExecutionService {
       return clone(record);
     }
 
+    // A real, exactly-filled exchange order now exists (exactFilledResult
+    // + complete fee evidence both passed above). Persist that confirmed
+    // fill durably before the two steps below that can still throw
+    // (missing authoritative order ID, or resolveCompensatingOrder itself
+    // failing/reconciling asynchronously) - otherwise a crash or thrown
+    // error here would leave the on-disk journal showing no evidence of a
+    // fill that genuinely happened on the exchange.
+    record = this.persist(base);
+
     const authoritativeResult = response.record?.result;
 
     if (!authoritativeResult?.orderId) {

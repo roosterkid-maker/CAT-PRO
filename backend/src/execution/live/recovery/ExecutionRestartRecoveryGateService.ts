@@ -517,23 +517,23 @@ export class ExecutionRestartRecoveryGateService {
       ]
       of grouped
     ) {
-      const buy =
-        this.latestForLeg(
+      // A session can legitimately hold more than one order record per leg
+      // (e.g. an original attempt superseded by a later retry, each with
+      // its own orderId). Exposure evidence from an earlier order on a leg
+      // must never be discarded just because a newer record exists for
+      // that same leg - so every order for the leg is inspected, not only
+      // the most recently updated one.
+      if (
+        this.legEverHadStatus(
           sessionOrders,
           "BUY",
-        );
-
-      const sell =
-        this.latestForLeg(
+          "PARTIALLY_FILLED",
+        ) ||
+        this.legEverHadStatus(
           sessionOrders,
           "SELL",
-        );
-
-      if (
-        buy?.status ===
-          "PARTIALLY_FILLED" ||
-        sell?.status ===
-          "PARTIALLY_FILLED"
+          "PARTIALLY_FILLED",
+        )
       ) {
         possibleExposure.add(
           sessionId,
@@ -543,12 +543,18 @@ export class ExecutionRestartRecoveryGateService {
       }
 
       const buyFilled =
-        buy?.status ===
-        "FILLED";
+        this.legEverHadStatus(
+          sessionOrders,
+          "BUY",
+          "FILLED",
+        );
 
       const sellFilled =
-        sell?.status ===
-        "FILLED";
+        this.legEverHadStatus(
+          sessionOrders,
+          "SELL",
+          "FILLED",
+        );
 
       if (
         buyFilled !==
@@ -565,34 +571,25 @@ export class ExecutionRestartRecoveryGateService {
     );
   }
 
-  private latestForLeg(
+  private legEverHadStatus(
     orders:
       readonly DuplicateOrderEvidence[],
 
     leg:
       "BUY" |
       "SELL",
-  ):
-    DuplicateOrderEvidence |
-    null {
-    return (
-      orders
-        .filter(
-          (
-            order,
-          ) =>
-            order.leg ===
-            leg,
-        )
-        .sort(
-          (
-            first,
-            second,
-          ) =>
-            second.updatedAt -
-            first.updatedAt,
-        )[0] ??
-      null
+
+    status:
+      DuplicateOrderEvidence["status"],
+  ): boolean {
+    return orders.some(
+      (
+        order,
+      ) =>
+        order.leg ===
+          leg &&
+        order.status ===
+          status,
     );
   }
 
