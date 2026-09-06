@@ -19,6 +19,22 @@ import type {
   ZebPayTradePair,
 } from "../../exchanges/zebpay/types";
 
+import {
+  ZEBPAY,
+} from "../../exchanges/zebpay/constants";
+
+import {
+  zebPayAccountApi,
+  type ZebPayAccountFeeEvidence,
+  type ZebPayFeeSide,
+} from "../../exchanges/zebpay/api/ZebPayAccountApi";
+
+import {
+  zebPayCredentialsProvider,
+  type ZebPayCredentials,
+  type ZebPayCredentialSource,
+} from "../../exchanges/zebpay/api/ZebPayCredentialsProvider";
+
 const ZEBPAY_EXCHANGE =
   "zebpay";
 
@@ -28,10 +44,22 @@ const DEFAULT_REFRESH_INTERVAL_MS =
 const DEFAULT_EVIDENCE_TTL_MS =
   15 * 60 * 1_000;
 
+const AUTHENTICATED_REFERENCE_SIDE:
+  ZebPayFeeSide =
+  "sell";
+
+export interface ZebPayAuthenticatedFeeSource {
+  getTradeFees(
+    market: string,
+    side: ZebPayFeeSide,
+    credentials: ZebPayCredentials,
+  ): Promise<ZebPayAccountFeeEvidence>;
+}
+
 export interface ZebPayFeeSynchronizationStatus {
   exchange: "zebpay";
 
-  source: "PUBLIC_API";
+  source: "PUBLIC_API" | "ACCOUNT_API";
 
   synchronized: boolean;
 
@@ -53,6 +81,12 @@ export interface ZebPayFeeSynchronizationStatus {
 export interface ZebPayFeeSynchronizationOptions {
   api?: ZebPayPublicMarketApi;
 
+  accountApi?:
+    ZebPayAuthenticatedFeeSource;
+
+  credentialsSource?:
+    ZebPayCredentialSource;
+
   now?: () => number;
 
   scheduleTimers?: boolean;
@@ -63,15 +97,27 @@ export interface ZebPayFeeSynchronizationOptions {
 }
 
 /*
- * Mirrors UnoCoinFeeSynchronizationService.ts - same public-API-only,
- * no-credentials-required pattern. ZebPay's own account-tier fee endpoint
- * (ZebPayAccountApi.getTradeFees) is more precise but requires authenticated
- * credentials that are not currently configured for CAT-PRO; this service
- * can be swapped or supplemented to prefer that endpoint once they are.
+ * Base rates come from ZebPay's public trade-pairs payload
+ * (no credentials required) - see normalizePair() below. When a dedicated
+ * ZebPay API key/secret is configured (ZEBPAY_API_KEY/ZEBPAY_API_SECRET),
+ * this also calls the authenticated, account-tier-specific fee endpoint
+ * (ZebPayAccountApi.getTradeFees) for one reference market and, on
+ * success, overrides every market's rate with that account's actual
+ * effective maker/taker percent (which already includes GST) - account
+ * fee tiers apply exchange-wide, not per market, so one authenticated
+ * read is enough to correct all of them. If credentials are absent or the
+ * authenticated call fails, this falls back to the public per-pair rates
+ * without ever throwing - the public data is still valid evidence.
  */
 export class ZebPayFeeSynchronizationService {
   private readonly api:
     ZebPayPublicMarketApi;
+
+  private readonly accountApi:
+    ZebPayAuthenticatedFeeSource;
+
+  private readonly credentialsSource:
+    ZebPayCredentialSource;
 
   private readonly now:
     () => number;
@@ -127,6 +173,14 @@ export class ZebPayFeeSynchronizationService {
     this.api =
       options.api ??
       zebPayPublicApi;
+
+    this.accountApi =
+      options.accountApi ??
+      zebPayAccountApi;
+
+    this.credentialsSource =
+      options.credentialsSource ??
+      zebPayCredentialsProvider;
 
     this.now =
       options.now ??
@@ -311,6 +365,31 @@ export class ZebPayFeeSynchronizationService {
         );
       }
 
+      const accountOverride =
+        await this.tryAccountTierOverride(
+          synchronizedAt,
+        );
+
+      let resolvedSource:
+        ZebPayFeeSynchronizationStatus["source"] =
+        "PUBLIC_API";
+
+      if (accountOverride) {
+        for (const item of evidence) {
+          item.makerPercent =
+            accountOverride.makerPercent;
+
+          item.takerPercent =
+            accountOverride.takerPercent;
+
+          item.source =
+            "ACCOUNT_API";
+        }
+
+        resolvedSource =
+          "ACCOUNT_API";
+      }
+
       replaceExchangeMarketFeeEvidence(
         ZEBPAY_EXCHANGE,
         evidence,
@@ -321,7 +400,7 @@ export class ZebPayFeeSynchronizationService {
           ZEBPAY_EXCHANGE,
 
         source:
-          "PUBLIC_API",
+          resolvedSource,
 
         synchronized:
           true,
@@ -357,6 +436,74 @@ export class ZebPayFeeSynchronizationService {
       };
 
       throw error;
+    }
+  }
+
+  /*
+   * Never throws - a failed or unconfigured authenticated read must not
+   * break the public-rate fallback that already succeeded above. Returns
+   * null (meaning "keep the public rates") unless the account-tier read
+   * genuinely succeeds.
+   */
+  private async tryAccountTierOverride(
+    synchronizedAt: number,
+  ): Promise<{
+    makerPercent: number;
+    takerPercent: number;
+  } | null> {
+    if (
+      !this.credentialsSource.isConfigured()
+    ) {
+      return null;
+    }
+
+    try {
+      const credentials =
+        this.credentialsSource.getCredentials();
+
+      const accountFees =
+        await this.accountApi.getTradeFees(
+          ZEBPAY.REFERENCE_FEE_MARKET,
+          AUTHENTICATED_REFERENCE_SIDE,
+          credentials,
+        );
+
+      if (
+        !Number.isFinite(
+          accountFees.effectiveMakerPercent,
+        ) ||
+        !Number.isFinite(
+          accountFees.effectiveTakerPercent,
+        ) ||
+        accountFees.effectiveMakerPercent <
+          0 ||
+        accountFees.effectiveTakerPercent <
+          0
+      ) {
+        return null;
+      }
+
+      return {
+        makerPercent:
+          accountFees.effectiveMakerPercent,
+
+        takerPercent:
+          accountFees.effectiveTakerPercent,
+      };
+    } catch (
+      error:
+        unknown
+    ) {
+      console.error(
+        "[ZebPay Fees] Authenticated account-tier read failed; keeping public trade-pair rates:",
+        this.errorMessage(
+          error,
+        ),
+        "synchronizedAt:",
+        synchronizedAt,
+      );
+
+      return null;
     }
   }
 

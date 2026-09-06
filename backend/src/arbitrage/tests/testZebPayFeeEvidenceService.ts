@@ -5,6 +5,7 @@ import {
 
 import {
   ZebPayFeeSynchronizationService,
+  type ZebPayAuthenticatedFeeSource,
 } from "../services/ZebPayFeeSynchronizationService";
 
 import type {
@@ -16,6 +17,16 @@ import type {
   ZebPayOrderBook,
   ZebPayTradePair,
 } from "../../exchanges/zebpay/types";
+
+import type {
+  ZebPayAccountFeeEvidence,
+  ZebPayFeeSide,
+} from "../../exchanges/zebpay/api/ZebPayAccountApi";
+
+import type {
+  ZebPayCredentials,
+  ZebPayCredentialSource,
+} from "../../exchanges/zebpay/api/ZebPayCredentialsProvider";
 
 function assertCondition(
   condition: boolean,
@@ -111,6 +122,95 @@ class FixtureZebPayFeeApi
   }
 }
 
+class FixtureZebPayCredentialSource
+  implements ZebPayCredentialSource
+{
+  constructor(
+    private readonly configured: boolean,
+  ) {}
+
+  getCredentials():
+    ZebPayCredentials {
+    if (!this.configured) {
+      throw new Error(
+        "Fixture ZebPay credentials are not configured.",
+      );
+    }
+
+    return {
+      apiKey:
+        "fixture-key",
+
+      apiSecret:
+        "fixture-secret",
+    };
+  }
+
+  isConfigured():
+    boolean {
+    return this.configured;
+  }
+}
+
+class FixtureZebPayAccountFeeApi
+  implements ZebPayAuthenticatedFeeSource
+{
+  constructor(
+    private readonly result:
+      | ZebPayAccountFeeEvidence
+      | "FAIL",
+  ) {}
+
+  async getTradeFees(
+    market: string,
+    side: ZebPayFeeSide,
+  ): Promise<ZebPayAccountFeeEvidence> {
+    if (this.result === "FAIL") {
+      throw new Error(
+        "Simulated ZebPay authenticated fee endpoint failure.",
+      );
+    }
+
+    return {
+      ...this.result,
+      market,
+      side,
+    };
+  }
+}
+
+function accountFeeFixture():
+  ZebPayAccountFeeEvidence {
+  return {
+    market:
+      "BTC-INR",
+
+    side:
+      "sell",
+
+    customerLevel:
+      "LEVEL_2",
+
+    makerPercent:
+      0.1,
+
+    takerPercent:
+      0.15,
+
+    gstPercent:
+      18,
+
+    tdsPercent:
+      1,
+
+    effectiveMakerPercent:
+      0.118,
+
+    effectiveTakerPercent:
+      0.177,
+  };
+}
+
 async function main():
   Promise<void> {
   clearDynamicFeeEvidence(
@@ -204,6 +304,158 @@ async function main():
 
     console.log(
       "No authenticated request or order was submitted.",
+    );
+  } finally {
+    clearDynamicFeeEvidence(
+      "zebpay",
+    );
+  }
+
+  try {
+    const synchronizedAt =
+      Date.now();
+
+    const overrideService =
+      new ZebPayFeeSynchronizationService({
+        api:
+          new FixtureZebPayFeeApi(),
+
+        accountApi:
+          new FixtureZebPayAccountFeeApi(
+            accountFeeFixture(),
+          ),
+
+        credentialsSource:
+          new FixtureZebPayCredentialSource(
+            true,
+          ),
+
+        now:
+          () =>
+            synchronizedAt,
+
+        scheduleTimers:
+          false,
+
+        evidenceTtlMs:
+          60_000,
+      });
+
+    await overrideService.synchronize();
+
+    const overriddenBtcInr =
+      getExchangeFeeEvidence(
+        "zebpay",
+        "BTC_INR",
+      );
+
+    const overriddenEthUsdt =
+      getExchangeFeeEvidence(
+        "zebpay",
+        "ETHUSDT",
+      );
+
+    assertCondition(
+      overriddenBtcInr !== null &&
+        overriddenBtcInr.source ===
+          "ACCOUNT_API" &&
+        overriddenBtcInr.makerPercent ===
+          0.118 &&
+        overriddenBtcInr.takerPercent ===
+          0.177,
+      "A configured authenticated ZebPay key must override the published rate with the account's effective tier.",
+    );
+
+    assertCondition(
+      overriddenEthUsdt !== null &&
+        overriddenEthUsdt.source ===
+          "ACCOUNT_API" &&
+        overriddenEthUsdt.takerPercent ===
+          0.177,
+      "The account-tier override must apply uniformly across every synchronized market, not just the reference pair.",
+    );
+
+    assertCondition(
+      overrideService
+        .getStatus()
+        .source ===
+        "ACCOUNT_API",
+      "Synchronization status must report ACCOUNT_API once the authenticated override succeeds.",
+    );
+
+    console.log(
+      "ZEBPAY AUTHENTICATED ACCOUNT-TIER OVERRIDE TEST PASSED.",
+    );
+  } finally {
+    clearDynamicFeeEvidence(
+      "zebpay",
+    );
+  }
+
+  try {
+    const synchronizedAt =
+      Date.now();
+
+    const failingOverrideService =
+      new ZebPayFeeSynchronizationService({
+        api:
+          new FixtureZebPayFeeApi(),
+
+        accountApi:
+          new FixtureZebPayAccountFeeApi(
+            "FAIL",
+          ),
+
+        credentialsSource:
+          new FixtureZebPayCredentialSource(
+            true,
+          ),
+
+        now:
+          () =>
+            synchronizedAt,
+
+        scheduleTimers:
+          false,
+
+        evidenceTtlMs:
+          60_000,
+      });
+
+    await failingOverrideService.synchronize();
+
+    const fallbackEvidence =
+      getExchangeFeeEvidence(
+        "zebpay",
+        "BTC_INR",
+      );
+
+    assertCondition(
+      fallbackEvidence !== null &&
+        fallbackEvidence.source ===
+          "PUBLIC_API" &&
+        fallbackEvidence.makerPercent ===
+          0.15,
+      "A failed authenticated read must fall back to the public trade-pair rate rather than losing evidence entirely.",
+    );
+
+    assertCondition(
+      failingOverrideService
+        .getStatus()
+        .synchronized &&
+        failingOverrideService
+          .getStatus()
+          .source ===
+          "PUBLIC_API" &&
+        failingOverrideService
+          .getStatus()
+          .lastError ===
+          null,
+      "A failed authenticated read must not surface as a synchronization failure - the public rates are still valid evidence.",
+    );
+
+    console.log(
+      "ZEBPAY AUTHENTICATED OVERRIDE FAILURE FALLBACK TEST PASSED.",
     );
   } finally {
     clearDynamicFeeEvidence(
