@@ -32,6 +32,8 @@ import {
 import {
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
+import {strategyOneTinyLivePreArmService} from "./StrategyOneTinyLivePreArmService";
+import {strategyOneTinyLiveAccountModeLeaseService} from "./StrategyOneTinyLiveAccountModeLeaseService";
 
 export type StrategyOneTinyLiveAuthorityState =
   | "PREVIEWED"
@@ -115,6 +117,19 @@ export interface StrategyOneTinyLiveActionAuthorityDependencies {
   pairSessionExists(sessionId: string): boolean;
   runtimeGateEnabled(): boolean;
   getTinyLiveCapitalPerLegInr(): number;
+  isRouteArmed(
+    route: {
+      market: string;
+      buyExchange: string;
+      sellExchange: string;
+    },
+    now: number,
+  ): boolean;
+  hasActiveAccountModeLease(route: {
+    market: string;
+    buyExchange: string;
+    sellExchange: string;
+  }): boolean;
 }
 
 const DEFAULT_FILE = resolve(
@@ -151,6 +166,7 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLiveActionAuthorityDependencies = {
     strategyOneTwoLegLiveExecutionService.getSession(sessionId) !== null,
   runtimeGateEnabled: () =>
     process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
+    process.env.TRADING_EXECUTION_MODE?.trim().toLowerCase() === "live" &&
     process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
     process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
       "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
@@ -162,6 +178,10 @@ const DEFAULT_DEPENDENCIES: StrategyOneTinyLiveActionAuthorityDependencies = {
       .values
       .tinyLive
       .capitalPerLegInr,
+  isRouteArmed: (route, now) =>
+    strategyOneTinyLivePreArmService.isRouteCurrentlyArmed(route, now),
+  hasActiveAccountModeLease: (route) =>
+    strategyOneTinyLiveAccountModeLeaseService.hasActiveLeaseForRoute(route),
 };
 
 /**
@@ -456,7 +476,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
 
     if (
       current.authorityExpiresAt === null ||
-      current.authorityExpiresAt < now
+      current.authorityExpiresAt <= now
     ) {
       throw new Error("Tiny-LIVE action preview expired; generate a fresh preview.");
     }
@@ -475,6 +495,24 @@ export class StrategyOneTinyLiveActionAuthorityService {
 
     if (this.dailyAttempts(now) >= this.maximumDailyAttempts) {
       throw new Error("Tiny-LIVE daily attempt cap is exhausted.");
+    }
+
+    const authorizationRoute = {
+      market: current.market,
+      buyExchange: current.buyExchange,
+      sellExchange: current.sellExchange,
+    };
+
+    if (!this.dependencies.isRouteArmed(authorizationRoute, now)) {
+      throw new Error(
+        "Live order authorization requires an active pre-arm for this exact route.",
+      );
+    }
+
+    if (!this.dependencies.hasActiveAccountModeLease(authorizationRoute)) {
+      throw new Error(
+        "Live order authorization requires an active account-mode lease for this exact route.",
+      );
     }
 
     const fresh = this.previewEvidence(current.opportunityId, now);
@@ -514,7 +552,7 @@ export class StrategyOneTinyLiveActionAuthorityService {
 
     if (
       current.authorityExpiresAt === null ||
-      current.authorityExpiresAt < now ||
+      current.authorityExpiresAt <= now ||
       current.opportunityId !== input.opportunity.id ||
       current.market !== normalizeMarket(input.opportunity.pair.market) ||
       current.buyExchange !== normalizeExchange(input.opportunity.pair.buy.exchange) ||

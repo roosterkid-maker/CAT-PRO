@@ -194,6 +194,7 @@ const MAXIMUM_HISTORY_SCREENINGS_PER_SNAPSHOT = 8;
 const DEFAULT_DEPENDENCIES: StrategyOneTinyLivePreArmDependencies = {
   runtimeGateEnabled: () =>
     process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
+    process.env.TRADING_EXECUTION_MODE?.trim().toLowerCase() === "live" &&
     process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
     process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
       "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
@@ -616,6 +617,24 @@ export class StrategyOneTinyLivePreArmService {
 
     const active = this.latest.get(this.activeArmId);
     return active?.state === "ARMED" ? clone(active) : null;
+  }
+
+  /**
+   * Whether a currently ARMED pre-arm covers the given route. This is the
+   * single source of truth other services (e.g. the action authority
+   * service) must consult before authorizing a live order for a route -
+   * never re-derive route-matching independently.
+   */
+  isRouteCurrentlyArmed(
+    route: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+    now = this.dependencies.now(),
+  ): boolean {
+    const active = this.getActiveArm(now);
+    return active !== null && armAllowsRoute(active, route);
   }
 
   getRecord(
@@ -1537,6 +1556,8 @@ function actionTimeRefreshRequest(
       candidate.pair.buy.timestamp,
     minimumSellTimestamp:
       candidate.pair.sell.timestamp,
+    purpose:
+      "live" as const,
   };
 }
 
@@ -1602,9 +1623,33 @@ function isCleanCompletion(result: ArbitrageLiveExecutionResult): boolean {
     result.unmatchedSellQuantity === 0;
 }
 
+/*
+ * Every message a StrategyOneTinyLiveActionAuthorityService.authorize() call
+ * can throw before it ever reaches the AUTHORIZED state - i.e. before any
+ * live order authority existed. Matching against this exhaustive list (not
+ * just the two most common prefixes) is what lets a transient revalidation
+ * failure release the claim back to ARMED instead of burning an attempt or
+ * discarding the batch outright.
+ */
+const PRE_AUTHORIZATION_REVALIDATION_FAILURE_MARKERS: readonly string[] = [
+  "Tiny-LIVE preflight changed:",
+  "Tiny-LIVE evidence changed after preview;",
+  "The exact opportunity expired before authorization.",
+  "Fresh dynamic timing qualification or exact funded quantity is unavailable.",
+  "Fresh route TTL is invalid or exceeds the operator-reviewed",
+  "hard-cap quote-spend evidence is unavailable.",
+  "Bootstrap timing calibration permits only the first Tiny-LIVE attempt on this exact route.",
+  "Controlled bootstrap timing calibration permits at most two Tiny-LIVE attempts on this exact route.",
+  "action-time LIVE contract is no longer ready.",
+  "action-time LIVE timing contract changed.",
+  "Live order authorization requires an active pre-arm for this exact route.",
+  "Live order authorization requires an active account-mode lease for this exact route.",
+];
+
 function isPreAuthorizationRevalidationFailure(reason: string): boolean {
-  return reason.startsWith("Tiny-LIVE preflight changed:") ||
-    reason.startsWith("Tiny-LIVE evidence changed after preview;");
+  return PRE_AUTHORIZATION_REVALIDATION_FAILURE_MARKERS.some((marker) =>
+    reason.includes(marker),
+  );
 }
 
 function summarizeAttempt(input: {
@@ -1891,7 +1936,6 @@ function isValidTransition(
     previous.state === "CLAIMED"
   ) {
     const releasedBeforeAuthorization =
-      next.schemaVersion === "190.0" &&
       next.state === "ARMED" &&
       getAttemptsUsed(next) === getAttemptsUsed(previous) &&
       next.attempts?.length === previous.attempts?.length &&

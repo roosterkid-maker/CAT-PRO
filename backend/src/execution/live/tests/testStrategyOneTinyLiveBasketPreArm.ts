@@ -492,6 +492,7 @@ async function verifyChangingRoutesCanRequestFreshBooks(
             candidate.pair.buy.timestamp,
           minimumSellTimestamp:
             candidate.pair.sell.timestamp,
+          purpose: "live",
         });
         return {
           state: "REFRESHED",
@@ -617,6 +618,7 @@ async function verifyOnlyStaleRouteLegIsRequested(
             candidate.pair.buy.timestamp,
           minimumSellTimestamp:
             candidate.pair.sell.timestamp,
+          purpose: "live",
         });
         return {
           state:

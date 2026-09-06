@@ -41,6 +41,8 @@ async function main(): Promise<void> {
       }),
       isPairResolved: () => true,
       runtimeGateEnabled: () => true,
+      isRouteArmed: () => true,
+      hasActiveAccountModeLease: () => true,
     };
     const service = new StrategyOneTinyLiveActionAuthorityService(
       dependencies,
@@ -229,6 +231,8 @@ function testDynamicPoolQualificationNeedsNoPerCoinApproval(
     isPairResolved: () => true,
     pairSessionExists: () => false,
     runtimeGateEnabled: () => true,
+    isRouteArmed: () => true,
+    hasActiveAccountModeLease: () => true,
     getTinyLiveCapitalPerLegInr: () => 500,
   }, join(directory, "dynamic-no-per-coin-approval.jsonl"));
 
@@ -293,6 +297,8 @@ function testAuthoritativeRecoveryClearsFinalizedBlocker(
       recoveryResolved && sessionId === "strategy-one:resolved-recovery",
     pairSessionExists: () => true,
     runtimeGateEnabled: () => true,
+    isRouteArmed: () => true,
+    hasActiveAccountModeLease: () => true,
     getTinyLiveCapitalPerLegInr: () => 500,
   };
   const service = new StrategyOneTinyLiveActionAuthorityService(
@@ -419,6 +425,8 @@ function testBasketBootstrapQuotaIsRouteScoped(
       isPairResolved: () => true,
       pairSessionExists: () => false,
       runtimeGateEnabled: () => true,
+      isRouteArmed: () => true,
+      hasActiveAccountModeLease: () => true,
       getTinyLiveCapitalPerLegInr: () => 500,
     },
     join(directory, "basket-route-scoped-authorities.jsonl"),
@@ -506,6 +514,8 @@ async function testControlledTenAttemptBatch(
       }),
       isPairResolved: () => true,
       runtimeGateEnabled: () => true,
+      isRouteArmed: () => true,
+      hasActiveAccountModeLease: () => true,
     },
     join(directory, "ten-batch-authorities.jsonl"),
     30_000,
@@ -629,6 +639,8 @@ function testRouteSpecificActionTimeContract(
     isPairResolved: () => true,
     pairSessionExists: () => false,
     runtimeGateEnabled: () => true,
+    isRouteArmed: () => true,
+    hasActiveAccountModeLease: () => true,
     getTinyLiveCapitalPerLegInr: () => 500,
   };
   const service = new StrategyOneTinyLiveActionAuthorityService(
@@ -707,6 +719,8 @@ async function testControlledTwoAttemptBatch(
       }),
       isPairResolved: () => true,
       runtimeGateEnabled: () => true,
+      isRouteArmed: () => true,
+      hasActiveAccountModeLease: () => true,
     },
     join(directory, "batch-authorities.jsonl"),
   );
@@ -827,6 +841,8 @@ async function testPreArmedOneShot(
       }),
       isPairResolved: () => true,
       runtimeGateEnabled: () => true,
+      isRouteArmed: () => true,
+      hasActiveAccountModeLease: () => true,
     },
     join(directory, "prearm-authorities.jsonl"),
   );

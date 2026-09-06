@@ -16,6 +16,7 @@ import {
 import {
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID,
   STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+  isStrategyOneTinyLiveDynamicRoute,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 
 import {
@@ -727,6 +728,17 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
     if (
       !lease
     ) {
+      if (
+        this.dependencies
+          .getAccount()
+          .mode ===
+        "LIVE"
+      ) {
+        this.lastReconciliationError =
+          "Trading account is in LIVE mode with no tracked Tiny-LIVE account-mode lease.";
+        this.failClosedWithEmergencyStop();
+      }
+
       return null;
     }
 
@@ -1221,6 +1233,23 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
       : null;
   }
 
+  /**
+   * Whether a currently active account-mode lease covers the given route.
+   * This is the single source of truth other services (e.g. the action
+   * authority service) must consult before authorizing a live order for a
+   * route - never re-derive route-matching independently.
+   */
+  hasActiveLeaseForRoute(
+    route: {
+      readonly market: string;
+      readonly buyExchange: string;
+      readonly sellExchange: string;
+    },
+  ): boolean {
+    const active = this.getActiveLease();
+    return active !== null && leaseAllowsRoute(active, route);
+  }
+
   private persist(
     record:
       StrategyOneTinyLiveAccountModeLeaseRecord,
@@ -1438,6 +1467,28 @@ function getAttemptsUsed(
   return record.attemptsUsed ??
     record.attempts?.length ??
     0;
+}
+
+function normalizeMarket(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
+}
+
+function leaseAllowsRoute(
+  lease: StrategyOneTinyLiveAccountModeLeaseRecord,
+  route: {
+    readonly market: string;
+    readonly buyExchange: string;
+    readonly sellExchange: string;
+  },
+): boolean {
+  if (lease.routeScope === "DYNAMIC_POOL") {
+    return lease.routePoolId === STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_ID &&
+      isStrategyOneTinyLiveDynamicRoute(route);
+  }
+
+  return lease.market === normalizeMarket(route.market) &&
+    lease.buyExchange === route.buyExchange.trim().toLowerCase() &&
+    lease.sellExchange === route.sellExchange.trim().toLowerCase();
 }
 
 function isLeaseRecord(

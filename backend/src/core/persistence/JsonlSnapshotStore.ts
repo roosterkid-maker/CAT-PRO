@@ -103,6 +103,17 @@ export class JsonlSnapshotStore<T> {
     string | null =
     null;
 
+  /*
+   * append() sits on the durable dispatch path (a write per state
+   * transition), so the directory-existence check below is skipped once
+   * confirmed once - mkdirSync on every single append is a redundant
+   * syscall on a hot, latency-sensitive path. appendFileSync itself stays
+   * fully synchronous: the durability guarantee callers rely on (a
+   * transition is on disk before the caller proceeds) is not touched.
+   */
+  private directoryEnsured =
+    false;
+
   constructor(
     private readonly options:
       JsonlSnapshotStoreOptions<T>,
@@ -131,17 +142,24 @@ export class JsonlSnapshotStore<T> {
     };
 
     try {
-      mkdirSync(
-        dirname(
-          this.options
-            .filePath,
-        ),
+      if (
+        !this.directoryEnsured
+      ) {
+        mkdirSync(
+          dirname(
+            this.options
+              .filePath,
+          ),
 
-        {
-          recursive:
-            true,
-        },
-      );
+          {
+            recursive:
+              true,
+          },
+        );
+
+        this.directoryEnsured =
+          true;
+      }
 
       appendFileSync(
         this.options
@@ -180,6 +198,12 @@ export class JsonlSnapshotStore<T> {
         error instanceof Error
           ? error.message
           : "Unknown JSONL snapshot write error.";
+
+      // A write failure may mean the directory itself is gone (e.g. deleted
+      // out-of-band); re-verify it on the next append rather than trusting
+      // the cached ensured-flag forever.
+      this.directoryEnsured =
+        false;
 
       throw error;
     }

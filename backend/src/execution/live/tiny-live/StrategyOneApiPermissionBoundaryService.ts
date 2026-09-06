@@ -272,6 +272,7 @@ export class StrategyOneApiPermissionBoundaryService {
       [
         "binance",
         "bybit",
+        "coindcx",
       ],
       now,
     );

@@ -52,6 +52,15 @@ export interface StrategyOneActionTimeBookRefreshRoute {
   readonly minimumBuyTimestamp?: number;
   /** Existing validated SELL-book timestamp when SELL is intentionally reused. */
   readonly minimumSellTimestamp?: number;
+  /**
+   * Which caller this refresh is for. The per-route cooldown below is keyed
+   * by this so a PAPER-lane refresh can never put a route into COOLDOWN for
+   * the LIVE lane (or vice versa) - each purpose gets its own throttle
+   * timer even though they share the same underlying route and adapters.
+   * Defaults to "live" - every existing (pre-purpose) caller was the LIVE
+   * action-time rescue path.
+   */
+  readonly purpose?: "live" | "paper";
 }
 
 interface NormalizedStrategyOneActionTimeBookRefreshRoute {
@@ -342,9 +351,7 @@ export class StrategyOneActionTimeBookRefreshService {
         request,
       );
     const routeKey =
-      key(
-        route,
-      );
+      `${key(route)}:${input.purpose ?? "live"}`;
 
     const existing =
       this.inFlight

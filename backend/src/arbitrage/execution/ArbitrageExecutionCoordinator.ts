@@ -330,13 +330,19 @@ export class ArbitrageExecutionCoordinator {
       preflightReasons.length >
       0
     ) {
-      return this.createBlockedResult(
+      const blocked = this.createBlockedResult(
         opportunity,
         buyExchange,
         sellExchange,
         startedAt,
         preflightReasons,
       );
+
+      if (actionAuthorityId) {
+        this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+      }
+
+      return blocked;
     }
 
     const buyAdapterStatus =
@@ -375,13 +381,17 @@ export class ArbitrageExecutionCoordinator {
       preflightReasons.length >
       0
     ) {
-      return this.createBlockedResult(
+      const blocked = this.createBlockedResult(
         opportunity,
         buyExchange,
         sellExchange,
         startedAt,
         preflightReasons,
       );
+
+      this.finalizeAuthoritySafely(actionAuthorityId, blocked);
+
+      return blocked;
     }
 
     let consumedAuthority:

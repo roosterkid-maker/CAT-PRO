@@ -86,7 +86,11 @@ const DEFAULT_DEPENDENCIES:
     (route) =>
       strategyOneActionTimeBookRefreshService
         .refresh(
-          route,
+          {
+            ...route,
+            purpose:
+              "paper" as const,
+          },
         ),
   isPaperRuntimeArmed:
     () =>
