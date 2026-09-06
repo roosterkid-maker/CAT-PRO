@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import type {
   AuthenticatedPrivateStreamSession,
+  PrivateFillIngestResult,
 } from "../fills/AuthenticatedPrivateFillEventOwner";
 
 import {
@@ -263,13 +264,21 @@ class FixtureOwner {
     return true;
   }
 
-  ingestCoinDCXOrderMessage(): readonly unknown[] {
+  listBackfillCandidates(): readonly [] {
+    return [];
+  }
+
+  ingestRestBackfill(): readonly PrivateFillIngestResult[] {
+    return [];
+  }
+
+  ingestCoinDCXOrderMessage(): readonly PrivateFillIngestResult[] {
     this.orderMessages +=
       1;
     return [];
   }
 
-  ingestCoinDCXTradeMessage(): readonly unknown[] {
+  ingestCoinDCXTradeMessage(): readonly PrivateFillIngestResult[] {
     this.tradeMessages +=
       1;
     return [];

@@ -146,7 +146,8 @@ export interface PrivateFillIngestResult {
     | "DUPLICATE"
     | "OUT_OF_ORDER_IGNORED"
     | "STALE_SESSION"
-    | "UNKNOWN_ORDER";
+    | "UNKNOWN_ORDER"
+    | "MALFORMED";
   readonly eventKey: string | null;
   readonly lifecycleOrderId: string | null;
   readonly state: AuthenticatedPrivateOrderState | null;
@@ -932,12 +933,24 @@ export class AuthenticatedPrivateFillEventOwner {
         ),
     ).map(
       (event) =>
-        this.ingest(
-          session,
+        isCoinDCXTradeNormalizationFailure(
           event,
-          receivedAt,
-          "WEBSOCKET",
-        ),
+        )
+          ? {
+              outcome:
+                "MALFORMED" as const,
+              eventKey: null,
+              lifecycleOrderId: null,
+              state: null,
+              reason:
+                event.reason,
+            }
+          : this.ingest(
+              session,
+              event,
+              receivedAt,
+              "WEBSOCKET",
+            ),
     );
   }
 
@@ -1889,10 +1902,25 @@ export class AuthenticatedPrivateFillEventOwner {
       outOfOrder =
         true;
     } else {
+      // ORDER_STATUS and FILL arrive on independent, uncoordinated
+      // exchange-side timestamp channels, so the sourceEventAt ordering
+      // guard above cannot fully protect against a stale/racy status
+      // snapshot. Clamping with maximumNullable/minimumNullable (the same
+      // helpers the FILL branch already uses) means a regressive snapshot
+      // can only ever preserve the already-known, larger cumulative
+      // quantity / smaller remaining quantity - never overwrite it
+      // downward/upward - while a genuinely newer, larger snapshot still
+      // updates normally.
       state.reportedCumulativeQuantity =
-        event.reportedCumulativeQuantity;
+        maximumNullable(
+          state.reportedCumulativeQuantity,
+          event.reportedCumulativeQuantity,
+        );
       state.reportedRemainingQuantity =
-        event.reportedRemainingQuantity;
+        minimumNullable(
+          state.reportedRemainingQuantity,
+          event.reportedRemainingQuantity,
+        );
       this.promoteStatus(
         state,
         event.reportedStatus,
@@ -1917,15 +1945,34 @@ export class AuthenticatedPrivateFillEventOwner {
       AuthenticatedOrderStatus,
     sourceEventAt: number,
   ): void {
+    const alreadyTerminal =
+      isTerminal(
+        state.status,
+      );
+
+    // A FILL event reporting "FILLED" is normally trusted over any other
+    // status (a real execution outranks a status label). But without any
+    // ordering check, a stale/replayed FILL event could otherwise flip an
+    // already-terminal, non-FILLED status (e.g. CANCELLED) back to FILLED.
+    // Only let that specific override through when the event is not
+    // provably older than the last status update already recorded.
+    const staleTerminalOverride =
+      alreadyTerminal &&
+      incoming ===
+        "FILLED" &&
+      state.lastStatusEventAt !==
+        null &&
+      sourceEventAt <
+        state.lastStatusEventAt;
+
     if (
       state.status !==
         "FILLED" &&
+      !staleTerminalOverride &&
       (
         incoming ===
           "FILLED" ||
-        !isTerminal(
-          state.status,
-        )
+        !alreadyTerminal
       )
     ) {
       state.status =
@@ -2675,6 +2722,19 @@ export function normalizeCoinDCXOrderMessage(
   );
 }
 
+export interface CoinDCXTradeNormalizationFailure {
+  readonly failed: true;
+  readonly reason: string;
+}
+
+export function isCoinDCXTradeNormalizationFailure(
+  value: unknown,
+): value is CoinDCXTradeNormalizationFailure {
+  return typeof value === "object" &&
+    value !== null &&
+    (value as {failed?: unknown}).failed === true;
+}
+
 export function normalizeCoinDCXTradeMessage(
   payload: unknown,
   resolveSide?: (
@@ -2683,14 +2743,53 @@ export function normalizeCoinDCXTradeMessage(
       clientOrderId: string | null;
     }>,
   ) => "buy" | "sell" | null,
-): readonly AuthenticatedPrivateFill[] {
+): readonly (AuthenticatedPrivateFill | CoinDCXTradeNormalizationFailure)[] {
+  // Every item is normalized independently: one malformed trade in a
+  // batched CoinDCX socket message (e.g. an order that isn't bound yet)
+  // must never discard every OTHER, otherwise-valid trade in the same
+  // message - a real, already-owned fill would be silently lost with no
+  // journal entry just because it happened to share a message with a bad
+  // one.
   return freeze(
     coinDCXMessageItems(
       payload,
       "CoinDCX trade update",
     ).map(
-      (item) => {
-        const orderId =
+      (item):
+        AuthenticatedPrivateFill |
+        CoinDCXTradeNormalizationFailure => {
+        try {
+          return normalizeCoinDCXTradeItem(
+            item,
+            resolveSide,
+          );
+        } catch (
+          error: unknown
+        ) {
+          return {
+            failed: true as const,
+            reason:
+              error instanceof Error
+                ? error.message
+                : "CoinDCX trade item could not be normalized.",
+          };
+        }
+      },
+    ),
+  );
+}
+
+function normalizeCoinDCXTradeItem(
+  item: Readonly<Record<string, unknown>>,
+  resolveSide?: (
+    identity: Readonly<{
+      orderId: string;
+      clientOrderId: string | null;
+    }>,
+  ) => "buy" | "sell" | null,
+): AuthenticatedPrivateFill {
+  {
+    const orderId =
           requireId(
             item.o,
             "CoinDCX order",
@@ -2804,9 +2903,7 @@ export function normalizeCoinDCXTradeMessage(
                 "partially_filled",
             ),
         });
-      },
-    ),
-  );
+  }
 }
 
 function normalizeSession(
@@ -4351,17 +4448,26 @@ function isJournalRecord(
         record.lifecycleOrderId,
         "journal lifecycle order",
       );
-    const accountFingerprint =
-      normalizeFingerprint(
-        requireText(
-          record.accountFingerprint,
-          "journal account fingerprint",
-        ),
-      );
-    const event =
-      normalizeOwnedEvent(
-        record.event as AuthenticatedPrivateOrderEvent,
-      );
+    normalizeFingerprint(
+      requireText(
+        record.accountFingerprint,
+        "journal account fingerprint",
+      ),
+    );
+    // Parsing/normalizing the event still catches genuine structural
+    // corruption (a field that no longer parses at all). What this
+    // deliberately does NOT do any more is require eventKey to exactly
+    // match a freshly recomputed createEventKey(accountFingerprint, event)
+    // - that recomputation depends on whatever normalization/eventKey
+    // composition code is live at replay time, so a later, unrelated
+    // change to that code would silently reclassify old, perfectly valid
+    // journal lines as malformed and drop them on the next restart,
+    // quietly under-reporting a real order's filled quantity with no
+    // failure, only a diagnostic counter. The stored eventKey was already
+    // derived correctly by the code that wrote it; trust it.
+    normalizeOwnedEvent(
+      record.event as AuthenticatedPrivateOrderEvent,
+    );
     const eventKey =
       requireText(
         record.eventKey,
@@ -4376,12 +4482,7 @@ function isJournalRecord(
         1_000 &&
       !/[\r\n]/u.test(
         eventKey,
-      ) &&
-      eventKey ===
-        createEventKey(
-          accountFingerprint,
-          event,
-        );
+      );
   } catch {
     return false;
   }

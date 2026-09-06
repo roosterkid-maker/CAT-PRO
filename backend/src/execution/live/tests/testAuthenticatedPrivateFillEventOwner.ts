@@ -369,30 +369,42 @@ function testCoinDCXBindingOwnedTradeWithoutPayloadSide(): void {
     "coindcx-trade-1",
   );
 
-  assert.throws(
-    () =>
-      owner.ingestCoinDCXTradeMessage(
-        session,
-        {
-          s:
-            "COTIUSDT",
-          o:
-            "unknown-order",
-          t:
-            "unknown-trade",
-          p:
-            "0.10",
-          q:
-            "1",
-          f:
-            "0",
-          T:
-            now +
-            30,
-        },
-        now +
-        31,
-      ),
+  // A malformed item in a CoinDCX trade-update batch is now reported as a
+  // MALFORMED ingest result (not thrown) - see
+  // AuthenticatedPrivateFillEventOwner.normalizeCoinDCXTradeMessage - so
+  // one bad item in a batched message can never discard every other,
+  // otherwise-valid item in the same message.
+  const malformed =
+    owner.ingestCoinDCXTradeMessage(
+      session,
+      {
+        s:
+          "COTIUSDT",
+        o:
+          "unknown-order",
+        t:
+          "unknown-trade",
+        p:
+          "0.10",
+        q:
+          "1",
+        f:
+          "0",
+        T:
+          now +
+          30,
+      },
+      now +
+      31,
+    )[0];
+
+  assert.equal(
+    malformed?.outcome,
+    "MALFORMED",
+  );
+  assert.match(
+    malformed?.reason ??
+      "",
     /no durable CAT PRO order binding/i,
   );
 }

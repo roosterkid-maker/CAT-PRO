@@ -182,7 +182,7 @@ export class BinanceUsdMOrderFillFeeSource implements OrderFillFeeSource {
   }
 }
 
-interface BybitExecutionResult {list?: unknown;}
+interface BybitExecutionResult {list?: unknown; nextPageCursor?: unknown;}
 interface BybitExecutionRecord {execId?: unknown; orderId?: unknown; symbol?: unknown; execPrice?: unknown; execQty?: unknown;
   execValue?: unknown; execFee?: unknown; execFeeV2?: unknown; feeCurrency?: unknown; isMaker?: unknown; execTime?: unknown;
   extraFees?: unknown; execType?: unknown;}
@@ -192,11 +192,27 @@ export class BybitOrderFillFeeSource implements OrderFillFeeSource {
   constructor(readonly product: "SPOT" | "PERPETUAL", private readonly port: BybitSignedReadPort = bybitPrivateHttpClient,
     private readonly credentials: {getCredentials(): BybitCredentials} = bybitCredentialsProvider) {}
   async getFills(market: string, orderId: string): Promise<readonly VenueOrderFill[]> {
-    const response = await this.port.getSigned<BybitExecutionResult>("/v5/execution/list",
-      {category: this.product === "SPOT" ? "spot" : "linear", symbol: market, orderId, limit: "100"},
-      this.credentials.getCredentials());
-    if (!Array.isArray(response.list)) throw new Error("Bybit execution-history list is missing.");
-    return response.list.map((value) => this.normalize(value, market, orderId));
+    // /v5/execution/list caps a single page at 100 executions; an order
+    // with more fills than that (a large or iceberg order) would otherwise
+    // permanently under-report its fill history to gap-backfill, since
+    // there was previously no way to reach the remaining pages. Follow
+    // nextPageCursor until Bybit reports none left, bounded so a
+    // misbehaving/non-terminating cursor can never loop forever.
+    const credentials = this.credentials.getCredentials();
+    const fills: VenueOrderFill[] = [];
+    let cursor: string | undefined;
+    const maximumPages = 20;
+    for (let page = 0; page < maximumPages; page += 1) {
+      const parameters: Record<string, string> = {category: this.product === "SPOT" ? "spot" : "linear", symbol: market, orderId, limit: "100"};
+      if (cursor) parameters.cursor = cursor;
+      const response = await this.port.getSigned<BybitExecutionResult>("/v5/execution/list", parameters, credentials);
+      if (!Array.isArray(response.list)) throw new Error("Bybit execution-history list is missing.");
+      fills.push(...response.list.map((value) => this.normalize(value, market, orderId)));
+      const nextCursor = typeof response.nextPageCursor === "string" ? response.nextPageCursor.trim() : "";
+      if (!nextCursor || response.list.length === 0) break;
+      cursor = nextCursor;
+    }
+    return fills;
   }
   private normalize(value: unknown, market: string, orderId: string): VenueOrderFill {
     if (!isRecord(value)) throw new Error("Bybit execution-history record is invalid.");

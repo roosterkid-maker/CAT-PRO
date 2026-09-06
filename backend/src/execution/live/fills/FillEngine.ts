@@ -167,16 +167,33 @@ export class FillEngine {
         previousAveragePrice *
         previousFilled;
 
-      const deltaNotional =
-        Math.max(
-          0,
-          currentNotional -
-            previousNotional,
-        );
+      const rawDeltaNotional =
+        currentNotional -
+        previousNotional;
 
+      /*
+       * deltaQuantity > 0 means real quantity was genuinely filled, so a
+       * negative rawDeltaNotional here can only be a rounding artifact of
+       * the exchange's own cumulative averageFillPrice - never proof the
+       * fill was free. Clamping this to 0 (the old behaviour) manufactured
+       * a FillSlice with a real quantity but price:0/notional:0, silently
+       * corrupting downstream fee-rate/slippage math. Falling back to the
+       * exchange's own current average price is a far better estimate
+       * than zero for this new slice.
+       */
       const derivedFillPrice =
-        deltaNotional /
-        deltaQuantity;
+        rawDeltaNotional >=
+        0
+          ? rawDeltaNotional /
+            deltaQuantity
+          : result.averageFillPrice;
+
+      const deltaNotional =
+        rawDeltaNotional >=
+        0
+          ? rawDeltaNotional
+          : derivedFillPrice *
+            deltaQuantity;
 
       const deltaFee =
         Math.max(
@@ -244,17 +261,22 @@ export class FillEngine {
      *
      * Fill Engine owns fill accounting,
      * not order status.
+     *
+     * buildSummary() only reads static order fields (requestedQuantity,
+     * side, requestedPrice, id, sessionId, ...) that applyExecutionResult()
+     * never changes, so it can safely use the pre-mutation `order` already
+     * fetched above. Committing this engine's own state BEFORE the
+     * external lifecycle mutation means a throw from either step can never
+     * leave `this.states` (the baseline the NEXT call's previousFilled/
+     * previousFee reads from) stale relative to what actually happened -
+     * the old order (external mutation first, own commit last) risked
+     * exactly that: a throw between the two would leave the lifecycle
+     * record already updated while this engine's own baseline lagged
+     * behind, double-counting the same delta on the next call.
      */
-    const lifecycle =
-      orderLifecycleManager
-        .applyExecutionResult(
-          orderLifecycleId,
-          result,
-        );
-
     const summary =
       this.buildSummary(
-        lifecycle,
+        order,
         result,
         fills,
       );
@@ -268,6 +290,12 @@ export class FillEngine {
           fingerprint,
       },
     );
+
+    orderLifecycleManager
+      .applyExecutionResult(
+        orderLifecycleId,
+        result,
+      );
 
     return structuredClone(
       summary,

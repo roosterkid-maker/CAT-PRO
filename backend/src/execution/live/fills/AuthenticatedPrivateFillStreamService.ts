@@ -938,14 +938,17 @@ export class AuthenticatedPrivateFillStreamService {
         state.accountFingerprint,
       );
 
-    if (
-      candidates.length >
-      this.maximumBackfillOrders
-    ) {
-      throw new Error(
-        "Authenticated private-stream REST gap backfill exceeded its bounded order capacity.",
+    // A backlog briefly exceeding the bounded cap must never permanently
+    // block this venue from reaching READY - that would be self-
+    // sustaining: READY is required for new WS fills to land, and new WS
+    // fills are exactly what shrinks the backlog. Process only the bounded
+    // prefix; the rest simply remain backfill candidates for the next
+    // reconnect's pass instead of tearing down the whole venue forever.
+    const boundedCandidates =
+      candidates.slice(
+        0,
+        this.maximumBackfillOrders,
       );
-    }
 
     const source =
       this.backfillSources.find(
@@ -968,23 +971,54 @@ export class AuthenticatedPrivateFillStreamService {
         fills: readonly VenueOrderFill[];
       }> = [];
 
-    for (const candidate of candidates) {
-      if (!candidate.exchangeOrderId) {
-        throw new Error(
-          "An unresolved durable private order lacks an exchange order ID; stream readiness remains fail-closed.",
+    const skippedCandidates:
+      string[] = [];
+
+    for (const candidate of boundedCandidates) {
+      try {
+        if (!candidate.exchangeOrderId) {
+          throw new Error(
+            "An unresolved durable private order lacks an exchange order ID; stream readiness remains fail-closed.",
+          );
+        }
+
+        const fills =
+          await source.getFills(
+            candidate.market,
+            candidate.exchangeOrderId,
+          );
+        backfills.push({
+          lifecycleOrderId:
+            candidate.lifecycleOrderId,
+          fills,
+        });
+      } catch (
+        error: unknown
+      ) {
+        // One poison candidate (missing exchange order ID, a transient
+        // REST error) must never block backfill/READY for every other
+        // healthy order on this venue - it stays a backfill candidate and
+        // is retried on the next reconnect instead of tearing the whole
+        // venue session down in an unbounded reconnect loop.
+        skippedCandidates.push(
+          `${candidate.lifecycleOrderId}: ${
+            error instanceof Error
+              ? error.message
+              : "Unknown backfill failure."
+          }`,
         );
       }
+    }
 
-      const fills =
-        await source.getFills(
-          candidate.market,
-          candidate.exchangeOrderId,
+    if (
+      skippedCandidates.length >
+      0
+    ) {
+      state.lastError =
+        this.redact(
+          state.venue,
+          `Backfill skipped ${skippedCandidates.length} candidate(s): ${skippedCandidates.join("; ")}`,
         );
-      backfills.push({
-        lifecycleOrderId:
-          candidate.lifecycleOrderId,
-        fills,
-      });
     }
 
     const activatedAt =

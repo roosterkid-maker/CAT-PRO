@@ -16,8 +16,19 @@ import type {
 } from "../../../exchanges/coindcx/api/CoinDCXHttpClient";
 
 import {
+  coinDCXOrderApi,
+} from "../../../exchanges/coindcx/api/CoinDCXOrderApi";
+
+import type {
+  CoinDCXOrder,
+} from "../../../exchanges/coindcx/api/CoinDCXOrderApi";
+
+import {
   authenticatedPrivateFillEventOwner,
+  type AuthenticatedPrivateOrderState,
   type AuthenticatedPrivateStreamSession,
+  type PrivateFillBackfillRecord,
+  type PrivateFillIngestResult,
 } from "./AuthenticatedPrivateFillEventOwner";
 
 type CoinDCXPrivateStreamPhase =
@@ -27,6 +38,7 @@ type CoinDCXPrivateStreamPhase =
   | "CONNECTING"
   | "VERIFYING_SIGNED_READ"
   | "JOINING"
+  | "BACKFILLING"
   | "READY"
   | "BACKOFF";
 
@@ -61,6 +73,13 @@ interface CoinDCXSignedReadProbe {
   ): Promise<void>;
 }
 
+interface CoinDCXOrderStatusPort {
+  getOrderStatus(
+    orderId: string,
+    credentials: CoinDCXCredentials,
+  ): Promise<CoinDCXOrder>;
+}
+
 interface CoinDCXPrivateFillOwnerPort {
   openAuthenticatedSession(
     session: AuthenticatedPrivateStreamSession,
@@ -74,16 +93,26 @@ interface CoinDCXPrivateFillOwnerPort {
   closeAuthenticatedSession(
     session: AuthenticatedPrivateStreamSession,
   ): boolean;
+  listBackfillCandidates(
+    venue: string,
+    accountFingerprint: string,
+  ): readonly AuthenticatedPrivateOrderState[];
+  ingestRestBackfill(
+    session: AuthenticatedPrivateStreamSession,
+    lifecycleOrderId: string,
+    records: readonly PrivateFillBackfillRecord[],
+    receivedAt?: number,
+  ): readonly PrivateFillIngestResult[];
   ingestCoinDCXOrderMessage(
     session: AuthenticatedPrivateStreamSession,
     payload: unknown,
     receivedAt?: number,
-  ): readonly unknown[];
+  ): readonly PrivateFillIngestResult[];
   ingestCoinDCXTradeMessage(
     session: AuthenticatedPrivateStreamSession,
     payload: unknown,
     receivedAt?: number,
-  ): readonly unknown[];
+  ): readonly PrivateFillIngestResult[];
 }
 
 export interface CoinDCXAuthenticatedPrivateFillStreamConfiguration {
@@ -93,6 +122,7 @@ export interface CoinDCXAuthenticatedPrivateFillStreamConfiguration {
   readonly reconnectMaximumDelayMs?: number;
   readonly sessionLeaseMs?: number;
   readonly signedReadRefreshMs?: number;
+  readonly maximumBackfillOrders?: number;
 }
 
 const DEFAULT_URL =
@@ -114,6 +144,7 @@ export class CoinDCXAuthenticatedPrivateFillStreamService {
   private readonly reconnectMaximumDelayMs: number;
   private readonly sessionLeaseMs: number;
   private readonly signedReadRefreshMs: number;
+  private readonly maximumBackfillOrders: number;
   private phase:
     CoinDCXPrivateStreamPhase =
     "STOPPED";
@@ -168,6 +199,8 @@ export class CoinDCXAuthenticatedPrivateFillStreamService {
       CoinDCXSignedReadProbe = new DefaultCoinDCXSignedReadProbe(),
     private readonly now:
       () => number = Date.now,
+    private readonly orderStatus:
+      CoinDCXOrderStatusPort = coinDCXOrderApi,
   ) {
     this.enabled =
       configuration.enabled ??
@@ -202,6 +235,12 @@ export class CoinDCXAuthenticatedPrivateFillStreamService {
         configuration.signedReadRefreshMs ??
           30_000,
         "CoinDCX signed-read refresh",
+      );
+    this.maximumBackfillOrders =
+      positiveInteger(
+        configuration.maximumBackfillOrders ??
+          100,
+        "CoinDCX private-stream backfill order capacity",
       );
 
     if (
@@ -488,6 +527,14 @@ export class CoinDCXAuthenticatedPrivateFillStreamService {
           session,
           verifiedAt,
         );
+
+      this.phase =
+        "BACKFILLING";
+      await this.performBackfill(
+        this.session,
+        credentials,
+      );
+
       this.phase =
         "READY";
       this.lastReadyAt =
@@ -505,6 +552,146 @@ export class CoinDCXAuthenticatedPrivateFillStreamService {
           "CoinDCX private signed-read or join setup failed.",
         ),
       );
+    }
+  }
+
+  /**
+   * Reconciles every non-terminal CoinDCX order's authoritative cumulative
+   * filled quantity (via signed REST order-status) against what has been
+   * recorded so far, injecting a synthetic catch-up fill for exactly the
+   * missing quantity. Unlike Binance/Bybit, CoinDCX has no authenticated
+   * "my trades" REST endpoint wired into this codebase, so this cannot
+   * reconstruct individual trade slices - it only closes the "a fill that
+   * happened while disconnected is lost forever" gap for the cumulative
+   * total, which is what actually protects real exposure from going
+   * undetected. Never throws: one bad candidate (network error, an order
+   * still missing its exchange order ID) must never block every other
+   * healthy order's backfill, and a backfill problem must never prevent
+   * this venue from reaching READY.
+   */
+  private async performBackfill(
+    session:
+      AuthenticatedPrivateStreamSession,
+    credentials:
+      CoinDCXCredentials,
+  ): Promise<void> {
+    let candidates:
+      readonly AuthenticatedPrivateOrderState[];
+
+    try {
+      candidates =
+        this.owner.listBackfillCandidates(
+          "coindcx",
+          session.accountFingerprint,
+        );
+    } catch (error: unknown) {
+      this.lastError =
+        message(
+          error,
+          "CoinDCX backfill candidate lookup failed.",
+        );
+      return;
+    }
+
+    const boundedCandidates =
+      candidates.slice(
+        0,
+        this.maximumBackfillOrders,
+      );
+
+    const skipped:
+      string[] = [];
+
+    for (const candidate of boundedCandidates) {
+      try {
+        if (!candidate.exchangeOrderId) {
+          throw new Error(
+            "An unresolved durable CoinDCX order lacks an exchange order ID.",
+          );
+        }
+
+        const order =
+          await this.orderStatus.getOrderStatus(
+            candidate.exchangeOrderId,
+            credentials,
+          );
+
+        const authoritativeFilled =
+          order.totalQuantity -
+          order.remainingQuantity;
+        const missing =
+          authoritativeFilled -
+          candidate.filledQuantity;
+
+        if (
+          !Number.isFinite(
+            missing,
+          ) ||
+          missing <=
+            1e-9
+        ) {
+          continue;
+        }
+
+        const record:
+          PrivateFillBackfillRecord = {
+          executionId:
+            `coindcx-catchup:${candidate.exchangeOrderId}:${authoritativeFilled}`,
+          orderId:
+            candidate.exchangeOrderId,
+          market:
+            candidate.market,
+          price:
+            order.averagePrice,
+          quantity:
+            missing,
+          quoteQuantity:
+            missing *
+            order.averagePrice,
+          feeAsset:
+            candidate.fees[0]?.asset ??
+            "UNKNOWN",
+          // CoinDCX's order-status endpoint only reports one cumulative
+          // fee total, not a per-trade breakdown, so the missing slice's
+          // fee is estimated proportionally to the quantity it covers.
+          feeAmount:
+            authoritativeFilled >
+            0
+              ? order.feeAmount *
+                (missing /
+                  authoritativeFilled)
+              : 0,
+          maker:
+            false,
+          executedAt:
+            this.now(),
+          additionalFeeMetadataPresent:
+            false,
+        };
+
+        this.owner.ingestRestBackfill(
+          session,
+          candidate.lifecycleOrderId,
+          [record],
+          this.now(),
+        );
+      } catch (error: unknown) {
+        skipped.push(
+          `${candidate.lifecycleOrderId}: ${
+            error instanceof Error
+              ? error.message
+              : "Unknown CoinDCX backfill failure."
+          }`,
+        );
+      }
+    }
+
+    if (
+      skipped.length >
+      0
+    ) {
+      this.lastError =
+        `CoinDCX backfill skipped ${skipped.length} candidate(s): ${skipped.join("; ")}`;
     }
   }
 
@@ -536,21 +723,40 @@ export class CoinDCXAuthenticatedPrivateFillStreamService {
       receivedAt;
 
     try {
-      if (
+      const results:
+        readonly PrivateFillIngestResult[] =
         topic ===
         "order-update"
+          ? this.owner.ingestCoinDCXOrderMessage(
+              this.session,
+              payload,
+              receivedAt,
+            )
+          : this.owner.ingestCoinDCXTradeMessage(
+              this.session,
+              payload,
+              receivedAt,
+            );
+
+      // A batched message can contain a mix of valid and malformed items
+      // (see AuthenticatedPrivateFillEventOwner.normalizeCoinDCXTradeMessage) -
+      // the valid ones are already durably ingested by this point, but a
+      // malformed one must still surface here so it isn't silently lost
+      // from rejectedMessages/lastError diagnostics.
+      const malformed =
+        results.find(
+          (result) =>
+            result.outcome ===
+            "MALFORMED",
+        );
+
+      if (
+        malformed
       ) {
-        this.owner.ingestCoinDCXOrderMessage(
-          this.session,
-          payload,
-          receivedAt,
-        );
-      } else {
-        this.owner.ingestCoinDCXTradeMessage(
-          this.session,
-          payload,
-          receivedAt,
-        );
+        this.rejectedMessages +=
+          1;
+        this.lastError =
+          malformed.reason;
       }
     } catch (error: unknown) {
       this.rejectedMessages +=
