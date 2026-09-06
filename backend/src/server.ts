@@ -36,6 +36,10 @@ import {
 } from "./arbitrage/services/UnoCoinFeeSynchronizationService";
 
 import {
+  zebPayFeeSynchronizationService,
+} from "./arbitrage/services/ZebPayFeeSynchronizationService";
+
+import {
   coinSwitchFeeSynchronizationService,
 } from "./arbitrage/services/CoinSwitchFeeSynchronizationService";
 
@@ -756,6 +760,24 @@ server.listen(
         .start();
 
       try {
+        await zebPayFeeSynchronizationService
+          .synchronize();
+      } catch (
+        error:
+          unknown
+      ) {
+        console.error(
+          "[ZebPay Fees] Initial synchronization failed; ZebPay fee-dependent routes remain blocked:",
+          error instanceof Error
+            ? error.message
+            : error,
+        );
+      }
+
+      zebPayFeeSynchronizationService
+        .start();
+
+      try {
         await unoCoinAuthenticatedReadVerificationService
           .verify();
       } catch (
@@ -1010,6 +1032,9 @@ const shutdown =
       .stop();
 
     unoCoinFeeSynchronizationService
+      .stop();
+
+    zebPayFeeSynchronizationService
       .stop();
 
     unoCoinAuthenticatedReadVerificationService
