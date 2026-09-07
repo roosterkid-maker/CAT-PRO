@@ -11,12 +11,20 @@ import {
 } from "../../../core/persistence/JsonlSnapshotStore";
 
 import {
-  liveExecutionCoordinator,
-} from "../coordinator/LiveExecutionCoordinator";
+  strategyOneTwoLegLiveExecutionService,
+} from "../arbitrage/StrategyOneTwoLegLiveExecutionService";
 
 import type {
-  LiveExecutionSession,
-} from "../coordinator/LiveExecutionSession";
+  CentralLiveOrderGatewayResponse,
+} from "../central/CentralLiveOrderExecutionGateway";
+
+import type {
+  LiveExecutionRequest,
+} from "../models/LiveExecutionRequest";
+
+import {
+  liveExecutionCoordinator,
+} from "../coordinator/LiveExecutionCoordinator";
 
 import {
   fillEngine,
@@ -32,7 +40,6 @@ import {
 
 import type {
   OrderLifecycleRecord,
-  OrderLifecycleStatus,
 } from "../lifecycle/OrderLifecycleRecord";
 
 import type {
@@ -92,6 +99,208 @@ function isIncidentRecord(
     );
 }
 
+/*
+ * Strategy #1's real live dispatch (StrategyOneTwoLegLiveExecutionService ->
+ * CentralLiveOrderExecutionGateway) never touches LiveExecutionCoordinator/
+ * OrderLifecycleManager/FillEngine directly - but PaperTwoLegExecutionLifecycleService
+ * (PAPER trading's own two-leg simulation) does route through that
+ * coordinator/lifecycle/fill machinery and calls evaluateSession() against
+ * it. This engine therefore watches BOTH session sources: the legacy
+ * coordinator (still the real, exercised source for PAPER) and Strategy
+ * #1's own live two-leg session store (the actual source for real LIVE
+ * orders, which the coordinator never sees). Both sides are normalized to
+ * the same StrategyOneLegSnapshot shape so the exposure/escalation logic
+ * below is written once and applies identically to either source.
+ */
+interface StrategyOneLegSnapshot {
+  readonly exchange: string;
+  readonly market: string;
+  readonly status: string | null;
+  readonly orderId: string | null;
+  readonly requestedQuantity: number;
+  readonly filledQuantity: number;
+  readonly averageFillPrice: number | null;
+  readonly requestedPrice: number | null;
+  readonly updatedAt: number | null;
+}
+
+function legSnapshotFromGatewayResponse(
+  request: LiveExecutionRequest,
+  response: CentralLiveOrderGatewayResponse | null,
+  updatedAt: number | null,
+): StrategyOneLegSnapshot {
+  const result =
+    response?.record?.result ??
+    null;
+
+  return {
+    exchange:
+      request.exchange,
+    market:
+      request.market,
+    status:
+      result?.status ??
+      null,
+    orderId:
+      result?.orderId ??
+      null,
+    requestedQuantity:
+      request.quantity,
+    filledQuantity:
+      Math.max(
+        0,
+        result?.filledQuantity ??
+          0,
+      ),
+    averageFillPrice:
+      result &&
+      result.averageFillPrice >
+        0
+        ? result.averageFillPrice
+        : null,
+    requestedPrice:
+      typeof request.price ===
+        "number" &&
+      request.price >
+        0
+        ? request.price
+        : null,
+    updatedAt,
+  };
+}
+
+function resolveLifecycleFilledQuantity(
+  order:
+    OrderLifecycleRecord,
+  fill:
+    OrderFillSummary |
+    null,
+): number {
+  if (
+    fill
+  ) {
+    return Math.max(
+      0,
+      fill.filledQuantity,
+    );
+  }
+
+  return Math.max(
+    0,
+    order.filledQuantity,
+  );
+}
+
+// orders/fills carry every order submitted for this leg (a retry can add
+// a second order after the first), so filled quantity is summed across
+// all of them - matching the original per-leg accounting this engine used
+// before Strategy #1's own live sessions were added as a second source.
+// The other, single-valued fields (status/orderId/prices/updatedAt) come
+// from the latest order, since only the current attempt's status is
+// relevant to "is the counter leg still active".
+function legSnapshotFromLifecycle(
+  orders:
+    readonly OrderLifecycleRecord[],
+  fillFor:
+    (
+      orderId: string,
+    ) =>
+      OrderFillSummary |
+      null,
+): StrategyOneLegSnapshot {
+  const latest =
+    orders[
+      orders.length -
+        1
+    ] ??
+    null;
+
+  const filledQuantity =
+    orders.reduce(
+      (
+        total,
+        order,
+      ) =>
+        total +
+        resolveLifecycleFilledQuantity(
+          order,
+          fillFor(
+            order.id,
+          ),
+        ),
+      0,
+    );
+
+  const latestFill =
+    latest
+      ? fillFor(
+          latest.id,
+        )
+      : null;
+
+  const averageFillPrice =
+    latestFill &&
+    latestFill.averageFillPrice >
+      0
+      ? latestFill.averageFillPrice
+      : latest &&
+        latest.averageFillPrice >
+          0
+        ? latest.averageFillPrice
+        : null;
+
+  const requestedPrice =
+    latest?.requestedPrice !==
+      null &&
+    latest?.requestedPrice !==
+      undefined &&
+    latest.requestedPrice >
+      0
+      ? latest.requestedPrice
+      : null;
+
+  return {
+    exchange:
+      latest?.exchange ??
+      "",
+    market:
+      latest?.market ??
+      "",
+    status:
+      latest?.status ??
+      null,
+    orderId:
+      latest?.id ??
+      null,
+    requestedQuantity:
+      latest?.requestedQuantity ??
+      0,
+    filledQuantity,
+    averageFillPrice,
+    requestedPrice,
+    updatedAt:
+      latest?.updatedAt ??
+      null,
+  };
+}
+
+function isLegFailureTerminal(
+  status:
+    string |
+    null,
+): boolean {
+  return status ===
+      "CANCELLED" ||
+    status ===
+      "REJECTED" ||
+    status ===
+      "TIMED_OUT" ||
+    status ===
+      "FAILED" ||
+    status ===
+      "ABORTED";
+}
+
 export class ExecutionRecoveryEngine {
   private static readonly SCAN_INTERVAL_MS =
     1_000;
@@ -127,10 +336,9 @@ export class ExecutionRecoveryEngine {
 
   // Durable, delta-per-mutation journal for incidents. Every sibling
   // recovery service in this directory uses JsonlSnapshotStore precisely
-  // because liveExecutionCoordinator's in-memory session state does not
-  // survive a restart - without this, every incident/severity/
-  // acknowledgement/resolution this engine ever produced was lost on
-  // every process restart.
+  // because in-memory session/order state does not survive a restart -
+  // without this, every incident/severity/acknowledgement/resolution this
+  // engine ever produced was lost on every process restart.
   private readonly store:
     JsonlSnapshotStore<ExecutionRecoveryIncident>;
 
@@ -266,15 +474,40 @@ export class ExecutionRecoveryEngine {
     this.scans +=
       1;
 
-    // failInternal() can move ANY active session (including one already
-    // mid-flight with a real fill on one leg) straight to FAILED - it
-    // never requires the legs to be flat first. A session that leaves
-    // RUNNING this way still needs exposure monitoring, so FAILED must
-    // stay in scope here too; only pre-submission (VALIDATING/RESERVED/
-    // READY_FOR_SUBMISSION) and genuinely order-free terminal states
-    // (COMPLETED, CANCELLED - cancel() refuses a RUNNING session -,
-    // EXPIRED - only reachable before order submission) are safe to skip.
-    const sessions =
+    // PREPARED means neither leg has dispatched yet (no exposure is
+    // possible), and COMPLETED means both legs settled without the pair
+    // owner itself ever flagging POSSIBLE_EXPOSURE - both are safe to
+    // skip. Every other state (DISPATCHING, POSSIBLE_EXPOSURE,
+    // RECOVERY_REQUIRED, FAILED) can carry a real, still-unresolved
+    // imbalance and stays in scope so it keeps being watched (and its
+    // incident severity keeps escalating) until it's actually resolved.
+    const strategyOneSessionIds =
+      strategyOneTwoLegLiveExecutionService
+        .listSessions()
+        .filter(
+          (
+            session,
+          ) =>
+            session.state !==
+              "PREPARED" &&
+            session.state !==
+              "COMPLETED",
+        )
+        .map(
+          (
+            session,
+          ) =>
+            session.sessionId,
+        );
+
+    // failInternal() can move ANY active coordinator session (including
+    // one already mid-flight with a real fill on one leg) straight to
+    // FAILED - it never requires the legs to be flat first. A session
+    // that leaves RUNNING this way still needs exposure monitoring, so
+    // FAILED must stay in scope here too; only pre-submission
+    // (VALIDATING/RESERVED/READY_FOR_SUBMISSION) and genuinely order-free
+    // terminal states (COMPLETED, CANCELLED, EXPIRED) are safe to skip.
+    const coordinatorSessionIds =
       liveExecutionCoordinator
         .getDiagnostics()
         .sessions
@@ -286,18 +519,27 @@ export class ExecutionRecoveryEngine {
               "RUNNING" ||
             session.status ===
               "FAILED",
+        )
+        .map(
+          (
+            session,
+          ) =>
+            session.id,
         );
 
     let detections =
       0;
 
     for (
-      const session
-      of sessions
+      const sessionId
+      of [
+        ...strategyOneSessionIds,
+        ...coordinatorSessionIds,
+      ]
     ) {
       const evaluation =
         this.evaluateSession(
-          session.id,
+          sessionId,
           now,
         );
 
@@ -320,110 +562,37 @@ export class ExecutionRecoveryEngine {
     now =
       Date.now(),
   ): ExecutionRecoveryEvaluation {
-    const session =
-      liveExecutionCoordinator
-        .getSession(
-          sessionId,
-        );
+    const resolved =
+      this.resolveSessionLegs(
+        sessionId,
+      );
 
     if (
-      !session
+      !resolved
     ) {
       throw new Error(
         "Live execution session not found.",
       );
     }
 
+    const {
+      sessionId:
+        resolvedSessionId,
+      planId,
+      preparedAt,
+      buyLeg,
+      sellLeg,
+    } =
+      resolved;
+
     this.sessionsEvaluated +=
       1;
 
-    const orders =
-      orderLifecycleManager
-        .getBySession(
-          session.id,
-        );
-
-    const buyOrders =
-      orders.filter(
-        (
-          order,
-        ) =>
-          order.leg ===
-          "BUY",
-      );
-
-    const sellOrders =
-      orders.filter(
-        (
-          order,
-        ) =>
-          order.leg ===
-          "SELL",
-      );
-
-    const buyOrder =
-      buyOrders[
-        buyOrders.length -
-          1
-      ] ??
-      null;
-
-    const sellOrder =
-      sellOrders[
-        sellOrders.length -
-          1
-      ] ??
-      null;
-
-    const buyFill =
-      buyOrder
-        ? fillEngine
-            .getSummary(
-              buyOrder.id,
-            )
-        : null;
-
-    const sellFill =
-      sellOrder
-        ? fillEngine
-            .getSummary(
-              sellOrder.id,
-            )
-        : null;
-
     const boughtQuantity =
-      buyOrders.reduce(
-        (
-          total,
-          order,
-        ) =>
-          total +
-          this.resolveFilledQuantity(
-            order,
-            fillEngine
-              .getSummary(
-                order.id,
-              ),
-          ),
-        0,
-      );
+      buyLeg.filledQuantity;
 
     const soldQuantity =
-      sellOrders.reduce(
-        (
-          total,
-          order,
-        ) =>
-          total +
-          this.resolveFilledQuantity(
-            order,
-            fillEngine
-              .getSummary(
-                order.id,
-              ),
-          ),
-        0,
-      );
+      sellLeg.filledQuantity;
 
     const rawDelta =
       boughtQuantity -
@@ -432,15 +601,9 @@ export class ExecutionRecoveryEngine {
     const tolerance =
       this.quantityTolerance(
         Math.max(
-          ...orders.map(
-            (
-              order,
-            ) =>
-              order.requestedQuantity,
-          ),
-
+          buyLeg.requestedQuantity,
+          sellLeg.requestedQuantity,
           boughtQuantity,
-
           soldQuantity,
         ),
       );
@@ -473,13 +636,13 @@ export class ExecutionRecoveryEngine {
         1;
 
       this.resolveActiveIncidentIfBalanced(
-        session.id,
+        resolvedSessionId,
         now,
       );
 
       return {
         sessionId:
-          session.id,
+          resolvedSessionId,
 
         requiresRecovery:
           false,
@@ -509,9 +672,9 @@ export class ExecutionRecoveryEngine {
 
     const assessment =
       this.chooseRecovery(
-        session,
-        buyOrder,
-        sellOrder,
+        preparedAt,
+        buyLeg,
+        sellLeg,
         exposureDirection,
         exposedQuantity,
         now,
@@ -519,15 +682,14 @@ export class ExecutionRecoveryEngine {
 
     const incident =
       this.upsertIncident({
-        session,
+        sessionId:
+          resolvedSessionId,
 
-        buyOrder,
+        planId,
 
-        sellOrder,
+        buyLeg,
 
-        buyFill,
-
-        sellFill,
+        sellLeg,
 
         boughtQuantity,
 
@@ -554,7 +716,7 @@ export class ExecutionRecoveryEngine {
 
     return {
       sessionId:
-        session.id,
+        resolvedSessionId,
 
       requiresRecovery:
         true,
@@ -577,6 +739,112 @@ export class ExecutionRecoveryEngine {
         assessment.reason,
 
       incident,
+    };
+  }
+
+  private resolveSessionLegs(
+    sessionId:
+      string,
+  ): {
+    sessionId:
+      string;
+    planId:
+      string;
+    preparedAt:
+      number;
+    buyLeg:
+      StrategyOneLegSnapshot;
+    sellLeg:
+      StrategyOneLegSnapshot;
+  } |
+    null {
+    const strategyOneSession =
+      strategyOneTwoLegLiveExecutionService
+        .getSession(
+          sessionId,
+        );
+
+    if (
+      strategyOneSession
+    ) {
+      return {
+        sessionId:
+          strategyOneSession.sessionId,
+        planId:
+          strategyOneSession.opportunityId,
+        preparedAt:
+          strategyOneSession.preparedAt,
+        buyLeg:
+          legSnapshotFromGatewayResponse(
+            strategyOneSession.buyRequest,
+            strategyOneSession.buyResponse,
+            strategyOneSession.buyDispatchedAt,
+          ),
+        sellLeg:
+          legSnapshotFromGatewayResponse(
+            strategyOneSession.sellRequest,
+            strategyOneSession.sellResponse,
+            strategyOneSession.sellDispatchedAt,
+          ),
+      };
+    }
+
+    const coordinatorSession =
+      liveExecutionCoordinator
+        .getSession(
+          sessionId,
+        );
+
+    if (
+      !coordinatorSession
+    ) {
+      return null;
+    }
+
+    const orders =
+      orderLifecycleManager
+        .getBySession(
+          coordinatorSession.id,
+        );
+
+    const fillFor =
+      (
+        orderId: string,
+      ) =>
+        fillEngine
+          .getSummary(
+            orderId,
+          );
+
+    return {
+      sessionId:
+        coordinatorSession.id,
+      planId:
+        coordinatorSession.planId,
+      preparedAt:
+        coordinatorSession.createdAt,
+      buyLeg:
+        legSnapshotFromLifecycle(
+          orders.filter(
+            (
+              order,
+            ) =>
+              order.leg ===
+              "BUY",
+          ),
+          fillFor,
+        ),
+      sellLeg:
+        legSnapshotFromLifecycle(
+          orders.filter(
+            (
+              order,
+            ) =>
+              order.leg ===
+              "SELL",
+          ),
+          fillFor,
+        ),
     };
   }
 
@@ -893,16 +1161,14 @@ export class ExecutionRecoveryEngine {
   }
 
   private chooseRecovery(
-    session:
-      LiveExecutionSession,
+    fallbackCreatedAt:
+      number,
 
-    buyOrder:
-      OrderLifecycleRecord |
-      null,
+    buyLeg:
+      StrategyOneLegSnapshot,
 
-    sellOrder:
-      OrderLifecycleRecord |
-      null,
+    sellLeg:
+      StrategyOneLegSnapshot,
 
     exposureDirection:
       Exclude<
@@ -925,22 +1191,23 @@ export class ExecutionRecoveryEngine {
     reason:
       string;
   } {
-    const counterOrder =
+    const counterLeg =
       exposureDirection ===
       "LONG"
-        ? sellOrder
-        : buyOrder;
+        ? sellLeg
+        : buyLeg;
 
     const exposureAgeMs =
       this.resolveExposureAgeMs(
-        session,
-        buyOrder,
-        sellOrder,
+        fallbackCreatedAt,
+        buyLeg,
+        sellLeg,
         now,
       );
 
     if (
-      !counterOrder
+      counterLeg.status ===
+        null
     ) {
       return {
         strategy:
@@ -954,14 +1221,14 @@ export class ExecutionRecoveryEngine {
             : "WARNING",
 
         reason:
-          `${exposureDirection} exposure of ${exposedQuantity} units exists, but the counter-leg lifecycle is missing. ` +
+          `${exposureDirection} exposure of ${exposedQuantity} units exists, but the counter-leg has not dispatched. ` +
           "Prepare/retry the counter leg before considering emergency exit.",
       };
     }
 
     if (
-      this.isFailureTerminal(
-        counterOrder.status,
+      isLegFailureTerminal(
+        counterLeg.status,
       )
     ) {
       return {
@@ -972,13 +1239,13 @@ export class ExecutionRecoveryEngine {
           "CRITICAL",
 
         reason:
-          `${exposureDirection} exposure of ${exposedQuantity} units remains after the counter leg reached terminal status ${counterOrder.status}. ` +
+          `${exposureDirection} exposure of ${exposedQuantity} units remains after the counter leg reached terminal status ${counterLeg.status}. ` +
           "Emergency exit is recommended, but automatic emergency order submission is intentionally disabled.",
       };
     }
 
     if (
-      counterOrder.status ===
+      counterLeg.status ===
       "FILLED"
     ) {
       return {
@@ -1044,24 +1311,17 @@ export class ExecutionRecoveryEngine {
 
   private upsertIncident(
     input: {
-      session:
-        LiveExecutionSession;
+      sessionId:
+        string;
 
-      buyOrder:
-        OrderLifecycleRecord |
-        null;
+      planId:
+        string;
 
-      sellOrder:
-        OrderLifecycleRecord |
-        null;
+      buyLeg:
+        StrategyOneLegSnapshot;
 
-      buyFill:
-        OrderFillSummary |
-        null;
-
-      sellFill:
-        OrderFillSummary |
-        null;
+      sellLeg:
+        StrategyOneLegSnapshot;
 
       boughtQuantity:
         number;
@@ -1094,7 +1354,7 @@ export class ExecutionRecoveryEngine {
     const existingId =
       this.activeIncidentBySession
         .get(
-          input.session.id,
+          input.sessionId,
         );
 
     const existing =
@@ -1109,10 +1369,8 @@ export class ExecutionRecoveryEngine {
       this.estimateExposureNotional(
         input.exposureDirection,
         input.exposedQuantity,
-        input.buyOrder,
-        input.sellOrder,
-        input.buyFill,
-        input.sellFill,
+        input.buyLeg,
+        input.sellLeg,
       );
 
     if (
@@ -1161,24 +1419,16 @@ export class ExecutionRecoveryEngine {
         estimatedExposureNotional;
 
       existing.buyLifecycleStatus =
-        input.buyOrder
-          ?.status ??
-        null;
+        input.buyLeg.status;
 
       existing.sellLifecycleStatus =
-        input.sellOrder
-          ?.status ??
-        null;
+        input.sellLeg.status;
 
       existing.buyOrderLifecycleId =
-        input.buyOrder
-          ?.id ??
-        null;
+        input.buyLeg.orderId;
 
       existing.sellOrderLifecycleId =
-        input.sellOrder
-          ?.id ??
-        null;
+        input.sellLeg.orderId;
 
       existing.reason =
         input.reason;
@@ -1201,19 +1451,19 @@ export class ExecutionRecoveryEngine {
         randomUUID(),
 
       sessionId:
-        input.session.id,
+        input.sessionId,
 
       planId:
-        input.session.planId,
+        input.planId,
 
       market:
-        input.session.market,
+        input.buyLeg.market,
 
       buyExchange:
-        input.session.buyExchange,
+        input.buyLeg.exchange,
 
       sellExchange:
-        input.session.sellExchange,
+        input.sellLeg.exchange,
 
       status:
         "OPEN",
@@ -1239,24 +1489,16 @@ export class ExecutionRecoveryEngine {
       estimatedExposureNotional,
 
       buyLifecycleStatus:
-        input.buyOrder
-          ?.status ??
-        null,
+        input.buyLeg.status,
 
       sellLifecycleStatus:
-        input.sellOrder
-          ?.status ??
-        null,
+        input.sellLeg.status,
 
       buyOrderLifecycleId:
-        input.buyOrder
-          ?.id ??
-        null,
+        input.buyLeg.orderId,
 
       sellOrderLifecycleId:
-        input.sellOrder
-          ?.id ??
-        null,
+        input.sellLeg.orderId,
 
       reason:
         input.reason,
@@ -1284,7 +1526,7 @@ export class ExecutionRecoveryEngine {
 
     this.activeIncidentBySession
       .set(
-        input.session.id,
+        input.sessionId,
         incident.id,
       );
 
@@ -1369,33 +1611,19 @@ export class ExecutionRecoveryEngine {
     quantity:
       number,
 
-    buyOrder:
-      OrderLifecycleRecord |
-      null,
+    buyLeg:
+      StrategyOneLegSnapshot,
 
-    sellOrder:
-      OrderLifecycleRecord |
-      null,
-
-    buyFill:
-      OrderFillSummary |
-      null,
-
-    sellFill:
-      OrderFillSummary |
-      null,
+    sellLeg:
+      StrategyOneLegSnapshot,
   ): number | null {
     const price =
-      direction ===
-      "LONG"
-        ? this.resolveReferencePrice(
-            buyFill,
-            buyOrder,
-          )
-        : this.resolveReferencePrice(
-            sellFill,
-            sellOrder,
-          );
+      this.resolveReferencePrice(
+        direction ===
+        "LONG"
+          ? buyLeg
+          : sellLeg,
+      );
 
     if (
       price ===
@@ -1412,105 +1640,57 @@ export class ExecutionRecoveryEngine {
   }
 
   private resolveReferencePrice(
-    fill:
-      OrderFillSummary |
-      null,
-
-    order:
-      OrderLifecycleRecord |
-      null,
+    leg:
+      StrategyOneLegSnapshot,
   ): number | null {
     if (
-      fill &&
-      fill.averageFillPrice >
-        0
+      leg.averageFillPrice !==
+        null
     ) {
-      return fill
+      return leg
         .averageFillPrice;
     }
 
     if (
-      order &&
-      order.averageFillPrice >
-        0
+      leg.requestedPrice !==
+        null
     ) {
-      return order
-        .averageFillPrice;
-    }
-
-    if (
-      order
-        ?.requestedPrice !==
-        null &&
-      order
-        ?.requestedPrice !==
-        undefined &&
-      order.requestedPrice >
-        0
-    ) {
-      return order
+      return leg
         .requestedPrice;
     }
 
     return null;
   }
 
-  private resolveFilledQuantity(
-    order:
-      OrderLifecycleRecord |
-      null,
-
-    fill:
-      OrderFillSummary |
-      null,
-  ): number {
-    if (
-      fill
-    ) {
-      return Math.max(
-        0,
-        fill.filledQuantity,
-      );
-    }
-
-    return Math.max(
-      0,
-      order
-        ?.filledQuantity ??
-        0,
-    );
-  }
-
   private resolveExposureAgeMs(
-    session:
-      LiveExecutionSession,
+    fallbackCreatedAt:
+      number,
 
-    buyOrder:
-      OrderLifecycleRecord |
-      null,
+    buyLeg:
+      StrategyOneLegSnapshot,
 
-    sellOrder:
-      OrderLifecycleRecord |
-      null,
+    sellLeg:
+      StrategyOneLegSnapshot,
 
     now:
       number,
   ): number {
     // Exposure age must measure how long the imbalance itself has existed,
-    // not how long the session has existed. session.startedAt/updatedAt
-    // are deliberately excluded: a session that ran balanced for a while
-    // before one leg was cancelled must not inherit that leg's whole
-    // lifetime as its exposure age. The most recent of the two legs'
-    // updatedAt is the moment the current (im)balance was created, so it
-    // is the correct reference point - not the oldest (Math.min), which
-    // would skip the counter-leg grace window entirely for any session
-    // that had been running for a while before the imbalance appeared.
+    // not how long the session has existed. fallbackCreatedAt is
+    // deliberately excluded from the candidate list below: a session that
+    // ran balanced for a while before one leg was cancelled must not
+    // inherit that leg's whole lifetime as its exposure age. The most
+    // recent of the two legs' updatedAt is the moment the current
+    // (im)balance was created, so it is the correct reference point - not
+    // the oldest (Math.min), which would skip the counter-leg grace
+    // window entirely for any session that had been running for a while
+    // before the imbalance appeared.
     const candidateTimes = [
-      buyOrder
-        ?.updatedAt,
+      buyLeg
+        .updatedAt,
 
-      sellOrder
-        ?.updatedAt,
+      sellLeg
+        .updatedAt,
     ].filter(
       (
         value,
@@ -1530,30 +1710,12 @@ export class ExecutionRecoveryEngine {
         ? Math.max(
             ...candidateTimes,
           )
-        : session.createdAt;
+        : fallbackCreatedAt;
 
     return Math.max(
       0,
       now -
         reference,
-    );
-  }
-
-  private isFailureTerminal(
-    status:
-      OrderLifecycleStatus,
-  ): boolean {
-    return (
-      status ===
-        "CANCELLED" ||
-      status ===
-        "REJECTED" ||
-      status ===
-        "TIMED_OUT" ||
-      status ===
-        "FAILED" ||
-      status ===
-        "ABORTED"
     );
   }
 
