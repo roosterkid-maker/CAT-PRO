@@ -28,10 +28,10 @@ export const PROFIT_TIER_POLICY = {
     0.05,
 
   qualificationMinimumNetProfitPercent:
-    0.30,
+    0.10,
 
   liveMinimumNetProfitPercent:
-    0.30,
+    0.10,
 } as const;
 
 export function classifyProfitTier(

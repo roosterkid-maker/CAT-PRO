@@ -167,12 +167,12 @@ function main(): void {
 
     service.observeSnapshot(snapshot(opportunity({
       generatedAt: NOW + 6_000,
-      netProfitPercent: 0.1,
+      netProfitPercent: 0.08,
       decision: "REVIEW",
     })), NOW + 6_005);
     const preview = {
       state: "WAITING_FOR_CURRENT_OPPORTUNITY",
-      minimumCurrentNetProfitPercent: 0.30,
+      minimumCurrentNetProfitPercent: 0.10,
       evidence: {fullyPreflightableMatches: 0},
       selected: null,
       blockers: ["No current Binance/Bybit candidate passed every action-time check."],
@@ -190,9 +190,9 @@ function main(): void {
       collectingAudit.observation.wallClockSpanMs,
       "The compatibility span must represent the truthful wall-clock audit window.");
     assert.equal(collectingAudit.observation.profitBands.discovered, 1);
-    assert.equal(collectingAudit.thresholds.activeTinyLiveNetProfitPercent, 0.30,
-      "The action-time threshold must remain at the authoritative 0.30% floor.");
-    assert.equal(collectingAudit.thresholds.liveNetProfitPercent, 0.30);
+    assert.equal(collectingAudit.thresholds.activeTinyLiveNetProfitPercent, 0.10,
+      "The action-time threshold must remain at the authoritative 0.10% floor.");
+    assert.equal(collectingAudit.thresholds.liveNetProfitPercent, 0.10);
     assert.equal(collectingAudit.routeRanking[0]?.routeKey,
       "BTCUSDT:binance->bybit");
     assert.equal(collectingAudit.currentActionTime.categories.every(
@@ -214,14 +214,14 @@ function main(): void {
     const reviewableAudit = audit.getReport(NOW + 3_606_100);
     assert.equal(reviewableAudit.state, "READY_FOR_POLICY_REVIEW");
     assert.equal(reviewableAudit.observation.profitBands.qualified, 0,
-      "No intermediate band remains when qualification and LIVE both start at 0.30%.");
+      "No intermediate band remains when qualification and LIVE both start at 0.10%.");
     assert.equal(reviewableAudit.observation.profitBands.liveEligible, 6,
-      "Every supported dynamic-route observation above 0.30% must be reported under the current LIVE floor.");
+      "Every supported dynamic-route observation above 0.10% must be reported under the current LIVE floor.");
     assert.equal(reviewableAudit.blockerRanking.find(
       (blocker) => blocker.code === "PROFIT_BELOW_LIVE_MINIMUM")?.count, 1);
     assert.notEqual(reviewableAudit.routeRanking[0]?.dominantBlocker,
       "PROFIT_BELOW_LIVE_MINIMUM",
-      "A route whose displayed P95 exceeds 0.30% must not be labelled below the LIVE minimum.");
+      "A route whose displayed P95 exceeds 0.10% must not be labelled below the LIVE minimum.");
     assert.equal(reviewableAudit.safety.policyMutationAllowed, false);
 
     service.stop();

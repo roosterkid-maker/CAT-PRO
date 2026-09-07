@@ -525,7 +525,7 @@ function testFinalPaperStressGate(): void {
   assert.equal(passed.sellVwap, 101.15);
   assert.equal(passed.buyLimitPrice, 100.1);
   assert.equal(passed.sellLimitPrice, 101.1);
-  assert.equal(passed.minimumNetProfitPercent, 0.3);
+  assert.equal(passed.minimumNetProfitPercent, 0.1);
   assert.ok((passed.postStressNetProfitPercent ?? 0) > 0.3);
   assert.equal(passed.paperOnly, true);
   assert.equal(passed.liveExecutionAllowed, false);
@@ -582,7 +582,7 @@ function testFinalPaperStressGate(): void {
   );
   books.set(
     "coinswitch:BTCUSDT",
-    orderBook("coinswitch", NOW, [[100.6, 5], [100.5, 5]], [[100.7, 20]]),
+    orderBook("coinswitch", NOW, [[100.32, 5], [100.28, 5]], [[100.4, 20]]),
   );
   const belowMinimum = gate.evaluate({
     opportunity: opportunity("stress-below-minimum", 20),
@@ -590,8 +590,12 @@ function testFinalPaperStressGate(): void {
     now: NOW,
   });
   assert.equal(belowMinimum.status, "BLOCKED");
-  assert.match(belowMinimum.reasons.join(" "), /below minimum 0\.3000%/i);
+  assert.match(belowMinimum.reasons.join(" "), /below minimum 0\.1000%/i);
 
+  books.set(
+    "coinswitch:BTCUSDT",
+    orderBook("coinswitch", NOW, [[100.6, 5], [100.5, 5]], [[100.7, 20]]),
+  );
   const relaxedPostStress = gate.evaluate({
     opportunity: opportunity("stress-v5-post-stress", 20),
     quantity: 10,
