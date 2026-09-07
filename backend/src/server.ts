@@ -100,6 +100,10 @@ import {
 } from "./exchanges/coinswitch/CoinSwitchMarketRuleSynchronizationService";
 
 import {
+  exchangeCapabilitySynchronizationService,
+} from "./execution/capabilities/services/ExchangeCapabilitySynchronizationService";
+
+import {
   application,
 } from "./core/bootstrap/Application";
 
@@ -849,6 +853,34 @@ server.listen(
       coinSwitchMarketRuleSynchronizationService
         .start();
 
+      /*
+       * Binance/Bybit/CoinDCX/ZebPay execution adapters validate against
+       * exchangeCapabilityService's cache (see
+       * BinanceExecutionAdapter.validateAgainstExchangeCapability and its
+       * siblings) via a cache-only synchronous read - deliberately never a
+       * live network fetch on the order-submission hot path. Without this,
+       * that cache is never populated and their exchange-rule validation
+       * stays inert. Mirrors the CoinSwitch rule-synchronization pattern
+       * immediately above.
+       */
+      try {
+        await exchangeCapabilitySynchronizationService
+          .synchronize();
+      } catch (
+        error:
+          unknown
+      ) {
+        console.error(
+          "[Exchange Capability Sync] Initial synchronization failed; exchange-rule validation remains inert until the next periodic attempt:",
+          error instanceof Error
+            ? error.message
+            : error,
+        );
+      }
+
+      exchangeCapabilitySynchronizationService
+        .start();
+
       fiveExchangeReadinessObservationService
         .start();
 
@@ -1047,6 +1079,9 @@ const shutdown =
       .stop();
 
     coinSwitchMarketRuleSynchronizationService
+      .stop();
+
+    exchangeCapabilitySynchronizationService
       .stop();
 
     fiveExchangeReadinessObservationService

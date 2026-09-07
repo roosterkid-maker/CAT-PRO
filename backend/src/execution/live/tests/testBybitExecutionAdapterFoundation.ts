@@ -529,6 +529,12 @@ async function testExecutionAdapterLifecycle():
             "Filled",
           );
     },
+    async getSpotOrderByClientOrderId():
+      Promise<BybitSpotOrder> {
+      throw new Error(
+        "This fixture never exercises creation-failure reconciliation.",
+      );
+    },
     async cancelSpotOrder():
       Promise<
         BybitOrderAcknowledgement

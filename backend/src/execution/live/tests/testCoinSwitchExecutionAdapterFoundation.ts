@@ -538,6 +538,14 @@ async function testExecutionLifecycle(
         status,
       );
     },
+    async getSpotOrderByClientOrderId():
+      Promise<
+        CoinSwitchSpotOrder
+      > {
+      throw new Error(
+        "This fixture never exercises creation-failure reconciliation.",
+      );
+    },
     async cancelSpotOrder():
       Promise<
         CoinSwitchSpotOrder

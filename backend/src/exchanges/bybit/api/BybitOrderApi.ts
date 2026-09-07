@@ -286,6 +286,99 @@ export class BybitOrderApi {
     );
   }
 
+  /*
+   * Enables reconciling an ambiguous create-order failure (a timeout or
+   * dropped connection after Bybit may have already accepted the order)
+   * before declaring the leg dead - the same reconciliation Binance and
+   * CoinDCX already perform via their own getOrderStatusByClientOrderId.
+   */
+  async getSpotOrderByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+    credentials?:
+      BybitCredentials,
+  ): Promise<BybitSpotOrder> {
+    const normalizedSymbol =
+      this.requireSymbol(
+        symbol,
+      );
+    const normalizedClientOrderId =
+      this.requireClientOrderId(
+        clientOrderId,
+      );
+    const parameters = {
+      category:
+        "spot",
+      symbol:
+        normalizedSymbol,
+      orderLinkId:
+        normalizedClientOrderId,
+      openOnly:
+        "0",
+      limit:
+        "1",
+    };
+    const realtime =
+      await this.client
+        .getSigned<
+          BybitOrderListResult
+        >(
+          "/v5/order/realtime",
+          parameters,
+          credentials,
+        );
+    const realtimeOrder =
+      this.findOrderByClientOrderId(
+        realtime,
+        normalizedClientOrderId,
+      );
+
+    if (realtimeOrder) {
+      return this.normalizeOrder(
+        realtimeOrder,
+      );
+    }
+
+    /*
+     * Bybit documents that recent closed orders can
+     * disappear from realtime after a service restart.
+     * Query history before declaring order state missing.
+     */
+    const history =
+      await this.client
+        .getSigned<
+          BybitOrderListResult
+        >(
+          "/v5/order/history",
+          {
+            category:
+              "spot",
+            symbol:
+              normalizedSymbol,
+            orderLinkId:
+              normalizedClientOrderId,
+            limit:
+              "1",
+          },
+          credentials,
+        );
+    const historicalOrder =
+      this.findOrderByClientOrderId(
+        history,
+        normalizedClientOrderId,
+      );
+
+    if (!historicalOrder) {
+      throw new Error(
+        `Bybit order with client order ID ${normalizedClientOrderId} was not found in realtime or history evidence.`,
+      );
+    }
+
+    return this.normalizeOrder(
+      historicalOrder,
+    );
+  }
+
   async cancelSpotOrder(
     symbol: string,
     orderId: string,
@@ -352,6 +445,41 @@ export class BybitOrderApi {
           ) &&
           candidate.orderId ===
             orderId,
+      );
+
+    return this.isRecord(
+      value,
+    )
+      ? value
+      : null;
+  }
+
+  private findOrderByClientOrderId(
+    result:
+      BybitOrderListResult,
+    clientOrderId: string,
+  ): Record<
+    string,
+    unknown
+  > | null {
+    if (
+      !Array.isArray(
+        result.list,
+      )
+    ) {
+      throw new Error(
+        "Invalid Bybit order response list.",
+      );
+    }
+
+    const value =
+      result.list.find(
+        (candidate) =>
+          this.isRecord(
+            candidate,
+          ) &&
+          candidate.orderLinkId ===
+            clientOrderId,
       );
 
     return this.isRecord(

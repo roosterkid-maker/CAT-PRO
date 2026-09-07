@@ -66,6 +66,14 @@ interface CoinSwitchOrderApiSource {
     CoinSwitchSpotOrder
   >;
 
+  getSpotOrderByClientOrderId(
+    clientOrderId: string,
+    credentials?:
+      CoinSwitchCredentials,
+  ): Promise<
+    CoinSwitchSpotOrder
+  >;
+
   cancelSpotOrder(
     orderId: string,
     credentials?:
@@ -350,6 +358,80 @@ export class CoinSwitchExecutionAdapter
     } catch (
       error: unknown
     ) {
+      /*
+       * The create-order call can throw after CoinSwitch already accepted
+       * the order (a timeout or dropped connection on the response side).
+       * Reconcile by client order ID before declaring the leg dead -
+       * reporting FAILED for an order that is actually live risks a caller
+       * retrying and placing a duplicate order for real notional. Only
+       * attempted when the CALLER supplied a clientOrderId (not the one
+       * this adapter might have generated internally, which isn't in
+       * scope here) - matching Binance/CoinDCX/Bybit's identical guard.
+       */
+      if (
+        request.clientOrderId
+          ?.trim()
+      ) {
+        try {
+          const credentials =
+            this.credentialsSource
+              .getCredentials();
+
+          const reconciledOrder =
+            await this.orderApi
+              .getSpotOrderByClientOrderId(
+                request.clientOrderId.trim(),
+                credentials,
+              );
+
+          const reconciledInitialResult =
+            this.mapOrder(
+              reconciledOrder,
+              startedAt,
+              request.clientOrderId.trim(),
+            );
+
+          await this.safeAudit(
+            () =>
+              this.audit
+                .orderCreated(
+                  request,
+                  reconciledInitialResult,
+                ),
+          );
+
+          // The reconciled order may not be terminal yet (still open) -
+          // route it through the same poller the normal success path
+          // uses rather than returning a non-final result.
+          const reconciledFinalResult =
+            await this.poller
+              .waitForFinalState(
+                this,
+                reconciledInitialResult,
+                {
+                  timeoutMs:
+                    request.timeoutMs ??
+                    15_000,
+                  pollingIntervalMs:
+                    request.pollingIntervalMs ??
+                    1_000,
+                  cancelOnTimeout:
+                    request.cancelOnTimeout ??
+                    true,
+                },
+              );
+
+          this.metrics.record(
+            reconciledFinalResult,
+          );
+
+          return reconciledFinalResult;
+        } catch {
+          // No order exists under this client order ID either - the
+          // original creation genuinely failed. Fall through below.
+        }
+      }
+
       const completedAt =
         this.now();
       const failureReason =

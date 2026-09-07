@@ -172,6 +172,49 @@ export class CoinSwitchOrderApi {
     );
   }
 
+  /*
+   * Enables reconciling an ambiguous create-order failure (a timeout or
+   * dropped connection after CoinSwitch may have already accepted the
+   * order) before declaring the leg dead - the same reconciliation
+   * Binance/CoinDCX/Bybit already perform via an order-by-client-id
+   * lookup. ASSUMPTION: this reuses ORDER_PATH with client_order_id as an
+   * alternate query key, mirroring the same-endpoint-either-key pattern
+   * this codebase already relies on for Binance/CoinDCX/Bybit and
+   * CoinSwitch's own response shape (which already reports
+   * client_order_id - see normalizeEnvelope below). Not independently
+   * confirmed against CoinSwitch's API docs; a wrong/rejected parameter
+   * only throws here, which the caller already treats as "no order found
+   * under this ID" and falls back to the prior FAILED behavior - it
+   * cannot make a wrong guess worse than not attempting reconciliation.
+   */
+  async getSpotOrderByClientOrderId(
+    clientOrderId: string,
+    credentials?:
+      CoinSwitchCredentials,
+  ): Promise<
+    CoinSwitchSpotOrder
+  > {
+    const envelope =
+      await this.client
+        .getSigned<
+          CoinSwitchOrderEnvelope
+        >(
+          COINSWITCH.REST
+            .ORDER_PATH,
+          {
+            client_order_id:
+              this.requireClientOrderId(
+                clientOrderId,
+              ),
+          },
+          credentials,
+        );
+
+    return this.normalizeEnvelope(
+      envelope,
+    );
+  }
+
   async cancelSpotOrder(
     orderId: string,
     credentials?:
