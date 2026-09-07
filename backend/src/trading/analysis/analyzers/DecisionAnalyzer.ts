@@ -45,10 +45,10 @@ export class DecisionAnalyzer {
 
     if (overallScore >= 65) {
       return {
-        decision: "REVIEW",
+        decision: "EXECUTE",
         score: overallScore,
         reason:
-          "Execution quality is acceptable but should be reviewed.",
+          "Acceptable execution quality.",
       };
     }
 
