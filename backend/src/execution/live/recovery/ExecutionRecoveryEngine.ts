@@ -1365,6 +1365,53 @@ export class ExecutionRecoveryEngine {
             )
         : undefined;
 
+    // An operator who resolved a prior incident for this exact session
+    // attested that this specific exposure snapshot is handled (e.g. a
+    // compensating order placed out-of-band on a different venue than the
+    // session itself tracked). The underlying session record never
+    // changes as a result of that manual resolution - re-evaluating it on
+    // the next scan tick would otherwise recreate a brand-new OPEN
+    // incident every single tick forever, making a resolved incident
+    // impossible to keep resolved. Only escalate again if the exposure
+    // has genuinely changed since that resolution.
+    if (
+      !existing
+    ) {
+      const mostRecentResolved =
+        [...this.incidents.values()]
+          .filter(
+            (
+              incident,
+            ) =>
+              incident.sessionId ===
+                input.sessionId &&
+              incident.status ===
+                "RESOLVED",
+          )
+          .sort(
+            (
+              first,
+              second,
+            ) =>
+              second.updatedAt -
+              first.updatedAt,
+          )[0];
+
+      if (
+        mostRecentResolved &&
+        mostRecentResolved.exposureDirection ===
+          input.exposureDirection &&
+        mostRecentResolved.boughtQuantity ===
+          input.boughtQuantity &&
+        mostRecentResolved.soldQuantity ===
+          input.soldQuantity
+      ) {
+        return structuredClone(
+          mostRecentResolved,
+        );
+      }
+    }
+
     const estimatedExposureNotional =
       this.estimateExposureNotional(
         input.exposureDirection,
