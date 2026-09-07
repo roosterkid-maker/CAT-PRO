@@ -1146,10 +1146,20 @@ export class UnoCoinExecutionAdapter
       case 7:
         return "PENDING";
 
+      /*
+       * Throwing here used to propagate straight out of getOrderStatus and
+       * cancelOrder's confirmation-polling loop, aborting order-state
+       * tracking entirely for a live order with no final confirmation of
+       * whether it filled or was cancelled. Treat an undocumented code the
+       * same as the other non-terminal codes above - still resolving,
+       * safe to keep polling - while logging so the drift is visible.
+       */
       default:
-        throw new Error(
-          `UnoCoin returned an undocumented order status: ${status}.`,
+        console.error(
+          `[UnoCoinExecutionAdapter] undocumented order status: ${status}`,
         );
+
+        return "PENDING";
     }
   }
 

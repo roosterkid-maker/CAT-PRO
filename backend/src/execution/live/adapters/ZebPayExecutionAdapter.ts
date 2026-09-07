@@ -1,5 +1,7 @@
 import {zebPayCredentialsProvider, type ZebPayCredentials} from "../../../exchanges/zebpay/api/ZebPayCredentialsProvider";
 import {zebPayOrderApi, type ZebPayLimitOrderRequest, type ZebPaySpotOrder} from "../../../exchanges/zebpay/api/ZebPayOrderApi";
+import {exchangeCapabilityService} from "../../capabilities/services/ExchangeCapabilityService";
+import {exchangeOrderValidator} from "../../capabilities/validation/ExchangeOrderValidator";
 import type {LiveExecutionAdapter, LiveExecutionAdapterCapabilities, LiveExecutionAdapterReadiness} from "../contracts/LiveExecutionAdapter";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
 import type {LiveExecutionResult} from "../models/LiveExecutionResult";
@@ -73,6 +75,7 @@ export class ZebPayExecutionAdapter implements LiveExecutionAdapter {
   async execute(request: LiveExecutionRequest): Promise<LiveExecutionResult> {
     const startedAt = this.now();
     this.assertSubmissionAllowed(request);
+    this.validateAgainstExchangeCapability(request);
     const clientOrderId = request.clientOrderId?.trim() ?? "";
     const existing = this.journal.get(clientOrderId);
     if (existing) {
@@ -114,6 +117,9 @@ export class ZebPayExecutionAdapter implements LiveExecutionAdapter {
   }
 
   private assertSubmissionAllowed(request: LiveExecutionRequest): void {
+    if (request.exchange.trim().toLowerCase() !== this.exchange) {
+      throw new Error(`Invalid exchange for ZebPay adapter: ${request.exchange}`);
+    }
     if (!this.submissionEnabled()) throw new Error("ZebPay LIVE order submission is disabled by its venue-specific gate.");
     if ((request.product ?? "SPOT") !== "SPOT" || request.orderType !== "limit" || request.timeInForce !== "GTC" || request.postOnly === true) {
       throw new Error("ZebPay V164 supports only explicitly-priced ordinary GTC Spot limit orders.");
@@ -126,6 +132,32 @@ export class ZebPayExecutionAdapter implements LiveExecutionAdapter {
 
   private assertSpotMarket(market: string | undefined, product: "SPOT" | "PERPETUAL" | undefined): void {
     if ((product ?? "SPOT") !== "SPOT" || !market?.trim()) throw new Error("ZebPay order read/cancel requires an explicit Spot market.");
+  }
+
+  /*
+   * assertSubmissionAllowed only checks that quantity/price are positive
+   * finite numbers. It never checked the order is actually aligned to
+   * ZebPay's real published tick/lot size or within notional bounds. A
+   * capability provider already exists for every exchange in
+   * exchangeCapabilityService; this wires it in rather than leaving ZebPay
+   * to rely entirely on the exchange's own rejection.
+   *
+   * Deliberately a CACHED-ONLY, synchronous read (matching CoinSwitch's own
+   * getMarketRules pattern) rather than an inline network fetch: this must
+   * stay safe to call from every order dispatch, including deterministic
+   * tests and network-isolated environments, with no new I/O added to the
+   * hot path. Nothing currently populates this cache for ZebPay - a
+   * background synchronizeExchange()/getCapability() call from anywhere
+   * activates this validation with no further adapter changes.
+   */
+  private validateAgainstExchangeCapability(request: LiveExecutionRequest): void {
+    const capability = exchangeCapabilityService.getCachedCapability(this.exchange, request.market, "spot");
+    if (!capability) return;
+    const result = exchangeOrderValidator.validate({
+      exchange: this.exchange, market: request.market, product: "spot", side: request.side, orderType: request.orderType,
+      timeInForce: request.timeInForce, quantity: request.quantity, price: request.price, capability,
+    });
+    if (!result.valid) throw new Error(`ZebPay order rejected by exchange-rule validation: ${result.reasons.join("; ")}`);
   }
 }
 

@@ -11,6 +11,14 @@ import {
   executionAuditLogger,
 } from "../audit/ExecutionAuditLogger";
 
+import {
+  exchangeCapabilityService,
+} from "../../capabilities/services/ExchangeCapabilityService";
+
+import {
+  exchangeOrderValidator,
+} from "../../capabilities/validation/ExchangeOrderValidator";
+
 import type {
   LiveExecutionAdapter,
   LiveExecutionAdapterCapabilities,
@@ -80,6 +88,10 @@ export class BinanceExecutionAdapter
         request,
       );
 
+      this.validateAgainstExchangeCapability(
+        request,
+      );
+
       const credentials =
         binanceCredentialsProvider
           .getCredentials();
@@ -141,7 +153,6 @@ export class BinanceExecutionAdapter
           createdOrder,
           startedAt,
           false,
-          false,
           null,
         );
 
@@ -181,6 +192,76 @@ export class BinanceExecutionAdapter
 
       return finalResult;
     } catch (error: unknown) {
+      /*
+       * The create-order call can throw after Binance already accepted the
+       * order (a timeout or dropped connection on the response side).
+       * Reconcile by client order ID before declaring the leg dead -
+       * reporting FAILED for an order that is actually live risks a caller
+       * retrying and placing a duplicate order for real notional.
+       */
+      if (
+        request.clientOrderId
+          ?.trim()
+      ) {
+        try {
+          const reconciledOrder =
+            await binanceOrderApi.getOrderStatusByClientOrderId(
+              request.market
+                .trim()
+                .toUpperCase(),
+              request.clientOrderId.trim(),
+              binanceCredentialsProvider
+                .getCredentials(),
+            );
+
+          const reconciledInitialResult =
+            this.mapOrder(
+              reconciledOrder,
+              startedAt,
+              false,
+              null,
+            );
+
+          void this.safeAudit(() =>
+            executionAuditLogger.orderCreated(
+              request,
+              reconciledInitialResult,
+            ),
+          );
+
+          // The reconciled order may not be terminal yet (still open) -
+          // route it through the same poller the normal success path uses
+          // rather than returning a non-final result.
+          const reconciledFinalResult =
+            await orderPoller.waitForFinalState(
+              this,
+              reconciledInitialResult,
+              {
+                timeoutMs:
+                  request.timeoutMs ??
+                  15_000,
+
+                pollingIntervalMs:
+                  request.pollingIntervalMs ??
+                  1_000,
+
+                cancelOnTimeout:
+                  request.cancelOnTimeout ??
+                  true,
+              },
+            );
+
+          executionMetricsService.record(
+            reconciledFinalResult,
+          );
+
+          return reconciledFinalResult;
+        } catch {
+          // No order exists under this client order ID either - the
+          // original creation genuinely failed. Fall through below.
+        }
+      }
+
       const completedAt =
         Date.now();
 
@@ -291,7 +372,6 @@ export class BinanceExecutionAdapter
       order,
       startedAt,
       false,
-      false,
       null,
     );
   }
@@ -312,20 +392,44 @@ export class BinanceExecutionAdapter
       binanceCredentialsProvider
         .getCredentials();
 
+    await binanceOrderApi.cancelOrder(
+      normalizedMarket,
+      orderId,
+      credentials,
+    );
+
+    /*
+     * Do not trust the cancel endpoint's own response as final: a fill can
+     * race the cancel request. Re-fetch the authoritative order state and
+     * require it to actually be terminal before reporting a cancellation,
+     * matching the Bybit adapter's confirmation pattern.
+     */
     const order =
-      await binanceOrderApi.cancelOrder(
+      await binanceOrderApi.getOrderStatus(
         normalizedMarket,
         orderId,
         credentials,
       );
 
-    return this.mapOrder(
-      order,
-      startedAt,
-      true,
-      false,
-      null,
-    );
+    const result =
+      this.mapOrder(
+        order,
+        startedAt,
+        false,
+        null,
+      );
+
+    if (
+      result.status !== "CANCELLED" &&
+      result.status !== "FILLED" &&
+      result.status !== "REJECTED"
+    ) {
+      throw new Error(
+        "Binance cancellation was not confirmed by final order-state evidence.",
+      );
+    }
+
+    return result;
   }
 
   getReadiness():
@@ -508,10 +612,78 @@ export class BinanceExecutionAdapter
     }
   }
 
+  /*
+   * validateRequest above only checks that quantity/price are positive
+   * finite numbers. It never checked the order is actually aligned to
+   * Binance's real published tick/lot size or within notional bounds -
+   * unlike CoinSwitch/UnoCoin, which validate against a market-rules cache
+   * before submission. A capability provider already exists for every
+   * exchange in exchangeCapabilityService; this wires it in rather than
+   * leaving Binance to rely entirely on the exchange's own rejection.
+   *
+   * Deliberately a CACHED-ONLY, synchronous read (matching CoinSwitch's own
+   * getMarketRules pattern) rather than an inline network fetch: this must
+   * stay safe to call from every order dispatch, including deterministic
+   * tests and network-isolated environments, with no new I/O added to the
+   * hot path. Nothing currently populates this cache for Binance - a
+   * background synchronizeExchange()/getCapability() call from anywhere
+   * activates this validation with no further adapter changes.
+   */
+  private validateAgainstExchangeCapability(
+    request: LiveExecutionRequest,
+  ): void {
+    const capability =
+      exchangeCapabilityService.getCachedCapability(
+        this.exchange,
+        request.market,
+        "spot",
+      );
+
+    if (!capability) {
+      return;
+    }
+
+    const result =
+      exchangeOrderValidator.validate(
+        {
+          exchange:
+            this.exchange,
+
+          market:
+            request.market,
+
+          product:
+            "spot",
+
+          side:
+            request.side,
+
+          orderType:
+            request.orderType,
+
+          timeInForce:
+            request.timeInForce,
+
+          quantity:
+            request.quantity,
+
+          price:
+            request.price,
+
+          capability,
+        },
+      );
+
+    if (!result.valid) {
+      throw new Error(
+        `Binance order rejected by exchange-rule validation: ${result.reasons.join("; ")}`,
+      );
+    }
+  }
+
   private mapOrder(
     order: BinanceOrder,
     startedAt: number,
-    cancelled: boolean,
     timedOut: boolean,
     failureReason: string | null,
   ): LiveExecutionResult {
@@ -592,8 +764,13 @@ export class BinanceExecutionAdapter
        */
       feeAmount: 0,
 
+      /*
+       * Derived purely from the freshly-fetched order status, never from
+       * caller intent - a cancel request that raced a fill must report the
+       * order's real terminal state, not the fact that cancellation was
+       * merely attempted.
+       */
       cancelled:
-        cancelled ||
         status === "CANCELLED",
 
       timedOut,

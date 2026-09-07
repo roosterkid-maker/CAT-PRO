@@ -11,6 +11,7 @@ async function main(): Promise<void> {
     "bybit",
     "coinswitch",
     "unocoin",
+    "zebpay",
   ];
 
   console.log(
@@ -130,7 +131,7 @@ async function main(): Promise<void> {
         ),
     );
 
-  const fiveExchangeRegistrationTruth =
+  const allExchangeRegistrationTruth =
     liveExecutionService
       .getRegisteredExchanges()
       .length ===
@@ -147,7 +148,7 @@ async function main(): Promise<void> {
   if (
     !allRegistered ||
     !verificationIsFailClosed ||
-    !fiveExchangeRegistrationTruth ||
+    !allExchangeRegistrationTruth ||
     !postOnlyCapabilityTruth
   ) {
     console.error(
@@ -163,10 +164,10 @@ async function main(): Promise<void> {
     }
 
     if (
-      !fiveExchangeRegistrationTruth
+      !allExchangeRegistrationTruth
     ) {
       console.error(
-        "The audited five-exchange adapter registry is incomplete or inconsistent.",
+        "The audited exchange adapter registry is incomplete or inconsistent.",
       );
     }
 

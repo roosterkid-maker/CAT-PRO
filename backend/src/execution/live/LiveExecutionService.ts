@@ -27,6 +27,10 @@ import {
   unoCoinExecutionAdapter,
 } from "./adapters/UnoCoinExecutionAdapter";
 
+import {
+  zebPayExecutionAdapter,
+} from "./adapters/ZebPayExecutionAdapter";
+
 import type {
   LiveExecutionAdapter,
   LiveExecutionAdapterCapabilities,
@@ -178,6 +182,19 @@ export class LiveExecutionService {
     this.register(
       new SafeReadLiveExecutionAdapter(
         unoCoinExecutionAdapter,
+      ),
+    );
+
+    /*
+     * V164 adds the ZebPay fail-closed Spot lifecycle foundation. It was
+     * built and modeled in StrategyOneLiveVenueContractRegistry as a
+     * supported venue but never actually registered here - getAdapter and
+     * hasAdapter could never resolve it. Global LIVE execution remains
+     * fail-closed by default; registration alone adds no order authority.
+     */
+    this.register(
+      new SafeReadLiveExecutionAdapter(
+        zebPayExecutionAdapter,
       ),
     );
 

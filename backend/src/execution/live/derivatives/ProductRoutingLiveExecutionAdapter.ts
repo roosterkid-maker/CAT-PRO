@@ -1,6 +1,14 @@
-import type {LiveExecutionAdapter, LiveExecutionAdapterCapabilities, LiveExecutionAdapterReadiness} from "../contracts/LiveExecutionAdapter";
+import type {LiveExecutionAdapter, LiveExecutionAdapterCapabilities, LiveExecutionAdapterReadiness, LiveExecutionAdapterVerificationState} from "../contracts/LiveExecutionAdapter";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
 import type {LiveExecutionResult} from "../models/LiveExecutionResult";
+
+/* Least-ready first: the router must report the weaker of its two delegates. */
+const VERIFICATION_STATE_RANK: Record<LiveExecutionAdapterVerificationState, number> = {
+  NOT_CONFIGURED: 0,
+  CONFIGURED_UNVERIFIED: 1,
+  VERIFICATION_STALE: 2,
+  VERIFIED: 3,
+};
 
 /** One exchange owner with explicit SPOT/PERPETUAL routing and no fallback. */
 export class ProductRoutingLiveExecutionAdapter implements LiveExecutionAdapter {
@@ -23,7 +31,29 @@ export class ProductRoutingLiveExecutionAdapter implements LiveExecutionAdapter 
   cancelOrder(orderId: string, market?: string, product: "SPOT" | "PERPETUAL" = "SPOT"): Promise<LiveExecutionResult> {
     return this.delegate(product).cancelOrder(orderId, market, product);
   }
-  getReadiness(): LiveExecutionAdapterReadiness { return this.spot.getReadiness(); }
+  /*
+   * Must reflect BOTH delegates, not just SPOT - a caller routing a
+   * PERPETUAL order relies on this to catch missing/unverified derivatives
+   * credentials before dispatch, the same way getCapabilities() below
+   * already combines both delegates rather than reporting just one.
+   */
+  getReadiness(): LiveExecutionAdapterReadiness {
+    const spot = this.spot.getReadiness();
+    const perpetual = this.perpetual.getReadiness();
+    const weaker = VERIFICATION_STATE_RANK[spot.verificationState] <= VERIFICATION_STATE_RANK[perpetual.verificationState] ? spot : perpetual;
+    return {
+      credentialsConfigured: spot.credentialsConfigured && perpetual.credentialsConfigured,
+      authenticationVerified: spot.authenticationVerified && perpetual.authenticationVerified,
+      exchangeApiReachable: spot.exchangeApiReachable && perpetual.exchangeApiReachable,
+      verificationState: weaker.verificationState,
+      readOnlyVerificationFresh: spot.readOnlyVerificationFresh && perpetual.readOnlyVerificationFresh,
+      lastVerifiedAt: spot.lastVerifiedAt === null || perpetual.lastVerifiedAt === null ? null : Math.min(spot.lastVerifiedAt, perpetual.lastVerifiedAt),
+      lastVerificationAttemptAt: spot.lastVerificationAttemptAt === null ? perpetual.lastVerificationAttemptAt : perpetual.lastVerificationAttemptAt === null ? spot.lastVerificationAttemptAt : Math.max(spot.lastVerificationAttemptAt, perpetual.lastVerificationAttemptAt),
+      verificationExpiresAt: spot.verificationExpiresAt === null || perpetual.verificationExpiresAt === null ? null : Math.min(spot.verificationExpiresAt, perpetual.verificationExpiresAt),
+      verificationMethod: spot.verificationMethod === perpetual.verificationMethod ? spot.verificationMethod : null,
+      lastVerificationError: weaker.lastVerificationError ?? (weaker === spot ? perpetual.lastVerificationError : spot.lastVerificationError),
+    };
+  }
   getCapabilities(): LiveExecutionAdapterCapabilities {
     const spot = this.spot.getCapabilities(); const perpetual = this.perpetual.getCapabilities();
     return {products: ["SPOT", "PERPETUAL"], supportsMarketOrders: spot.supportsMarketOrders && perpetual.supportsMarketOrders,

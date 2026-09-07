@@ -10,6 +10,14 @@ import {
   executionAuditLogger,
 } from "../audit/ExecutionAuditLogger";
 
+import {
+  exchangeCapabilityService,
+} from "../../capabilities/services/ExchangeCapabilityService";
+
+import {
+  exchangeOrderValidator,
+} from "../../capabilities/validation/ExchangeOrderValidator";
+
 import type {
   LiveExecutionAdapter,
   LiveExecutionAdapterCapabilities,
@@ -75,6 +83,14 @@ export class CoinDCXExecutionAdapter
     );
 
     try {
+      this.validateRequest(
+        request,
+      );
+
+      this.validateAgainstExchangeCapability(
+        request,
+      );
+
       if (
         request.postOnly ===
         true
@@ -182,7 +198,6 @@ export class CoinDCXExecutionAdapter
           createdOrder,
           startedAt,
           false,
-          false,
           null,
         );
 
@@ -222,6 +237,76 @@ export class CoinDCXExecutionAdapter
 
       return finalResult;
     } catch (error: unknown) {
+      /*
+       * The create-order call can throw after CoinDCX already accepted the
+       * order (a timeout or dropped connection on the response side).
+       * Reconcile by client order ID before declaring the leg dead -
+       * reporting FAILED for an order that is actually live risks a caller
+       * retrying and placing a duplicate order for real notional.
+       */
+      if (
+        request.clientOrderId
+          ?.trim()
+      ) {
+        try {
+          const credentials =
+            coinDCXCredentialsProvider
+              .getCredentials();
+
+          const reconciledOrder =
+            await coinDCXOrderApi.getOrderStatusByClientOrderId(
+              request.clientOrderId.trim(),
+              credentials,
+            );
+
+          const reconciledInitialResult =
+            this.mapOrder(
+              reconciledOrder,
+              startedAt,
+              false,
+              null,
+            );
+
+          void this.safeAudit(() =>
+            executionAuditLogger.orderCreated(
+              request,
+              reconciledInitialResult,
+            ),
+          );
+
+          // The reconciled order may not be terminal yet (still open) -
+          // route it through the same poller the normal success path uses
+          // rather than returning a non-final result.
+          const reconciledFinalResult =
+            await orderPoller.waitForFinalState(
+              this,
+              reconciledInitialResult,
+              {
+                timeoutMs:
+                  request.timeoutMs ??
+                  15_000,
+
+                pollingIntervalMs:
+                  request.pollingIntervalMs ??
+                  1_000,
+
+                cancelOnTimeout:
+                  request.cancelOnTimeout ??
+                  true,
+              },
+            );
+
+          executionMetricsService.record(
+            reconciledFinalResult,
+          );
+
+          return reconciledFinalResult;
+        } catch {
+          // No order exists under this client order ID either - the
+          // original creation genuinely failed. Fall through below.
+        }
+      }
+
       const completedAt =
         Date.now();
 
@@ -326,7 +411,6 @@ export class CoinDCXExecutionAdapter
       order,
       startedAt,
       false,
-      false,
       null,
     );
   }
@@ -342,19 +426,41 @@ export class CoinDCXExecutionAdapter
       coinDCXCredentialsProvider
         .getCredentials();
 
+    await coinDCXOrderApi.cancelOrder(
+      orderId,
+      credentials,
+    );
+
+    /*
+     * Do not trust the cancel endpoint's own response as final: a fill can
+     * race the cancel request. Re-fetch the authoritative order state and
+     * require it to actually be terminal before reporting a cancellation.
+     */
     const order =
-      await coinDCXOrderApi.cancelOrder(
+      await coinDCXOrderApi.getOrderStatus(
         orderId,
         credentials,
       );
 
-    return this.mapOrder(
-      order,
-      startedAt,
-      true,
-      false,
-      null,
-    );
+    const result =
+      this.mapOrder(
+        order,
+        startedAt,
+        false,
+        null,
+      );
+
+    if (
+      result.status !== "CANCELLED" &&
+      result.status !== "FILLED" &&
+      result.status !== "REJECTED"
+    ) {
+      throw new Error(
+        "CoinDCX cancellation was not confirmed by final order-state evidence.",
+      );
+    }
+
+    return result;
   }
 
   getReadiness():
@@ -370,6 +476,143 @@ export class CoinDCXExecutionAdapter
       );
   }
 
+  /*
+   * General request-shape validation every sibling adapter performs
+   * unconditionally. This previously lived only inside the GTC-specific
+   * branch below, so a request with timeInForce left undefined skipped it
+   * entirely - quantity/price/side/exchange flowed straight to the
+   * exchange API unchecked.
+   */
+  private validateRequest(
+    request: LiveExecutionRequest,
+  ): void {
+    if (
+      request.exchange
+        .trim()
+        .toLowerCase() !==
+      this.exchange
+    ) {
+      throw new Error(
+        `Invalid exchange for CoinDCX adapter: ${request.exchange}`,
+      );
+    }
+
+    if (
+      request.side !== "buy" &&
+      request.side !== "sell"
+    ) {
+      throw new Error(
+        "CoinDCX execution side must be buy or sell.",
+      );
+    }
+
+    if (
+      request.orderType !== "limit" &&
+      request.orderType !== "market"
+    ) {
+      throw new Error(
+        "CoinDCX execution order type must be limit or market.",
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        request.quantity,
+      ) ||
+      request.quantity <= 0
+    ) {
+      throw new Error(
+        "CoinDCX execution quantity must be a positive finite number.",
+      );
+    }
+
+    if (
+      request.orderType === "limit" &&
+      (
+        !Number.isFinite(
+          request.price,
+        ) ||
+        (
+          request.price ??
+          0
+        ) <= 0
+      )
+    ) {
+      throw new Error(
+        "CoinDCX limit execution requires a positive finite price.",
+      );
+    }
+  }
+
+  /*
+   * The general checks above only confirm quantity/price are positive
+   * finite numbers. They never checked the order is actually aligned to
+   * CoinDCX's real published tick/lot size or within notional bounds -
+   * unlike CoinSwitch/UnoCoin, which validate against a market-rules cache
+   * before submission. A capability provider already exists for every
+   * exchange in exchangeCapabilityService; this wires it in rather than
+   * leaving CoinDCX to rely entirely on the exchange's own rejection.
+   *
+   * Deliberately a CACHED-ONLY, synchronous read (matching CoinSwitch's own
+   * getMarketRules pattern) rather than an inline network fetch: this must
+   * stay safe to call from every order dispatch, including deterministic
+   * tests and network-isolated environments, with no new I/O added to the
+   * hot path. Nothing currently populates this cache for CoinDCX - a
+   * background synchronizeExchange()/getCapability() call from anywhere
+   * activates this validation with no further adapter changes.
+   */
+  private validateAgainstExchangeCapability(
+    request: LiveExecutionRequest,
+  ): void {
+    const capability =
+      exchangeCapabilityService.getCachedCapability(
+        this.exchange,
+        request.market,
+        "spot",
+      );
+
+    if (!capability) {
+      return;
+    }
+
+    const result =
+      exchangeOrderValidator.validate(
+        {
+          exchange:
+            this.exchange,
+
+          market:
+            request.market,
+
+          product:
+            "spot",
+
+          side:
+            request.side,
+
+          orderType:
+            request.orderType,
+
+          timeInForce:
+            request.timeInForce,
+
+          quantity:
+            request.quantity,
+
+          price:
+            request.price,
+
+          capability,
+        },
+      );
+
+    if (!result.valid) {
+      throw new Error(
+        `CoinDCX order rejected by exchange-rule validation: ${result.reasons.join("; ")}`,
+      );
+    }
+  }
+
   private mapOrder(
     order: Awaited<
       ReturnType<
@@ -377,7 +620,6 @@ export class CoinDCXExecutionAdapter
       >
     >,
     startedAt: number,
-    cancelled: boolean,
     timedOut: boolean,
     failureReason: string | null,
   ): LiveExecutionResult {
@@ -435,8 +677,13 @@ export class CoinDCXExecutionAdapter
       feeAmount:
         order.feeAmount,
 
+      /*
+       * Derived purely from the freshly-fetched order status, never from
+       * caller intent - a cancel request that raced a fill must report the
+       * order's real terminal state, not the fact that cancellation was
+       * merely attempted.
+       */
       cancelled:
-        cancelled ||
         status === "CANCELLED",
 
       timedOut,

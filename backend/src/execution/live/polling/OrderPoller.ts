@@ -96,12 +96,32 @@ export class OrderPoller {
         options.pollingIntervalMs,
       );
 
-       latestResult =
-  await adapter.getOrderStatus(
-    initialResult.orderId,
-    initialResult.market,
-    initialResult.product,
-  );
+      /*
+       * A transient failure here (network blip, or an exchange returning
+       * a status the adapter's own mapStatus doesn't recognize) must not
+       * be allowed to propagate out of this loop: the caller's catch block
+       * has no way to distinguish "poll failed" from "order never
+       * existed" and would discard the real, already-known orderId,
+       * reporting a live order as never submitted. Keep the last known
+       * good result and simply retry on the next tick instead.
+       */
+      try {
+        latestResult =
+          await adapter.getOrderStatus(
+            initialResult.orderId,
+            initialResult.market,
+            initialResult.product,
+          );
+      } catch (error: unknown) {
+        console.error(
+          "[OrderPoller] order status check failed, retrying",
+          error instanceof Error
+            ? error.message
+            : error,
+        );
+
+        continue;
+      }
 
       await this.safeAudit(() =>
         executionAuditLogger.orderStatusUpdated(

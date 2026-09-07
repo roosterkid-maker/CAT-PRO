@@ -14,6 +14,14 @@ import {
   executionAuditLogger,
 } from "../audit/ExecutionAuditLogger";
 
+import {
+  exchangeCapabilityService,
+} from "../../capabilities/services/ExchangeCapabilityService";
+
+import {
+  exchangeOrderValidator,
+} from "../../capabilities/validation/ExchangeOrderValidator";
+
 import type {
   LiveExecutionAdapter,
   LiveExecutionAdapterCapabilities,
@@ -227,6 +235,10 @@ export class BybitExecutionAdapter
 
     try {
       this.validateRequest(
+        request,
+      );
+
+      this.validateAgainstExchangeCapability(
         request,
       );
 
@@ -624,6 +636,75 @@ export class BybitExecutionAdapter
     this.validatePolling(
       request,
     );
+  }
+
+  /*
+   * validateRequest above only checks that quantity/price are positive
+   * finite numbers. It never checked the order is actually aligned to
+   * Bybit's real published tick/lot size or within notional bounds -
+   * unlike CoinSwitch/UnoCoin, which validate against a market-rules cache
+   * before submission. A capability provider already exists for every
+   * exchange in exchangeCapabilityService; this wires it in rather than
+   * leaving Bybit to rely entirely on the exchange's own rejection.
+   *
+   * Deliberately a CACHED-ONLY, synchronous read (matching CoinSwitch's own
+   * getMarketRules pattern) rather than an inline network fetch: this must
+   * stay safe to call from every order dispatch, including deterministic
+   * tests and network-isolated environments, with no new I/O added to the
+   * hot path. Nothing currently populates this cache for Bybit - a
+   * background synchronizeExchange()/getCapability() call from anywhere
+   * activates this validation with no further adapter changes.
+   */
+  private validateAgainstExchangeCapability(
+    request: LiveExecutionRequest,
+  ): void {
+    const capability =
+      exchangeCapabilityService.getCachedCapability(
+        this.exchange,
+        request.market,
+        "spot",
+      );
+
+    if (!capability) {
+      return;
+    }
+
+    const result =
+      exchangeOrderValidator.validate(
+        {
+          exchange:
+            this.exchange,
+
+          market:
+            request.market,
+
+          product:
+            "spot",
+
+          side:
+            request.side,
+
+          orderType:
+            request.orderType,
+
+          timeInForce:
+            request.timeInForce,
+
+          quantity:
+            request.quantity,
+
+          price:
+            request.price,
+
+          capability,
+        },
+      );
+
+    if (!result.valid) {
+      throw new Error(
+        `Bybit order rejected by exchange-rule validation: ${result.reasons.join("; ")}`,
+      );
+    }
   }
 
   private validatePolling(
