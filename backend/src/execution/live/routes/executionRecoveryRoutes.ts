@@ -34,6 +34,10 @@ import {
   strategyOneResidualRecoveryExecutionService,
 } from "../recovery/StrategyOneResidualRecoveryExecutionService";
 
+import {
+  readConfirmationPhrase,
+} from "./executionSafetyMetadata";
+
 const router =
   Router();
 
@@ -182,9 +186,10 @@ router.post(
                   ? request.body.maximumLossQuote
                   : Number.NaN,
               confirmation:
-                typeof request.body?.lossAuthorization === "string"
-                  ? request.body.lossAuthorization
-                  : "",
+                readConfirmationPhrase(
+                  request.body,
+                  "lossAuthorization",
+                ),
             }
             : null,
         );
@@ -229,9 +234,7 @@ router.put(
       const preview =
         strategyOneResidualRecoveryAssistantService.approvePreview(
           request.params.previewId,
-          typeof request.body?.confirmation === "string"
-            ? request.body.confirmation
-            : "",
+          readConfirmationPhrase(request.body),
         );
 
       response.json({success: true, data: preview});
@@ -282,9 +285,7 @@ router.post(
       const result =
         await strategyOneResidualRecoveryExecutionService.execute(
           request.params.previewId,
-          typeof request.body?.confirmation === "string"
-            ? request.body.confirmation
-            : "",
+          readConfirmationPhrase(request.body),
           typeof request.body?.resolutionNote === "string"
             ? request.body.resolutionNote
             : "",
@@ -343,9 +344,7 @@ router.post(
               ? request.body.priorExecutionId
               : "",
             request.params.previewId,
-            typeof request.body?.confirmation === "string"
-              ? request.body.confirmation
-              : "",
+            readConfirmationPhrase(request.body),
             typeof request.body?.resolutionNote === "string"
               ? request.body.resolutionNote
               : "",
@@ -460,12 +459,54 @@ router.post(
             resolutionNote,
           );
 
+      /*
+       * ExecutionRecoveryResolutionService's own ledger is a completely
+       * separate mechanism from ExecutionRecoveryEngine's incidents - it
+       * has no reference to executionRecoveryEngine anywhere. The Tiny-LIVE
+       * activation guard (StrategyOneExecutionPolicyService) gates on
+       * executionRecoveryEngine's own openIncidents/acknowledgedIncidents
+       * counters, which this call never touched. A resolveSession() success
+       * here means authoritative exchange-reconciled terminal-balanced
+       * evidence was just proven for this exact session - strictly
+       * stronger proof than a manual incident resolve - so it is safe to
+       * also resolve any still-open ExecutionRecoveryEngine incident for
+       * the same session, closing the gap where this was previously the
+       * dashboard's only "Resolve" action yet never actually cleared the
+       * guard it appears to.
+       */
+      const recoveryEngineIncidentsResolved =
+        executionRecoveryEngine
+          .getBySession(
+            request.params
+              .sessionId,
+          )
+          .filter(
+            (
+              incident,
+            ) =>
+              incident.status !==
+              "RESOLVED",
+          )
+          .map(
+            (
+              incident,
+            ) =>
+              executionRecoveryEngine
+                .resolve(
+                  incident.id,
+
+                  resolutionNote,
+                ),
+          );
+
       response.json({
         success:
           true,
 
         data: {
           resolution,
+
+          recoveryEngineIncidentsResolved,
 
           recoveryGate:
             executionRestartRecoveryGateService
@@ -567,9 +608,24 @@ router.get(
       error:
         unknown
     ) {
+      /*
+       * evaluateSession() throws exactly "Live execution session not
+       * found." when the session doesn't resolve - that is the only
+       * expected failure mode here and the only one that should map to
+       * 404. Any other exception (a genuine internal bug elsewhere in this
+       * combined read) must surface as a server error, not be reported to
+       * monitoring as a routine "not found".
+       */
+      const notFound =
+        error instanceof Error &&
+        error.message ===
+          "Live execution session not found.";
+
       response
         .status(
-          404,
+          notFound
+            ? 404
+            : 500,
         )
         .json({
           success:
@@ -647,9 +703,24 @@ router.post(
       error:
         unknown
     ) {
+      /*
+       * "not found" is the only case that should map to 404 (matching
+       * GET /:incidentId's explicit 404 for the same condition); a
+       * genuine state conflict (e.g. "Resolved recovery incident cannot
+       * be acknowledged again.") is a 409, matching every other mutating
+       * recovery endpoint's convention in this file - not 400, which
+       * would incorrectly suggest the request itself was malformed.
+       */
+      const notFound =
+        error instanceof Error &&
+        error.message ===
+          "Execution recovery incident not found.";
+
       response
         .status(
-          400,
+          notFound
+            ? 404
+            : 409,
         )
         .json({
           success:
@@ -706,9 +777,24 @@ router.post(
       error:
         unknown
     ) {
+      /*
+       * "not found" is the only case that should map to 404 (matching
+       * GET /:incidentId's explicit 404 for the same condition); any
+       * other thrown error here is a state/validation conflict, matching
+       * every other mutating recovery endpoint's 409 convention in this
+       * file - not 400, which would incorrectly suggest the request
+       * itself was malformed.
+       */
+      const notFound =
+        error instanceof Error &&
+        error.message ===
+          "Execution recovery incident not found.";
+
       response
         .status(
-          400,
+          notFound
+            ? 404
+            : 409,
         )
         .json({
           success:

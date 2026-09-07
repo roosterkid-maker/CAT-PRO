@@ -26,6 +26,10 @@ import {
   strategyOneApiPermissionBoundaryService,
 } from "../tiny-live/StrategyOneApiPermissionBoundaryService";
 
+import {
+  readConfirmationPhrase,
+} from "./executionSafetyMetadata";
+
 import type {
   TinyLivePreflightRequest,
 } from "../tiny-live/TinyLivePreflight";
@@ -476,9 +480,7 @@ router.post(
     try {
       const authority = strategyOneTinyLiveActionAuthorityService.authorize(
         request.params.authorityId,
-        typeof request.body?.confirmation === "string"
-          ? request.body.confirmation
-          : "",
+        readConfirmationPhrase(request.body),
       );
 
       response.json({success: true, data: authority});
@@ -498,6 +500,13 @@ router.post(
     response,
   ) => {
     response.setHeader("Cache-Control", "no-store");
+
+    if (personalBotRuntimeControlService.getControl().enabled) {
+      return response.status(409).json({
+        success: false,
+        message: "Pause PAPER automation before executing a Tiny-LIVE action.",
+      });
+    }
 
     try {
       const authority = strategyOneTinyLiveActionAuthorityService.get(
@@ -550,9 +559,7 @@ router.post(
     try {
       const resolved = strategyOneTinyLiveActionAuthorityService.resolve(
         request.params.authorityId,
-        typeof request.body?.confirmation === "string"
-          ? request.body.confirmation
-          : "",
+        readConfirmationPhrase(request.body),
       );
 
       response.json({success: true, data: resolved});
@@ -610,9 +617,7 @@ router.post(
       const diagnostics =
         strategyOneTinyLiveEmergencyStopRecoveryService
           .clear(
-            typeof request.body?.confirmation === "string"
-              ? request.body.confirmation
-              : "",
+            readConfirmationPhrase(request.body),
           );
 
       response.json({
@@ -654,9 +659,7 @@ router.post(
         strategyOneTinyLiveAccountModeLeaseService
           .activate(
             request.params.preArmId,
-            typeof request.body?.confirmation === "string"
-              ? request.body.confirmation
-              : "",
+            readConfirmationPhrase(request.body),
           );
 
       response.status(201).json({
@@ -687,9 +690,7 @@ router.post(
         strategyOneTinyLiveAccountModeLeaseService
           .restore(
             request.params.leaseId,
-            typeof request.body?.confirmation === "string"
-              ? request.body.confirmation
-              : "",
+            readConfirmationPhrase(request.body),
           );
 
       response.json({
@@ -733,9 +734,7 @@ router.post(
         sellExchange: typeof request.body?.sellExchange === "string"
           ? request.body.sellExchange
           : "",
-        confirmation: typeof request.body?.confirmation === "string"
-          ? request.body.confirmation
-          : "",
+        confirmation: readConfirmationPhrase(request.body),
         durationMinutes: typeof request.body?.durationMinutes === "number"
           ? request.body.durationMinutes
           : undefined,
@@ -772,9 +771,7 @@ router.post(
     try {
       const record = strategyOneTinyLivePreArmService.disarm(
         request.params.preArmId,
-        typeof request.body?.confirmation === "string"
-          ? request.body.confirmation
-          : "",
+        readConfirmationPhrase(request.body),
       );
 
       strategyOneTinyLiveAccountModeLeaseService

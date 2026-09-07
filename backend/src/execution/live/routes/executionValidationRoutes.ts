@@ -6,6 +6,10 @@ import {
   failureInjectionValidationService,
 } from "../validation/FailureInjectionValidationService";
 
+import {
+  executionSafetyMetadataPrefix,
+} from "./executionSafetyMetadata";
+
 const router =
   Router();
 
@@ -30,14 +34,9 @@ router.get(
         true,
 
       data: {
-        generatedAt:
-          Date.now(),
-
-        version:
-          "18.0",
-
-        build:
+        ...executionSafetyMetadataPrefix(
           "14",
+        ),
 
         syntheticOnly:
           true,
@@ -52,12 +51,6 @@ router.get(
           false,
 
         realMoneyUsed:
-          false,
-
-        liveTradingEnabled:
-          false,
-
-        liveSubmissionAllowed:
           false,
 
         availableDrills: [

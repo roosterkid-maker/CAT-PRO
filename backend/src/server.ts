@@ -104,6 +104,14 @@ import {
 } from "./execution/capabilities/services/ExchangeCapabilitySynchronizationService";
 
 import {
+  executionRecoveryEngine,
+} from "./execution/live/recovery/ExecutionRecoveryEngine";
+
+import {
+  executionReconciliationEngine,
+} from "./execution/live/reconciliation/ExecutionReconciliationEngine";
+
+import {
   application,
 } from "./core/bootstrap/Application";
 
@@ -881,6 +889,19 @@ server.listen(
       exchangeCapabilitySynchronizationService
         .start();
 
+      /*
+       * Previously started as a module-level side effect of importing
+       * executionMonitoringRoutes.ts (a route-mounting file) - moved here
+       * alongside every other engine/service lifecycle call so importing
+       * a route file for inspection or an isolated test can no longer
+       * unknowingly start these two long-lived background engines.
+       */
+      executionRecoveryEngine
+        .start();
+
+      executionReconciliationEngine
+        .start();
+
       fiveExchangeReadinessObservationService
         .start();
 
@@ -1082,6 +1103,12 @@ const shutdown =
       .stop();
 
     exchangeCapabilitySynchronizationService
+      .stop();
+
+    executionRecoveryEngine
+      .stop();
+
+    executionReconciliationEngine
       .stop();
 
     fiveExchangeReadinessObservationService

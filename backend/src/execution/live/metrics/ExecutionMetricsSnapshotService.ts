@@ -128,11 +128,25 @@ export class ExecutionMetricsSnapshotService {
   getRecent(
     limit = 60,
   ): ExecutionMetricsSnapshot[] {
+    /*
+     * A non-finite limit (e.g. NaN from Number(request.query.limit) on a
+     * non-numeric query param) would otherwise survive every Math.max/min
+     * step below as NaN, and this.snapshots.slice(-NaN) is equivalent to
+     * slice(0) - the entire buffer, silently ignoring the caller's
+     * intended bound. Fall back to the default rather than propagate NaN.
+     */
+    const safeLimit =
+      Number.isFinite(
+        limit,
+      )
+        ? limit
+        : 60;
+
     const normalizedLimit =
       Math.max(
         1,
         Math.min(
-          Math.floor(limit),
+          Math.floor(safeLimit),
           MAXIMUM_SNAPSHOTS,
         ),
       );

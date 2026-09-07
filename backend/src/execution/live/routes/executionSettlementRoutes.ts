@@ -18,6 +18,10 @@ import {
   persistentExecutionSettlementService,
 } from "../settlement/PersistentExecutionSettlementService";
 
+import {
+  executionSafetyMetadataPrefix,
+} from "./executionSafetyMetadata";
+
 const router =
   Router();
 
@@ -49,20 +53,9 @@ router.get(
         true,
 
       data: {
-        generatedAt:
-          Date.now(),
-
-        version:
-          "18.0",
-
-        build:
+        ...executionSafetyMetadataPrefix(
           "6",
-
-        liveTradingEnabled:
-          false,
-
-        liveSubmissionAllowed:
-          false,
+        ),
 
         automaticAccountingReplayAllowed:
           false,
@@ -96,20 +89,9 @@ router.get(
         true,
 
       data: {
-        generatedAt:
-          Date.now(),
-
-        version:
-          "18.0",
-
-        build:
+        ...executionSafetyMetadataPrefix(
           "7",
-
-        liveTradingEnabled:
-          false,
-
-        liveSubmissionAllowed:
-          false,
+        ),
 
         persistentAccountReconstruction:
           true,
@@ -271,9 +253,23 @@ router.get(
       error:
         unknown
     ) {
+      /*
+       * getAudit() throws exactly "Live execution session not found."
+       * when the session doesn't resolve - the only expected failure mode
+       * here. Any other exception (a genuine internal audit-generation
+       * bug) must surface as a server error, not be reported as a routine
+       * "not found" that would mask a real defect from monitoring.
+       */
+      const notFound =
+        error instanceof Error &&
+        error.message ===
+          "Live execution session not found.";
+
       response
         .status(
-          404,
+          notFound
+            ? 404
+            : 500,
         )
         .json({
           success:

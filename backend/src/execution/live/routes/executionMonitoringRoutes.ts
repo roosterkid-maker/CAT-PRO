@@ -20,14 +20,6 @@ import {
 import tinyLivePreflightRoutes
   from "./tinyLivePreflightRoutes";
 
-import {
-  executionReconciliationEngine,
-} from "../reconciliation/ExecutionReconciliationEngine";
-
-import {
-  executionRecoveryEngine,
-} from "../recovery/ExecutionRecoveryEngine";
-
 import executionAlertRoutes
   from "./executionAlertRoutes";
 
@@ -63,12 +55,6 @@ import executionVerificationRoutes
 
 export const executionMonitoringRoutes =
   Router();
-
-executionRecoveryEngine
-  .start();
-
-executionReconciliationEngine
-  .start();
 
 executionMonitoringRoutes.use(
   "/dry-run",

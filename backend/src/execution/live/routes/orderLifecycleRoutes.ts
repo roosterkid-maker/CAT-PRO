@@ -7,6 +7,14 @@ import {
 } from "../lifecycle/OrderLifecycleManager";
 
 import {
+  executionRestartRecoveryGateService,
+} from "../recovery/ExecutionRestartRecoveryGateService";
+
+import {
+  executionSafetyMetadataPrefix,
+} from "./executionSafetyMetadata";
+
+import {
   orderLifecycleEvidenceService,
 } from "../lifecycle/OrderLifecycleEvidenceService";
 
@@ -81,20 +89,9 @@ router.get(
         true,
 
       data: {
-        generatedAt:
-          Date.now(),
-
-        version:
-          "18.0",
-
-        build:
+        ...executionSafetyMetadataPrefix(
           "3",
-
-        liveTradingEnabled:
-          false,
-
-        liveSubmissionAllowed:
-          false,
+        ),
 
         automaticOrderResumeAllowed:
           false,
@@ -224,6 +221,41 @@ router.post(
 
             message:
               "leg must be BUY or SELL.",
+          });
+
+        return;
+      }
+
+      /*
+       * Mirrors liveExecutionCoordinatorRoutes.ts's identical guard on its
+       * own /prepare - a session cannot be prepared for new live execution
+       * while persisted restart-recovery evidence isn't clean, regardless
+       * of which of the two independent lifecycle-preparation endpoints is
+       * called.
+       */
+      const recoveryGate =
+        executionRestartRecoveryGateService
+          .canPrepareNewLiveExecution();
+
+      if (
+        !recoveryGate.allowed
+      ) {
+        response
+          .status(
+            409,
+          )
+          .json({
+            success:
+              false,
+
+            message:
+              "New LIVE execution preparation is blocked by the restart-recovery gate.",
+
+            recovery:
+              recoveryGate.report,
+
+            reasons:
+              recoveryGate.reasons,
           });
 
         return;

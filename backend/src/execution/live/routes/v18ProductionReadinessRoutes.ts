@@ -6,6 +6,10 @@ import {
   v18ProductionReadinessService,
 } from "../readiness/V18ProductionReadinessService";
 
+import {
+  executionSafetyMetadataPrefix,
+} from "./executionSafetyMetadata";
+
 const router =
   Router();
 
@@ -58,14 +62,9 @@ router.get(
             false,
 
           data: {
-            generatedAt:
-              Date.now(),
-
-            version:
-              "18.0",
-
-            build:
+            ...executionSafetyMetadataPrefix(
               "16",
+            ),
 
             finalAcceptanceGate:
               true,
@@ -74,12 +73,6 @@ router.get(
               false,
 
             tinyLiveOperationalReady:
-              false,
-
-            liveTradingEnabled:
-              false,
-
-            liveSubmissionAllowed:
               false,
 
             error:
