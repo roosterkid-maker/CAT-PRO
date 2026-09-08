@@ -27,7 +27,20 @@ export class DynamicOpportunityDiscoveryRunnerService {
   constructor(
     private readonly service: DynamicOpportunityDiscoveryService =
       dynamicOpportunityDiscoveryService,
-    private readonly intervalMs = 1_000,
+    /*
+     * This clock only feeds TriangularArbitrageStrategyController (the
+     * dashboard's observational near-miss panel also reads its snapshot) -
+     * Strategy #1's tiny-LIVE execution path does not subscribe to it.
+     * refresh() is synchronous and, with up to 10,000 books /
+     * 5,000 cross-exchange routes / 2,000 triangular paths plus a full
+     * structuredClone+deepFreeze of the result, is not cheap. Running it
+     * every 1s was measured contributing to main-thread contention that
+     * delayed the latency-critical Strategy #1 market-update path (see the
+     * clone-once comment in refresh() below for the earlier half of this
+     * fix). 5s keeps triangular-arbitrage data reasonably fresh while
+     * cutting this loop's CPU footprint ~5x.
+     */
+    private readonly intervalMs = 5_000,
   ) {
     if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
       throw new Error("Dynamic discovery interval must be a positive integer.");
