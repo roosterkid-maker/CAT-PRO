@@ -487,7 +487,17 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
       ? arm.expiresAt
       : Math.min(arm.expiresAt, calibration?.expiresAt ?? 0);
 
+    /*
+     * !Number.isFinite(expiresAt) is checked explicitly: arm.expiresAt is
+     * an externally-supplied pre-arm field never otherwise validated in
+     * this file, and "NaN < 30000" is false in JS - a malformed expiresAt
+     * would otherwise silently pass this guard, activate a LIVE lease, and
+     * persist an ACTIVE record with expiresAt: NaN.
+     */
     if (
+      !Number.isFinite(
+        expiresAt,
+      ) ||
       expiresAt -
         now <
       MINIMUM_REMAINING_LEASE_MS
@@ -633,13 +643,30 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
         this.failClosedWithEmergencyStop();
       }
 
+      /*
+       * If the PAPER rollback itself failed, the account is now actually
+       * stuck in LIVE mode - not merely "activation didn't happen". Persist
+       * RESTORE_FAILED (which stays in ACTIVE_STATES and keeps activeLeaseId
+       * pointing at this lease) rather than the terminal ACTIVATION_FAILED
+       * (ACTIVATION_FAILED -> [] in isValidTransition's table - a dead end
+       * with no legal successor). Without this, persist() nulls
+       * activeLeaseId, getActiveLease() returns null, and reconcile()'s
+       * only remaining branch for that case re-arms the emergency stop
+       * every tick forever without ever attempting another PAPER-restore -
+       * the account would stay LIVE until someone manually intervenes.
+       * RESTORE_FAILED is exactly the state reconcile()'s
+       * "lease.state === RESTORING || lease.state === RESTORE_FAILED"
+       * branch already retries automatically via restoreOwnedLease().
+       */
       const failed =
         freeze({
           ...clone(
             activating,
           ),
           state:
-            "ACTIVATION_FAILED" as const,
+            rollbackReason
+              ? "RESTORE_FAILED" as const
+              : "ACTIVATION_FAILED" as const,
           completedAt:
             this.dependencies
               .now(),
@@ -826,6 +853,18 @@ export class StrategyOneTinyLiveAccountModeLeaseService {
         account.mode !==
           "LIVE"
       ) {
+        /*
+         * TradingMode has a third value (TESTNET) besides PAPER/LIVE, so
+         * this branch is genuinely reachable, not theoretical. Every other
+         * error path in this file calls failClosedWithEmergencyStop()
+         * before surfacing an unrecoverable lease-reconciliation problem;
+         * this was the one exception - reached via the periodic
+         * reconcileSafely() timer, this throw was only logged into
+         * lastReconciliationError and swallowed, repeating every tick
+         * with no escalation while the account sat in an unexpected mode.
+         */
+        this.failClosedWithEmergencyStop();
+
         throw new Error(
           `Tiny-LIVE account lease cannot recover from ${account.mode} mode.`,
         );
@@ -1391,7 +1430,20 @@ function nonBotGuardBlockers(
   const blockers:
     string[] = [];
 
+  /*
+   * !Number.isFinite(...) is checked explicitly alongside "> 0" throughout
+   * this function. guard is produced by an external dependency
+   * (getActivationGuard()); any comparison against NaN is false in JS, so
+   * a NaN counter (e.g. from an upstream aggregation bug) would otherwise
+   * silently fail OPEN into "no blocker" instead of blocking - letting
+   * activate() flip the account to real LIVE mode on unknown/corrupted
+   * guard state. Same fail-open hazard already found and fixed elsewhere
+   * in this codebase this session.
+   */
   if (
+    !Number.isFinite(
+      guard.accountOpenTrades,
+    ) ||
     guard.accountOpenTrades >
       0
   ) {
@@ -1401,6 +1453,12 @@ function nonBotGuardBlockers(
   }
 
   if (
+    !Number.isFinite(
+      guard.activeExecutionSessions,
+    ) ||
+    !Number.isFinite(
+      guard.activeExecutionLocks,
+    ) ||
     guard.activeExecutionSessions >
       0 ||
     guard.activeExecutionLocks >
@@ -1412,6 +1470,9 @@ function nonBotGuardBlockers(
   }
 
   if (
+    !Number.isFinite(
+      guard.nonTerminalOrders,
+    ) ||
     guard.nonTerminalOrders >
       0
   ) {
@@ -1421,6 +1482,21 @@ function nonBotGuardBlockers(
   }
 
   if (
+    !Number.isFinite(
+      guard.nonTerminalStrategyOneLiveSessions,
+    ) ||
+    guard.nonTerminalStrategyOneLiveSessions >
+      0
+  ) {
+    blockers.push(
+      `${guard.nonTerminalStrategyOneLiveSessions} Strategy #1 LIVE two-leg session(s) are non-terminal.`,
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      guard.unresolvedRecoveryIncidents,
+    ) ||
     guard.unresolvedRecoveryIncidents >
       0
   ) {
