@@ -213,6 +213,39 @@ export class LiveExecutionCoordinator {
       ];
 
       if (
+        session.status !==
+        "VALIDATING"
+      ) {
+        /*
+         * A concurrent cancel()/fail() ran against this session while
+         * the executionPlanValidator.validate(plan) await above was
+         * pending (session.id is known to callers as soon as
+         * createSession() returns, before this await). Proceeding
+         * would resurrect a session another caller already believes
+         * is terminal - reserveAndReady() would push a CANCELLED
+         * session straight back into RESERVED. Bail out without
+         * mutating the session further; the concurrent transition
+         * stands.
+         */
+        this.totalRejected +=
+          1;
+
+        return {
+          approved:
+            false,
+
+          session:
+            this.cloneSession(
+              session,
+            ),
+
+          reasons: [
+            `Execution session ${session.id} left the VALIDATING status (now ${session.status}) during plan validation.`,
+          ],
+        };
+      }
+
+      if (
         !validation.valid
       ) {
         this.totalRejected +=
@@ -414,10 +447,48 @@ export class LiveExecutionCoordinator {
       },
     );
 
-    return this.reserveAndReady(
-      session,
-      "DRY_RUN",
-    );
+    try {
+      return this.reserveAndReady(
+        session,
+        "DRY_RUN",
+      );
+    } catch (
+      error:
+        unknown
+    ) {
+      /*
+       * The LIVE path in prepare() already routes an unexpected
+       * reserveAndReady() throw through failInternal(); this path
+       * didn't, so a throw here left the session stuck in
+       * VALIDATING forever, still holding its execution lock.
+       */
+      this.totalRejected +=
+        1;
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown dry-run execution preparation error.";
+
+      this.failInternal(
+        session,
+        message,
+      );
+
+      return {
+        approved:
+          false,
+
+        session:
+          this.cloneSession(
+            session,
+          ),
+
+        reasons: [
+          message,
+        ],
+      };
+    }
   }
 
   preparePaper(
@@ -494,10 +565,48 @@ export class LiveExecutionCoordinator {
       },
     );
 
-    return this.reserveAndReady(
-      session,
-      "PAPER",
-    );
+    try {
+      return this.reserveAndReady(
+        session,
+        "PAPER",
+      );
+    } catch (
+      error:
+        unknown
+    ) {
+      /*
+       * The LIVE path in prepare() already routes an unexpected
+       * reserveAndReady() throw through failInternal(); this path
+       * didn't, so a throw here left the session stuck in
+       * VALIDATING forever, still holding its execution lock.
+       */
+      this.totalRejected +=
+        1;
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown PAPER execution preparation error.";
+
+      this.failInternal(
+        session,
+        message,
+      );
+
+      return {
+        approved:
+          false,
+
+        session:
+          this.cloneSession(
+            session,
+          ),
+
+        reasons: [
+          message,
+        ],
+      };
+    }
   }
 
   isDryRunSession(
@@ -622,19 +731,52 @@ export class LiveExecutionCoordinator {
     if (
       session.reservationId
     ) {
-      capitalReservationService
-        .commit(
-          session.reservationId,
-          this.isPaperSession(
-            session.id,
-          )
-            ? "PAPER execution completed and settled."
-            : this.isDryRunSession(
-                session.id,
-              )
-              ? "Dry-run execution completed successfully."
-              : "Live arbitrage execution completed and settled.",
+      /*
+       * A throw here (e.g. an account-bookkeeping failure inside
+       * CapitalReservationService.finalize) used to propagate straight
+       * out of complete() before the session ever reached a terminal
+       * status or released its execution lock. sweepExpired()
+       * explicitly skips RUNNING sessions, so a session stuck here
+       * could never self-heal short of a process restart. Route any
+       * commit failure through failInternal() instead, which releases
+       * the (still-active, since commit only deletes it on success)
+       * reservation and puts the session into a terminal FAILED state
+       * with its lock released.
+       */
+      try {
+        capitalReservationService
+          .commit(
+            session.reservationId,
+            this.isPaperSession(
+              session.id,
+            )
+              ? "PAPER execution completed and settled."
+              : this.isDryRunSession(
+                  session.id,
+                )
+                ? "Dry-run execution completed successfully."
+                : "Live arbitrage execution completed and settled.",
+          );
+      } catch (
+        error:
+          unknown
+      ) {
+        const reason =
+          error instanceof Error
+            ? `Capital reservation commit failed during execution completion: ${error.message}`
+            : "Capital reservation commit failed during execution completion.";
+
+        this.failInternal(
+          session,
+          reason,
         );
+
+        throw error instanceof Error
+          ? error
+          : new Error(
+              reason,
+            );
+      }
     }
 
     session.completedAt =
@@ -1707,6 +1849,17 @@ export class LiveExecutionCoordinator {
       session,
       "EXECUTION_EXPIRED",
       reason,
+      {
+        dryRun:
+          this.isDryRunSession(
+            session.id,
+          ),
+
+        paper:
+          this.isPaperSession(
+            session.id,
+          ),
+      },
     );
 
     this.releaseLock(
@@ -1868,6 +2021,34 @@ export class LiveExecutionCoordinator {
     status:
       LiveExecutionSession["status"],
   ): void {
+    /*
+     * Every public terminal-transition method (cancel/complete/fail)
+     * already re-fetches the session through getMutableActiveSession(),
+     * which itself refuses to hand back an already-terminal session -
+     * so those call sites can never reach this method with a stale
+     * terminal session. The gap is internal call chains that hold a
+     * session object reference across an await (prepare(), reserveAndReady())
+     * without re-checking status; a concurrent cancel()/failInternal()
+     * on that same object could otherwise be silently overwritten,
+     * resurrecting a session every other consumer already believes is
+     * finished. Refusing any transition once a session is terminal
+     * makes that guarantee hold here too, independent of whether every
+     * caller remembers to re-check status itself.
+     */
+    if (
+      !this.isActiveStatus(
+        session.status,
+      ) &&
+      session.status !==
+        status
+    ) {
+      console.error(
+        `[LiveExecutionCoordinator] Refusing illegal transition for session ${session.id}: ${session.status} -> ${status}.`,
+      );
+
+      return;
+    }
+
     session.status =
       status;
 

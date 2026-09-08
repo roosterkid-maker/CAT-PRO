@@ -284,7 +284,7 @@ export class LivePerformanceAnalyticsService {
           session,
         ) =>
           !liveExecutionCoordinator
-            .isDryRunSession(
+            .isNonLiveSession(
               session.id,
             ),
       );
@@ -309,7 +309,7 @@ export class LivePerformanceAnalyticsService {
           settlement.status ===
             "SETTLED" &&
           !liveExecutionCoordinator
-            .isDryRunSession(
+            .isNonLiveSession(
               settlement.sessionId,
             ),
       );

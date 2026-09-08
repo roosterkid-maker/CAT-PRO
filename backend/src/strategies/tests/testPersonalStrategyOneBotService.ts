@@ -38,10 +38,10 @@ function main(): void {
   const reservationSessions: DailyExecutionReservationSessionEvidence[] = [
     {sessionId: "completed-session", planId: "completed-plan", market: "BTCUSDT",
       buyExchange: "coindcx", sellExchange: "binance", capital: 100, status: "COMPLETED",
-      dryRun: false, createdAt: NOW - 2_000, completedAt: NOW - 1_000, failureReason: null},
+      dryRun: false, paper: false, createdAt: NOW - 2_000, completedAt: NOW - 1_000, failureReason: null},
     {sessionId: "failed-session", planId: "failed-plan", market: "ETHUSDT",
       buyExchange: "coindcx", sellExchange: "bybit", capital: 200, status: "FAILED",
-      dryRun: false, createdAt: NOW - 600, completedAt: NOW - 500, failureReason: "Fixture rejection."},
+      dryRun: false, paper: false, createdAt: NOW - 600, completedAt: NOW - 500, failureReason: "Fixture rejection."},
   ];
   const profitValidation = new PostGuardProfitValidationLedgerService({getTrades: () => trades});
   const paperController = createPaperController();
@@ -57,7 +57,8 @@ function main(): void {
     getTrades: () => trades,
     getProfitValidation: (now) => profitValidation.getReport(now),
     getDailyReservationEvidence: (now) => ({generatedAt: now, dryRunReservations: 2,
-      paperReservations: 0, failedDryRunReservations: 1, failedPaperReservations: 0}),
+      paperReservations: 0, liveReservations: 0, failedDryRunReservations: 1,
+      failedPaperReservations: 0, failedLiveReservations: 0}),
     getDailyAccountReservationAttempts: () => accountReservationAttempts,
     getDailyReservationSessions: () => reservationSessions,
     getExchangeBalanceReport: (now) => createExchangeBalanceReport(now, balanceStale),

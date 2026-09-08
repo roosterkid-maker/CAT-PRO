@@ -65,9 +65,18 @@ export class PersistentExecutionSettlementService {
       );
     }
 
+    /*
+     * This flag gates whether real accounting is
+     * applied (ExecutionSettlementAccountingPersistenceService.finalize
+     * marks ACCOUNTING_APPLIED vs DRY_RUN_NOT_ACCOUNTED). A PAPER
+     * session must be excluded from real accounting exactly like a
+     * DRY_RUN session is - isNonLiveSession() covers both, whereas
+     * isDryRunSession() alone let PAPER settlements through as if
+     * they were real.
+     */
     const dryRun =
       liveExecutionCoordinator
-        .isDryRunSession(
+        .isNonLiveSession(
           sessionId,
         );
 

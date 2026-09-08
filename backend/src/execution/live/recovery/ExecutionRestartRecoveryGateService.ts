@@ -205,6 +205,7 @@ export class ExecutionRestartRecoveryGateService {
             session,
           ) =>
             !session.dryRun &&
+            !session.paper &&
             !executionRecoveryResolutionService
               .isSessionResolved(
                 session.sessionId,

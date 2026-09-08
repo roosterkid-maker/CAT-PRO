@@ -130,6 +130,7 @@ export class ExecutionRecoveryResolutionService {
             session,
           ) =>
             !session.dryRun &&
+            !session.paper &&
             session.sessionId ===
               normalizedSessionId,
         ) ??
@@ -661,6 +662,7 @@ export class ExecutionRecoveryResolutionService {
             session,
           ) =>
             !session.dryRun &&
+            !session.paper &&
             session.sessionId ===
               sessionId,
         )

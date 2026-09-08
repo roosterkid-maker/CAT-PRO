@@ -107,8 +107,17 @@ export interface DailyExecutionReservationEvidence {
   readonly generatedAt: number;
   readonly dryRunReservations: number;
   readonly paperReservations: number;
+  /**
+   * Genuine LIVE (real-money) reservations - previously these were folded
+   * into paperReservations because that field was computed as "!dryRun"
+   * instead of an actual paper check, silently mislabeling every real LIVE
+   * reservation as PAPER. Added so real LIVE activity has its own honest
+   * count instead of disappearing into either bucket.
+   */
+  readonly liveReservations: number;
   readonly failedDryRunReservations: number;
   readonly failedPaperReservations: number;
+  readonly failedLiveReservations: number;
 }
 
 export interface DailyExecutionReservationSessionEvidence {
@@ -120,6 +129,7 @@ export interface DailyExecutionReservationSessionEvidence {
   readonly capital: number;
   readonly status: LiveExecutionSession["status"];
   readonly dryRun: boolean;
+  readonly paper: boolean;
   readonly createdAt: number;
   readonly completedAt: number | null;
   readonly failureReason: string | null;
@@ -499,11 +509,14 @@ export class LiveExecutionSessionEvidenceService {
     return {
       generatedAt: now,
       dryRunReservations: reserved.filter((record) => record.dryRun).length,
-      paperReservations: reserved.filter((record) => !record.dryRun).length,
+      paperReservations: reserved.filter((record) => !record.dryRun && record.paper).length,
+      liveReservations: reserved.filter((record) => !record.dryRun && !record.paper).length,
       failedDryRunReservations: reserved.filter((record) =>
         record.dryRun && record.status !== "COMPLETED").length,
       failedPaperReservations: reserved.filter((record) =>
-        !record.dryRun && record.status !== "COMPLETED").length,
+        !record.dryRun && record.paper && record.status !== "COMPLETED").length,
+      failedLiveReservations: reserved.filter((record) =>
+        !record.dryRun && !record.paper && record.status !== "COMPLETED").length,
     };
   }
 
@@ -537,6 +550,7 @@ export class LiveExecutionSessionEvidenceService {
         capital: record.session.capital,
         status: record.session.status,
         dryRun: record.dryRun,
+        paper: this.isPersistedPaperEvidence(record),
         createdAt: record.session.createdAt,
         completedAt: record.session.completedAt,
         failureReason: record.session.failureReason,
