@@ -662,16 +662,25 @@ export class ExecutionSettlementService {
       ],
     };
 
-    this.settlements.set(
-      sessionId,
-      record,
-    );
-
     /*
      * Non-LIVE sessions must never alter account PnL here.
      *
      * Real live sessions do record the actual
      * settled net result.
+     *
+     * This must run BEFORE this.settlements.set() below, not after. If
+     * recordProfit() throws, the caller (PersistentExecutionSettlementService
+     * via tradingAccountService.runWithAccountingTransaction) correctly
+     * leaves its own durable evidence store at PENDING_SETTLEMENT/uncertain
+     * - but this class's in-memory settlements Map has no such rollback.
+     * Caching the record as SETTLED before the call that can fail meant a
+     * failed recordProfit() still left getSettlement() permanently
+     * reporting SETTLED (masking the durable PENDING_SETTLEMENT truth) and
+     * made settle() short-circuit-return the stale cached record on any
+     * retry, so the real accounting application was silently never
+     * retried. Setting the cache only after recordProfit() succeeds keeps
+     * both stores in agreement: on failure, neither this cache nor the
+     * durable evidence store reports SETTLED.
      */
     if (
       !liveExecutionCoordinator
@@ -684,6 +693,11 @@ export class ExecutionSettlementService {
           netProfit,
         );
     }
+
+    this.settlements.set(
+      sessionId,
+      record,
+    );
 
     const latestSession =
       liveExecutionCoordinator
@@ -1039,10 +1053,20 @@ export class ExecutionSettlementService {
       market:
         session.market,
 
+      // settle() computes effectiveBuyExchange/effectiveSellExchange
+      // specifically to capture a recovery reroute that filled a leg on a
+      // different exchange than originally planned, and stores those on
+      // the settlement record. Falling back to the session-level exchange
+      // (only reachable before a settlement exists) instead of always
+      // using the plan's original exchange keeps this audit record
+      // agreeing with settle()'s own record about which venue a leg
+      // actually settled on.
       buyExchange:
+        settlement?.buyExchange ??
         session.buyExchange,
 
       sellExchange:
+        settlement?.sellExchange ??
         session.sellExchange,
 
       generatedAt:

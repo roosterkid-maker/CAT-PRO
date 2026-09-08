@@ -25,6 +25,33 @@ export class PersistentExecutionSettlementService {
     sessionId:
       string,
   ): ExecutionSettlementRecord {
+    /*
+     * Validate the session exists BEFORE begin() below persists
+     * PENDING_SETTLEMENT. begin()'s own catch-block comment explains that
+     * keeping PENDING_SETTLEMENT on any failure is deliberate - the exact
+     * point of failure inside the accounting transaction is ambiguous from
+     * outside, so a human must manually confirm whether real PnL was
+     * applied. That ambiguity does not exist for "session not found":
+     * begin() (and therefore any accounting transaction) is never reached,
+     * so there is nothing to investigate. Without this check, any
+     * nonexistent or mistyped sessionId - including a real Strategy-One
+     * LIVE session id, which genuinely never exists in
+     * liveExecutionCoordinator - permanently poisons that id's accounting
+     * evidence as PENDING_SETTLEMENT/uncertain, since preflight() blocks
+     * all further attempts once that state is persisted and there is no
+     * transition back out of it.
+     */
+    if (
+      !liveExecutionCoordinator
+        .getSession(
+          sessionId,
+        )
+    ) {
+      throw new Error(
+        "Live execution session not found.",
+      );
+    }
+
     const accountingTransactionId =
       this.createAccountingTransactionId(
         sessionId,
