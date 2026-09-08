@@ -398,7 +398,7 @@ export class PortfolioService {
   getSummary(
     trades =
       paperTradingService
-        .getTrades(),
+        .getTradesForReadOnlyAggregation(),
 
     account:
       TradingAccount =

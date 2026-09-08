@@ -1,5 +1,7 @@
 import { paperTradingService } from "../../trading/services/PaperTradingService";
 
+import type { PaperTrade } from "../../trading/models/PaperTrade";
+
 import type { AnalyticsReport } from "../models/AnalyticsReport";
 import type { AnalyticsOverview } from "../models/AnalyticsOverview";
 import type { ExchangePerformance } from "../models/ExchangePerformance";
@@ -8,7 +10,8 @@ import type { MarketPerformance } from "../models/MarketPerformance";
 export class AnalyticsService {
   getReport(): AnalyticsReport {
     const trades =
-      paperTradingService.getTrades();
+      paperTradingService
+        .getTradesForReadOnlyAggregation();
 
     const closedTrades =
       trades.filter(
@@ -137,14 +140,12 @@ export class AnalyticsService {
   }
 
   private calculateExchangePerformance(
-    trades: ReturnType<
-      typeof paperTradingService.getTrades
-    >,
+    trades: readonly PaperTrade[],
   ): ExchangePerformance[] {
     const map =
       new Map<
         string,
-        typeof trades
+        PaperTrade[]
       >();
 
     for (const trade of trades) {
@@ -205,14 +206,12 @@ export class AnalyticsService {
   }
 
   private calculateMarketPerformance(
-    trades: ReturnType<
-      typeof paperTradingService.getTrades
-    >,
+    trades: readonly PaperTrade[],
   ): MarketPerformance[] {
     const map =
       new Map<
         string,
-        typeof trades
+        PaperTrade[]
       >();
 
     for (const trade of trades) {

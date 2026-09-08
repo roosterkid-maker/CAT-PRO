@@ -18,6 +18,10 @@ import {
   PaperTradeStore,
 } from "../PaperTradeStore";
 
+import {
+  PaperTradingService,
+} from "../PaperTradingService";
+
 const BASE_TIME =
   1_900_000_000_000;
 
@@ -183,6 +187,52 @@ function main(): void {
           },
         ),
       /cursor/i,
+    );
+
+    const service =
+      new PaperTradingService(
+        restored,
+      );
+    const firstAggregationSnapshot =
+      service
+        .getTradesForReadOnlyAggregation();
+    const repeatedAggregationSnapshot =
+      service
+        .getTradesForReadOnlyAggregation();
+
+    assert.strictEqual(
+      repeatedAggregationSnapshot,
+      firstAggregationSnapshot,
+      "Unchanged read-only aggregation must reuse one immutable ledger snapshot instead of cloning every trade.",
+    );
+    assert.equal(
+      Object.isFrozen(
+        firstAggregationSnapshot,
+      ),
+      true,
+    );
+
+    restored.create(
+      createTrade(
+        "aggregation-invalidation",
+        BASE_TIME +
+          2_000,
+      ),
+    );
+
+    const updatedAggregationSnapshot =
+      service
+        .getTradesForReadOnlyAggregation();
+
+    assert.notStrictEqual(
+      updatedAggregationSnapshot,
+      firstAggregationSnapshot,
+      "A durable ledger mutation must invalidate the shared aggregation snapshot.",
+    );
+    assert.equal(
+      updatedAggregationSnapshot.length,
+      firstAggregationSnapshot.length +
+        1,
     );
 
     console.log(

@@ -178,7 +178,7 @@ export class PaperAutomationAccountingService {
 
     const paperTrades =
       paperTradingService
-        .getTrades();
+        .getTradesForReadOnlyAggregation();
 
     const portfolio =
       portfolioService

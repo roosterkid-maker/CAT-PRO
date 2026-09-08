@@ -539,7 +539,7 @@ router.post(
           .run();
 
       paperAutomationAccountingService
-        .synchronize();
+        .synchronizeState();
 
       response.json({
         success:
@@ -598,7 +598,7 @@ router.post(
           .run();
 
       paperAutomationAccountingService
-        .synchronize();
+        .synchronizeState();
 
       response.json({
         success:

@@ -32,7 +32,7 @@ export class PositionService {
   ): PositionSnapshot {
     const trades =
       paperTradingService
-        .getTrades();
+        .getTradesForReadOnlyAggregation();
 
     const positions =
       trades.map(

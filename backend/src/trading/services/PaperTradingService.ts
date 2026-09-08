@@ -261,6 +261,19 @@ export class PaperTradingService {
     return this.store.getAll();
   }
 
+  /**
+   * Trusted internal analytics snapshot.
+   *
+   * The PAPER ledger can contain tens of thousands of evidence-rich records.
+   * Hot read-only services must not deep-clone that complete history on every
+   * scheduler tick. The store owns and invalidates this immutable array when
+   * authoritative trade state changes.
+   */
+  getTradesForReadOnlyAggregation(): readonly PaperTrade[] {
+    return this.store
+      .getAllForReadOnlyAggregation();
+  }
+
   getRecentTrades(
     limit: number,
   ): PaperTrade[] {
