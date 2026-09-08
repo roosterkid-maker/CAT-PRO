@@ -34,9 +34,9 @@ import {
   usePersonalStrategyOneBot,
 } from "@/modules/strategies/hooks/useStrategies";
 
-import type {
-  PersonalOpportunityCandidateConversion,
-} from "@/modules/strategies/types/PersonalStrategyOneBot";
+import {
+  resolvePaperCandidateStatus,
+} from "@/modules/arbitrage/utils/paperCandidateStatus";
 
 import MetricBar from "@/shared/components/MetricBar";
 
@@ -144,6 +144,18 @@ export default function Arbitrage() {
           .currentCandidates,
       ],
     );
+
+  const paperCandidateSnapshotState = {
+    hasSnapshot:
+      personalBotQuery.data !==
+      undefined,
+    isPending:
+      personalBotQuery.isPending,
+    isFetching:
+      personalBotQuery.isFetching,
+    isError:
+      personalBotQuery.isError,
+  };
 
   const filteredOpportunities =
     useMemo(
@@ -543,7 +555,7 @@ export default function Arbitrage() {
                             }
                             scope="ANALYTICAL"
                             analyticalStatus={
-                              paperCandidateStatus(
+                              resolvePaperCandidateStatus(
                                 paperCandidateByRoute
                                   .get(
                                     paperRouteKey(
@@ -552,6 +564,7 @@ export default function Arbitrage() {
                                       opportunity.sellExchange,
                                     ),
                                   ),
+                                paperCandidateSnapshotState,
                               )
                             }
                           />
@@ -676,7 +689,7 @@ export default function Arbitrage() {
               selectedOpportunity
             }
             analyticalStatus={
-              paperCandidateStatus(
+              resolvePaperCandidateStatus(
                 paperCandidateByRoute
                   .get(
                     paperRouteKey(
@@ -685,6 +698,7 @@ export default function Arbitrage() {
                       selectedOpportunity.sellExchange,
                     ),
                   ),
+                paperCandidateSnapshotState,
               )
             }
           />
@@ -717,112 +731,6 @@ function paperRouteKey(
   return `${market.trim().toUpperCase()}|${buyExchange.trim().toLowerCase()}|${sellExchange.trim().toLowerCase()}`;
 }
 
-function paperCandidateStatus(
-  candidate:
-    PersonalOpportunityCandidateConversion |
-    undefined,
-) {
-  if (
-    !candidate
-  ) {
-    return {
-      state:
-        "CHECKING" as const,
-      label:
-        "ENGINE PASS · PAPER CHECKING",
-      reason:
-        "The analytical opportunity passed. PAPER persistence and exact execution gates are still being synchronized.",
-    };
-  }
-
-  if (
-    candidate.selectableForPaper
-  ) {
-    return {
-      state:
-        "READY" as const,
-      label:
-        "PAPER READY",
-      reason:
-        candidate.reason,
-    };
-  }
-
-  const firstFailure =
-    candidate.failedCheckDetails[0];
-  const blocker =
-    candidate.failedChecks[0] ??
-    candidate.currentStage;
-
-  return {
-    state:
-      "WAITING" as const,
-    label:
-      `PAPER WAIT · ${paperBlockerLabel(
-        blocker,
-      )}`,
-    reason:
-      firstFailure
-        ? `${candidate.reason} ${firstFailure.reason}`
-        : candidate.reason,
-  };
-}
-
-function paperBlockerLabel(
-  blocker:
-    string,
-): string {
-  const normalized =
-    blocker
-      .trim()
-      .toLowerCase();
-
-  if (
-    normalized.includes(
-      "fresh",
-    )
-  ) {
-    return "BOOK SYNC";
-  }
-
-  if (
-    normalized.includes(
-      "liquid",
-    )
-  ) {
-    return "DEPTH";
-  }
-
-  if (
-    normalized.includes(
-      "profitstability",
-    ) ||
-    normalized.includes(
-      "profit_stability",
-    )
-  ) {
-    return "PROFIT STABILITY";
-  }
-
-  if (
-    normalized.includes(
-      "consecutive",
-    ) ||
-    normalized.includes(
-      "persistence",
-    )
-  ) {
-    return "PERSISTENCE";
-  }
-
-  return normalized
-    .replaceAll(
-      "_",
-      " ",
-    )
-    .toUpperCase();
-}
-
 function OpportunityInspector({
   opportunity,
   analyticalStatus,
@@ -831,7 +739,7 @@ function OpportunityInspector({
 
   analyticalStatus:
     ReturnType<
-      typeof paperCandidateStatus
+      typeof resolvePaperCandidateStatus
     >;
 }) {
   return (

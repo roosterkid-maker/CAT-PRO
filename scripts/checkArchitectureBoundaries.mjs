@@ -234,6 +234,64 @@ if (
   );
 }
 
+const backendComposeBlock =
+  compose.split(
+    "\n  frontend:",
+  )[0] ??
+  "";
+
+if (
+  !compose.includes(
+    "${CAT_PRO_BIND_ADDRESS:-127.0.0.1}:${CAT_PRO_HTTP_PORT:-8080}:80",
+  ) ||
+  backendComposeBlock.includes(
+    "\n    ports:",
+  )
+) {
+  failures.push(
+    "Compose must keep the same-origin gateway on loopback by default and must not publish the backend port.",
+  );
+}
+
+if (
+  !compose.includes(
+    "http://127.0.0.1:5000/health/ready",
+  )
+) {
+  failures.push(
+    "Compose backend health must use the authoritative readiness endpoint.",
+  );
+}
+
+const httpsCompose =
+  readRepositoryFile(
+    "docker-compose.https.yml",
+  );
+
+const caddyConfiguration =
+  readRepositoryFile(
+    "deploy/caddy/Caddyfile",
+  );
+
+if (
+  !httpsCompose.includes(
+    "CAT_PRO_DASHBOARD_USER: ${CAT_PRO_DASHBOARD_USER:?Set the dashboard Basic Auth username}",
+  ) ||
+  !httpsCompose.includes(
+    "CAT_PRO_DASHBOARD_PASSWORD_HASH: ${CAT_PRO_DASHBOARD_PASSWORD_HASH:?Set the dashboard bcrypt password hash}",
+  ) ||
+  !caddyConfiguration.includes(
+    "basic_auth",
+  ) ||
+  !caddyConfiguration.includes(
+    "{$CAT_PRO_DASHBOARD_USER} {$CAT_PRO_DASHBOARD_PASSWORD_HASH}",
+  )
+) {
+  failures.push(
+    "The public HTTPS edge must require explicitly configured Basic Auth credentials.",
+  );
+}
+
 const runtimeUrls =
   readRepositoryFile(
     "frontend/src/config/runtimeUrls.ts",

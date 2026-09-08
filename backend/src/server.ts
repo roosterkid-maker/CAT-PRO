@@ -310,6 +310,15 @@ import {
 } from "./websocket/manager";
 
 import {
+  exchangeManager,
+} from "./exchanges/core/ExchangeManager";
+
+import {
+  evaluateApplicationReadiness,
+  type ApplicationInitializationState,
+} from "./health/ApplicationReadiness";
+
+import {
   authenticatedPrivateFillStreamService,
 } from "./execution/live/fills/AuthenticatedPrivateFillStreamService";
 
@@ -353,6 +362,10 @@ strategyReadModelService
 
 const PORT =
   environment.port;
+
+let applicationInitializationState:
+  ApplicationInitializationState =
+    "STARTING";
 
 app.use(
   cors({
@@ -470,6 +483,56 @@ app.get(
     response.send(
       "Crypto Arbitrage Server Running",
     );
+  },
+);
+
+app.get(
+  "/health/live",
+
+  (
+    _request,
+    response,
+  ) => {
+    response.json({
+      status:
+        "ALIVE",
+    });
+  },
+);
+
+app.get(
+  "/health/ready",
+
+  (
+    _request,
+    response,
+  ) => {
+    const readiness =
+      evaluateApplicationReadiness(
+        applicationInitializationState,
+        exchangeManager
+          .getAll()
+          .map(
+            (
+              exchange,
+            ) => ({
+              name:
+                exchange.name,
+              connected:
+                exchange.isConnected(),
+            }),
+          ),
+      );
+
+    response
+      .status(
+        readiness.ready
+          ? 200
+          : 503,
+      )
+      .json(
+        readiness,
+      );
   },
 );
 
@@ -981,29 +1044,24 @@ server.listen(
       rebalancingExecutionRunner
         .start();
 
-      void websocketManager
-        .start()
-        .catch(
-          (
-            error:
-              unknown,
-          ) => {
-            console.error(
-              "[WebSocketManager] Startup failed:",
-              error,
-            );
-          },
-        );
+      await websocketManager
+        .start();
 
       authenticatedPrivateFillStreamService
         .start();
 
       coinDCXAuthenticatedPrivateFillStreamService
         .start();
+
+      applicationInitializationState =
+        "READY";
     } catch (
       error:
         unknown
     ) {
+      applicationInitializationState =
+        "FAILED";
+
       console.error(
         "[Application] Initialization failed:",
         error,

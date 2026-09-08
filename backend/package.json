@@ -37,9 +37,12 @@
     "@types/express": "^5.0.6",
     "@types/node": "^24.1.0",
     "@types/ws": "^8.18.1",
-    "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "tsx": "^4.23.8",
     "typescript": "^5.9.2"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "qs": "6.16.0"
   }
 }

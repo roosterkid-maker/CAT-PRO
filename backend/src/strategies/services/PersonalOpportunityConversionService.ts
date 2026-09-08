@@ -260,7 +260,7 @@ export class PersonalOpportunityConversionService {
     const convertedCandidates = input.opportunities
       .map((opportunity) => this.toCandidate(opportunity, input))
       .sort(compareCandidateEconomics);
-    const currentCandidates = convertedCandidates.slice(0, 12);
+    const currentCandidates = convertedCandidates;
     const currentLeader = convertedCandidates.find((candidate) =>
       candidate.paperAdmissionAllowed && candidate.modeledNetProfitInr !== null) ?? null;
     const paperWinner = convertedCandidates.find((candidate) => candidate.selectableForPaper) ?? null;

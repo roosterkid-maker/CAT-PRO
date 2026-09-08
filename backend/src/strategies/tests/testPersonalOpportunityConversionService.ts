@@ -20,6 +20,7 @@ function main(): void {
   verifySuccessfulConversionTrace();
   verifyKeyNamespacesAndQuarantineArbitration();
   verifyDependencyReadIsSingleAndNonExecuting();
+  verifyCurrentCandidateSetIsComplete();
 
   console.log("PERSONAL OPPORTUNITY CONVERSION TEST PASSED.");
   console.log("Current scan, persistence, qualification, central queue, PAPER and post-guard evidence were composed read-only without threshold, LIVE or order authority.");
@@ -157,6 +158,68 @@ function verifyDependencyReadIsSingleAndNonExecuting(): void {
   assert.equal(reads, 1);
   assert.equal(report.safety.readOnlyDiagnostics, true);
   assert.equal(report.safety.realEvidenceOnly, true);
+}
+
+function verifyCurrentCandidateSetIsComplete(): void {
+  const input = createInput();
+  input.opportunities = Array.from(
+    {
+      length:
+        13,
+    },
+    (
+      _value,
+      index,
+    ) => {
+      const opportunity =
+        createOpportunity();
+      const market =
+        `TOKEN${index}USDT`;
+
+      return {
+        ...opportunity,
+        id:
+          `conversion-opportunity-${index}`,
+        pair: {
+          ...opportunity.pair,
+          market,
+          buy: {
+            ...opportunity.pair.buy,
+            market,
+          },
+          sell: {
+            ...opportunity.pair.sell,
+            market,
+          },
+        },
+      };
+    },
+  );
+
+  const report =
+    new PersonalOpportunityConversionService({
+      getInput:
+        () =>
+          input,
+    }).getReport(
+      NOW,
+    );
+
+  assert.equal(
+    report.currentCandidates.length,
+    13,
+  );
+  assert.deepEqual(
+    new Set(
+      report.currentCandidates.map(
+        (
+          candidate,
+        ) =>
+          candidate.candidateKey,
+      ),
+    ).size,
+    13,
+  );
 }
 
 function createInput(): PersonalOpportunityConversionInput {
