@@ -578,7 +578,18 @@ export class ExecutionReconciliationEngine {
       );
     }
 
+    /*
+     * !Number.isFinite(...) is checked explicitly alongside "> tolerance"
+     * below. Any comparison against NaN is false in JS, so a NaN
+     * difference (a non-finite remote.* field from a malformed/unexpected
+     * exchange response) would otherwise silently fail OPEN into "no
+     * drift" instead of being flagged - the same fail-open hazard already
+     * found and fixed twice in a sibling recovery module this session.
+     */
     if (
+      !Number.isFinite(
+        requestedQuantityDifference,
+      ) ||
       requestedQuantityDifference >
       quantityTolerance
     ) {
@@ -588,6 +599,9 @@ export class ExecutionReconciliationEngine {
     }
 
     if (
+      !Number.isFinite(
+        filledQuantityDifference,
+      ) ||
       filledQuantityDifference >
       quantityTolerance
     ) {
@@ -597,6 +611,9 @@ export class ExecutionReconciliationEngine {
     }
 
     if (
+      !Number.isFinite(
+        remainingQuantityDifference,
+      ) ||
       remainingQuantityDifference >
       quantityTolerance
     ) {
@@ -639,6 +656,9 @@ export class ExecutionReconciliationEngine {
       );
 
     if (
+      !Number.isFinite(
+        feeDifference,
+      ) ||
       feeDifference >
       feeTolerance
     ) {
@@ -1047,6 +1067,9 @@ export class ExecutionReconciliationEngine {
     }
 
     if (
+      !Number.isFinite(
+        filledQuantityDifference,
+      ) ||
       filledQuantityDifference >
       tolerance
     ) {
