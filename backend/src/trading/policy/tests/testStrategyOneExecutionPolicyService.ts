@@ -163,6 +163,8 @@ function main(): void {
         0,
       nonTerminalOrders:
         0,
+      nonTerminalStrategyOneLiveSessions:
+        0,
       unresolvedRecoveryIncidents:
         0,
     };

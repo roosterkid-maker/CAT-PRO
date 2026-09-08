@@ -24,6 +24,10 @@ import {
 } from "../../execution/live/recovery/ExecutionRecoveryEngine";
 
 import {
+  strategyOneTwoLegRestartRecoveryService,
+} from "../../execution/live/recovery/StrategyOneTwoLegRestartRecoveryService";
+
+import {
   personalBotRuntimeControlService,
 } from "../../strategies/services/PersonalBotRuntimeControlService";
 
@@ -110,6 +114,7 @@ export interface StrategyOnePolicyActivationGuard {
   readonly activeExecutionSessions: number;
   readonly activeExecutionLocks: number;
   readonly nonTerminalOrders: number;
+  readonly nonTerminalStrategyOneLiveSessions: number;
   readonly unresolvedRecoveryIncidents: number;
   readonly blockers: readonly string[];
 }
@@ -150,6 +155,7 @@ export interface StrategyOnePolicyRuntimeEvidence {
   readonly activeExecutionSessions: number;
   readonly activeExecutionLocks: number;
   readonly nonTerminalOrders: number;
+  readonly nonTerminalStrategyOneLiveSessions: number;
   readonly unresolvedRecoveryIncidents: number;
 }
 
@@ -396,6 +402,26 @@ const DEFAULT_DEPENDENCIES:
         executionRecoveryEngine
           .getDiagnostics();
 
+      /*
+       * orders/nonTerminalOrders above comes from orderLifecycleManager,
+       * which is the legacy/PAPER execution path - real Strategy-One LIVE
+       * orders are dispatched through StrategyOneTwoLegLiveExecutionService
+       * -> CentralLiveOrderExecutionGateway and never touch that path, so
+       * they never show up there. executionRecoveryEngine.getDiagnostics()
+       * above does scan both, but only once an incident has actually been
+       * detected (exposure/imbalance) - a real LIVE session that is merely
+       * PREPARED or DISPATCHING (orders literally in flight on the
+       * exchange right now, nothing wrong yet) would otherwise be
+       * invisible to every field here, letting an operator activate a
+       * different policy version mid-dispatch. strategyOneTwoLegRestartRecoveryService
+       * already defines exactly this "unresolved" concept for the real
+       * LIVE path (reused here rather than re-deriving the same state
+       * filter a second time).
+       */
+      const strategyOneLive =
+        strategyOneTwoLegRestartRecoveryService
+          .getReport();
+
       return {
         botEnabled:
           bot.enabled,
@@ -411,6 +437,8 @@ const DEFAULT_DEPENDENCIES:
           orders.acknowledged +
           orders.open +
           orders.partiallyFilled,
+        nonTerminalStrategyOneLiveSessions:
+          strategyOneLive.summary.unresolvedSessions,
         unresolvedRecoveryIncidents:
           recovery.openIncidents +
           recovery.acknowledgedIncidents,
@@ -709,6 +737,15 @@ export class StrategyOneExecutionPolicyService {
     }
 
     if (
+      evidence.nonTerminalStrategyOneLiveSessions >
+      0
+    ) {
+      blockers.push(
+        `${evidence.nonTerminalStrategyOneLiveSessions} Strategy #1 LIVE two-leg session(s) are non-terminal.`,
+      );
+    }
+
+    if (
       evidence.unresolvedRecoveryIncidents >
       0
     ) {
@@ -731,6 +768,8 @@ export class StrategyOneExecutionPolicyService {
         evidence.activeExecutionLocks,
       nonTerminalOrders:
         evidence.nonTerminalOrders,
+      nonTerminalStrategyOneLiveSessions:
+        evidence.nonTerminalStrategyOneLiveSessions,
       unresolvedRecoveryIncidents:
         evidence.unresolvedRecoveryIncidents,
       blockers,
@@ -1183,6 +1222,7 @@ function validateRuntimeEvidence(
       evidence.activeExecutionSessions,
       evidence.activeExecutionLocks,
       evidence.nonTerminalOrders,
+      evidence.nonTerminalStrategyOneLiveSessions,
       evidence.unresolvedRecoveryIncidents,
     ]
   ) {

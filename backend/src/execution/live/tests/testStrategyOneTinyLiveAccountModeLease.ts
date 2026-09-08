@@ -717,6 +717,8 @@ function clearGuard(): StrategyOnePolicyActivationGuard {
       0,
     nonTerminalOrders:
       0,
+    nonTerminalStrategyOneLiveSessions:
+      0,
     unresolvedRecoveryIncidents:
       0,
     blockers: [
