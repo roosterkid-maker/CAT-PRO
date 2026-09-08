@@ -346,6 +346,19 @@ function terminalBalancedEvidence(
     return null;
   }
 
+  // Number.isFinite() rejects NaN explicitly. Without this, a corrupted or
+  // partially-deserialized filledQuantity (NaN) would make every comparison
+  // below (">"/"<=" against NaN is always false in JS) fail OPEN instead of
+  // blocking - silently journaling a RESOLVED record with a NaN quantity and
+  // clearing the session from StrategyOneTwoLegRestartRecoveryService's
+  // unresolved list without the residual ever actually being verified.
+  if (
+    !Number.isFinite(buy.filledQuantity) ||
+    !Number.isFinite(sell.filledQuantity)
+  ) {
+    return null;
+  }
+
   const tolerance =
     Math.max(1e-12, Math.max(buy.filledQuantity, sell.filledQuantity) * 1e-9);
 
@@ -372,6 +385,18 @@ function compensatedTerminalEvidence(
   const sell = session.sellResponse?.record?.result;
 
   if (!buy || !sell || !terminal(buy.status) || !terminal(sell.status)) {
+    return null;
+  }
+
+  // Same NaN-fails-open hazard as terminalBalancedEvidence() above: every
+  // guard below is a "block unless clearly satisfied" comparison, which is
+  // always false (i.e. does not block) against NaN.
+  if (
+    !Number.isFinite(buy.filledQuantity) ||
+    !Number.isFinite(sell.filledQuantity) ||
+    !Number.isFinite(evidence.filledQuantity) ||
+    !Number.isFinite(evidence.requestedQuantity)
+  ) {
     return null;
   }
 
@@ -430,10 +455,129 @@ function terminal(value: string): boolean {
     value === "FAILED";
 }
 
+/**
+ * Fingerprint only durable order and financial evidence.
+ *
+ * Read-only reconciliation (reconcileSession()/executeOrReconcile()) rewrites
+ * transport metadata on every call - updatedAt, dispatch timestamps, gateway
+ * timestamps, lastError and diagnostic reasons - even when nothing financial
+ * changed. Hashing the entire session (as this function used to) therefore
+ * made an already-resolved, unchanged session look "stale" the moment
+ * anything else (the restart-recovery gate, a dashboard refresh, another
+ * resolve attempt) triggered one more reconciliation, silently reopening a
+ * resolved incident and blocking new LIVE preparation for no financial
+ * reason. This mirrors StrategyOneResidualRecoveryAssistantService.ts's own
+ * fingerprint(), which carries the identical comment and field list for the
+ * identical reason - keep the two in sync; both must exclude the same
+ * transport-only fields.
+ */
 function fingerprint(session: StrategyOneTwoLegSessionRecord): string {
   return createHash("sha256")
-    .update(JSON.stringify(session))
+    .update(JSON.stringify({
+      schemaVersion: session.schemaVersion,
+      sessionId: session.sessionId,
+      requestHash: session.requestHash,
+      opportunityId: session.opportunityId,
+      lastLookDecisionId: session.lastLookDecisionId,
+      buyIdempotencyKey: session.buyIdempotencyKey,
+      sellIdempotencyKey: session.sellIdempotencyKey,
+      buyRequest: session.buyRequest,
+      sellRequest: session.sellRequest,
+      state: session.state,
+      buyResponse: gatewayEvidence(session.buyResponse),
+      sellResponse: gatewayEvidence(session.sellResponse),
+      automaticRetryAllowed: session.automaticRetryAllowed,
+      automaticRecoveryOrderAllowed: session.automaticRecoveryOrderAllowed,
+      newOrderSubmissionAllowed: session.newOrderSubmissionAllowed,
+    }))
     .digest("hex");
+}
+
+function gatewayEvidence(
+  response: StrategyOneTwoLegSessionRecord["buyResponse"],
+) {
+  const record = response?.record;
+  const result = record?.result;
+  const feeEvidence = record?.feeEvidence;
+
+  if (!response) {
+    return null;
+  }
+
+  return {
+    state: response.state,
+    record: record
+      ? {
+        id: record.id,
+        idempotencyKey: record.idempotencyKey,
+        requestHash: record.requestHash,
+        request: record.request,
+        state: record.state,
+        result: result
+          ? {
+            success: result.success,
+            exchange: result.exchange,
+            product: result.product ?? null,
+            reduceOnly: result.reduceOnly ?? null,
+            positionMode: result.positionMode ?? null,
+            positionSide: result.positionSide ?? null,
+            market: result.market,
+            side: result.side,
+            orderId: result.orderId,
+            clientOrderId: result.clientOrderId,
+            status: result.status,
+            requestedQuantity: result.requestedQuantity,
+            filledQuantity: result.filledQuantity,
+            remainingQuantity: result.remainingQuantity,
+            requestedPrice: result.requestedPrice,
+            averageFillPrice: result.averageFillPrice,
+            feeAmount: result.feeAmount,
+            authoritativeFeeQuoteAmount:
+              result.authoritativeFeeQuoteAmount ?? null,
+            authoritativeWithholdingQuoteAmount:
+              result.authoritativeWithholdingQuoteAmount ?? null,
+            authoritativeCashDeductionQuoteAmount:
+              result.authoritativeCashDeductionQuoteAmount ?? null,
+            authoritativeWithholdingEvidenceComplete:
+              result.authoritativeWithholdingEvidenceComplete ?? null,
+            authoritativeFeeEvidenceId:
+              result.authoritativeFeeEvidenceId ?? null,
+            cancelled: result.cancelled,
+            timedOut: result.timedOut,
+          }
+          : null,
+        feeEvidence: feeEvidence
+          ? {
+            version: feeEvidence.version,
+            id: feeEvidence.id,
+            exchange: feeEvidence.exchange,
+            product: feeEvidence.product,
+            market: feeEvidence.market,
+            orderId: feeEvidence.orderId,
+            expectedFilledQuantity: feeEvidence.expectedFilledQuantity,
+            observedFilledQuantity: feeEvidence.observedFilledQuantity,
+            observedQuoteQuantity: feeEvidence.observedQuoteQuantity,
+            averageFillPrice: feeEvidence.averageFillPrice,
+            fills: feeEvidence.fills,
+            fees: feeEvidence.fees,
+            withholdings: feeEvidence.withholdings,
+            quoteAsset: feeEvidence.quoteAsset,
+            totalFeeQuoteAmount: feeEvidence.totalFeeQuoteAmount,
+            totalWithholdingQuoteAmount:
+              feeEvidence.totalWithholdingQuoteAmount,
+            totalCashDeductionQuoteAmount:
+              feeEvidence.totalCashDeductionQuoteAmount,
+            withholdingEvidenceComplete:
+              feeEvidence.withholdingEvidenceComplete,
+            complete: feeEvidence.complete,
+            source: feeEvidence.source,
+          }
+          : null,
+        cancellationRequested: record.cancelRequestedAt !== null,
+        orderSubmissionPerformed: record.orderSubmissionPerformed,
+      }
+      : null,
+  };
 }
 
 function resolutionFingerprint(

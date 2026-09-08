@@ -600,6 +600,20 @@ export class StrategyOneResidualRecoveryAssistantService {
       finiteNonNegative(buy?.filledQuantity) ?? null;
     const sellFilled =
       finiteNonNegative(sell?.filledQuantity) ?? null;
+
+    // A terminal leg with missing/non-finite fill-quantity evidence is not
+    // proof of zero residual - it means the residual was never actually
+    // verified. Defaulting exactResidual to 0 below would otherwise report
+    // BALANCED_NO_ACTION for a position that may still carry real exposure.
+    if (
+      bothLegsTerminal &&
+      (buyFilled === null || sellFilled === null)
+    ) {
+      blockers.push(
+        "Authoritative filled-quantity evidence is missing or non-finite for a terminal leg; residual cannot be safely assessed.",
+      );
+    }
+
     const exactResidual =
       buyFilled !== null && sellFilled !== null
         ? Math.abs(buyFilled - sellFilled)
@@ -610,7 +624,10 @@ export class StrategyOneResidualRecoveryAssistantService {
         Math.max(buyFilled ?? 0, sellFilled ?? 0) * 1e-9,
       );
     const balanced =
-      bothLegsTerminal && exactResidual <= tolerance;
+      bothLegsTerminal &&
+      buyFilled !== null &&
+      sellFilled !== null &&
+      exactResidual <= tolerance;
     const longResidual =
       bothLegsTerminal &&
       buyFilled !== null &&

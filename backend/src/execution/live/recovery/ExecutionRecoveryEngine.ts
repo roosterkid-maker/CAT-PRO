@@ -289,12 +289,22 @@ function isLegFailureTerminal(
     string |
     null,
 ): boolean {
+  // TIMED_OUT is deliberately excluded: it means the authoritative status
+  // *query* did not confirm an outcome in time, not that the exchange order
+  // itself failed - the order can still be open or fill later. Every other
+  // file in this module already treats it this way (AuthoritativeRecoveryInspectionService
+  // classifies it CONFIRMED_OPEN, ExecutionRestartRecoveryGateService lists
+  // it in POSSIBLY_OPEN_STATUSES, and both StrategyOneTwoLeg terminal()
+  // helpers exclude it). Treating it as a confirmed failure here recommended
+  // EMERGENCY_EXIT on a counter leg that might still fill, risking a
+  // double-exposed position if an operator acted on that recommendation and
+  // the "timed out" leg later filled anyway. Falling through to the
+  // age-based escalation below (same path as a null/unknown status) is the
+  // fail-closed behavior that agrees with the rest of the module.
   return status ===
       "CANCELLED" ||
     status ===
       "REJECTED" ||
-    status ===
-      "TIMED_OUT" ||
     status ===
       "FAILED" ||
     status ===
