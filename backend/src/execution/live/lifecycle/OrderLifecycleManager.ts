@@ -1080,6 +1080,31 @@ export class OrderLifecycleManager {
         "Live execution result side does not match the lifecycle record.",
       );
     }
+
+    /*
+     * Once this lifecycle record has an authoritative exchangeOrderId from
+     * a previous applyExecutionResult() call, every later call must report
+     * status for that SAME exchange order. Exchange/market/side/quantity
+     * alone can coincidentally match a different order on the same
+     * market+side; without pinning the order identity itself once known,
+     * a caller that ever fed in a result for the wrong order (matching
+     * everything else) would silently make this lifecycle record start
+     * tracking the wrong exchange order - the same identity-pinning
+     * CentralLiveOrderExecutionGateway.validateResult() already performs
+     * for the real LIVE order path.
+     */
+    if (
+      order.exchangeOrderId !==
+        null &&
+      result.orderId !==
+        null &&
+      result.orderId !==
+        order.exchangeOrderId
+    ) {
+      throw new Error(
+        "Live execution result exchange order ID does not match the lifecycle record's known order.",
+      );
+    }
   }
 
   private mapStatus(

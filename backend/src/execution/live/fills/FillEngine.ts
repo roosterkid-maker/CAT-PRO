@@ -886,6 +886,30 @@ export class FillEngine {
       );
     }
 
+    /*
+     * Once the lifecycle record already has a known exchangeOrderId, this
+     * result must be reporting status for that SAME order - checked here,
+     * before either this engine's own state or the lifecycle record
+     * mutate below, since this is the one call site that feeds
+     * orderLifecycleManager.applyExecutionResult() and this engine commits
+     * its own state first (see the comment above the applyExecutionResult
+     * call further down). A mismatch caught only on the lifecycle side
+     * would leave this engine's delta-based fill accounting already
+     * corrupted by the wrong order's numbers before the throw.
+     */
+    if (
+      order.exchangeOrderId !==
+        null &&
+      result.orderId !==
+        null &&
+      result.orderId !==
+        order.exchangeOrderId
+    ) {
+      throw new Error(
+        "Fill result exchange order ID does not match lifecycle order.",
+      );
+    }
+
     const tolerance =
       this.quantityTolerance(
         order.requestedQuantity,
