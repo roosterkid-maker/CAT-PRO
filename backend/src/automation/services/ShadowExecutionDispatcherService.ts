@@ -323,12 +323,8 @@ export class ShadowExecutionDispatcherService {
               cancelled,
           };
 
-          this.storeRecord(
-            record,
-          );
-
           resultRecords.push(
-            structuredClone(
+            this.storeRecord(
               record,
             ),
           );
@@ -447,12 +443,8 @@ export class ShadowExecutionDispatcherService {
               consumed,
           };
 
-          this.storeRecord(
-            record,
-          );
-
           resultRecords.push(
-            structuredClone(
+            this.storeRecord(
               record,
             ),
           );
@@ -585,12 +577,8 @@ export class ShadowExecutionDispatcherService {
             consumed,
         };
 
-        this.storeRecord(
-          record,
-        );
-
         resultRecords.push(
-          structuredClone(
+          this.storeRecord(
             record,
           ),
         );
@@ -678,23 +666,21 @@ export class ShadowExecutionDispatcherService {
       lastDispatchAt:
         this.lastDispatchAt,
 
+      /*
+       * storeRecord() already returns (and retains) a deep-frozen clone, so
+       * this.lastRecord / this.records elements can never be mutated by a
+       * caller. Re-cloning them here on every getDiagnostics() call - up to
+       * maximumHistory (500) records, potentially polled every few seconds -
+       * was pure wasted CPU. Spread this.records into a fresh array so a
+       * caller mutating the returned array (push/sort/etc) cannot corrupt
+       * this service's internal history.
+       */
       lastRecord:
-        this.lastRecord
-          ? structuredClone(
-              this.lastRecord,
-            )
-          : null,
+        this.lastRecord,
 
-      records:
-        this.records
-          .map(
-            (
-              record,
-            ) =>
-              structuredClone(
-                record,
-              ),
-          ),
+      records: [
+        ...this.records,
+      ],
     };
   }
 
@@ -766,20 +752,36 @@ export class ShadowExecutionDispatcherService {
     );
   }
 
+  /*
+   * Clone-and-freeze the record exactly once, then share that single
+   * immutable reference across internal history, lastRecord, and the
+   * value returned to the caller (dispatchAvailable's resultRecords).
+   * Previously this cloned the same record up to 3 times (once here for
+   * the history array, once here again for lastRecord, once more at each
+   * call site for the returned batch) - CPU profiling on the live VPS
+   * showed this file's structuredClone calls alone consuming roughly a
+   * quarter of total backend CPU, degrading freshness for the
+   * latency-critical Strategy #1 market-update path. Freezing makes
+   * sharing the one clone across all three uses safe: nothing can mutate
+   * it out from under another holder.
+   */
   private storeRecord(
     record:
       ShadowDispatchRecord,
-  ): void {
+  ): ShadowDispatchRecord {
+    const frozen =
+      deepFreeze(
+        structuredClone(
+          record,
+        ),
+      );
+
     this.records.unshift(
-      structuredClone(
-        record,
-      ),
+      frozen,
     );
 
     this.lastRecord =
-      structuredClone(
-        record,
-      );
+      frozen;
 
     if (
       this.records.length >
@@ -788,6 +790,8 @@ export class ShadowExecutionDispatcherService {
       this.records.length =
         this.config.maximumHistory;
     }
+
+    return frozen;
   }
 
   private validateConfig():
@@ -818,6 +822,18 @@ export class ShadowExecutionDispatcherService {
       );
     }
   }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+
+  for (const nested of Object.values(value)) {
+    deepFreeze(nested);
+  }
+
+  return Object.freeze(value);
 }
 
 export const shadowExecutionDispatcherService =
