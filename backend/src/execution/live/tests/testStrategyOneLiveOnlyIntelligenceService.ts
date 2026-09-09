@@ -93,6 +93,7 @@ async function main():
         enabled:
           true,
       },
+      capitalStudy: capitalStudyReport(),
       recentAttempts:
         [],
       exchangeFoundations:
@@ -332,6 +333,7 @@ function blockedPreflight(
       90,
     quoteSkewMs:
       10,
+    capitalStudy: capitalStudyDecision(current),
     permissionBoundary: {
       ready:
         true,
@@ -404,6 +406,65 @@ function blockedPreflight(
         false,
     },
   } as unknown as StrategyOneLiveOnlyPreflightReport;
+}
+
+function capitalStudyDecision(current: ArbitrageOpportunity) {
+  return {
+    routeKey: `${current.pair.market}|${current.pair.buy.exchange}|${current.pair.sell.exchange}`,
+    market: current.pair.market,
+    buyExchange: current.pair.buy.exchange,
+    sellExchange: current.pair.sell.exchange,
+    opportunityId: current.id,
+    status: "EXECUTION_STUDY_READY" as const,
+    executionQualified: true,
+    capitalActionQualified: false,
+    currentConsecutiveSamples: 5,
+    requiredCurrentSamples: 5 as const,
+    completedQualificationCycles: 1,
+    requiredQualificationCycles: 5 as const,
+    totalIndependentSamples: 5,
+    requiredTotalSamplesForCapital: 25 as const,
+    effectiveMinimumCurrentNetProfitPercent: 0.3,
+    baselineMinimumCurrentNetProfitPercent: 0.3 as const,
+    hardMinimumCurrentNetProfitPercent: 0.2 as const,
+    latestNetProfitPercent: current.netProfitPercent,
+    latestObservedAt: NOW,
+    latestEvidenceAgeMs: 0,
+    recommendation: "WAIT_FOR_MORE_EVIDENCE" as const,
+    recommendationDetail: "Test study evidence.",
+    funding: null,
+    blockers: [],
+    safety: {
+      studyOnly: true as const,
+      restartResetsQualification: true as const,
+      hardGatesAutoRelaxed: false as const,
+      recoveryClean: true,
+      movementAllowed: false,
+      orderSubmissionAllowed: false as const,
+    },
+  };
+}
+
+function capitalStudyReport() {
+  return {
+    schemaVersion: "1.0" as const,
+    generatedAt: NOW,
+    running: true,
+    trackedRoutes: 0,
+    executionStudyReadyRoutes: 0,
+    capitalStudyReadyRoutes: 0,
+    policy: {
+      independentSamplesPerExecutionDecision: 5 as const,
+      qualificationCyclesForCapitalAction: 5 as const,
+      independentSamplesForCapitalAction: 25 as const,
+      minimumSampleSpacingMs: 750 as const,
+      adaptiveCurrentNetLadderPercent: [0.3, 0.25, 0.2] as const,
+      postStressNetHardFloorPercent: 0.15,
+      maximumBookAgeMs: 500,
+      maximumBookSkewMs: 500,
+    },
+    routes: [],
+  };
 }
 
 void main().catch(

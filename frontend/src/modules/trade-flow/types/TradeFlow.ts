@@ -24,6 +24,76 @@ export interface LiveOnlyIntelligenceLegPlan {
   explanation: string;
 }
 
+export interface OpportunityCapitalFundingStudy {
+  buyExchange: string;
+  buyAsset: string | null;
+  buyRequired: number | null;
+  buyAvailable: number | null;
+  buyShortfall: number | null;
+  buySufficient: boolean;
+  sellExchange: string;
+  sellAsset: string | null;
+  sellRequired: number | null;
+  sellAvailable: number | null;
+  sellShortfall: number | null;
+  sellSufficient: boolean;
+}
+
+export interface OpportunityCapitalStudyDecision {
+  routeKey: string;
+  market: string;
+  buyExchange: string;
+  sellExchange: string;
+  opportunityId: string;
+  status: "STUDYING" | "EXECUTION_STUDY_READY" | "CAPITAL_STUDY_READY";
+  executionQualified: boolean;
+  capitalActionQualified: boolean;
+  currentConsecutiveSamples: number;
+  requiredCurrentSamples: number;
+  completedQualificationCycles: number;
+  requiredQualificationCycles: number;
+  totalIndependentSamples: number;
+  requiredTotalSamplesForCapital: number;
+  effectiveMinimumCurrentNetProfitPercent: number;
+  baselineMinimumCurrentNetProfitPercent: number;
+  hardMinimumCurrentNetProfitPercent: number;
+  latestNetProfitPercent: number;
+  latestObservedAt: number;
+  latestEvidenceAgeMs: number;
+  recommendation: string;
+  recommendationDetail: string;
+  funding: OpportunityCapitalFundingStudy | null;
+  blockers: string[];
+  safety: {
+    studyOnly: true;
+    restartResetsQualification: true;
+    hardGatesAutoRelaxed: false;
+    recoveryClean: boolean;
+    movementAllowed: boolean;
+    orderSubmissionAllowed: false;
+  };
+}
+
+export interface OpportunityCapitalStudyReport {
+  schemaVersion: "1.0";
+  generatedAt: number;
+  running: boolean;
+  trackedRoutes: number;
+  executionStudyReadyRoutes: number;
+  capitalStudyReadyRoutes: number;
+  policy: {
+    independentSamplesPerExecutionDecision: number;
+    qualificationCyclesForCapitalAction: number;
+    independentSamplesForCapitalAction: number;
+    minimumSampleSpacingMs: number;
+    adaptiveCurrentNetLadderPercent: number[];
+    postStressNetHardFloorPercent: number;
+    maximumBookAgeMs: number;
+    maximumBookSkewMs: number;
+  };
+  routes: OpportunityCapitalStudyDecision[];
+}
+
 export interface LiveOnlyIntelligenceOpportunity {
   opportunityId: string;
   market: string;
@@ -46,6 +116,7 @@ export interface LiveOnlyIntelligenceOpportunity {
   blockers: string[];
   whatWouldMakeExecutable: string[];
   policyChecks: LiveOnlyIntelligencePolicyCheck[];
+  capitalStudy: OpportunityCapitalStudyDecision | null;
   safety: {
     reportIsReadOnly: true;
     authorityGranted: false;
@@ -136,6 +207,7 @@ export interface LiveOnlyIntelligenceReport {
   policy: LiveOnlyRuntimePolicy;
   policyReference: LiveOnlyIntelligencePolicyCheck[];
   capitalManager: LiveOnlyCapitalManagerReport;
+  capitalStudy: OpportunityCapitalStudyReport;
   opportunities: LiveOnlyIntelligenceOpportunity[];
   recentAttempts: LiveOnlyRecentAttempt[];
   exchangeFoundations: ExchangeFoundationCapability[];

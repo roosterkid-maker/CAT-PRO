@@ -40,6 +40,11 @@ import {
   type StrategyOneLiveOnlyStressReport,
 } from "./StrategyOneLiveOnlyStressGateService";
 
+import {
+  opportunityCapitalStudyService,
+  type OpportunityCapitalStudyDecision,
+} from "../../../rebalancing/services/OpportunityCapitalStudyService";
+
 export interface StrategyOneLiveOnlyPreflightReport {
   readonly schemaVersion: "1.0";
   readonly evaluatedAt: number;
@@ -54,6 +59,7 @@ export interface StrategyOneLiveOnlyPreflightReport {
   readonly buyQuoteAgeMs: number;
   readonly sellQuoteAgeMs: number;
   readonly quoteSkewMs: number;
+  readonly capitalStudy: OpportunityCapitalStudyDecision;
   readonly permissionBoundary: StrategyOneApiPermissionBoundaryReport;
   readonly funding: StrategyOneFundedRouteReport;
   readonly stress: StrategyOneLiveOnlyStressReport | null;
@@ -119,6 +125,12 @@ export class StrategyOneLiveOnlyPreflightService {
     const blockers:
       string[] =
       [];
+    const capitalStudy =
+      opportunityCapitalStudyService
+        .getDecision(
+          opportunity,
+          now,
+        );
 
     if (
       !isLiveOnlyRuntimeEnabled()
@@ -168,10 +180,16 @@ export class StrategyOneLiveOnlyPreflightService {
     if (
       !Number.isFinite(opportunity.netProfitPercent) ||
       opportunity.netProfitPercent <
-        policy.minimumCurrentNetProfitPercent
+        capitalStudy.effectiveMinimumCurrentNetProfitPercent
     ) {
       blockers.push(
-        `Current fee-adjusted net must be at least ${policy.minimumCurrentNetProfitPercent.toFixed(2)}%.`,
+        `Current fee-adjusted net must be at least ${capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(2)}% for this studied route.`,
+      );
+    }
+
+    if (!capitalStudy.executionQualified) {
+      blockers.push(
+        `CAPITAL_STUDY: Exact route has ${capitalStudy.currentConsecutiveSamples}/${capitalStudy.requiredCurrentSamples} consecutive independent safe samples.`,
       );
     }
 
@@ -386,6 +404,7 @@ export class StrategyOneLiveOnlyPreflightService {
       buyQuoteAgeMs,
       sellQuoteAgeMs,
       quoteSkewMs,
+      capitalStudy,
       permissionBoundary,
       funding,
       stress,

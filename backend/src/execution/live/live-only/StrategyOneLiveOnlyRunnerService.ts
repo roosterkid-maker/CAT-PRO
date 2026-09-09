@@ -37,6 +37,11 @@ import {
 } from "./StrategyOneLiveOnlyAuthorityService";
 
 import {
+  opportunityCapitalStudyService,
+  type OpportunityCapitalStudyDecision,
+} from "../../../rebalancing/services/OpportunityCapitalStudyService";
+
+import {
   strategyOneActionTimeBookRefreshService,
   type StrategyOneActionTimeBookRefreshRoute,
   type StrategyOneActionTimeBookRefreshResult,
@@ -67,6 +72,10 @@ export interface StrategyOneLiveOnlyRunnerDependencies {
     opportunity: ArbitrageOpportunity,
     authorityId: string,
   ): Promise<ArbitrageLiveExecutionResult>;
+  getCapitalStudyDecision(
+    opportunity: ArbitrageOpportunity,
+    now: number,
+  ): OpportunityCapitalStudyDecision;
   now(): number;
 }
 
@@ -162,6 +171,15 @@ const DEFAULT_DEPENDENCIES:
           cancelOnTimeout:
             true,
         },
+       ),
+  getCapitalStudyDecision: (
+    opportunity,
+    now,
+  ) =>
+    opportunityCapitalStudyService
+      .getDecision(
+        opportunity,
+        now,
       ),
   now:
     Date.now,
@@ -749,6 +767,12 @@ export class StrategyOneLiveOnlyRunnerService {
     const ageMs =
       now -
       opportunity.timestamp;
+    const capitalStudy =
+      this.dependencies
+        .getCapitalStudyDecision(
+          opportunity,
+          now,
+        );
 
     return opportunity.decision ===
         "EXECUTE" &&
@@ -762,8 +786,9 @@ export class StrategyOneLiveOnlyRunnerService {
       }) &&
       opportunity.quotesAreFresh &&
       !opportunity.usedLastPriceFallback &&
+      capitalStudy.executionQualified &&
       opportunity.netProfitPercent >=
-        policy.minimumCurrentNetProfitPercent &&
+        capitalStudy.effectiveMinimumCurrentNetProfitPercent &&
       ageMs >=
         0 &&
       ageMs <=

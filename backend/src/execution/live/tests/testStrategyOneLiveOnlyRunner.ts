@@ -27,6 +27,9 @@ import {
   StrategyOneLiveOnlyRunnerService,
   type StrategyOneLiveOnlyRunnerDependencies,
 } from "../live-only/StrategyOneLiveOnlyRunnerService";
+import type {
+  OpportunityCapitalStudyDecision,
+} from "../../../rebalancing/services/OpportunityCapitalStudyService";
 
 const NOW =
   1_788_900_000_000;
@@ -74,6 +77,9 @@ async function main(): Promise<void> {
     await testFinalRefreshFailureNeverExecutes(
       directory,
     );
+    await testFiveStudyConfirmationsRequired(
+      directory,
+    );
   } finally {
     rmSync(
       directory,
@@ -89,6 +95,37 @@ async function main(): Promise<void> {
   console.log(
     "LIVE-only runner action-time refresh passed: exact public books are rebuilt before authority, refreshed again after authority, and every refresh failure remains order-I/O free.",
   );
+}
+
+async function testFiveStudyConfirmationsRequired(
+  directory: string,
+): Promise<void> {
+  let studyReads = 0;
+  let executions = 0;
+  const service = runner(
+    join(directory, "study-gate.jsonl"),
+    {
+      getCapitalStudyDecision: (candidate) => ({
+        opportunityId: candidate.id,
+        executionQualified: ++studyReads >= 5,
+        effectiveMinimumCurrentNetProfitPercent: 0.2,
+      } as OpportunityCapitalStudyDecision),
+      execute: async (candidate) => {
+        executions += 1;
+        return completedResult(candidate, NOW + 100);
+      },
+    },
+  );
+
+  for (let index = 0; index < 5; index += 1) {
+    await service.observeSnapshot({
+      generatedAt: NOW + index,
+      opportunities: [opportunity(`study-${index}`, NOW)],
+    });
+  }
+
+  assert.equal(executions, 1);
+  assert.equal(service.getDiagnostics(NOW + 100).attempts, 1);
 }
 
 async function testRefreshAuthorizeFinalRefreshExecute(
@@ -432,6 +469,13 @@ function runner(
         POLICY,
       subscribe: () =>
         () => undefined,
+      getCapitalStudyDecision: (
+        candidate,
+      ) => ({
+        opportunityId: candidate.id,
+        executionQualified: true,
+        effectiveMinimumCurrentNetProfitPercent: 0.3,
+      } as OpportunityCapitalStudyDecision),
       now: () =>
         NOW +
         100,

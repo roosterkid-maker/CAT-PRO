@@ -31,11 +31,17 @@ import {
 
 import {
   rebalancingDecisionEngine,
+  type RebalancingDecisionPlan,
 } from "../services/RebalancingDecisionEngine";
 
 import {
   capitalManagerSafetyContextService,
 } from "../services/CapitalManagerSafetyContextService";
+
+import {
+  opportunityCapitalStudyService,
+  type OpportunityCapitalMovementAuthorization,
+} from "../services/OpportunityCapitalStudyService";
 
 import {
   tradingAccountService,
@@ -151,8 +157,15 @@ export class RebalancingExecutionRunner {
       const account = tradingAccountService.getAccount();
       const safetyContext = capitalManagerSafetyContextService.getContext(account, now);
       const plan = rebalancingDecisionEngine.plan(allocation, safetyContext, undefined, now);
+      const movementAuthorizations =
+        opportunityCapitalStudyService
+          .getCrossExchangeMovementAuthorizations(now);
+      const studyBoundPlan = bindRebalancingPlanToCapitalStudy(
+        plan,
+        movementAuthorizations,
+      );
 
-      const crossExchangeOutcomes = await rebalancingExecutionService.executeCrossExchangeMoves(plan);
+      const crossExchangeOutcomes = await rebalancingExecutionService.executeCrossExchangeMoves(studyBoundPlan);
       const sameExchangeOutcome = await rebalancingExecutionService.executeSameExchangeTopUp(
         safetyContext,
       );
@@ -188,6 +201,46 @@ export class RebalancingExecutionRunner {
       this.cycleInProgress = false;
     }
   }
+
+}
+
+/**
+ * Generic equal-allocation proposals are never sufficient authority for a
+ * real withdrawal. Keep only Binance-sourced moves whose destination and
+ * amount are justified by a current 25-sample route-specific USDT shortage.
+ */
+export function bindRebalancingPlanToCapitalStudy(
+  plan: RebalancingDecisionPlan,
+  authorizations: readonly OpportunityCapitalMovementAuthorization[],
+): RebalancingDecisionPlan {
+  const approvedByDestination = new Map<string, number>();
+  for (const authorization of authorizations) {
+    approvedByDestination.set(
+      authorization.destinationExchange,
+      Math.max(
+        approvedByDestination.get(authorization.destinationExchange) ?? 0,
+        authorization.maximumAmountUsdt,
+      ),
+    );
+  }
+
+  const desiredMoves = plan.desiredMoves.flatMap((move) => {
+    const approved = approvedByDestination.get(move.destinationExchange) ?? 0;
+    if (move.sourceExchange !== "binance" || approved <= 0) return [];
+    const amountUsdt = Math.min(move.amountUsdt, approved);
+    if (!Number.isFinite(amountUsdt) || amountUsdt <= 0) return [];
+    return [{
+      ...move,
+      amountUsdt,
+      reason:
+        `${move.reason} Bound to a current five-cycle capital-study USDT shortfall; old opportunities cannot authorize movement.`,
+    }];
+  });
+
+  return {
+    ...plan,
+    desiredMoves,
+  };
 }
 
 export const rebalancingExecutionRunner = new RebalancingExecutionRunner();

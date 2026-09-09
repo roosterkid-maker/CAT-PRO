@@ -72,7 +72,7 @@ export default function LiveOnlyDashboard() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Metric icon={<WalletCards />} label="Per-leg capital" value={`₹${runtime.policy.minimumCapitalPerLegInr}–₹${runtime.policy.maximumCapitalPerLegInr}`} detail={`Current target ₹${runtime.policy.preferredCapitalPerLegInr}`} good={runtime.policy.preferredCapitalPerLegInr >= runtime.policy.minimumCapitalPerLegInr && runtime.policy.preferredCapitalPerLegInr <= runtime.policy.maximumCapitalPerLegInr} />
-        <Metric icon={<Zap />} label="Current net gate" value={`${runtime.policy.minimumCurrentNetProfitPercent.toFixed(2)}%`} detail={`Post-stress ≥ ${runtime.policy.minimumPostStressNetProfitPercent.toFixed(2)}%`} good />
+        <Metric icon={<Zap />} label="Current net ladder" value={runtime.capitalStudy.policy.adaptiveCurrentNetLadderPercent.map((value) => `${value.toFixed(2)}%`).join(" → ")} detail={`Post-stress hard floor ≥ ${runtime.policy.minimumPostStressNetProfitPercent.toFixed(2)}%`} good />
         <Metric icon={<Activity />} label="Execution" value={runtime.runner.inFlight ? "IN FLIGHT" : runtime.runner.running ? "WATCHING" : "STOPPED"} detail={`${runtime.runner.completed}/${runtime.runner.attempts} completed`} good={runtime.runner.running && !runtime.runner.halted} />
         <Metric icon={<Landmark />} label="Capital Manager" value={capitalManagerReady ? "ENABLED" : "LOCKED"} detail={`${runtime.capitalManager.withdrawalWhitelistEntries} whitelisted destination(s)`} good={capitalManagerReady} />
       </div>
@@ -83,6 +83,34 @@ export default function LiveOnlyDashboard() {
           <p className="mt-2 text-sm text-red-200/80">{runtime.runner.haltedReason}</p>
         </section>
       ) : null}
+
+      <section className="rounded-2xl border border-cyan-400/25 bg-panel p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Capital Manager study</p>
+            <h2 className="mt-1 text-xl font-bold text-text-primary">Har exact route ko 5 baar verify karo</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">5 fresh independent checks ke baad route execution study ready hota hai. Real capital movement ke liye 5 complete cycles chahiye; recovery halt, stale evidence ya missing inventory mein movement band rahega.</p>
+          </div>
+          <StatusBadge label={`${runtime.capitalStudy.executionStudyReadyRoutes} EXECUTION READY`} good={runtime.capitalStudy.executionStudyReadyRoutes > 0} />
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {runtime.capitalStudy.routes.slice(0, 6).map((route) => (
+            <article key={route.routeKey} className="rounded-xl border border-border-default bg-background-subtle p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div><p className="font-mono font-bold text-text-primary">{route.market}</p><p className="mt-1 text-xs uppercase text-text-muted">{route.buyExchange} BUY → {route.sellExchange} SELL</p></div>
+                <StatusBadge label={route.status.replaceAll("_", " ")} good={route.status !== "STUDYING"} />
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                <div><p className="text-text-muted">Checks</p><p className="font-mono font-bold text-text-primary">{route.currentConsecutiveSamples}/{route.requiredCurrentSamples}</p></div>
+                <div><p className="text-text-muted">Cycles</p><p className="font-mono font-bold text-text-primary">{route.completedQualificationCycles}/{route.requiredQualificationCycles}</p></div>
+                <div><p className="text-text-muted">Net gate</p><p className="font-mono font-bold text-emerald-300">{route.effectiveMinimumCurrentNetProfitPercent.toFixed(2)}%</p></div>
+              </div>
+              <p className="mt-3 text-xs leading-5 text-text-muted">{route.recommendationDetail}</p>
+            </article>
+          ))}
+          {runtime.capitalStudy.routes.length === 0 ? <p className="text-sm text-text-muted">Fresh audited USDT route ka pehla independent sample abhi pending hai.</p> : null}
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-border-default bg-panel p-5">
         <div className="flex items-center justify-between gap-4">

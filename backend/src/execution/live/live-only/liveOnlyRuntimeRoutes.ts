@@ -35,6 +35,10 @@ import {
   strategyOneLiveOnlyIntelligenceService,
 } from "./StrategyOneLiveOnlyIntelligenceService";
 
+import {
+  opportunityCapitalStudyService,
+} from "../../../rebalancing/services/OpportunityCapitalStudyService";
+
 const router =
   Router();
 
@@ -66,6 +70,9 @@ router.get(
         capitalManager: {
           ...rebalancing,
         },
+        capitalStudy:
+          opportunityCapitalStudyService
+            .getReport(),
       },
     });
   },
@@ -107,6 +114,11 @@ router.get(
             runtime,
             capitalManager:
               getCapitalManagerReport(),
+            capitalStudy:
+              opportunityCapitalStudyService
+                .getReport(
+                  now,
+                ),
             recentAttempts:
               runtime.recentAttempts,
             exchangeFoundations:

@@ -221,6 +221,10 @@ import {
 } from "./execution/live/live-only/StrategyOneLiveOnlyRunnerService";
 
 import {
+  opportunityCapitalStudyService,
+} from "./rebalancing/services/OpportunityCapitalStudyService";
+
+import {
   tradingAccountService,
 } from "./trading/account/TradingAccountService";
 
@@ -837,6 +841,9 @@ server.listen(
        * dedicated withdrawal-capable Binance key and populated the
        * withdrawal whitelist.
        */
+      opportunityCapitalStudyService
+        .start();
+
       rebalancingExecutionRunner
         .start();
 
@@ -884,6 +891,9 @@ const shutdown =
     );
 
     strategyOneLiveOnlyRunnerService
+      .stop();
+
+    opportunityCapitalStudyService
       .stop();
 
     /*

@@ -23,6 +23,11 @@ import type {
   StrategyOneLiveOnlyPreflightReport,
 } from "./StrategyOneLiveOnlyPreflightService";
 
+import type {
+  OpportunityCapitalStudyDecision,
+  OpportunityCapitalStudyReport,
+} from "../../../rebalancing/services/OpportunityCapitalStudyService";
+
 export type LiveOnlyIntelligenceCheckState =
   | "PASS"
   | "BLOCKED"
@@ -81,6 +86,7 @@ export interface LiveOnlyIntelligenceOpportunity {
   readonly whatWouldMakeExecutable: readonly string[];
   readonly policyChecks:
     readonly LiveOnlyIntelligencePolicyCheck[];
+  readonly capitalStudy: OpportunityCapitalStudyDecision | null;
   readonly safety: {
     readonly reportIsReadOnly: true;
     readonly authorityGranted: false;
@@ -100,6 +106,7 @@ export interface LiveOnlyIntelligenceReport {
   readonly policyReference:
     readonly LiveOnlyIntelligencePolicyCheck[];
   readonly capitalManager: unknown;
+  readonly capitalStudy: OpportunityCapitalStudyReport;
   readonly opportunities:
     readonly LiveOnlyIntelligenceOpportunity[];
   readonly recentAttempts:
@@ -129,6 +136,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
       unknown;
     readonly capitalManager:
       unknown;
+    readonly capitalStudy:
+      OpportunityCapitalStudyReport;
     readonly recentAttempts:
       readonly unknown[];
     readonly exchangeFoundations:
@@ -198,6 +207,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
         ),
       capitalManager:
         input.capitalManager,
+      capitalStudy:
+        input.capitalStudy,
       opportunities,
       recentAttempts:
         input.recentAttempts,
@@ -331,6 +342,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
             blockers[0],
           ),
         ],
+        capitalStudy:
+          null,
         safety:
           readOnlySafety(),
       });
@@ -421,6 +434,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
             reason,
           ),
         ],
+        capitalStudy:
+          null,
         safety:
           readOnlySafety(),
       });
@@ -500,6 +515,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
           preflight,
           policy,
         ),
+      capitalStudy:
+        preflight.capitalStudy,
       safety:
         readOnlySafety(),
     });
@@ -651,16 +668,28 @@ export class StrategyOneLiveOnlyIntelligenceService {
         "current-net",
         "Current fee-adjusted net",
         opportunity.netProfitPercent >=
-          policy.minimumCurrentNetProfitPercent
+          preflight.capitalStudy.effectiveMinimumCurrentNetProfitPercent
           ? "PASS"
           : "BLOCKED",
         `${opportunity.netProfitPercent.toFixed(
           3,
         )}%`,
-        `≥ ${policy.minimumCurrentNetProfitPercent.toFixed(
+        `≥ ${preflight.capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(
           2,
         )}%`,
-        "Profit must clear the first gate before exact depth and stress costs.",
+        `Route-specific studied gate; baseline is ${policy.minimumCurrentNetProfitPercent.toFixed(2)}% and the hard adaptive floor is 0.20%.`,
+      ),
+      check(
+        "capital-study",
+        "Independent route confirmations",
+        preflight.capitalStudy.executionQualified
+          ? "PASS"
+          : "BLOCKED",
+        `${preflight.capitalStudy.currentConsecutiveSamples}/${preflight.capitalStudy.requiredCurrentSamples}`,
+        `${preflight.capitalStudy.requiredCurrentSamples} fresh independent samples`,
+        preflight.capitalStudy.executionQualified
+          ? "This exact market and BUY/SELL venue direction earned the current route threshold."
+          : "The same cached book never counts twice; a new route still needs fresh independent confirmations.",
       ),
       check(
         "freshness",

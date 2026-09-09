@@ -68,5 +68,35 @@ export interface LiveOnlyRuntimeResponse {
         lastError: string | null;
       };
     };
+    capitalStudy: {
+      running: boolean;
+      trackedRoutes: number;
+      executionStudyReadyRoutes: number;
+      capitalStudyReadyRoutes: number;
+      policy: {
+        independentSamplesPerExecutionDecision: number;
+        qualificationCyclesForCapitalAction: number;
+        independentSamplesForCapitalAction: number;
+        adaptiveCurrentNetLadderPercent: number[];
+      };
+      routes: Array<{
+        routeKey: string;
+        market: string;
+        buyExchange: string;
+        sellExchange: string;
+        status: "STUDYING" | "EXECUTION_STUDY_READY" | "CAPITAL_STUDY_READY";
+        currentConsecutiveSamples: number;
+        requiredCurrentSamples: number;
+        completedQualificationCycles: number;
+        requiredQualificationCycles: number;
+        effectiveMinimumCurrentNetProfitPercent: number;
+        recommendation: string;
+        recommendationDetail: string;
+        safety: {
+          recoveryClean: boolean;
+          movementAllowed: boolean;
+        };
+      }>;
+    };
   };
 }

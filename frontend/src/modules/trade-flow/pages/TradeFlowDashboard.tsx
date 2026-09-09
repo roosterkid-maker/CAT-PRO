@@ -9,6 +9,7 @@ import {
   Database,
   ExternalLink,
   Gauge,
+  Landmark,
   RefreshCw,
   Route,
   ShieldCheck,
@@ -145,6 +146,25 @@ export default function TradeFlowDashboard() {
         </div>
       </Panel>
 
+      <Panel>
+        <SectionTitle
+          icon={<Landmark />}
+          eyebrow="Adaptive capital study"
+          title="5 fresh checks per route · 5 cycles before capital movement"
+          detail="Har market + BUY exchange + SELL exchange alag study hota hai. Same cached book dobara count nahi hota; restart par qualification safe-side se zero hoti hai."
+        />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Fact label="Study service" value={report.capitalStudy.running ? "RUNNING" : "STOPPED"} good={report.capitalStudy.running} />
+          <Fact label="Tracked routes" value={formatCount(report.capitalStudy.trackedRoutes)} good={report.capitalStudy.trackedRoutes > 0} />
+          <Fact label="Execution study ready" value={formatCount(report.capitalStudy.executionStudyReadyRoutes)} good={report.capitalStudy.executionStudyReadyRoutes > 0} />
+          <Fact label="Capital study ready" value={formatCount(report.capitalStudy.capitalStudyReadyRoutes)} good={report.capitalStudy.capitalStudyReadyRoutes > 0} />
+        </div>
+        <p className="mt-3 text-[10px] leading-5 text-text-muted">
+          Adaptive current-net ladder: {report.capitalStudy.policy.adaptiveCurrentNetLadderPercent.map((value) => `${value.toFixed(2)}%`).join(" → ")}.
+          Post-stress floor {report.capitalStudy.policy.postStressNetHardFloorPercent.toFixed(2)}%, fresh books, depth, balances, recovery and ₹1,000 cap kabhi auto-relax nahi hote.
+        </p>
+      </Panel>
+
       <section className="space-y-4">
         <SectionTitle
           icon={<Route />}
@@ -186,6 +206,8 @@ export default function TradeFlowDashboard() {
             <Fact label="Cross-exchange" value={report.capitalManager.crossExchangeEnabled ? "ENABLED" : "DISABLED"} good={report.capitalManager.crossExchangeEnabled} />
             <Fact label="Dedicated Binance key" value={report.capitalManager.dedicatedBinanceCredentialsConfigured ? "CONFIGURED" : "MISSING"} good={report.capitalManager.dedicatedBinanceCredentialsConfigured} />
             <Fact label="Withdrawal whitelist" value={`${report.capitalManager.withdrawalWhitelistEntries} entries`} good={report.capitalManager.withdrawalWhitelistEntries > 0} />
+            <Fact label="Execution studies" value={`${report.capitalStudy.executionStudyReadyRoutes} ready`} good={report.capitalStudy.executionStudyReadyRoutes > 0} />
+            <Fact label="Capital studies" value={`${report.capitalStudy.capitalStudyReadyRoutes} ready`} good={report.capitalStudy.capitalStudyReadyRoutes > 0} />
           </div>
           {report.capitalManager.enabled &&
           (!report.capitalManager.dedicatedBinanceCredentialsConfigured || report.capitalManager.withdrawalWhitelistEntries === 0) ? (
@@ -282,6 +304,27 @@ function OpportunityCard({
         <LegCard leg={opportunity.buy} />
         <LegCard leg={opportunity.sell} />
       </div>
+
+      {opportunity.capitalStudy ? (
+        <div className="border-t border-border-default bg-cyan-400/5 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">Route-specific adaptive study</p>
+              <p className="mt-1 text-xs text-text-muted">{opportunity.capitalStudy.recommendationDetail}</p>
+            </div>
+            <StatusPill
+              label={opportunity.capitalStudy.status.replaceAll("_", " ")}
+              tone={opportunity.capitalStudy.executionQualified ? "success" : "warning"}
+            />
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Fact label="Fresh confirmations" value={`${opportunity.capitalStudy.currentConsecutiveSamples}/${opportunity.capitalStudy.requiredCurrentSamples}`} good={opportunity.capitalStudy.executionQualified} />
+            <Fact label="Capital cycles" value={`${opportunity.capitalStudy.completedQualificationCycles}/${opportunity.capitalStudy.requiredQualificationCycles}`} good={opportunity.capitalStudy.capitalActionQualified} />
+            <Fact label="Earned current-net gate" value={`${opportunity.capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(2)}%`} good={opportunity.netProfitPercent >= opportunity.capitalStudy.effectiveMinimumCurrentNetProfitPercent} />
+            <Fact label="Fund action" value={opportunity.capitalStudy.recommendation.replaceAll("_", " ")} good={opportunity.capitalStudy.recommendation === "FUNDED"} />
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 border-y border-border-default bg-black/15 p-4 sm:grid-cols-2 xl:grid-cols-5">
         <Fact label="Execution quantity" value={formatNullable(opportunity.executionQuantity)} good={opportunity.executionQuantity !== null} />
