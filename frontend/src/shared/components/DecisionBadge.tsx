@@ -49,7 +49,7 @@ export default function DecisionBadge({
     decision === "EXECUTE"
       ? analyticalStatus
           ?.label ??
-        "ENGINE PASS · PAPER CHECKING"
+        "ENGINE PASS · LIVE PREFLIGHT"
       : decision;
 
   const style =

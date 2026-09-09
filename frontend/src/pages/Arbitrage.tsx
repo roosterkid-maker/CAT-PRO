@@ -31,12 +31,8 @@ import {
 import DecisionBadge from "@/shared/components/DecisionBadge";
 
 import {
-  usePersonalStrategyOneBot,
-} from "@/modules/strategies/hooks/useStrategies";
-
-import {
-  resolvePaperCandidateStatus,
-} from "@/modules/arbitrage/utils/paperCandidateStatus";
+  resolveLiveCandidateStatus,
+} from "@/modules/arbitrage/utils/liveCandidateStatus";
 
 import MetricBar from "@/shared/components/MetricBar";
 
@@ -74,9 +70,6 @@ export default function Arbitrage() {
   const nearMissQuery =
     useOpportunityNearMissAnalytics();
 
-  const personalBotQuery =
-    usePersonalStrategyOneBot();
-
   const [
     search,
     setSearch,
@@ -110,52 +103,6 @@ export default function Arbitrage() {
 
   const nearMissReport =
     nearMissQuery.data?.data;
-
-  const paperCandidateByRoute =
-    useMemo(
-      () =>
-        new Map(
-          (
-            personalBotQuery
-              .data
-              ?.data
-              .conversion
-              .currentCandidates ??
-            []
-          )
-            .map(
-              (
-                candidate,
-              ) => [
-                paperRouteKey(
-                  candidate.market,
-                  candidate.buyExchange,
-                  candidate.sellExchange,
-                ),
-                candidate,
-              ] as const,
-            ),
-        ),
-      [
-        personalBotQuery
-          .data
-          ?.data
-          .conversion
-          .currentCandidates,
-      ],
-    );
-
-  const paperCandidateSnapshotState = {
-    hasSnapshot:
-      personalBotQuery.data !==
-      undefined,
-    isPending:
-      personalBotQuery.isPending,
-    isFetching:
-      personalBotQuery.isFetching,
-    isError:
-      personalBotQuery.isError,
-  };
 
   const filteredOpportunities =
     useMemo(
@@ -555,16 +502,8 @@ export default function Arbitrage() {
                             }
                             scope="ANALYTICAL"
                             analyticalStatus={
-                              resolvePaperCandidateStatus(
-                                paperCandidateByRoute
-                                  .get(
-                                    paperRouteKey(
-                                      opportunity.market,
-                                      opportunity.buyExchange,
-                                      opportunity.sellExchange,
-                                    ),
-                                  ),
-                                paperCandidateSnapshotState,
+                              resolveLiveCandidateStatus(
+                                opportunity,
                               )
                             }
                           />
@@ -689,16 +628,8 @@ export default function Arbitrage() {
               selectedOpportunity
             }
             analyticalStatus={
-              resolvePaperCandidateStatus(
-                paperCandidateByRoute
-                  .get(
-                    paperRouteKey(
-                      selectedOpportunity.market,
-                      selectedOpportunity.buyExchange,
-                      selectedOpportunity.sellExchange,
-                    ),
-                  ),
-                paperCandidateSnapshotState,
+              resolveLiveCandidateStatus(
+                selectedOpportunity,
               )
             }
           />
@@ -720,17 +651,6 @@ export default function Arbitrage() {
   );
 }
 
-function paperRouteKey(
-  market:
-    string,
-  buyExchange:
-    string,
-  sellExchange:
-    string,
-): string {
-  return `${market.trim().toUpperCase()}|${buyExchange.trim().toLowerCase()}|${sellExchange.trim().toLowerCase()}`;
-}
-
 function OpportunityInspector({
   opportunity,
   analyticalStatus,
@@ -739,7 +659,7 @@ function OpportunityInspector({
 
   analyticalStatus:
     ReturnType<
-      typeof resolvePaperCandidateStatus
+      typeof resolveLiveCandidateStatus
     >;
 }) {
   return (
