@@ -89,6 +89,7 @@ export interface ExchangeFoundationCapability {
   requiredCredentialVariables: string[];
   credentialsConfigured: boolean;
   marketDataAdapterImplemented: boolean;
+  marketDataConnected: boolean;
   authenticatedReadImplemented: boolean;
   orderAdapterImplemented: false;
   liveExecutionEnabled: false;

@@ -67,6 +67,14 @@ async function main():
             connected:
               true,
           },
+
+          {
+            name:
+              "Giottus",
+
+            connected:
+              true,
+          },
         ],
 
       hasMarketRuleProvider:
@@ -282,10 +290,22 @@ async function main():
         "giottus,mudrex,bitbns" &&
       report.foundationExchanges.every(
         (exchange) =>
-          !exchange.marketDataAdapterImplemented &&
           !exchange.orderAdapterImplemented &&
           !exchange.liveExecutionEnabled,
       ) &&
+      report.foundationExchanges[0]
+        ?.marketDataAdapterImplemented ===
+        true &&
+      report.foundationExchanges[0]
+        ?.marketDataConnected ===
+        true &&
+      report.foundationExchanges
+        .slice(1)
+        .every(
+          (exchange) =>
+            !exchange.marketDataAdapterImplemented &&
+            !exchange.marketDataConnected,
+        ) &&
       report.foundationExchanges[0]
         ?.authenticatedReadImplemented ===
         true &&

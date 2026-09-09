@@ -69,6 +69,8 @@ export interface ExchangeFoundationCapability {
 
   readonly marketDataAdapterImplemented: boolean;
 
+  readonly marketDataConnected: boolean;
+
   readonly authenticatedReadImplemented: boolean;
 
   readonly orderAdapterImplemented: false;
@@ -351,6 +353,7 @@ const FOUNDATION_DEFINITIONS:
     ExchangeFoundationCapability,
     | "credentialsConfigured"
     | "marketDataAdapterImplemented"
+    | "marketDataConnected"
     | "authenticatedReadImplemented"
     | "orderAdapterImplemented"
     | "liveExecutionEnabled"
@@ -657,11 +660,22 @@ export class ExchangeFleetRegistry {
             authenticatedReadStatus
               .readOnlyVerificationFresh;
 
+          const marketDataAdapterImplemented =
+            definition.exchange ===
+              "giottus";
+
+          const marketDataConnected =
+            marketDataAdapters.get(
+              definition.exchange,
+            ) ??
+            false;
+
           return {
             ...definition,
             credentialsConfigured,
             marketDataAdapterImplemented:
-              false as const,
+              marketDataAdapterImplemented,
+            marketDataConnected,
             authenticatedReadImplemented:
               authenticatedReadImplemented,
             orderAdapterImplemented:
@@ -678,7 +692,7 @@ export class ExchangeFleetRegistry {
                 : "CREDENTIALS_PENDING" as const,
             blockers: [
               authenticatedReadImplemented
-                ? "Signed wallet authentication is implemented; market-data, exact market-rule, fee, clock and order-lifecycle adapters remain unimplemented and execution-blocked."
+                ? "Public ticker/depth and signed wallet/open-order reads are implemented; exact market-rule, fee, clock and deterministic order-submission contracts remain unimplemented and execution-blocked."
                 : "CAT PRO market-data, market-rule, authenticated-read and order adapters have not been implemented or proven yet.",
               ...(
                 definition.exchange ===
@@ -717,7 +731,7 @@ export class ExchangeFleetRegistry {
                   : []
               ),
               authenticatedReadImplemented
-                ? "Authenticated balance reads are read-only; no market-data connection, fund movement or order authority is granted by this foundation record."
+                ? "Authenticated balance and open-order reads are read-only; no fund movement or order authority is granted by this record."
                 : "No market-data connection, balance read, fund movement or order authority is granted by this foundation record.",
             ],
           } satisfies ExchangeFoundationCapability;
@@ -831,7 +845,9 @@ export class ExchangeFleetRegistry {
 
         "LIVE execution and order submission remain disabled for every exchange.",
 
-        "Giottus, Mudrex and Bitbns are visible integration foundations only. They are excluded from opportunity generation and execution until their current product contract, credentials, rules, signed reads and full order lifecycle are independently implemented and verified.",
+        "Giottus public ticker and quantity-bearing order-book data now participates in shared-market discovery and rejected-route diagnostics. It remains excluded from accepted/executable opportunities until exact rules, fees, clock safety and deterministic submission reconciliation are independently implemented and verified.",
+
+        "Mudrex and Bitbns remain visible integration foundations only. They are excluded from opportunity generation and execution until their current product contract, credentials, rules, signed reads and full order lifecycle are independently implemented and verified.",
       ],
     };
   }

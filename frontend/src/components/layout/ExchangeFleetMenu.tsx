@@ -321,8 +321,8 @@ function FoundationExchangeRow({
       </div>
 
       <StatusPill
-        label="Data not built"
-        tone="warning"
+        label={exchange.marketDataConnected ? "Data connected" : "Data offline"}
+        tone={exchange.marketDataConnected ? "success" : "danger"}
       />
       <StatusPill
         label={authVerified ? "Auth verified" : "Auth unverified"}

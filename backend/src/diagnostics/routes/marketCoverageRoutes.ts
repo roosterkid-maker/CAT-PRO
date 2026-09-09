@@ -82,6 +82,10 @@ router.get(
             websocketManager
               .getZebPayObservationDiagnostics(),
 
+          giottusObservation:
+            websocketManager
+              .getGiottusObservationDiagnostics(),
+
           strategyOnePairDiscovery: {
             route:
               "unocoin<->coindcx",

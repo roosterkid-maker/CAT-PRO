@@ -23,8 +23,16 @@ import {
 } from "../exchanges/zebpay/ZebPayObservationAdapter";
 
 import {
+  GiottusObservationAdapter,
+} from "../exchanges/giottus/GiottusObservationAdapter";
+
+import {
   canonicalizeZebPayMarket,
 } from "../exchanges/zebpay/normalize";
+
+import {
+  canonicalizeGiottusMarket,
+} from "../exchanges/giottus/normalize";
 
 import {
   CoinDCXOrderBookAdapter,
@@ -117,6 +125,9 @@ export interface DynamicCoverageRecoveryMetrics {
   zebPayRefreshes:
     number;
 
+  giottusRefreshes:
+    number;
+
   coinDCXRefreshes:
     number;
 
@@ -135,6 +146,9 @@ export interface DynamicCoverageRecoveryMetrics {
   lastZebPayCandidateCount:
     number;
 
+  lastGiottusCandidateCount:
+    number;
+
   lastUnoCoinCandidateCount:
     number;
 
@@ -142,6 +156,9 @@ export interface DynamicCoverageRecoveryMetrics {
     number;
 
   lastZebPaySubscribedMarkets:
+    number;
+
+  lastGiottusSubscribedMarkets:
     number;
 
   lastCoinDCXSubscribedMarkets:
@@ -239,6 +256,9 @@ class WebSocketManager {
   private lastZebPayCandidateSignature =
     "";
 
+  private lastGiottusCandidateSignature =
+    "";
+
   private unoCoinCoinDCXPriorityMarkets:
     readonly string[] =
     [];
@@ -261,6 +281,10 @@ class WebSocketManager {
   /* V162: discovery remains broad; only bounded shared markets get depth. */
   private readonly zebPayObservation =
     new ZebPayObservationAdapter();
+
+  /* Public depth and signed reads only; no Giottus order authority. */
+  private readonly giottusObservation =
+    new GiottusObservationAdapter();
 
   private readonly coinDCXDemandSubscriptions =
     new CoinDCXDemandSubscriptionService(
@@ -318,6 +342,9 @@ class WebSocketManager {
     zebPayRefreshes:
       0,
 
+    giottusRefreshes:
+      0,
+
     coinDCXRefreshes:
       0,
 
@@ -336,6 +363,9 @@ class WebSocketManager {
     lastZebPayCandidateCount:
       0,
 
+    lastGiottusCandidateCount:
+      0,
+
     lastUnoCoinCandidateCount:
       0,
 
@@ -343,6 +373,9 @@ class WebSocketManager {
       0,
 
     lastZebPaySubscribedMarkets:
+      0,
+
+    lastGiottusSubscribedMarkets:
       0,
 
     lastCoinDCXSubscribedMarkets:
@@ -406,6 +439,10 @@ class WebSocketManager {
         this.zebPayObservation,
       );
 
+      exchangeManager.register(
+        this.giottusObservation,
+      );
+
       await exchangeManager
         .connectAll();
 
@@ -453,6 +490,10 @@ class WebSocketManager {
       );
 
       await this.subscribeZebPaySharedMarkets(
+        true,
+      );
+
+      await this.subscribeGiottusSharedMarkets(
         true,
       );
 
@@ -587,6 +628,9 @@ class WebSocketManager {
       this.lastZebPayCandidateSignature =
         "";
 
+      this.lastGiottusCandidateSignature =
+        "";
+
       this.unoCoinCoinDCXPriorityMarkets =
         [];
 
@@ -656,6 +700,12 @@ class WebSocketManager {
   /** V162 read-only operational proof for the staged ZebPay PAPER lane. */
   getZebPayObservationDiagnostics() {
     return this.zebPayObservation
+      .getDiagnostics();
+  }
+
+  /** Read-only public Giottus depth evidence; never grants order authority. */
+  getGiottusObservationDiagnostics() {
+    return this.giottusObservation
       .getDiagnostics();
   }
 
@@ -1046,6 +1096,37 @@ class WebSocketManager {
     return true;
   }
 
+  private async subscribeGiottusSharedMarkets(
+    force: boolean,
+  ): Promise<boolean> {
+    if (!this.giottusObservation.isConnected()) return false;
+
+    const availableMarkets = new Set(
+      this.giottusObservation.getAvailableMarkets().map(canonicalizeGiottusMarket),
+    );
+    const candidates = this.buildExecutableCrossExchangeCandidates(
+      this.giottusObservation.name,
+    ).filter((market) =>
+      availableMarkets.has(
+        canonicalizeGiottusMarket(this.toGiottusSymbol(market)),
+      ),
+    ).slice(0, this.giottusObservation.getMaximumSubscribedMarkets());
+
+    this.dynamicCoverageMetrics.lastGiottusCandidateCount = candidates.length;
+    const signature = this.buildMarketSignature(candidates);
+    if (!force && signature === this.lastGiottusCandidateSignature) {
+      this.dynamicCoverageMetrics.skippedCycles += 1;
+      return false;
+    }
+
+    await this.giottusObservation.subscribe(candidates);
+    this.lastGiottusCandidateSignature = signature;
+    this.dynamicCoverageMetrics.giottusRefreshes += 1;
+    this.dynamicCoverageMetrics.lastGiottusSubscribedMarkets =
+      this.giottusObservation.getDiagnostics().requestedMarkets;
+    return true;
+  }
+
   /**
    * Keep the strongest evidence continuously subscribed while rotating only
    * four scarce slots through the next-best candidates. The target adapter
@@ -1249,6 +1330,10 @@ class WebSocketManager {
         false,
       );
 
+      await this.subscribeGiottusSharedMarkets(
+        false,
+      );
+
       if (
         await this.coinDCXOrderBook
           .refreshSharedMarketSubscriptions()
@@ -1283,6 +1368,12 @@ class WebSocketManager {
       this.dynamicCoverageMetrics
         .lastZebPaySubscribedMarkets =
         this.zebPayObservation
+          .getDiagnostics()
+          .requestedMarkets;
+
+      this.dynamicCoverageMetrics
+        .lastGiottusSubscribedMarkets =
+        this.giottusObservation
           .getDiagnostics()
           .requestedMarkets;
 
@@ -1409,6 +1500,17 @@ class WebSocketManager {
       ...coinDCXAlignedMarkets,
       ...executableCandidates,
     ]);
+  }
+
+  private toGiottusSymbol(market: string): string {
+    const normalized = market.trim().toUpperCase();
+    if (/[\/_-]/.test(normalized)) return normalized;
+    for (const quote of ["USDT", "INR"]) {
+      if (normalized.endsWith(quote) && normalized.length > quote.length) {
+        return `${normalized.slice(0, -quote.length)}/${quote}`;
+      }
+    }
+    return "";
   }
 
   /**

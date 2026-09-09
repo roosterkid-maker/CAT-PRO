@@ -1594,8 +1594,8 @@ function FleetCapabilityMatrix({
 
               <CapabilityValue
                 implemented={giottus.marketDataAdapterImplemented}
-                positive={false}
-                implementedLabel="CONNECTED"
+                positive={giottus.marketDataConnected}
+                implementedLabel={giottus.marketDataConnected ? "CONNECTED" : "REGISTERED"}
               />
 
               <CapabilityValue

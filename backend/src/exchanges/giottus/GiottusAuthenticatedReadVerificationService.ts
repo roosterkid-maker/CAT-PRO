@@ -13,6 +13,7 @@ import type {
 import {
   giottusAccountApi,
   type GiottusBalance,
+  type GiottusOpenOrder,
 } from "./api/GiottusAccountApi";
 
 import {
@@ -30,6 +31,10 @@ export interface GiottusAuthenticatedReadApi {
     credentials:
       GiottusCredentials,
   ): Promise<GiottusBalance[]>;
+
+  getOpenOrders(
+    credentials: GiottusCredentials,
+  ): Promise<GiottusOpenOrder[]>;
 }
 
 export interface GiottusAuthenticatedReadDiagnostics {
@@ -38,6 +43,10 @@ export interface GiottusAuthenticatedReadDiagnostics {
   balanceRows: number;
 
   positiveBalanceRows: number;
+
+  openOrderRows: number;
+
+  partiallyFilledOpenOrders: number;
 
   lastBalanceReadAt:
     number | null;
@@ -48,7 +57,7 @@ export interface GiottusAuthenticatedReadDiagnostics {
   executionEligible: false;
 
   blocker:
-    "MARKET_DATA_RULE_FEE_CLOCK_AND_ORDER_LIFECYCLE_REQUIRED";
+    "RULE_FEE_CLOCK_AND_DETERMINISTIC_ORDER_SUBMISSION_REQUIRED";
 }
 
 export interface GiottusAuthenticatedReadVerificationOptions {
@@ -100,6 +109,10 @@ export class GiottusAuthenticatedReadVerificationService {
       0,
     positiveBalanceRows:
       0,
+    openOrderRows:
+      0,
+    partiallyFilledOpenOrders:
+      0,
     lastBalanceReadAt:
       null,
     lastError:
@@ -107,7 +120,7 @@ export class GiottusAuthenticatedReadVerificationService {
     executionEligible:
       false,
     blocker:
-      "MARKET_DATA_RULE_FEE_CLOCK_AND_ORDER_LIFECYCLE_REQUIRED",
+      "RULE_FEE_CLOCK_AND_DETERMINISTIC_ORDER_SUBMISSION_REQUIRED",
   };
 
   constructor(
@@ -250,12 +263,11 @@ export class GiottusAuthenticatedReadVerificationService {
     }
 
     try {
-      const balances =
-        await this.api
-          .getBalances(
-            this.credentialsProvider
-              .getCredentials(),
-          );
+      const credentials = this.credentialsProvider.getCredentials();
+      const [balances, openOrders] = await Promise.all([
+        this.api.getBalances(credentials),
+        this.api.getOpenOrders(credentials),
+      ]);
 
       const verifiedAt =
         this.now();
@@ -270,6 +282,11 @@ export class GiottusAuthenticatedReadVerificationService {
           (balance) =>
             balance.totalBalance > 0,
         ).length;
+
+      this.diagnostics.openOrderRows = openOrders.length;
+      this.diagnostics.partiallyFilledOpenOrders = openOrders.filter(
+        (order) => order.status === "PARTIALLY_FILLED",
+      ).length;
 
       this.diagnostics
         .lastBalanceReadAt =

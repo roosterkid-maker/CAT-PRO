@@ -20,6 +20,19 @@ export interface GiottusBalance {
   totalBalance: number;
 }
 
+export interface GiottusOpenOrder {
+  symbol: string;
+  orderId: string;
+  price: number;
+  originalQuantity: number;
+  executedQuantity: number;
+  remainingQuantity: number;
+  status: "NEW" | "PARTIALLY_FILLED";
+  type: "MARKET" | "LIMIT" | "STOP_MARKET" | "STOP_LIMIT";
+  side: "BUY" | "SELL";
+  createdAt: number;
+}
+
 interface GiottusSignedReadClient {
   getSigned<T>(
     path: string,
@@ -67,6 +80,20 @@ export class GiottusAccountApi {
           index,
         ),
     );
+  }
+
+  async getOpenOrders(
+    credentials: GiottusCredentials,
+  ): Promise<GiottusOpenOrder[]> {
+    const payload = await this.client.getSigned<unknown>(
+      GIOTTUS.REST.OPEN_ORDERS_PATH,
+      [],
+      credentials,
+    );
+    if (!Array.isArray(payload)) {
+      throw new Error("Invalid Giottus open-orders response: order list is missing.");
+    }
+    return payload.map((value, index) => this.normalizeOpenOrder(value, index));
   }
 
   private normalizeBalance(
@@ -121,6 +148,40 @@ export class GiottusAccountApi {
       totalBalance:
         freeBalance +
         lockedBalance,
+    };
+  }
+
+  private normalizeOpenOrder(value: unknown, index: number): GiottusOpenOrder {
+    if (!this.isRecord(value)) {
+      throw new Error(`Invalid Giottus open-order row at index ${index}.`);
+    }
+    const symbol = typeof value.symbol === "string" ? value.symbol.trim().toUpperCase() : "";
+    const orderId = typeof value.orderId === "string" ? value.orderId.trim() : "";
+    const status = value.status;
+    const type = value.type;
+    const side = value.side;
+    const createdAt = Number(value.time);
+    if (
+      !/^[A-Z0-9]+\/[A-Z0-9]+$/.test(symbol) ||
+      !/^\d+-\d+-\d+$/.test(orderId) ||
+      (status !== "NEW" && status !== "PARTIALLY_FILLED") ||
+      (type !== "MARKET" && type !== "LIMIT" && type !== "STOP_MARKET" && type !== "STOP_LIMIT") ||
+      (side !== "BUY" && side !== "SELL") ||
+      !Number.isSafeInteger(createdAt) || createdAt <= 0
+    ) {
+      throw new Error(`Invalid Giottus open-order identity at index ${index}.`);
+    }
+    return {
+      symbol,
+      orderId,
+      price: this.toNonNegativeNumber(value.price, `${symbol} order price`),
+      originalQuantity: this.toNonNegativeNumber(value.origQty, `${symbol} original quantity`),
+      executedQuantity: this.toNonNegativeNumber(value.executedQty, `${symbol} executed quantity`),
+      remainingQuantity: this.toNonNegativeNumber(value.remainingQty, `${symbol} remaining quantity`),
+      status,
+      type,
+      side,
+      createdAt,
     };
   }
 

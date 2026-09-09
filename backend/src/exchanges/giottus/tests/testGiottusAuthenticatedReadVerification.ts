@@ -109,11 +109,14 @@ async function main():
               .update(canonical)
               .digest("hex");
 
+          const supportedReadPath =
+            url.pathname === "/api/v1/wallet" ||
+            url.pathname === "/api/v1/spot/orders/open";
+
           assertCondition(
             url.origin ===
               "https://api.giottus.com" &&
-            url.pathname ===
-              "/api/v1/wallet" &&
+            supportedReadPath &&
             url.searchParams.get(
               "recvWindow",
             ) === "5000" &&
@@ -130,26 +133,24 @@ async function main():
               "User-Agent",
             ) === "CAT-PRO/20.0" &&
             method === "GET",
-            "Giottus verification must issue only the documented signed wallet GET.",
+            "Giottus verification must issue only documented signed account-read GETs.",
           );
 
           return new Response(
-            JSON.stringify([
-              {
-                asset:
-                  "USDT",
-                free:
-                  "10.5",
-                locked:
-                  "1.5",
-                lockedFd:
-                  "0",
-                lockedStaking:
-                  "0",
-                lockedOtc:
-                  "0",
-              },
-            ]),
+            JSON.stringify(
+              url.pathname === "/api/v1/wallet"
+                ? [
+                    {
+                      asset: "USDT",
+                      free: "10.5",
+                      locked: "1.5",
+                      lockedFd: "0",
+                      lockedStaking: "0",
+                      lockedOtc: "0",
+                    },
+                  ]
+                : [],
+            ),
             {
               status:
                 200,
@@ -198,8 +199,10 @@ async function main():
       readiness.readOnlyVerificationFresh &&
       diagnostics.balanceRows === 1 &&
       diagnostics.positiveBalanceRows === 1 &&
+      diagnostics.openOrderRows === 0 &&
+      diagnostics.partiallyFilledOpenOrders === 0 &&
       diagnostics.executionEligible === false &&
-      requestCount === 1 &&
+      requestCount === 2 &&
       nonGetRequestCount === 0,
       "Giottus signed balance evidence must verify read access without granting execution.",
     );
