@@ -57,6 +57,16 @@ try {
         true,
     },
   );
+  mkdirSync(
+    join(
+      root,
+      "execution",
+    ),
+    {
+      recursive:
+        true,
+    },
+  );
   writeFileSync(
     join(
       root,
@@ -80,6 +90,30 @@ try {
       "tiny-live-arm.jsonl",
     ),
     "retire\n",
+  );
+  writeFileSync(
+    join(
+      root,
+      "execution",
+      "live-performance-evidence.jsonl",
+    ),
+    "obsolete-unbounded-stream\n",
+  );
+  writeFileSync(
+    join(
+      root,
+      "execution",
+      "live-performance-checkpoint.jsonl",
+    ),
+    "bounded-checkpoint\n",
+  );
+  writeFileSync(
+    join(
+      root,
+      "execution",
+      "live-performance-checkpoint.jsonl.previous",
+    ),
+    "bounded-checkpoint-previous\n",
   );
 
   execFileSync(
@@ -114,6 +148,36 @@ try {
       ),
     ),
     false,
+  );
+  assert.equal(
+    existsSync(
+      join(
+        root,
+        "execution",
+        "live-performance-evidence.jsonl",
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    existsSync(
+      join(
+        root,
+        "execution",
+        "live-performance-checkpoint.jsonl",
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    existsSync(
+      join(
+        root,
+        "execution",
+        "live-performance-checkpoint.jsonl.previous",
+      ),
+    ),
+    true,
   );
   assert.equal(
     existsSync(
@@ -155,7 +219,7 @@ try {
     );
   assert.equal(
     manifest.entries.length,
-    2,
+    3,
   );
   assert.equal(
     manifest.entries.every(

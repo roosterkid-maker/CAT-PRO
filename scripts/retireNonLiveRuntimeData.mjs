@@ -275,6 +275,7 @@ function collectCandidates(
         "control/paper-capital-configuration.jsonl",
         "control/personal-bot-runtime.jsonl",
         "control/strategy-one-policy-activations.jsonl",
+        "execution/live-performance-evidence.jsonl",
       ].includes(
         relativePath,
       );
