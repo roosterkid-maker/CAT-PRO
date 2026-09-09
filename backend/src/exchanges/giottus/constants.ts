@@ -35,10 +35,13 @@ export const GIOTTUS = {
     "CAT-PRO/20.0",
 
   MARKET_REFRESH_MS:
-    15_000,
+    60_000,
 
   ORDER_BOOK_REFRESH_MS:
-    5_000,
+    10_000,
+
+  MINIMUM_RATE_LIMIT_COOLDOWN_MS:
+    10_000,
 
   CONNECTION_STALE_MULTIPLIER:
     3,
@@ -50,7 +53,7 @@ export const GIOTTUS = {
     8,
 
   ORDER_BOOK_CONCURRENCY:
-    2,
+    1,
 
   OBSERVATION_QUOTE_ASSETS: [
     "USDT",

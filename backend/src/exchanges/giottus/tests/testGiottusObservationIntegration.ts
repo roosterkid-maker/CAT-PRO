@@ -1,5 +1,8 @@
 import {GiottusObservationAdapter} from "../GiottusObservationAdapter";
-import {GiottusPublicApi} from "../GiottusPublicApi";
+import {
+  GiottusPublicApi,
+  GiottusPublicRateLimitError,
+} from "../GiottusPublicApi";
 import type {GiottusPublicMarketApi} from "../GiottusPublicApi";
 import type {NormalizedTicker} from "../../coindcx/types";
 
@@ -34,6 +37,26 @@ async function main(): Promise<void> {
     observedUrls[2]?.searchParams.get("symbol") === "BTC/USDT" &&
       observedUrls[2]?.searchParams.get("limit") === "20",
     "Giottus order-book query must retain the documented BASE/QUOTE symbol.",
+  );
+
+  const rateLimitedPublicApi = new GiottusPublicApi(async () =>
+    new Response(JSON.stringify({code: -1003}), {
+      status: 429,
+      headers: {
+        "Content-Type": "application/json",
+        "Retry-After": "2",
+      },
+    }));
+  let publicRateLimit: unknown = null;
+  try {
+    await rateLimitedPublicApi.getOrderBook("BTC/USDT");
+  } catch (error: unknown) {
+    publicRateLimit = error;
+  }
+  assertCondition(
+    publicRateLimit instanceof GiottusPublicRateLimitError &&
+      publicRateLimit.retryAfterMs === 2_000,
+    "Giottus HTTP 429 responses must preserve the documented Retry-After cooldown.",
   );
 
   let timestamp = Date.now();
@@ -77,6 +100,38 @@ async function main(): Promise<void> {
     "Giottus must publish only validated quantity-bearing selected books and remain execution-blocked.",
   );
   await adapter.disconnect();
+
+  let rateLimitedBookReads = 0;
+  const rateLimitedAdapter = new GiottusObservationAdapter({
+    api: {
+      async getSymbols() { return ["BTC/USDT", "ETH/USDT"]; },
+      async getTickers() {
+        return [
+          {symbol: "BTC/USDT", lastPrice: "100", time: String(timestamp)},
+          {symbol: "ETH/USDT", lastPrice: "200", time: String(timestamp)},
+        ];
+      },
+      async getOrderBook() {
+        rateLimitedBookReads += 1;
+        throw new GiottusPublicRateLimitError("Synthetic Giottus HTTP 429.", 1_000);
+      },
+    },
+    now: () => timestamp,
+    scheduleTimers: false,
+  });
+  await rateLimitedAdapter.connect();
+  await rateLimitedAdapter.subscribe(["BTCUSDT", "ETHUSDT"]);
+  await rateLimitedAdapter.subscribe(["BTCUSDT", "ETHUSDT"]);
+  const rateLimitedDiagnostics = rateLimitedAdapter.getDiagnostics();
+  assertCondition(
+    rateLimitedBookReads === 1 &&
+      rateLimitedDiagnostics.failedBookReads === 1 &&
+      rateLimitedDiagnostics.rateLimitResponses === 1 &&
+      rateLimitedDiagnostics.rateLimitSkippedRefreshes === 1 &&
+      rateLimitedDiagnostics.rateLimitCooldownUntil === timestamp + 10_000,
+    "Giottus depth polling must stop during the bounded shared-IP cooldown instead of creating a 429 storm.",
+  );
+  await rateLimitedAdapter.disconnect();
   console.log("GIOTTUS OBSERVATION INTEGRATION TEST PASSED.");
 }
 

@@ -12,6 +12,16 @@ export interface GiottusPublicMarketApi {
   getOrderBook(symbol: string, limit?: number): Promise<GiottusOrderBook>;
 }
 
+export class GiottusPublicRateLimitError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs: number,
+  ) {
+    super(message);
+    this.name = "GiottusPublicRateLimitError";
+  }
+}
+
 export class GiottusPublicApi implements GiottusPublicMarketApi {
   constructor(
     private readonly request: GiottusPublicFetch = fetch,
@@ -78,6 +88,14 @@ export class GiottusPublicApi implements GiottusPublicMarketApi {
       );
     }
 
+    if (response.status === 429) {
+      const retryAfterMs = resolveRetryAfterMs(response.headers, Date.now());
+      throw new GiottusPublicRateLimitError(
+        `Giottus public GET ${url.pathname} failed: HTTP 429; retry after ${Math.ceil(retryAfterMs / 1_000)}s.`,
+        retryAfterMs,
+      );
+    }
+
     let payload: unknown;
     try {
       payload = await response.json();
@@ -93,6 +111,25 @@ export class GiottusPublicApi implements GiottusPublicMarketApi {
     }
     return payload;
   }
+}
+
+function resolveRetryAfterMs(headers: Headers, now: number): number {
+  const retryAfter = headers.get("Retry-After")?.trim() ?? "";
+  const retryAfterSeconds = Number(retryAfter);
+  const retryAfterDate = Date.parse(retryAfter);
+  const resetSeconds = Number(headers.get("X-RateLimit-Reset"));
+  const candidates = [
+    Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+      ? retryAfterSeconds * 1_000
+      : Number.NaN,
+    Number.isFinite(retryAfterDate)
+      ? retryAfterDate - now
+      : Number.NaN,
+    Number.isFinite(resetSeconds) && resetSeconds > 0
+      ? resetSeconds * 1_000 - now
+      : Number.NaN,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  return candidates.length > 0 ? Math.max(...candidates) : GIOTTUS.MINIMUM_RATE_LIMIT_COOLDOWN_MS;
 }
 
 function normalizeApiSymbol(symbol: string): string {

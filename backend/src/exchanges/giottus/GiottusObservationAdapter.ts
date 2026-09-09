@@ -3,7 +3,11 @@ import {marketCache} from "../../services/cache.service";
 import type {ExchangeAdapter} from "../core/ExchangeAdapter";
 import type {NormalizedTicker} from "../coindcx/types";
 import {GIOTTUS} from "./constants";
-import {giottusPublicApi, type GiottusPublicMarketApi} from "./GiottusPublicApi";
+import {
+  GiottusPublicRateLimitError,
+  giottusPublicApi,
+  type GiottusPublicMarketApi,
+} from "./GiottusPublicApi";
 import {
   canonicalizeGiottusMarket,
   isGiottusObservationMarket,
@@ -22,6 +26,9 @@ export interface GiottusObservationDiagnostics {
   successfulBookReads: number;
   failedBookReads: number;
   rejectedBooks: number;
+  rateLimitResponses: number;
+  rateLimitSkippedRefreshes: number;
+  rateLimitCooldownUntil: number | null;
   lastSuccessfulTickerReadAt: number | null;
   lastSuccessfulBookReadAt: number | null;
   lastError: string | null;
@@ -47,6 +54,7 @@ export class GiottusObservationAdapter implements ExchangeAdapter {
   private lastUpdate = 0;
   private tickerRefreshInProgress = false;
   private bookRefreshInProgress = false;
+  private nextBookIndex = 0;
   private tickerTimer: NodeJS.Timeout | null = null;
   private bookTimer: NodeJS.Timeout | null = null;
   private tickerCallback: ((ticker: NormalizedTicker) => void) | null = null;
@@ -59,6 +67,9 @@ export class GiottusObservationAdapter implements ExchangeAdapter {
     successfulBookReads: 0,
     failedBookReads: 0,
     rejectedBooks: 0,
+    rateLimitResponses: 0,
+    rateLimitSkippedRefreshes: 0,
+    rateLimitCooldownUntil: null,
     lastSuccessfulTickerReadAt: null,
     lastSuccessfulBookReadAt: null,
     lastError: null,
@@ -194,18 +205,21 @@ export class GiottusObservationAdapter implements ExchangeAdapter {
 
   private async refreshBooks(): Promise<void> {
     if (this.bookRefreshInProgress || this.requestedByCanonical.size === 0) return;
+    const now = this.now();
+    if (
+      this.diagnostics.rateLimitCooldownUntil !== null &&
+      now < this.diagnostics.rateLimitCooldownUntil
+    ) {
+      this.diagnostics.rateLimitSkippedRefreshes += 1;
+      return;
+    }
     this.bookRefreshInProgress = true;
     try {
       const queue = [...this.requestedByCanonical.values()];
-      const workerCount = Math.min(queue.length, GIOTTUS.ORDER_BOOK_CONCURRENCY);
-      await Promise.all(
-        Array.from({length: workerCount}, async () => {
-          while (queue.length > 0) {
-            const symbol = queue.shift();
-            if (symbol) await this.refreshBook(symbol);
-          }
-        }),
-      );
+      const index = this.nextBookIndex % queue.length;
+      this.nextBookIndex = (index + GIOTTUS.ORDER_BOOK_CONCURRENCY) % queue.length;
+      const selected = queue.slice(index, index + GIOTTUS.ORDER_BOOK_CONCURRENCY);
+      await Promise.all(selected.map((symbol) => this.refreshBook(symbol)));
     } finally {
       this.bookRefreshInProgress = false;
     }
@@ -239,6 +253,13 @@ export class GiottusObservationAdapter implements ExchangeAdapter {
       this.lastUpdate = Math.max(this.lastUpdate, receivedAt);
     } catch (error: unknown) {
       this.diagnostics.failedBookReads += 1;
+      if (error instanceof GiottusPublicRateLimitError) {
+        this.diagnostics.rateLimitResponses += 1;
+        this.diagnostics.rateLimitCooldownUntil = Math.max(
+          this.diagnostics.rateLimitCooldownUntil ?? 0,
+          this.now() + Math.max(error.retryAfterMs, GIOTTUS.MINIMUM_RATE_LIMIT_COOLDOWN_MS),
+        );
+      }
       this.diagnostics.lastError = error instanceof Error ? error.message.slice(0, 500) : "Giottus order-book refresh failed.";
     } finally {
       this.updateCounts();
