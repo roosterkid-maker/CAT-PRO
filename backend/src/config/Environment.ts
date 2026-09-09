@@ -7,6 +7,10 @@ type TradingMode =
   | "paper"
   | "live";
 
+type RuntimeProfile =
+  | "staged"
+  | "live-only";
+
 export interface ApplicationEnvironment {
   nodeEnv:
     NodeEnvironment;
@@ -22,6 +26,9 @@ export interface ApplicationEnvironment {
 
   tradingMode:
     TradingMode;
+
+  runtimeProfile:
+    RuntimeProfile;
 
   liveTradingEnabled:
     boolean;
@@ -74,6 +81,16 @@ ApplicationEnvironment {
       "paper",
     );
 
+  const runtimeProfile =
+    readEnum(
+      "CAT_PRO_RUNTIME_PROFILE",
+      [
+        "staged",
+        "live-only",
+      ] as const,
+      "staged",
+    );
+
   const environment:
     ApplicationEnvironment = {
     nodeEnv,
@@ -97,6 +114,8 @@ ApplicationEnvironment {
       ),
 
     tradingMode,
+
+    runtimeProfile,
 
     liveTradingEnabled:
       readBoolean(
@@ -186,6 +205,29 @@ function validateTradingSafety(
   ) {
     throw new Error(
       "Production live trading requires ARBITRAGE_LIVE_CONFIRMATION.",
+    );
+  }
+
+  if (
+    environment.runtimeProfile ===
+      "live-only" &&
+    (
+      environment.tradingMode !==
+        "live" ||
+      !environment.liveTradingEnabled ||
+      process.env
+        .TRADING_EXECUTION_MODE
+        ?.trim()
+        .toLowerCase() !==
+        "live" ||
+      process.env
+        .CAT_PRO_LIVE_ONLY_CONFIRMATION
+        ?.trim() !==
+        "ENABLE_CAT_PRO_LIVE_ONLY_RUNTIME"
+    )
+  ) {
+    throw new Error(
+      "LIVE-only runtime requires live trading/execution mode, LIVE_TRADING_ENABLED=true and CAT_PRO_LIVE_ONLY_CONFIRMATION.",
     );
   }
 }

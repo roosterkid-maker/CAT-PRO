@@ -9,9 +9,6 @@ import {
   Routes,
 } from "react-router-dom";
 
-import Dashboard
-  from "@/pages/Dashboard";
-
 import {
   APP_PAGE_PATHS,
 } from "./routes";
@@ -21,11 +18,7 @@ export type {
 } from "./routes";
 
 const BotDashboard = lazy(
-  () => import("@/modules/bot/pages/BotDashboard"),
-);
-
-const AgentSakhondraDashboard = lazy(
-  () => import("@/modules/agent-sakhondra/pages/AgentSakhondraDashboard"),
+  () => import("@/modules/live-only/pages/LiveOnlyDashboard"),
 );
 
 const TradeFlowDashboard = lazy(
@@ -69,36 +62,6 @@ const Arbitrage = lazy(
     ),
 );
 
-const PaperTrading = lazy(
-  () =>
-    import(
-      "@/pages/PaperTrading"
-    ),
-);
-
-const StrategyDashboard = lazy(
-  () =>
-    import(
-      "@/modules/strategies/pages/StrategyDashboard"
-    ),
-);
-
-const AutomationCenterDashboard =
-  lazy(
-    () =>
-      import(
-        "@/modules/automation/pages/AutomationCenterDashboard"
-      ),
-  );
-
-const PerformanceAnalyticsDashboard =
-  lazy(
-    () =>
-      import(
-        "@/modules/performance/pages/PerformanceAnalyticsDashboard"
-      ),
-  );
-
 const SystemHealth = lazy(
   () =>
     import(
@@ -106,27 +69,11 @@ const SystemHealth = lazy(
     ),
 );
 
-const ProductionSafetyDashboard =
-  lazy(
-    () =>
-      import(
-        "@/modules/production-safety/pages/ProductionSafetyDashboard"
-      ),
-  );
-
 const RecoveryDiagnosticsDashboard =
   lazy(
     () =>
       import(
         "@/modules/recovery/pages/RecoveryDiagnosticsDashboard"
-      ),
-  );
-
-const TinyLivePreflightDashboard =
-  lazy(
-    () =>
-      import(
-        "@/modules/tiny-live/pages/TinyLivePreflightDashboard"
       ),
   );
 
@@ -137,13 +84,6 @@ const Alerts = lazy(
     ),
 );
 
-const OperatorSettingsDashboard =
-  lazy(
-    () =>
-      import(
-        "@/modules/operator-settings/pages/OperatorSettingsDashboard"
-      ),
-  );
 
 export default function AppRouter() {
   return (
@@ -158,7 +98,7 @@ export default function AppRouter() {
             APP_PAGE_PATHS.dashboard
           }
           element={
-            <Dashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -167,7 +107,7 @@ export default function AppRouter() {
             APP_PAGE_PATHS.strategies
           }
           element={
-            <StrategyDashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -196,7 +136,7 @@ export default function AppRouter() {
             APP_PAGE_PATHS["agent-sakhondra"]
           }
           element={
-            <AgentSakhondraDashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -261,7 +201,7 @@ export default function AppRouter() {
             ]
           }
           element={
-            <PaperTrading />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -272,7 +212,7 @@ export default function AppRouter() {
             ]
           }
           element={
-            <AutomationCenterDashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -281,7 +221,7 @@ export default function AppRouter() {
             APP_PAGE_PATHS.performance
           }
           element={
-            <PerformanceAnalyticsDashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -303,7 +243,7 @@ export default function AppRouter() {
             ]
           }
           element={
-            <ProductionSafetyDashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -323,7 +263,7 @@ export default function AppRouter() {
             ]
           }
           element={
-            <TinyLivePreflightDashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 
@@ -341,7 +281,7 @@ export default function AppRouter() {
             APP_PAGE_PATHS.settings
           }
           element={
-            <OperatorSettingsDashboard />
+            <Navigate to={APP_PAGE_PATHS.bot} replace />
           }
         />
 

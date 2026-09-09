@@ -12,7 +12,7 @@ import { useSystemHealth } from "@/modules/system-health/hooks/useSystemHealth";
 const QUICK_LINKS = [
   {
     label: "Open BOT control",
-    detail: "Choose OFF, PAPER or bounded LIVE from one place.",
+    detail: "Inspect the bounded LIVE-only runner and final execution controls.",
     path: APP_PAGE_PATHS.bot,
   },
   {

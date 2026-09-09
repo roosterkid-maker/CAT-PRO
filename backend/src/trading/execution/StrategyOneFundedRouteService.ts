@@ -1,8 +1,8 @@
 import {getExchangeTakerFeePercent} from "../../arbitrage/config/fees";
 import {
-  STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
-  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
-} from "../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+  STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_LIVE_MAXIMUM_BOOK_SKEW_MS,
+} from "../../arbitrage/execution/StrategyOneLiveTimingPolicy";
 import type {ArbitrageOpportunity} from "../../arbitrage/models/ArbitrageOpportunity";
 import type {ExchangeMarketCapability} from "../../execution/capabilities/models/ExchangeCapability";
 import {exchangeCapabilityService} from "../../execution/capabilities/services/ExchangeCapabilityService";
@@ -271,7 +271,7 @@ export class StrategyOneFundedRouteService {
     const opportunitySnapshotIsFresh =
       opportunitySnapshotAgeMs !== null &&
       opportunitySnapshotAgeMs >= 0 &&
-      opportunitySnapshotAgeMs <= STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS &&
+      opportunitySnapshotAgeMs <= STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS &&
       opportunity.quotesAreFresh !== false;
     const availableDepthInputs = [
       opportunity.availableExecutableQty,
@@ -584,7 +584,7 @@ export class StrategyOneFundedRouteService {
       buyBookAgeMs === null ||
       !Number.isSafeInteger(buyBookAgeMs) ||
       buyBookAgeMs < 0 ||
-      buyBookAgeMs > STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS
+      buyBookAgeMs > STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS
     ) {
       blockers.push("BUY multi-level order book is outside the dispatch-reserved freshness budget");
     }
@@ -592,14 +592,14 @@ export class StrategyOneFundedRouteService {
       sellBookAgeMs === null ||
       !Number.isSafeInteger(sellBookAgeMs) ||
       sellBookAgeMs < 0 ||
-      sellBookAgeMs > STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS
+      sellBookAgeMs > STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS
     ) {
       blockers.push("SELL multi-level order book is outside the dispatch-reserved freshness budget");
     }
     if (
       bookSkewMs === null ||
       !Number.isSafeInteger(bookSkewMs) ||
-      bookSkewMs > STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS
+      bookSkewMs > STRATEGY_ONE_LIVE_MAXIMUM_BOOK_SKEW_MS
     ) {
       blockers.push("Multi-level order-book timestamp skew exceeds the pilot ceiling");
     }
@@ -627,8 +627,8 @@ export class StrategyOneFundedRouteService {
       buyDepthQuantity,
       sellDepthQuantity,
       sharedDepthQuantity,
-      maximumBookAgeMs: STRATEGY_ONE_PILOT_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
-      maximumBookSkewMs: STRATEGY_ONE_PILOT_MAXIMUM_BOOK_SKEW_MS,
+      maximumBookAgeMs: STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+      maximumBookSkewMs: STRATEGY_ONE_LIVE_MAXIMUM_BOOK_SKEW_MS,
       blockers: [...new Set(blockers)],
     };
   }

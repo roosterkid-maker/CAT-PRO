@@ -57,10 +57,14 @@ import type {
   SharedRecoveryIntentProposal,
 } from "../../recovery/models/SharedRecoveryIntent";
 
-import {
-  strategyOneTinyLiveActionAuthorityService,
-  type StrategyOneTinyLiveAuthorityRecord,
+import type {
+  StrategyOneTinyLiveAuthorityRecord,
 } from "../../execution/live/tiny-live/StrategyOneTinyLiveActionAuthorityService";
+
+import {
+  strategyOneLiveOnlyAuthorityService,
+  type StrategyOneLiveOnlyAuthorityRecord,
+} from "../../execution/live/live-only/StrategyOneLiveOnlyAuthorityService";
 
 import {
   capitalReservationService,
@@ -91,6 +95,10 @@ export interface ArbitrageExecutionOptions {
    */
   allowTinyLiveReviewCandidate?: boolean;
 }
+
+type StrategyOneExecutionAuthorityRecord =
+  | StrategyOneTinyLiveAuthorityRecord
+  | StrategyOneLiveOnlyAuthorityRecord;
 
 export interface ArbitrageExecutionCoordinatorDependencies {
   readonly liveExecution: {
@@ -179,19 +187,19 @@ export interface ArbitrageExecutionCoordinatorDependencies {
     readonly authorityId: string;
     readonly opportunity: ArbitrageOpportunity;
     readonly now: number;
-  }) => StrategyOneTinyLiveAuthorityRecord;
+  }) => StrategyOneExecutionAuthorityRecord;
 
   readonly bindActionAuthorityPair: (
     authorityId: string,
     pairSessionId: string,
     now: number,
-  ) => StrategyOneTinyLiveAuthorityRecord;
+  ) => StrategyOneExecutionAuthorityRecord;
 
   readonly finalizeActionAuthority: (
     authorityId: string,
     result: ArbitrageLiveExecutionResult,
     now: number,
-  ) => StrategyOneTinyLiveAuthorityRecord;
+  ) => StrategyOneExecutionAuthorityRecord;
 
   readonly now:
     () => number;
@@ -230,21 +238,27 @@ const DEFAULT_DEPENDENCIES:
         ?.trim() ===
       LIVE_CONFIRMATION,
   consumeActionAuthority:
-    (input) => strategyOneTinyLiveActionAuthorityService.consume(input),
+    (input) =>
+      strategyOneLiveOnlyAuthorityService
+        .consume(
+          input,
+        ),
   bindActionAuthorityPair:
     (authorityId, pairSessionId, now) =>
-      strategyOneTinyLiveActionAuthorityService.bindPair(
-        authorityId,
-        pairSessionId,
-        now,
-      ),
+      strategyOneLiveOnlyAuthorityService
+        .bindPair(
+          authorityId,
+          pairSessionId,
+          now,
+        ),
   finalizeActionAuthority:
     (authorityId, result, now) =>
-      strategyOneTinyLiveActionAuthorityService.finalize(
-        authorityId,
-        result,
-        now,
-      ),
+      strategyOneLiveOnlyAuthorityService
+        .finalize(
+          authorityId,
+          result,
+          now,
+        ),
   now:
     Date.now,
 };
@@ -322,7 +336,7 @@ export class ArbitrageExecutionCoordinator {
 
     if (!actionAuthorityId) {
       preflightReasons.push(
-        "A one-time Strategy #1 Tiny-LIVE action authority is required.",
+        "A fresh durable Strategy #1 LIVE action authority is required.",
       );
     }
 
@@ -395,7 +409,7 @@ export class ArbitrageExecutionCoordinator {
     }
 
     let consumedAuthority:
-      StrategyOneTinyLiveAuthorityRecord;
+      StrategyOneExecutionAuthorityRecord;
 
     try {
       consumedAuthority =
@@ -412,7 +426,7 @@ export class ArbitrageExecutionCoordinator {
         startedAt,
         [
           this.getErrorMessage(
-            "One-time Tiny-LIVE action authority was rejected",
+            "Strategy #1 LIVE action authority was rejected",
             error,
           ),
         ],
@@ -599,7 +613,8 @@ export class ArbitrageExecutionCoordinator {
     if (
       (
         consumedAuthority.schemaVersion === "190.0" ||
-        consumedAuthority.schemaVersion === "191.0"
+        consumedAuthority.schemaVersion === "191.0" ||
+        consumedAuthority.schemaVersion === "1.0"
       ) &&
       (
         !Number.isFinite(maximumBuyQuoteSpend) ||
@@ -693,7 +708,7 @@ export class ArbitrageExecutionCoordinator {
         startedAt,
         [
           this.getErrorMessage(
-            "Tiny-LIVE pair authority binding failed before exchange dispatch",
+            "LIVE pair authority binding failed before exchange dispatch",
             error,
           ),
         ],
@@ -702,7 +717,7 @@ export class ArbitrageExecutionCoordinator {
       );
       this.dependencies.capitalReservations.release(
         capitalReservationId,
-        "Tiny-LIVE pair authority binding failed before exchange dispatch.",
+        "LIVE pair authority binding failed before exchange dispatch.",
       );
       this.finalizeAuthoritySafely(actionAuthorityId, blocked);
       return blocked;
@@ -1173,7 +1188,7 @@ export class ArbitrageExecutionCoordinator {
     } catch (error: unknown) {
       executionResult.reasons.push(
         this.getErrorMessage(
-          "Tiny-LIVE authority finalization failed; further attempts remain fail-closed",
+          "LIVE authority finalization failed; further attempts remain fail-closed",
           error,
         ),
       );

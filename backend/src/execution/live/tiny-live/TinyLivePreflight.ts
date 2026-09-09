@@ -63,9 +63,9 @@ export interface TinyLivePreflightReport {
   requestedCapital: number;
 
   hardCapitalRange: {
-    minimum: 100;
+    minimum: number;
 
-    maximum: 500;
+    maximum: number;
 
     currency: "INR";
   };

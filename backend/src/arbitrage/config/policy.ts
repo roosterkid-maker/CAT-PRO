@@ -22,7 +22,7 @@ export const defaultArbitragePolicy:
     2,
 
   referenceCapital:
-    500,
+    600,
 
   /**
    * Development-stage liquidity threshold.

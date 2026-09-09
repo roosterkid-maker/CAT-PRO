@@ -153,7 +153,9 @@ export class RebalancingExecutionRunner {
       const plan = rebalancingDecisionEngine.plan(allocation, safetyContext, undefined, now);
 
       const crossExchangeOutcomes = await rebalancingExecutionService.executeCrossExchangeMoves(plan);
-      const sameExchangeOutcome = await rebalancingExecutionService.executeSameExchangeTopUp();
+      const sameExchangeOutcome = await rebalancingExecutionService.executeSameExchangeTopUp(
+        safetyContext,
+      );
       const outcomes = [...crossExchangeOutcomes, sameExchangeOutcome];
 
       this.lastOutcomes = outcomes;

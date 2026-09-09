@@ -87,23 +87,15 @@ const PAGE_PRELOADERS:
       () => Promise<unknown>
     >
   > = {
-  bot: () => import("@/modules/bot/pages/BotDashboard"),
-  "agent-sakhondra": () => import("@/modules/agent-sakhondra/pages/AgentSakhondraDashboard"),
+  bot: () => import("@/modules/live-only/pages/LiveOnlyDashboard"),
   "trade-intelligence": () => import("@/modules/trade-flow/pages/TradeFlowDashboard"),
   "execution-monitoring": () => import("@/modules/execution-monitoring/pages/ExecutionMonitoringDashboard"),
   markets: () => import("@/modules/market/pages/MarketsDashboard"),
   "exchange-health": () => import("@/modules/exchange-health/pages/ExchangeHealthDashboard"),
   arbitrage: () => import("@/pages/Arbitrage"),
-  "paper-trading": () => import("@/pages/PaperTrading"),
-  strategies: () => import("@/modules/strategies/pages/StrategyDashboard"),
-  "automation-center": () => import("@/modules/automation/pages/AutomationCenterDashboard"),
-  performance: () => import("@/modules/performance/pages/PerformanceAnalyticsDashboard"),
   "system-health": () => import("@/pages/SystemHealth"),
-  "production-safety": () => import("@/modules/production-safety/pages/ProductionSafetyDashboard"),
   recovery: () => import("@/modules/recovery/pages/RecoveryDiagnosticsDashboard"),
-  "tiny-live": () => import("@/modules/tiny-live/pages/TinyLivePreflightDashboard"),
   alerts: () => import("@/pages/Alerts"),
-  settings: () => import("@/modules/operator-settings/pages/OperatorSettingsDashboard"),
 };
 
 export function preloadAppPage(

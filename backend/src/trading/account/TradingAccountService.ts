@@ -777,6 +777,65 @@ export class TradingAccountService {
   }
 
   /**
+   * One-way startup transition for the explicitly confirmed LIVE-only
+   * deployment profile. Unlike the retired Tiny-LIVE lease this mode does not
+   * fall back to PAPER between attempts. It refuses to mutate an account with
+   * open exposure and applies the ₹1,000 hard per-trade ceiling atomically.
+   */
+  transitionToLiveOnlyRuntime(
+    confirmation:
+      string,
+  ): TradingAccount {
+    if (
+      confirmation.trim() !==
+        "ENABLE_CAT_PRO_LIVE_ONLY_RUNTIME"
+    ) {
+      throw new Error(
+        "The exact LIVE-only runtime confirmation is required.",
+      );
+    }
+
+    if (
+      this.account.openTrades !==
+        0
+    ) {
+      throw new Error(
+        "LIVE-only account activation cannot occur while account positions are open.",
+      );
+    }
+
+    if (
+      this.account.mode ===
+        "LIVE" &&
+      this.account.limits.maximumCapitalPerTrade ===
+        1_000
+    ) {
+      return this.getAccount();
+    }
+
+    const next =
+      structuredClone(
+        this.account,
+      );
+
+    next.mode =
+      "LIVE";
+    next.limits.maximumCapitalPerTrade =
+      1_000;
+
+    this.commitAccountMutation(
+      "UPDATE_ACCOUNT",
+      next,
+      {
+        transactionId:
+          "live-only-runtime-activation",
+      },
+    );
+
+    return this.getAccount();
+  }
+
+  /**
    * Narrow, journal-first mode transition owned exclusively by a bounded
    * Strategy #1 Tiny-LIVE account lease. It cannot change capital, limits,
    * balances or emergency-stop state, and it refuses to cross modes while an

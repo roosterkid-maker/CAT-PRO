@@ -32,6 +32,11 @@ import type {
   TinyLivePreflightRequest,
 } from "./TinyLivePreflight";
 
+import {
+  getLiveOnlyRuntimePolicy,
+  isLiveOnlyRuntimeProfile,
+} from "../../../config/LiveOnlyRuntimePolicy";
+
 const MINIMUM_TINY_LIVE_CAPITAL =
   100;
 
@@ -124,6 +129,23 @@ export class TinyLivePreflightService {
       Number(
         request.requestedCapital,
       );
+
+    const liveOnlyPolicy =
+      isLiveOnlyRuntimeProfile()
+        ? getLiveOnlyRuntimePolicy()
+        : null;
+    const minimumCapital =
+      liveOnlyPolicy
+        ?.minimumCapitalPerLegInr ??
+      MINIMUM_TINY_LIVE_CAPITAL;
+    const maximumCapital =
+      liveOnlyPolicy
+        ?.maximumCapitalPerLegInr ??
+      MAXIMUM_TINY_LIVE_CAPITAL;
+    const runtimeLabel =
+      liveOnlyPolicy
+        ? "LIVE-only"
+        : "Tiny-LIVE";
 
     const market =
       request.market
@@ -273,22 +295,22 @@ export class TinyLivePreflightService {
         requestedCapital,
       ) &&
         requestedCapital >=
-          MINIMUM_TINY_LIVE_CAPITAL &&
+          minimumCapital &&
         requestedCapital <=
-          MAXIMUM_TINY_LIVE_CAPITAL,
+          maximumCapital,
 
-      `Requested capital must remain within ₹${MINIMUM_TINY_LIVE_CAPITAL}–₹${MAXIMUM_TINY_LIVE_CAPITAL}.`,
+      `Requested capital must remain within ₹${minimumCapital}–₹${maximumCapital}.`,
 
       Number.isFinite(
         requestedCapital,
       ) &&
       requestedCapital >=
-        MINIMUM_TINY_LIVE_CAPITAL &&
+        minimumCapital &&
       requestedCapital <=
-        MAXIMUM_TINY_LIVE_CAPITAL
+        maximumCapital
         ? []
         : [
-            `Requested capital ₹${requestedCapital} violates the hard ₹${MINIMUM_TINY_LIVE_CAPITAL}–₹${MAXIMUM_TINY_LIVE_CAPITAL} tiny-LIVE range.`,
+            `Requested capital ₹${requestedCapital} violates the hard ₹${minimumCapital}–₹${maximumCapital} ${runtimeLabel} range.`,
           ],
     );
 
@@ -818,10 +840,10 @@ export class TinyLivePreflightService {
 
       hardCapitalRange: {
         minimum:
-          100,
+          minimumCapital,
 
         maximum:
-          500,
+          maximumCapital,
 
         currency:
           "INR",
@@ -858,19 +880,23 @@ export class TinyLivePreflightService {
       },
 
       notes: [
-        "Version 18 Build 15 performs tiny-LIVE eligibility preflight only.",
+        isLiveOnlyRuntimeProfile()
+          ? "This report performs LIVE-only route eligibility preflight."
+          : "Version 18 Build 15 performs tiny-LIVE eligibility preflight only.",
 
         "Passing this report does not submit an exchange order.",
 
         "Passing this report does not reserve trading capital or create a LIVE execution session.",
 
-        "₹500 is an absolute Build 15 tiny-LIVE ceiling.",
+        `₹${minimumCapital}–₹${maximumCapital} is the active ${runtimeLabel} per-leg capital range.`,
 
         "Fresh exchange balance requirements must be supplied explicitly and must pass TradingAccountService freshness checks.",
 
         "Persistent CRITICAL alerts and restart-recovery evidence remain fail-closed.",
 
-        "Actual controlled tiny-LIVE order submission remains deferred.",
+        isLiveOnlyRuntimeProfile()
+          ? "Order submission remains subject to the separate durable LIVE authority and final last-look."
+          : "Actual controlled tiny-LIVE order submission remains deferred.",
       ],
     };
   }

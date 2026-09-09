@@ -256,7 +256,12 @@ async function main() {
     client.futuresMargin = 5; // below the 20 USDT floor -> 15 USDT shortfall
     const service = buildService(baseConfig(), client);
 
-    const outcome = await service.executeSameExchangeTopUp();
+    const safetyContext = {
+      executionRecoveryPending: false,
+      settlementReconciliationPending: false,
+      emergencyStopActive: false,
+    };
+    const outcome = await service.executeSameExchangeTopUp(safetyContext);
     assert.equal(outcome.status, "EXECUTED");
     // min(shortfall=15, spare=100-20=80, perTransferCap=10) = 10
     assert.equal(outcome.amountUsdt, 10);
@@ -265,22 +270,37 @@ async function main() {
 
     const marginHealthyClient = new FakeExchangeClient();
     marginHealthyClient.futuresMargin = 25; // above floor
-    const healthyOutcome = await buildService(baseConfig(), marginHealthyClient).executeSameExchangeTopUp();
+    const healthyOutcome = await buildService(baseConfig(), marginHealthyClient).executeSameExchangeTopUp(safetyContext);
     assert.equal(healthyOutcome.status, "SKIPPED_DISABLED");
     assert.equal(marginHealthyClient.transferCalls.length, 0);
 
     const spotDrainedClient = new FakeExchangeClient();
     spotDrainedClient.spotBalance = 20; // exactly at reserve floor, no spare
     spotDrainedClient.futuresMargin = 5;
-    const drainedOutcome = await buildService(baseConfig(), spotDrainedClient).executeSameExchangeTopUp();
+    const drainedOutcome = await buildService(baseConfig(), spotDrainedClient).executeSameExchangeTopUp(safetyContext);
     assert.equal(drainedOutcome.status, "SKIPPED_CAP_REJECTED");
     assert.equal(spotDrainedClient.transferCalls.length, 0);
 
     const disabledClient = new FakeExchangeClient();
     const disabledOutcome = await buildService(baseConfig({sameExchangeEnabled: false}), disabledClient)
-      .executeSameExchangeTopUp();
+      .executeSameExchangeTopUp(safetyContext);
     assert.equal(disabledOutcome.status, "SKIPPED_DISABLED");
     assert.equal(disabledClient.transferCalls.length, 0);
+
+    const unsafeClient = new FakeExchangeClient();
+    const unsafeOutcome = await buildService(baseConfig(), unsafeClient)
+      .executeSameExchangeTopUp({
+        ...safetyContext,
+        executionRecoveryPending: true,
+      });
+    assert.equal(unsafeOutcome.status, "SKIPPED_SAFETY_BLOCKED");
+    assert.equal(unsafeClient.transferCalls.length, 0);
+
+    const missingContextClient = new FakeExchangeClient();
+    const missingContextOutcome = await buildService(baseConfig(), missingContextClient)
+      .executeSameExchangeTopUp();
+    assert.equal(missingContextOutcome.status, "SKIPPED_SAFETY_BLOCKED");
+    assert.equal(missingContextClient.transferCalls.length, 0);
   }
 
   console.log("Automated Capital Rebalancer execution-layer tests passed.");

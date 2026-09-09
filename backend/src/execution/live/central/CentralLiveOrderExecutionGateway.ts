@@ -13,6 +13,7 @@ import {
 } from "../evidence/OrderFillFeeEvidenceService";
 import {authenticatedPrivateFillEventOwner} from "../fills/AuthenticatedPrivateFillEventOwner";
 import {parseBinancePreAcceptRejection} from "./BinancePreAcceptRejectionEvidence";
+import {isLiveOnlyRuntimeEnabled} from "../../../config/LiveOnlyRuntimePolicy";
 
 export type CentralLiveOrderGatewayState =
   | "PREPARED"
@@ -386,12 +387,15 @@ class DefaultCentralPrivateFillOwnership implements CentralPrivateFillOwnershipP
 }
 
 const STRATEGY_ONE_LIVE_GATEWAY_ENABLED =
-  process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
-  process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
-  process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
-    "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
-  process.env.STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION?.trim() ===
-  "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME";
+  isLiveOnlyRuntimeEnabled() ||
+  (
+    process.env.TRADING_MODE?.trim().toLowerCase() === "live" &&
+    process.env.LIVE_TRADING_ENABLED?.trim().toLowerCase() === "true" &&
+    process.env.ARBITRAGE_LIVE_CONFIRMATION?.trim() ===
+      "ENABLE_CONFIRMED_ARBITRAGE_EXECUTION" &&
+    process.env.STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION?.trim() ===
+      "ENABLE_STRATEGY_ONE_TINY_LIVE_RUNTIME"
+  );
 
 export const centralLiveOrderExecutionGateway = new CentralLiveOrderExecutionGateway({enabled: STRATEGY_ONE_LIVE_GATEWAY_ENABLED}, liveExecutionService,
   orderFillFeeEvidenceService, DEFAULT_FILE, new DefaultCentralPrivateFillOwnership());

@@ -178,7 +178,7 @@ export default function ExchangeFleetMenu({
           <div
             ref={popupRef}
             role="dialog"
-            aria-label="Six-exchange PAPER fleet"
+            aria-label="Six-exchange LIVE fleet"
             className="fixed overflow-hidden rounded-xl border border-border-default bg-panel shadow-2xl shadow-black/40"
             style={{
               left: popupPosition.left,
@@ -190,16 +190,16 @@ export default function ExchangeFleetMenu({
             <div className="flex items-start justify-between gap-4 border-b border-border-default bg-app-bg/70 px-4 py-3">
               <div>
                 <p className="text-sm font-semibold text-text-primary">
-                  Six-exchange PAPER fleet
+                  Six-exchange LIVE fleet
                 </p>
 
                 <p className="mt-1 text-xs text-text-muted">
-                  Unified market-data, PAPER eligibility and authenticated-read evidence.
+                  Unified market-data, authenticated-read and execution-safety evidence.
                 </p>
               </div>
 
               <span className="whitespace-nowrap rounded-full border border-danger/30 bg-danger/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-danger">
-                LIVE OFF
+                LIVE ONLY
               </span>
             </div>
 
@@ -215,11 +215,6 @@ export default function ExchangeFleetMenu({
                     exchange={exchange}
                     clock={clockByExchange.get(exchange.exchange)}
                     clockUnavailable={clockQuery.isError}
-                    showPaperEligibility={exchange.exchange === "zebpay"}
-                    paperEligible={
-                      exchange.exchange === "zebpay" &&
-                      (fleet.observationSummary?.executionEligible ?? 0) > 0
-                    }
                   />
                 ))
               )}

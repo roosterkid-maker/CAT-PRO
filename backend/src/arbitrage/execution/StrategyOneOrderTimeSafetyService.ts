@@ -23,10 +23,12 @@ import {
 } from "../../orderbook/services/OrderBookService";
 
 import {
-  getStrategyOneTinyLivePostStressMinimumNetProfitPercent,
-  strategyOneExecutionPolicyService,
-  type StrategyOneExecutionPolicyDefinition,
-} from "../../trading/policy/StrategyOneExecutionPolicyService";
+  createHash,
+} from "node:crypto";
+
+import {
+  getLiveOnlyRuntimePolicy,
+} from "../../config/LiveOnlyRuntimePolicy";
 
 import {
   strategyOneLiveVenueContractRegistry,
@@ -34,8 +36,9 @@ import {
   type StrategyOneVenueOrderContract,
 } from "../../execution/live/contracts/StrategyOneLiveVenueContractRegistry";
 import {
-  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
-} from "./StrategyOnePilotEquivalentPaperEvidenceService";
+  STRATEGY_ONE_LIVE_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_LIVE_MAXIMUM_BOOK_SKEW_MS,
+} from "./StrategyOneLiveTimingPolicy";
 
 import {
   getStrategyOneTinyLiveCashCostProfile,
@@ -47,7 +50,7 @@ export type {
 } from "../../execution/live/contracts/StrategyOneLiveVenueContractRegistry";
 
 export interface StrategyOneOrderTimeSafetyDependencies {
-  getExecutionPolicy(): StrategyOneExecutionPolicyDefinition;
+  getExecutionPolicy(): StrategyOneOrderTimeExecutionPolicy;
 
   getOrderBook(
     exchange: string,
@@ -72,6 +75,24 @@ export interface StrategyOneOrderTimeSafetyDependencies {
   ): StrategyOneVenueOrderContract | null;
 
   getMonotonicTimeMs(): number;
+}
+
+export interface StrategyOneOrderTimeExecutionPolicy {
+  readonly policyId: string;
+  readonly revision: number;
+  readonly policyHash: string;
+  readonly values: {
+    readonly paper: {
+      readonly buySlippagePercent: number;
+      readonly sellSlippagePercent: number;
+      readonly safetyBufferPercent: number;
+    };
+    readonly tinyLive: {
+      readonly minimumNetProfitPercent: number;
+      readonly postStressMinimumNetProfitPercent?: number;
+      readonly maximumPreviewOpportunityAgeMs: number;
+    };
+  };
 }
 
 export interface StrategyOneOrderTimeSafetyConfig {
@@ -173,7 +194,7 @@ export interface StrategyOneOrderTimeSafetyReport {
 const DEFAULT_CONFIG:
   StrategyOneOrderTimeSafetyConfig = {
   maximumBookTimestampSkewMs:
-    250,
+    STRATEGY_ONE_LIVE_MAXIMUM_BOOK_SKEW_MS,
   maximumEvaluationDurationMs:
     25,
   requiredTimeInForce:
@@ -183,9 +204,52 @@ const DEFAULT_CONFIG:
 const DEFAULT_DEPENDENCIES:
   StrategyOneOrderTimeSafetyDependencies = {
   getExecutionPolicy:
-    () =>
-      strategyOneExecutionPolicyService
-        .getActivePolicy(),
+    () => {
+      const policy =
+        getLiveOnlyRuntimePolicy();
+      const values = {
+        paper: {
+          buySlippagePercent:
+            0.02,
+          sellSlippagePercent:
+            0.02,
+          safetyBufferPercent:
+            0.05,
+        },
+        tinyLive: {
+          minimumNetProfitPercent:
+            policy.minimumCurrentNetProfitPercent,
+          postStressMinimumNetProfitPercent:
+            policy.minimumPostStressNetProfitPercent,
+          maximumPreviewOpportunityAgeMs:
+            policy.maximumOpportunityAgeMs,
+        },
+      };
+
+      return Object.freeze({
+        policyId:
+          "cat-pro-live-only-runtime-v1",
+        revision:
+          1,
+        policyHash:
+          createHash(
+            "sha256",
+          )
+            .update(
+              JSON.stringify(values),
+            )
+            .digest(
+              "hex",
+            ),
+        values:
+          Object.freeze({
+            paper:
+              Object.freeze(values.paper),
+            tinyLive:
+              Object.freeze(values.tinyLive),
+          }),
+      });
+    },
   getOrderBook:
     (exchange, market) =>
       orderBookService.get(
@@ -290,9 +354,10 @@ export class StrategyOneOrderTimeSafetyService {
       this.dependencies
         .getExecutionPolicy();
     const postStressMinimumNetProfitPercent =
-      getStrategyOneTinyLivePostStressMinimumNetProfitPercent(
-        policy.values.tinyLive,
-      );
+      policy.values.tinyLive
+        .postStressMinimumNetProfitPercent ??
+      policy.values.tinyLive
+        .minimumNetProfitPercent;
     const opportunity =
       input.opportunity;
     const market =
@@ -327,11 +392,11 @@ export class StrategyOneOrderTimeSafetyService {
         !Number.isSafeInteger(input.authorizedMaximumBookAgeMs) ||
         input.authorizedMaximumBookAgeMs <= 0 ||
         input.authorizedMaximumBookAgeMs >
-          STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
+          STRATEGY_ONE_LIVE_MAXIMUM_BOOK_AGE_MS
       )
     ) {
       reasons.push(
-        `Authorized order-book TTL is invalid or exceeds the operator-reviewed ${STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS} ms ceiling.`,
+        `Authorized order-book TTL is invalid or exceeds the LIVE ${STRATEGY_ONE_LIVE_MAXIMUM_BOOK_AGE_MS} ms ceiling.`,
       );
     }
 

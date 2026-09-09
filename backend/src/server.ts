@@ -5,18 +5,8 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 
-import analyticsRoutes
-  from "./analytics/routes/analyticsRoutes";
-
-import agentSakhondraRoutes
-  from "./agents/sakhondra/agentSakhondraRoutes";
-
   import executionClockRoutes
   from "./execution/live/routes/executionClockRoutes";
-
-import {
-  arbitragePnLRoutes,
-} from "./arbitrage/routes/arbitragePnLRoutes";
 
 import bybitSubscriptionAuditRoutes
   from "./diagnostics/routes/bybitSubscriptionAuditRoutes";
@@ -55,45 +45,24 @@ import {
   opportunityService,
 } from "./arbitrage/services/OpportunityService";
 
-import automationRoutes
-  from "./automation/routes/automationRoutes";
-
-import controlledLiveTradingRoutes
-  from "./automation/routes/controlledLiveTradingRoutes";
-
-import opportunityPipelineBottleneckRoutes
-  from "./automation/routes/opportunityPipelineBottleneckRoutes";
-
-import productionSafetyDiagnosticsRoutes
-  from "./automation/routes/productionSafetyDiagnosticsRoutes";
-
-import {
-  automationSchedulerService,
-} from "./automation/services/AutomationSchedulerService";
-
 import {
   rebalancingExecutionRunner,
 } from "./rebalancing/execution/RebalancingExecutionRunner";
 
-import candidateBoardRoutes
-  from "./candidates/routes/candidateBoardRoutes";
+import {
+  loadRebalancingExecutionConfig,
+} from "./rebalancing/execution/RebalancingExecutionConfig";
 
 import {
   environment,
 } from "./config/Environment";
 
+import {
+  isLiveOnlyRuntimeEnabled,
+} from "./config/LiveOnlyRuntimePolicy";
+
 import exchangeFleetRoutes
   from "./exchanges/routes/exchangeFleetRoutes";
-
-import paperShadowReadinessRoutes
-  from "./exchanges/routes/paperShadowReadinessRoutes";
-
-import readinessObservationRoutes
-  from "./exchanges/routes/readinessObservationRoutes";
-
-import {
-  fiveExchangeReadinessObservationService,
-} from "./exchanges/services/FiveExchangeReadinessObservationService";
 
 import {
   coinSwitchMarketRuleSynchronizationService,
@@ -121,9 +90,6 @@ import coinDCXExecutableDiagnosticsRoutes
 import coinDCXSubscriptionAuditRoutes
   from "./diagnostics/routes/coinDCXSubscriptionAuditRoutes";
 
-import diagnosticsRoutes
-  from "./diagnostics/routes/diagnosticsRoutes";
-
 import marketCoverageRoutes
   from "./diagnostics/routes/marketCoverageRoutes";
 
@@ -140,22 +106,12 @@ import {
 } from "./execution/live/tiny-live/StrategyOneApiPermissionBoundaryService";
 
 import {
-  strategyOneTinyLiveAccountModeLeaseService,
-} from "./execution/live/tiny-live/StrategyOneTinyLiveAccountModeLeaseService";
-
-import {
   productionAlertHistoryService,
 } from "./execution/live/alerts/ProductionAlertHistoryService";
 
 import {
   executionHistoryRoutes,
 } from "./execution/live/routes/executionHistoryRoutes";
-
-import fiveExchangeGoNoGoRoutes
-  from "./execution/live/routes/fiveExchangeGoNoGoRoutes";
-
-import centralStrategyLiveReadinessRoutes
-  from "./execution/live/routes/centralStrategyLiveReadinessRoutes";
 
 import {
   executionMonitoringRoutes,
@@ -174,14 +130,8 @@ import capitalRoutes
 import optimizerRoutes
   from "./optimizer/routes/optimizerRoutes";
 
-import portfolioRoutes
-  from "./portfolio/routes/portfolioRoutes";
-
 import rankingRoutes
   from "./ranking/routes/rankingRoutes";
-
-import riskRoutes
-  from "./risk/routes/riskRoutes";
 
 import comparisonRoutes
   from "./routes/comparison";
@@ -192,12 +142,6 @@ import liveRoutes
 import opportunityRoutes
   from "./routes/opportunities";
 
-import paperTradingRouter
-  from "./routes/paperTrading";
-
-import paperTradeRoutes
-  from "./routes/paperTrades";
-
 import spreadRoutes
   from "./routes/spreads";
 
@@ -207,9 +151,6 @@ import systemHealthRoutes
 import {
   initializeSocket,
 } from "./socket/server";
-
-import automatedPaperTradingRoutes
-  from "./trading/routes/automatedPaperTradingRoutes";
 
 import {
   exchangeBalanceSynchronizationRunner,
@@ -228,82 +169,12 @@ import {
 } from "./execution/live/LiveExecutionService";
 
 import {
-  tradeMonitorRunner,
-} from "./trading/services/TradeMonitorRunner";
-
-// backend/src/server.ts
-
-import operatorSettingsRoutes
-  from "./operator-settings/routes/operatorSettingsRoutes";
-
-import strategyRoutes
-  from "./strategies/routes/strategyRoutes";
-
-import {
-  aclaShadowLifecycleService,
-  centralStrategyExecutionAdmissionService,
-  strategyAttributionService,
-  strategyOrchestrator,
-  strategyReadModelService,
-} from "./strategies/bootstrap/StrategyBootstrap";
-
-import {
-  centralPaperIntakeService,
-} from "./strategies/services/CentralPaperIntakeService";
-
-import {
-  centralPaperExecutionWorkerService,
-} from "./strategies/services/CentralPaperExecutionWorkerService";
-
-import {
-  centralPaperOpenPositionLifecycleService,
-} from "./strategies/services/CentralPaperOpenPositionLifecycleService";
-
-import {
-  centralPaperRecoveryLifecycleService,
-} from "./recovery/services/CentralPaperRecoveryLifecycleService";
-
-import {
   dynamicOpportunityDiscoveryRunnerService,
 } from "./discovery/services/DynamicOpportunityDiscoveryRunnerService";
-
-import derivativeMarketDataRoutes
-  from "./derivatives/routes/derivativeMarketDataRoutes";
-
-import derivativeEvidenceRoutes
-  from "./derivatives/routes/derivativeEvidenceRoutes";
-
-import {
-  derivativeMarketDataService,
-} from "./derivatives/services/DerivativeMarketDataService";
-
-import {
-  derivativeDepthService,
-} from "./derivatives/services/DerivativeDepthService";
-
-import {
-  derivativeEvidenceRefreshCoordinator,
-} from "./derivatives/services/DerivativeEvidenceRefreshCoordinator";
 
 import {
   coinDCXProtectedRestOrderBookService,
 } from "./exchanges/coindcx/CoinDCXProtectedRestOrderBookService";
-
-import {
-  derivativeAccountEvidenceService,
-} from "./derivatives/services/DerivativeAccountEvidenceService";
-
-import {
-  derivativeFundingSettlementEvidenceService,
-} from "./derivatives/services/DerivativeFundingSettlementEvidenceService";
-
-import {
-  statisticalHistoricalDataService,
-} from "./strategies/statistical-arbitrage/StatisticalHistoricalDataService";
-
-import {
-  strategyAttributionAnalyticsService,
-} from "./analytics/services/StrategyAttributionAnalyticsService";
 
 import {
   websocketManager,
@@ -331,10 +202,6 @@ import {
 } from "./arbitrage/execution/StrategyOneExecutionTimingEvidenceService";
 
 import {
-  strategyOnePilotEquivalentPaperEvidenceService,
-} from "./arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
-
-import {
   authenticatedPrivateFillEventOwner,
 } from "./execution/live/fills/AuthenticatedPrivateFillEventOwner";
 
@@ -342,8 +209,28 @@ import {
   centralLiveOrderExecutionGateway,
 } from "./execution/live/central/CentralLiveOrderExecutionGateway";
 
+import liveOnlyRuntimeRoutes
+  from "./execution/live/live-only/liveOnlyRuntimeRoutes";
+
+import {
+  strategyOneLiveOnlyRunnerService,
+} from "./execution/live/live-only/StrategyOneLiveOnlyRunnerService";
+
+import {
+  tradingAccountService,
+} from "./trading/account/TradingAccountService";
+
 const app =
   express();
+
+if (
+  environment.runtimeProfile !==
+    "live-only"
+) {
+  throw new Error(
+    "This CAT PRO build is LIVE-only. Start it with the explicit live-only compose overlay and confirmation.",
+  );
+}
 
 authenticatedPrivateFillEventOwner
   .setTimingObserver(
@@ -353,11 +240,6 @@ authenticatedPrivateFillEventOwner
 centralLiveOrderExecutionGateway
   .setTimingEvidence(
     strategyOneExecutionTimingEvidenceService,
-  );
-
-strategyReadModelService
-  .setAttributionEvidenceSource(
-    strategyAttributionAnalyticsService,
   );
 
 const PORT =
@@ -381,27 +263,6 @@ app.use(
   express.json(),
 );
 
-/*
- * V19 BUILD 10
- *
- * Read-only operator settings/configuration surface.
- */
-app.use(
-  "/api/operator-settings",
-  operatorSettingsRoutes,
-);
-
-/*
- * CAT PRO V20.0 PHASE 1A
- *
- * Read-only strategy identity, runtime evidence,
- * and immutable signal read models.
- */
-app.use(
-  "/api/strategies",
-  strategyRoutes,
-);
-
 app.use(
   "/api/execution/clock",
   executionClockRoutes,
@@ -423,16 +284,6 @@ app.use(
 );
 
 app.use(
-  "/api/derivatives/markets",
-  derivativeMarketDataRoutes,
-);
-
-app.use(
-  "/api/derivatives",
-  derivativeEvidenceRoutes,
-);
-
-app.use(
   "/api/debug/coindcx/subscriptions",
   coinDCXSubscriptionAuditRoutes,
 );
@@ -440,11 +291,6 @@ app.use(
 app.use(
   "/api/debug/market-coverage",
   marketCoverageRoutes,
-);
-
-app.use(
-  "/api/debug/candidates",
-  candidateBoardRoutes,
 );
 
 app.use(
@@ -523,6 +369,91 @@ app.get(
             }),
           ),
       );
+    const liveOnlyBlockers:
+      string[] =
+      [];
+
+    if (
+      environment.runtimeProfile ===
+        "live-only"
+    ) {
+      const runner =
+        strategyOneLiveOnlyRunnerService
+          .getDiagnostics();
+      const rebalancing =
+        loadRebalancingExecutionConfig();
+      const dedicatedCredentialsConfigured =
+        Boolean(
+          process.env.CAT_PRO_REBALANCER_BINANCE_API_KEY
+            ?.trim() &&
+          process.env.CAT_PRO_REBALANCER_BINANCE_API_SECRET
+            ?.trim(),
+        );
+
+      if (
+        !isLiveOnlyRuntimeEnabled()
+      ) {
+        liveOnlyBlockers.push(
+          "LIVE-only runtime confirmation is incomplete.",
+        );
+      }
+
+      if (
+        !runner.running
+      ) {
+        liveOnlyBlockers.push(
+          "LIVE-only opportunity runner is not running.",
+        );
+      }
+
+      if (
+        runner.halted
+      ) {
+        liveOnlyBlockers.push(
+          runner.haltedReason ??
+            "LIVE-only opportunity runner is halted.",
+        );
+      }
+
+      if (
+        !rebalancing.enabled ||
+        !rebalancingExecutionRunner
+          .isRunning()
+      ) {
+        liveOnlyBlockers.push(
+          "Capital Manager fund movement is not enabled and running.",
+        );
+      }
+
+      if (
+        (
+          rebalancing.sameExchangeEnabled ||
+          rebalancing.crossExchangeEnabled
+        ) &&
+        !dedicatedCredentialsConfigured
+      ) {
+        liveOnlyBlockers.push(
+          "Dedicated Capital Manager Binance credentials are missing.",
+        );
+      }
+
+      if (
+        rebalancing.crossExchangeEnabled &&
+        rebalancing.withdrawalWhitelist.length ===
+          0
+      ) {
+        liveOnlyBlockers.push(
+          "Cross-exchange Capital Manager movement has no whitelisted destination.",
+        );
+      }
+    }
+
+    const liveOnlyOperationalReady =
+      environment.runtimeProfile ===
+        "live-only"
+        ? liveOnlyBlockers.length ===
+          0
+        : null;
 
     response
       .status(
@@ -530,9 +461,11 @@ app.get(
           ? 200
           : 503,
       )
-      .json(
-        readiness,
-      );
+      .json({
+        ...readiness,
+        liveOnlyOperationalReady,
+        liveOnlyBlockers,
+      });
   },
 );
 
@@ -557,16 +490,6 @@ app.get(
 );
 
 app.use(
-  "/api/debug/diagnostics",
-  diagnosticsRoutes,
-);
-
-app.use(
-  "/api/arbitrage/pnl",
-  arbitragePnLRoutes,
-);
-
-app.use(
   "/api/execution/history",
   executionHistoryRoutes,
 );
@@ -579,16 +502,6 @@ app.use(
 app.use(
   "/api/live",
   liveRoutes,
-);
-
-app.use(
-  "/api/analytics",
-  analyticsRoutes,
-);
-
-app.use(
-  "/api/agent-sakhondra",
-  agentSakhondraRoutes,
 );
 
 app.use(
@@ -617,6 +530,11 @@ app.use(
 );
 
 app.use(
+  "/api/live-only",
+  liveOnlyRuntimeRoutes,
+);
+
+app.use(
   "/api/optimizer",
   optimizerRoutes,
 );
@@ -627,31 +545,6 @@ app.use(
 );
 
 app.use(
-  "/api/risk",
-  riskRoutes,
-);
-
-app.use(
-  "/api/portfolio",
-  portfolioRoutes,
-);
-
-app.use(
-  "/api/paper",
-  paperTradingRouter,
-);
-
-app.use(
-  "/api/paper/automated",
-  automatedPaperTradingRoutes,
-);
-
-app.use(
-  "/api/paper-trades",
-  paperTradeRoutes,
-);
-
-app.use(
   "/api/system-health",
   systemHealthRoutes,
 );
@@ -659,77 +552,6 @@ app.use(
 app.use(
   "/api/exchanges/fleet",
   exchangeFleetRoutes,
-);
-
-app.use(
-  "/api/exchanges/paper-shadow-readiness",
-  paperShadowReadinessRoutes,
-);
-
-app.use(
-  "/api/exchanges/readiness-observations",
-  readinessObservationRoutes,
-);
-
-app.use(
-  "/api/execution/five-exchange-go-no-go",
-  fiveExchangeGoNoGoRoutes,
-);
-
-app.use(
-  "/api/execution/strategy-live-readiness",
-  centralStrategyLiveReadinessRoutes,
-);
-
-/*
- * Version 15.0
- *
- * SHADOW automation scheduler.
- */
-app.use(
-  "/api/automation",
-  automationRoutes,
-);
-
-/*
- * Version 17.0+
- *
- * Controlled LIVE framework.
- *
- * LIVE remains disabled unless explicit future
- * safety gates permit otherwise.
- */
-app.use(
-  "/api/automation/live-control",
-  controlledLiveTradingRoutes,
-);
-
-/*
- * VERSION 17.5 BUILD 6
- *
- * Unified read-only Production Safety endpoint.
- *
- * This endpoint exposes consolidated safety
- * diagnostics only.
- *
- * It does NOT arm LIVE mode and does NOT submit
- * exchange orders.
- */
-app.use(
-  "/api/production-safety",
-  productionSafetyDiagnosticsRoutes,
-);
-
-/*
- * Version 17.3
- *
- * Opportunity pipeline / freshness diagnostics.
- *
- * Diagnostic-only.
- */
-app.use(
-  "/api/automation/bottleneck",
-  opportunityPipelineBottleneckRoutes,
 );
 
 const server =
@@ -767,53 +589,17 @@ server.listen(
       await application
         .initialize();
 
-      /*
-       * V151: reconcile the journal-first account-mode lease before any
-       * opportunity producer or execution worker is allowed to start.
-       */
-      strategyOneTinyLiveAccountModeLeaseService
-        .start();
-
-      strategyAttributionService
-        .start();
+      tradingAccountService
+        .transitionToLiveOnlyRuntime(
+          process.env
+            .CAT_PRO_LIVE_ONLY_CONFIRMATION ??
+            "",
+        );
 
       dynamicOpportunityDiscoveryRunnerService
         .start();
 
       coinDCXProtectedRestOrderBookService
-        .start();
-
-      statisticalHistoricalDataService
-        .start();
-
-      derivativeEvidenceRefreshCoordinator
-        .start();
-
-      derivativeAccountEvidenceService
-        .start();
-
-      derivativeFundingSettlementEvidenceService
-        .start();
-
-      centralStrategyExecutionAdmissionService
-        .start();
-
-      aclaShadowLifecycleService
-        .start();
-
-      centralPaperIntakeService
-        .start();
-
-      centralPaperExecutionWorkerService
-        .start();
-
-      centralPaperRecoveryLifecycleService
-        .start();
-
-      centralPaperOpenPositionLifecycleService
-        .start();
-
-      strategyOrchestrator
         .start();
 
       try {
@@ -953,11 +739,7 @@ server.listen(
         .start();
 
       /*
-       * Previously started as a module-level side effect of importing
-       * executionMonitoringRoutes.ts (a route-mounting file) - moved here
-       * alongside every other engine/service lifecycle call so importing
-       * a route file for inspection or an isolated test can no longer
-       * unknowingly start these two long-lived background engines.
+       * Engine lifecycle belongs to startup, never route-module imports.
        */
       executionRecoveryEngine
         .start();
@@ -965,13 +747,7 @@ server.listen(
       executionReconciliationEngine
         .start();
 
-      fiveExchangeReadinessObservationService
-        .start();
-
       executionMetricsSnapshotScheduler
-        .start();
-
-      tradeMonitorRunner
         .start();
 
       exchangeBalanceSynchronizationRunner
@@ -1018,20 +794,6 @@ server.listen(
       strategyOneExecutionTimingEvidenceService
         .start();
 
-      strategyOnePilotEquivalentPaperEvidenceService
-        .start();
-
-      /*
-       * Version 15.0
-       *
-       * Safe automation scheduler.
-       *
-       * Current stage remains SHADOW unless later
-       * evidence and explicit controls permit more.
-       */
-      automationSchedulerService
-        .start();
-
       /*
        * Automated Capital Rebalancer (Phase D). Starting this timer is
        * always safe: RebalancingExecutionService checks
@@ -1051,6 +813,14 @@ server.listen(
         .start();
 
       coinDCXAuthenticatedPrivateFillStreamService
+        .start();
+
+      /*
+       * LIVE-only execution is the final producer to start. Recovery,
+       * reconciliation, balances, clocks, permission evidence and private
+       * fill ownership are already running before it can observe a candidate.
+       */
+      strategyOneLiveOnlyRunnerService
         .start();
 
       applicationInitializationState =
@@ -1079,67 +849,20 @@ const shutdown =
       `[Shutdown] Received ${signal}.`,
     );
 
-    strategyOneTinyLiveAccountModeLeaseService
-      .stop(
-        true,
-      );
+    strategyOneLiveOnlyRunnerService
+      .stop();
 
     /*
      * Stop producers/automation before network
      * connections and process termination.
      */
-    automationSchedulerService
-      .stop();
-
     strategyOneExecutionTimingEvidenceService
-      .stop();
-
-    strategyOnePilotEquivalentPaperEvidenceService
-      .stop();
-
-    centralPaperExecutionWorkerService
-      .stop();
-
-    centralPaperRecoveryLifecycleService
-      .stop();
-
-    centralPaperOpenPositionLifecycleService
-      .stop();
-
-    derivativeFundingSettlementEvidenceService
-      .stop();
-
-    centralPaperIntakeService
-      .stop();
-
-    aclaShadowLifecycleService
-      .stop();
-
-    centralStrategyExecutionAdmissionService
-      .stop();
-
-    strategyOrchestrator
       .stop();
 
     dynamicOpportunityDiscoveryRunnerService
       .stop();
 
     coinDCXProtectedRestOrderBookService
-      .stop();
-
-    statisticalHistoricalDataService
-      .stop();
-
-    derivativeEvidenceRefreshCoordinator
-      .stop();
-
-    derivativeMarketDataService.stop();
-    derivativeDepthService.stop();
-
-    derivativeAccountEvidenceService
-      .stop();
-
-    strategyAttributionService
       .stop();
 
     unoCoinFeeSynchronizationService
@@ -1169,9 +892,6 @@ const shutdown =
     executionReconciliationEngine
       .stop();
 
-    fiveExchangeReadinessObservationService
-      .stop();
-
     /*
      * VERSION 17.3 BUILD 3
      *
@@ -1198,9 +918,6 @@ marketCacheOrderBookReconciliationService
       .stop();
 
     productionAlertHistoryService
-      .stop();
-
-    tradeMonitorRunner
       .stop();
 
     executionMetricsSnapshotScheduler

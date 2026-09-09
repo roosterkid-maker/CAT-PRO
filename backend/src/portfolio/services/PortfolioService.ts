@@ -21,10 +21,6 @@ import type {
   PaperTradeStatus,
 } from "../../trading/models/PaperTrade";
 
-import {
-  paperTradingService,
-} from "../../trading/services/PaperTradingService";
-
 import type {
   ExchangePortfolioSnapshot,
   PortfolioAssetPosition,
@@ -46,6 +42,22 @@ const OPEN_TRADE_STATUSES =
     "open",
     "monitoring",
   ]);
+
+/*
+ * Historical PAPER summaries are retained only for offline compatibility.
+ * Keep their store out of the LIVE-only process graph; the legacy module is
+ * loaded only when an explicitly invoked offline caller asks for a summary.
+ */
+function getLegacyPaperTrades(): readonly PaperTrade[] {
+  const {
+    paperTradingService,
+  } = require(
+    "../../trading/services/PaperTradingService"
+  ) as typeof import("../../trading/services/PaperTradingService");
+
+  return paperTradingService
+    .getTradesForReadOnlyAggregation();
+}
 
 function isFiniteNumber(
   value: number | null,
@@ -397,8 +409,7 @@ export class PortfolioService {
    */
   getSummary(
     trades =
-      paperTradingService
-        .getTradesForReadOnlyAggregation(),
+      getLegacyPaperTrades(),
 
     account:
       TradingAccount =

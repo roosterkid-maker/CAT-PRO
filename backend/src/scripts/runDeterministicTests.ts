@@ -21,6 +21,7 @@ import {
 } from "dotenv";
 
 const DETERMINISTIC_TESTS = [
+  "config/tests/testLiveOnlyRuntimePolicy.js",
   "agents/sakhondra/tests/testAgentSakhondraService.js",
   "arbitrage/execution/tests/testArbitrageExecutionPreflight.js",
   "arbitrage/execution/tests/testStrategyOneOrderTimeSafety.js",
@@ -114,6 +115,7 @@ const DETERMINISTIC_TESTS = [
   "execution/live/tests/testOrderLifecycleNonLiveEvidenceReclassification.js",
   "execution/live/tests/testExecutionReconciliationBoundedHistoryRace.js",
   "execution/live/tests/testCentralLiveOrderExecutionGateway.js",
+  "execution/live/tests/testStrategyOneLiveOnlyStressGate.js",
   "execution/live/tests/testStrategyOneLiveVenueContractRegistry.js",
   "execution/live/tests/testStrategyOneTwoLegLiveExecutionService.js",
   "execution/live/tests/testStrategyOneTwoLegRestartRecovery.js",
@@ -244,12 +246,15 @@ const DETERMINISTIC_TESTS = [
 ] as const;
 
 const EXECUTION_CONFIRMATION_VARIABLES = [
+  "ARBITRAGE_LIVE_CONFIRMATION",
   "ARBITRAGE_LIVE_EXECUTION_CONFIRMATION",
   "AUTOMATED_PAPER_TRADING_CONFIRMATION",
   "BINANCE_LIVE_ORDER_CONFIRM",
   "COINDCX_LIVE_ORDER_CONFIRM",
   "LIVE_EXECUTION_CONFIRMATION",
   "LIVE_TRADING_CONFIRMATION",
+  "CAT_PRO_LIVE_ONLY_CONFIRMATION",
+  "STRATEGY_ONE_LIVE_RUNTIME_CONFIRMATION",
   "TINY_LIVE_CONFIRMATION",
 ] as const;
 
@@ -290,6 +295,23 @@ function main(): void {
       variable
     ];
   }
+
+  environment.NODE_ENV =
+    "test";
+  environment.CAT_PRO_RUNTIME_PROFILE =
+    "staged";
+  environment.TRADING_MODE =
+    "paper";
+  environment.TRADING_EXECUTION_MODE =
+    "paper";
+  environment.LIVE_TRADING_ENABLED =
+    "false";
+  environment.CAT_PRO_REBALANCER_ENABLED =
+    "false";
+  environment.CAT_PRO_REBALANCER_SAME_EXCHANGE_ENABLED =
+    "false";
+  environment.CAT_PRO_REBALANCER_CROSS_EXCHANGE_ENABLED =
+    "false";
 
   let passed =
     0;

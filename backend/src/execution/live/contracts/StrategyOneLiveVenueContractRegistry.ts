@@ -3,14 +3,12 @@ import {
 } from "../fills/AuthenticatedPrivateFillEventOwner";
 
 import {
-  strategyOneTimingCalibrationService,
-} from "../../../arbitrage/execution/StrategyOneTimingCalibrationService";
-import {
   isStrategyOneTinyLiveBasketRoute,
 } from "../../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
 import {
-  STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS,
-} from "../../../arbitrage/execution/StrategyOnePilotEquivalentPaperEvidenceService";
+  STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS,
+  STRATEGY_ONE_LIVE_MAXIMUM_BOOK_AGE_MS,
+} from "../../../arbitrage/execution/StrategyOneLiveTimingPolicy";
 
 export type StrategyOneTimeInForce =
   | "GTC"
@@ -316,9 +314,11 @@ const DEFAULT_DEPENDENCIES:
   isPrivateFillSessionReady: (exchange) =>
     authenticatedPrivateFillEventOwner.isVenueReady(exchange),
   getApprovedRouteTtl: (input) =>
-    strategyOneTimingCalibrationService
-      .getDynamicPoolRouteQualification(input)
-      ?.maximumBookAgeMs ?? null,
+    isStrategyOneTinyLiveBasketRoute(
+      input,
+    )
+      ? STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS
+      : null,
   };
 
 /**
@@ -375,7 +375,7 @@ export class StrategyOneLiveVenueContractRegistry {
     if (
       !Number.isSafeInteger(authorizedMaximumBookAgeMs) ||
       authorizedMaximumBookAgeMs <= 0 ||
-      authorizedMaximumBookAgeMs > STRATEGY_ONE_PILOT_MAXIMUM_BOOK_AGE_MS
+      authorizedMaximumBookAgeMs > STRATEGY_ONE_LIVE_MAXIMUM_BOOK_AGE_MS
     ) {
       return null;
     }

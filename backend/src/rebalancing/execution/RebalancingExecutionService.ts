@@ -67,6 +67,10 @@ import type {
   RebalancingRouteProposal,
 } from "../services/RebalancingDecisionEngine";
 
+import type {
+  CapitalManagerSafetyContext,
+} from "../services/CapitalManagerSafetyContextService";
+
 const REBALANCE_ASSET = "USDT";
 
 /**
@@ -163,6 +167,7 @@ export type RebalancingMoveOutcomeStatus =
   | "SKIPPED_UNSUPPORTED_EXCHANGE"
   | "SKIPPED_NOT_WHITELISTED"
   | "SKIPPED_CAP_REJECTED"
+  | "SKIPPED_SAFETY_BLOCKED"
   | "FAILED";
 
 export interface RebalancingMoveOutcome {
@@ -329,7 +334,9 @@ export class RebalancingExecutionService {
    * Spot have spare USDT? If so, move the smallest of (shortfall, spare
    * above reserve, per-transfer cap) from Spot to USDS-M Futures.
    */
-  async executeSameExchangeTopUp(): Promise<RebalancingMoveOutcome> {
+  async executeSameExchangeTopUp(
+    safetyContext?: CapitalManagerSafetyContext,
+  ): Promise<RebalancingMoveOutcome> {
     if (!this.config.enabled || !this.config.sameExchangeEnabled) {
       return this.outcome(
         "SAME_EXCHANGE",
@@ -338,6 +345,24 @@ export class RebalancingExecutionService {
         0,
         "SKIPPED_DISABLED",
         "Automated same-exchange rebalancing is disabled (CAT_PRO_REBALANCER_ENABLED / CAT_PRO_REBALANCER_SAME_EXCHANGE_ENABLED).",
+      );
+    }
+
+    if (
+      !safetyContext ||
+      safetyContext.executionRecoveryPending ||
+      safetyContext.settlementReconciliationPending ||
+      safetyContext.emergencyStopActive
+    ) {
+      return this.outcome(
+        "SAME_EXCHANGE",
+        "binance",
+        null,
+        0,
+        "SKIPPED_SAFETY_BLOCKED",
+        !safetyContext
+          ? "Authoritative capital-manager safety context is missing; refusing transfer."
+          : "Execution recovery, settlement reconciliation or emergency stop blocks capital movement.",
       );
     }
 

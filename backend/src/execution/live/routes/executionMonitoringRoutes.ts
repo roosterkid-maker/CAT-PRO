@@ -17,9 +17,6 @@ import {
   executionMetricsSnapshotService,
 } from "../metrics/ExecutionMetricsSnapshotService";
 
-import tinyLivePreflightRoutes
-  from "./tinyLivePreflightRoutes";
-
 import executionAlertRoutes
   from "./executionAlertRoutes";
 
@@ -64,11 +61,6 @@ executionMonitoringRoutes.use(
 executionMonitoringRoutes.use(
   "/v18-readiness",
   v18ProductionReadinessRoutes,
-);
-
-executionMonitoringRoutes.use(
-  "/tiny-live",
-  tinyLivePreflightRoutes,
 );
 
 executionMonitoringRoutes.use(

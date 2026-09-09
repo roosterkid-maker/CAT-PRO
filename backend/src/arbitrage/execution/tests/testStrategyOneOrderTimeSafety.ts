@@ -971,7 +971,7 @@ async function main(): Promise<void> {
   assert.equal(invalidAuthorizedTtl.decision, "BLOCKED");
   assert.match(
     invalidAuthorizedTtl.reasons.join(" "),
-    /operator-reviewed 560 ms ceiling/iu,
+    /LIVE 560 ms ceiling/iu,
   );
 
   const mixedTimeInForce =

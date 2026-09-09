@@ -12,12 +12,9 @@ import {
 
 import {
   Activity,
-  BarChart3,
   Bell,
-  BrainCircuit,
   Bot,
   ChevronDown,
-  FlaskConical,
   Gauge,
   HardDriveDownload,
   Landmark,
@@ -25,10 +22,6 @@ import {
   LineChart,
   MoreHorizontal,
   Network,
-  Settings,
-  ShieldCheck,
-  TestTubeDiagonal,
-  Workflow,
   Zap,
 } from "lucide-react";
 
@@ -100,33 +93,16 @@ SidebarItem[] = [
       <Landmark size={18} />,
   },
 
-  {
-    label:
-      "Settings",
-
-    page:
-      "settings",
-
-    icon:
-      <Settings size={18} />,
-  },
 ];
 
 const advancedItems:
 SidebarItem[] = [
   {label: "Dashboard", page: "dashboard", icon: <LayoutDashboard size={18} />},
-  {label: "Paper Trading Details", page: "paper-trading", icon: <FlaskConical size={18} />},
-  {label: "Agent Sakhondra", page: "agent-sakhondra", icon: <BrainCircuit size={18} />},
   {label: "Alerts", page: "alerts", icon: <Bell size={18} />},
   {label: "Execution", page: "execution-monitoring", icon: <Gauge size={18} />},
   {label: "Arbitrage", page: "arbitrage", icon: <Zap size={18} />},
-  {label: "Strategies", page: "strategies", icon: <Workflow size={18} />},
-  {label: "Automation Center", page: "automation-center", icon: <Bot size={18} />},
-  {label: "Performance", page: "performance", icon: <BarChart3 size={18} />},
   {label: "System Health", page: "system-health", icon: <Activity size={18} />},
-  {label: "Production Safety", page: "production-safety", icon: <ShieldCheck size={18} />},
   {label: "Recovery", page: "recovery", icon: <HardDriveDownload size={18} />},
-  {label: "Tiny-LIVE Preflight", page: "tiny-live", icon: <TestTubeDiagonal size={18} />},
 ];
 
 export default function Sidebar({

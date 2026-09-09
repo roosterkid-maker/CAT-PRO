@@ -67,6 +67,11 @@ import {
   getStrategyOneTinyLiveCashCostProfile,
 } from "../evidence/StrategyOneTinyLiveCashCostService";
 
+import {
+  getLiveOnlyRuntimePolicy,
+  isLiveOnlyRuntimeProfile,
+} from "../../../config/LiveOnlyRuntimePolicy";
+
 const REQUIRED_CONFIRMATION_TOKEN =
   "RUN_STRATEGY_ONE_PILOT_PREFLIGHT_ONLY";
 
@@ -180,6 +185,7 @@ export interface StrategyOnePilotPreflightRunReport {
 
 export interface StrategyOnePilotPreflightDependencies {
   getTinyLivePolicy(): StrategyOnePilotRuntimePolicy;
+  requiresHistoricalRouteEvidence(): boolean;
   getOpportunities(): readonly ArbitrageOpportunity[];
   getOpportunityById(id: string): ArbitrageOpportunity | null;
   getCapitalPlacement(now: number): StrategyOneCapitalPlacementReport;
@@ -214,6 +220,28 @@ const DEFAULT_DEPENDENCIES:
   StrategyOnePilotPreflightDependencies = {
   getTinyLivePolicy:
     () => {
+      if (
+        isLiveOnlyRuntimeProfile()
+      ) {
+        const policy =
+          getLiveOnlyRuntimePolicy();
+
+        return {
+          minimumCapitalPerLegInr:
+            policy.minimumCapitalPerLegInr,
+          capitalPerLegInr:
+            policy.preferredCapitalPerLegInr,
+          maximumCapitalPerLegInr:
+            policy.maximumCapitalPerLegInr,
+          minimumNetProfitPercent:
+            policy.minimumCurrentNetProfitPercent,
+          postStressMinimumNetProfitPercent:
+            policy.minimumPostStressNetProfitPercent,
+          maximumPreviewOpportunityAgeMs:
+            policy.maximumOpportunityAgeMs,
+        };
+      }
+
       const policy =
         strategyOneExecutionPolicyService
           .getActivePolicy()
@@ -237,6 +265,9 @@ const DEFAULT_DEPENDENCIES:
           policy.maximumPreviewOpportunityAgeMs,
       };
     },
+  requiresHistoricalRouteEvidence:
+    () =>
+      !isLiveOnlyRuntimeProfile(),
   getOpportunities:
     () =>
       opportunityService
@@ -390,6 +421,10 @@ export class StrategyOnePilotPreflightService {
           now,
         );
 
+    const requiresHistoricalRouteEvidence =
+      this.dependencies
+        .requiresHistoricalRouteEvidence();
+
     const historicalCandidates = placement.routes.filter(
       (route) => hasCredibleHistoricalRouteEvidence(
         route,
@@ -461,6 +496,13 @@ export class StrategyOnePilotPreflightService {
                 routeKeyFor(
                   opportunity,
                 ),
+              ) ??
+              (
+                requiresHistoricalRouteEvidence
+                  ? undefined
+                  : currentOnlyHistoricalRouteEvidence(
+                      opportunity,
+                    )
               );
 
             return historical
@@ -914,11 +956,16 @@ export class StrategyOnePilotPreflightService {
       ),
       check(
         "HISTORICAL_ROUTE_EVIDENCE",
-        hasCredibleHistoricalRouteEvidence(
-          historical,
-          minimumHistoricalRouteSample,
-        ),
-        "The exact directional route has durable positive realized PAPER evidence and audited LIVE contracts; TDS cash lock remains separate funding evidence.",
+        !this.dependencies
+          .requiresHistoricalRouteEvidence() ||
+          hasCredibleHistoricalRouteEvidence(
+            historical,
+            minimumHistoricalRouteSample,
+          ),
+        this.dependencies
+          .requiresHistoricalRouteEvidence()
+          ? "The exact directional route has durable positive realized PAPER evidence and audited LIVE contracts; TDS cash lock remains separate funding evidence."
+          : "LIVE-only mode uses fresh exact-route books, authenticated funding, fees, stress economics and final last-look without PAPER history.",
         [],
       ),
       check(
@@ -1386,6 +1433,79 @@ function routeKeyFor(
   return `${opportunity.pair.market.trim().toUpperCase()}|${opportunity.pair.buy.exchange.trim().toLowerCase()}>${opportunity.pair.sell.exchange.trim().toLowerCase()}`;
 }
 
+function currentOnlyHistoricalRouteEvidence(
+  opportunity:
+    ArbitrageOpportunity,
+): StrategyOneCapitalPlacementRouteRank {
+  const market =
+    opportunity.pair.market
+      .trim()
+      .toUpperCase();
+  const quoteAsset =
+    market.endsWith(
+      "USDT",
+    )
+      ? "USDT"
+      : "";
+  const baseAsset =
+    quoteAsset
+      ? market.slice(
+          0,
+          -quoteAsset.length,
+        )
+      : market;
+
+  return {
+    rank:
+      1,
+    routeKey:
+      routeKeyFor(
+        opportunity,
+      ),
+    market,
+    baseAsset,
+    quoteAsset,
+    buyExchange:
+      opportunity.pair.buy.exchange
+        .trim()
+        .toLowerCase(),
+    sellExchange:
+      opportunity.pair.sell.exchange
+        .trim()
+        .toLowerCase(),
+    uniqueSettlements:
+      0,
+    profitableSettlements:
+      0,
+    negativeSettlements:
+      0,
+    winRatePercent:
+      0,
+    totalCapitalInr:
+      0,
+    realizedPnlInr:
+      0,
+    deployableCashPnlInr:
+      0,
+    feesInr:
+      0,
+    tdsWithheldInr:
+      0,
+    averageNetReturnPercent:
+      0,
+    lastSettledAt:
+      0,
+    buyAdapterRegistered:
+      true,
+    sellAdapterRegistered:
+      true,
+    liveAdapterFoundationReady:
+      true,
+    confidence:
+      "LOW",
+  };
+}
+
 function hasCredibleHistoricalRouteEvidence(
   route: StrategyOneCapitalPlacementRouteRank,
   minimumHistoricalRouteSample: number,
@@ -1538,14 +1658,27 @@ function assertTinyLivePolicy(
   policy:
     StrategyOnePilotRuntimePolicy,
 ): void {
+  const liveOnlyPolicy =
+    isLiveOnlyRuntimeProfile();
+
+  const minimumCapitalPerLegInr =
+    liveOnlyPolicy
+      ? 600
+      : 100;
+
+  const maximumCapitalPerLegInr =
+    liveOnlyPolicy
+      ? 1_000
+      : 500;
+
   if (
     !Number.isSafeInteger(
       policy.capitalPerLegInr,
     ) ||
     policy.capitalPerLegInr <
-      100 ||
+      minimumCapitalPerLegInr ||
     policy.capitalPerLegInr >
-      500 ||
+      maximumCapitalPerLegInr ||
     !Number.isFinite(
       policy.minimumNetProfitPercent,
     ) ||
@@ -1565,7 +1698,9 @@ function assertTinyLivePolicy(
       0
   ) {
     throw new Error(
-      "Active Strategy #1 Tiny-LIVE policy is invalid.",
+      liveOnlyPolicy
+        ? "Active Strategy #1 LIVE-only policy is invalid."
+        : "Active Strategy #1 Tiny-LIVE policy is invalid.",
     );
   }
 }
