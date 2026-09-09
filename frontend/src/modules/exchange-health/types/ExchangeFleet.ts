@@ -131,11 +131,15 @@ export interface ExchangeFleetCapabilityReport {
     documentedProduct: "SPOT" | "FUTURES" | "LEGACY_SPOT_CLIENT";
     requiredCredentialVariables: string[];
     credentialsConfigured: boolean;
-    marketDataAdapterImplemented: false;
-    authenticatedReadImplemented: false;
+    marketDataAdapterImplemented: boolean;
+    authenticatedReadImplemented: boolean;
     orderAdapterImplemented: false;
     liveExecutionEnabled: false;
-    readinessState: "CREDENTIALS_PENDING" | "SPOT_CONTRACT_REVIEW_REQUIRED";
+    readinessState:
+      | "CREDENTIALS_PENDING"
+      | "AUTHENTICATED_READ_UNVERIFIED"
+      | "AUTHENTICATED_READ_VERIFIED"
+      | "SPOT_CONTRACT_REVIEW_REQUIRED";
     blockers: string[];
   }>;
 

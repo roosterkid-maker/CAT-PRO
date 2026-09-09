@@ -19,6 +19,8 @@ services:
         required: true
       - path: ./backend/.env.zebpay
         required: false
+      - path: ./backend/.env.giottus
+        required: false
 
     environment:
       NODE_ENV: production

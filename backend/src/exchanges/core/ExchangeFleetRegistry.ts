@@ -67,9 +67,9 @@ export interface ExchangeFoundationCapability {
 
   readonly credentialsConfigured: boolean;
 
-  readonly marketDataAdapterImplemented: false;
+  readonly marketDataAdapterImplemented: boolean;
 
-  readonly authenticatedReadImplemented: false;
+  readonly authenticatedReadImplemented: boolean;
 
   readonly orderAdapterImplemented: false;
 
@@ -77,6 +77,8 @@ export interface ExchangeFoundationCapability {
 
   readonly readinessState:
     | "CREDENTIALS_PENDING"
+    | "AUTHENTICATED_READ_UNVERIFIED"
+    | "AUTHENTICATED_READ_VERIFIED"
     | "SPOT_CONTRACT_REVIEW_REQUIRED";
 
   readonly blockers:
@@ -621,7 +623,21 @@ export class ExchangeFleetRegistry {
     const foundationExchanges =
       FOUNDATION_DEFINITIONS.map(
         (definition) => {
+          const authenticatedReadImplemented =
+            definition.exchange ===
+              "giottus";
+
+          const authenticatedReadStatus =
+            authenticatedReadImplemented
+              ? this.dependencies
+                  .getReadStatus(
+                    definition.exchange,
+                  )
+              : null;
+
           const credentialsConfigured =
+            authenticatedReadStatus
+              ?.credentialsConfigured ??
             definition.requiredCredentialVariables
               .every(
                 (variable) =>
@@ -634,13 +650,20 @@ export class ExchangeFleetRegistry {
             definition.documentedProduct !==
               "SPOT";
 
+          const authenticatedReadVerified =
+            authenticatedReadStatus
+              ?.verificationState ===
+                "VERIFIED" &&
+            authenticatedReadStatus
+              .readOnlyVerificationFresh;
+
           return {
             ...definition,
             credentialsConfigured,
             marketDataAdapterImplemented:
               false as const,
             authenticatedReadImplemented:
-              false as const,
+              authenticatedReadImplemented,
             orderAdapterImplemented:
               false as const,
             liveExecutionEnabled:
@@ -648,9 +671,15 @@ export class ExchangeFleetRegistry {
             readinessState:
               spotContractReviewRequired
                 ? "SPOT_CONTRACT_REVIEW_REQUIRED" as const
+                : authenticatedReadVerified
+                  ? "AUTHENTICATED_READ_VERIFIED" as const
+                  : credentialsConfigured
+                    ? "AUTHENTICATED_READ_UNVERIFIED" as const
                 : "CREDENTIALS_PENDING" as const,
             blockers: [
-              "CAT PRO market-data, market-rule, authenticated-read and order adapters have not been implemented or proven yet.",
+              authenticatedReadImplemented
+                ? "Signed wallet authentication is implemented; market-data, exact market-rule, fee, clock and order-lifecycle adapters remain unimplemented and execution-blocked."
+                : "CAT PRO market-data, market-rule, authenticated-read and order adapters have not been implemented or proven yet.",
               ...(
                 credentialsConfigured
                   ? []
@@ -659,6 +688,15 @@ export class ExchangeFleetRegistry {
                         " + ",
                       )}.`,
                     ]
+              ),
+              ...(
+                authenticatedReadImplemented &&
+                credentialsConfigured &&
+                !authenticatedReadVerified
+                  ? [
+                      "The latest signed Giottus wallet read is missing, failed or stale.",
+                    ]
+                  : []
               ),
               ...(
                 spotContractReviewRequired

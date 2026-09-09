@@ -64,6 +64,7 @@ const DETERMINISTIC_TESTS = [
   "exchanges/coindcx/tests/testCoinDCXCrossedBookIntegrity.js",
   "exchanges/coindcx/tests/testCoinDCXSharedMarketSelection.js",
   "exchanges/coindcx/tests/testCoinDCXProtectedRestOrderBookService.js",
+  "exchanges/giottus/tests/testGiottusAuthenticatedReadVerification.js",
   "exchanges/tests/testBinanceCapabilityBulkSynchronization.js",
   "exchanges/tests/testBybitMarketUniverseSelection.js",
   "exchanges/tests/testSpotMarketUniverseSelection.js",

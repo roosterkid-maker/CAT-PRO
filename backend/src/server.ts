@@ -165,6 +165,10 @@ import {
 } from "./exchanges/zebpay/ZebPayAuthenticatedReadVerificationService";
 
 import {
+  giottusAuthenticatedReadVerificationService,
+} from "./exchanges/giottus/GiottusAuthenticatedReadVerificationService";
+
+import {
   liveExecutionService,
 } from "./execution/live/LiveExecutionService";
 
@@ -571,6 +575,18 @@ liveExecutionService
         .getReadiness(),
   );
 
+/*
+ * Giottus is authenticated-read only. Registration here exposes current
+ * signed wallet evidence without granting market-data, rule or order authority.
+ */
+liveExecutionService
+  .registerReadOnlyReadinessProvider(
+    "giottus",
+    () =>
+      giottusAuthenticatedReadVerificationService
+        .getReadiness(),
+  );
+
 initializeSocket(
   server,
 );
@@ -672,6 +688,24 @@ server.listen(
       }
 
       zebPayAuthenticatedReadVerificationService
+        .start();
+
+      try {
+        await giottusAuthenticatedReadVerificationService
+          .verify();
+      } catch (
+        error:
+          unknown
+      ) {
+        console.error(
+          "[Giottus Authenticated Read] Verification failed; Giottus remains execution-blocked:",
+          error instanceof Error
+            ? error.message
+            : error,
+        );
+      }
+
+      giottusAuthenticatedReadVerificationService
         .start();
 
       try {
@@ -875,6 +909,9 @@ const shutdown =
       .stop();
 
     zebPayAuthenticatedReadVerificationService
+      .stop();
+
+    giottusAuthenticatedReadVerificationService
       .stop();
 
     coinSwitchFeeSynchronizationService

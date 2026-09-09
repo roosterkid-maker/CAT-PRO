@@ -90,6 +90,7 @@ async function main():
           "unocoin",
           "coinswitch",
           "zebpay",
+          "giottus",
         ],
 
       getReadStatus:
@@ -103,6 +104,9 @@ async function main():
               "coindcx"
               ? "VERIFIED"
               : exchange ===
+                  "giottus"
+                ? "VERIFIED"
+              : exchange ===
                   "zebpay"
                 ? "VERIFIED"
               : exchange ===
@@ -114,7 +118,9 @@ async function main():
             exchange ===
               "coindcx" ||
             exchange ===
-              "zebpay",
+              "zebpay" ||
+            exchange ===
+              "giottus",
         }),
 
       getClockStates:
@@ -277,11 +283,22 @@ async function main():
       report.foundationExchanges.every(
         (exchange) =>
           !exchange.marketDataAdapterImplemented &&
-          !exchange.authenticatedReadImplemented &&
           !exchange.orderAdapterImplemented &&
           !exchange.liveExecutionEnabled,
-      ),
-    "Giottus, Mudrex and Bitbns must remain visible, fail-closed integration foundations without inflating the proven fleet.",
+      ) &&
+      report.foundationExchanges[0]
+        ?.authenticatedReadImplemented ===
+        true &&
+      report.foundationExchanges[0]
+        ?.readinessState ===
+        "AUTHENTICATED_READ_VERIFIED" &&
+      report.foundationExchanges
+        .slice(1)
+        .every(
+          (exchange) =>
+            !exchange.authenticatedReadImplemented,
+        ),
+    "Giottus signed reads may be verified while every expansion venue remains fail-closed for market data and orders.",
   );
 
   const bybit =

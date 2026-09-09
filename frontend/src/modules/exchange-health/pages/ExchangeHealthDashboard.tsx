@@ -1670,11 +1670,25 @@ function FleetCapabilityMatrix({
                 </div>
                 <StatusBadge
                   label={exchange.readinessState.replaceAll("_", " ")}
-                  status="warning"
+                  status={
+                    exchange.readinessState === "AUTHENTICATED_READ_VERIFIED"
+                      ? "good"
+                      : "warning"
+                  }
                 />
               </div>
-              <p className="mt-3 text-xs text-warning">
-                Credentials {exchange.credentialsConfigured ? "configured" : "pending"} · order adapter not implemented
+              <p
+                className={`mt-3 text-xs ${
+                  exchange.readinessState === "AUTHENTICATED_READ_VERIFIED"
+                    ? "text-success"
+                    : "text-warning"
+                }`}
+              >
+                Credentials {exchange.credentialsConfigured ? "configured" : "pending"}
+                {exchange.authenticatedReadImplemented
+                  ? ` · signed read ${exchange.readinessState === "AUTHENTICATED_READ_VERIFIED" ? "verified" : "blocked"}`
+                  : " · signed read not implemented"}
+                {" · order adapter not implemented"}
               </p>
               <ul className="mt-3 space-y-1 text-[11px] leading-5 text-text-muted">
                 {exchange.blockers.map((blocker) => (
