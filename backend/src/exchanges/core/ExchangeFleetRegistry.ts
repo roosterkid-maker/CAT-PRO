@@ -681,6 +681,14 @@ export class ExchangeFleetRegistry {
                 ? "Signed wallet authentication is implemented; market-data, exact market-rule, fee, clock and order-lifecycle adapters remain unimplemented and execution-blocked."
                 : "CAT PRO market-data, market-rule, authenticated-read and order adapters have not been implemented or proven yet.",
               ...(
+                definition.exchange ===
+                  "giottus"
+                  ? [
+                      "The current Spot create-order contract does not document FOK/IOC or a client-order identifier, and its asynchronous success response does not return an order ID. Deterministic submit reconciliation must be proven before CAT PRO can grant LIVE authority.",
+                    ]
+                  : []
+              ),
+              ...(
                 credentialsConfigured
                   ? []
                   : [
@@ -708,7 +716,9 @@ export class ExchangeFleetRegistry {
                     ]
                   : []
               ),
-              "No market-data connection, balance read, fund movement or order authority is granted by this foundation record.",
+              authenticatedReadImplemented
+                ? "Authenticated balance reads are read-only; no market-data connection, fund movement or order authority is granted by this foundation record."
+                : "No market-data connection, balance read, fund movement or order authority is granted by this foundation record.",
             ],
           } satisfies ExchangeFoundationCapability;
         },

@@ -26,11 +26,6 @@ import type {
   ExchangeFleetCapabilityReport,
 } from "../types/ExchangeFleet";
 
-import type {
-  FiveExchangeReadinessObservationReport,
-  FiveExchangePaperShadowReadinessReport,
-} from "../types/PaperShadowReadiness";
-
 const fallbackTargetExchanges = [
   "coindcx",
   "binance",
@@ -73,12 +68,6 @@ export default function ExchangeHealthDashboard() {
   const fleetSource =
     snapshot?.sources.fleetCapabilities;
 
-  const paperShadowSource =
-    snapshot?.sources.paperShadowReadiness;
-
-  const observationSource =
-    snapshot?.sources.readinessObservations;
-
   const systemHealthResponse =
     systemHealthSource?.data;
 
@@ -90,12 +79,6 @@ export default function ExchangeHealthDashboard() {
 
   const fleetResponse =
     fleetSource?.data;
-
-  const paperShadowResponse =
-    paperShadowSource?.data;
-
-  const observationResponse =
-    observationSource?.data;
 
   const systemHealthError =
     snapshotError ||
@@ -118,16 +101,6 @@ export default function ExchangeHealthDashboard() {
       fleetSource?.error,
     );
 
-  const paperShadowError =
-    Boolean(
-      paperShadowSource?.error,
-    );
-
-  const observationError =
-    Boolean(
-      observationSource?.error,
-    );
-
   const systemHealth =
     systemHealthResponse?.data;
 
@@ -136,12 +109,6 @@ export default function ExchangeHealthDashboard() {
 
   const fleetReport =
     fleetResponse?.data;
-
-  const paperShadowReport =
-    paperShadowResponse?.data;
-
-  const observationReport =
-    observationResponse?.data;
 
   const fleetExchanges =
     fleetReport
@@ -394,8 +361,6 @@ export default function ExchangeHealthDashboard() {
       {(executionHealthError ||
         clockError ||
         fleetError ||
-        paperShadowError ||
-        observationError ||
         systemHealthError) && (
         <section className="rounded-xl border border-warning/30 bg-warning/10 p-4">
           <div className="flex items-start gap-3">
@@ -428,29 +393,6 @@ export default function ExchangeHealthDashboard() {
           }
         />
       )}
-
-      {paperShadowReport ? (
-        <PaperShadowReadinessMatrix
-          report={
-            paperShadowReport
-          }
-        />
-      ) : (
-        <section className="rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
-          Paper/shadow readiness
-          evidence is unavailable.
-          Missing evidence is not
-          treated as ready.
-        </section>
-      )}
-
-      {observationReport ? (
-        <RollingReadinessEvidence
-          report={
-            observationReport
-          }
-        />
-      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-3">
         {targetExchanges.map(
@@ -492,13 +434,6 @@ export default function ExchangeHealthDashboard() {
 
             const fleetCapability =
               fleetExchanges.find(
-                (exchange) =>
-                  exchange.exchange ===
-                  exchangeName,
-              );
-
-            const paperExtension =
-              paperShadowReport?.paperExtensionExchanges?.find(
                 (exchange) =>
                   exchange.exchange ===
                   exchangeName,
@@ -622,8 +557,7 @@ export default function ExchangeHealthDashboard() {
                 }
                 executionEvidenceAvailable={
                   execution?.executionEvidenceAvailable ??
-                  paperExtension?.paperAvailability ===
-                    "AVAILABLE"
+                  false
                 }
                 adapterKnown={
                   Boolean(
@@ -634,18 +568,20 @@ export default function ExchangeHealthDashboard() {
                 executionStatus={
                   execution?.status ??
                   (
-                    paperExtension?.paperAvailability ===
-                      "AVAILABLE"
-                      ? "PAPER_ELIGIBLE"
-                      : observationOnly
-                        ? "PAPER_BLOCKED"
-                        : "NOT_REPORTED"
+                    observationOnly
+                      ? "LIVE_EXCLUDED"
+                      : "NOT_REPORTED"
                   )
                 }
                 executionReasons={
                   execution?.reasons ??
-                  paperExtension?.blockers ??
-                  []
+                  (
+                    observationOnly
+                      ? [
+                          "Market data and authenticated reads are monitored, but the LIVE order/fill adapter is not registered.",
+                        ]
+                      : []
+                  )
                 }
                 clockMode={
                   clock?.mode ??
@@ -671,7 +607,7 @@ export default function ExchangeHealthDashboard() {
                   clock?.reasons ??
                   []
                 }
-                paperExtension={
+                observationOnly={
                   observationOnly
                 }
               />
@@ -894,7 +830,7 @@ interface ExchangeCardProps {
   clockReasons:
     string[];
 
-  paperExtension: boolean;
+  observationOnly: boolean;
 }
 
 function ExchangeCard({
@@ -927,7 +863,7 @@ function ExchangeCard({
   signedRequestAllowed,
   clockAgeMs,
   clockReasons,
-  paperExtension,
+  observationOnly,
 }: ExchangeCardProps) {
   const executablePercent =
     quoteBookTargets > 0
@@ -1021,8 +957,8 @@ function ExchangeCard({
           <PlugZap className="size-4 text-brand" />
 
           <p className="text-xs font-semibold uppercase tracking-[0.15em] text-text-muted">
-            {paperExtension
-              ? "PAPER Extension / LIVE Boundary"
+            {observationOnly
+              ? "Observation / LIVE Boundary"
               : "Execution Adapter"}
           </p>
         </div>
@@ -1030,7 +966,7 @@ function ExchangeCard({
         <div className="mt-3 space-y-2">
           <DataRow
             label={
-              paperExtension
+              observationOnly
                 ? "LIVE Adapter Registered"
                 : "Registered"
             }
@@ -1067,7 +1003,7 @@ function ExchangeCard({
 
           <DataRow
             label={
-              paperExtension
+              observationOnly
                 ? "Authenticated Read API"
                 : "Execution API"
             }
@@ -1186,8 +1122,8 @@ function ExchangeCard({
 
           <DataRow
             label={
-              paperExtension
-                ? "PAPER Eligibility"
+              observationOnly
+                ? "LIVE Execution Evidence"
                 : "Execution Evidence"
             }
             value={
@@ -1201,8 +1137,8 @@ function ExchangeCard({
 
           <DataRow
             label={
-              paperExtension
-                ? "PAPER Status"
+              observationOnly
+                ? "LIVE Status"
                 : "Execution Health"
             }
             value={
@@ -1498,6 +1434,13 @@ function FleetCapabilityMatrix({
     ...report.observationExchanges,
   ];
 
+  const giottus =
+    report.foundationExchanges?.find(
+      (exchange) =>
+        exchange.exchange ===
+        "giottus",
+    );
+
   return (
     <section className="rounded-xl border border-border-default bg-panel p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -1507,16 +1450,16 @@ function FleetCapabilityMatrix({
           </p>
 
           <h2 className="mt-1 text-xl font-bold text-text-primary">
-            Five-Exchange Core + ZebPay PAPER Extension
+            Exchange Execution Capability Matrix
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">
-            Implementation and runtime evidence are separate. Documented APIs are not reported as built until CAT PRO has an audited integration.
+            Core venues, observation-only ZebPay, and the Giottus integration are shown together. A verified signed read does not imply order authority.
           </p>
         </div>
 
         <StatusBadge
-          label="LIVE DISABLED"
+          label="PER-VENUE GATED"
           status="warning"
         />
       </div>
@@ -1580,7 +1523,7 @@ function FleetCapabilityMatrix({
                     {exchange.exchange}
                     {exchange.exchange ===
                     "zebpay"
-                      ? ` · PAPER ${report.observationSummary.executionEligible > 0 ? "ELIGIBLE" : "BLOCKED"}`
+                      ? " · OBSERVATION / LIVE BLOCKED"
                       : " · CORE"}
                   </p>
                 </div>
@@ -1636,6 +1579,52 @@ function FleetCapabilityMatrix({
               </div>
             ),
           )}
+
+          {giottus ? (
+            <div className="grid grid-cols-[1.15fr_1fr_1fr_1fr_1fr] items-center gap-3 rounded-lg border border-warning/30 bg-warning/5 px-3 py-3 text-xs">
+              <div>
+                <p className="font-semibold text-text-primary">
+                  {giottus.displayName}
+                </p>
+
+                <p className="mt-1 font-mono text-[10px] text-text-muted">
+                  giottus · EXPANSION / LIVE BLOCKED
+                </p>
+              </div>
+
+              <CapabilityValue
+                implemented={giottus.marketDataAdapterImplemented}
+                positive={false}
+                implementedLabel="CONNECTED"
+              />
+
+              <CapabilityValue
+                implemented={false}
+                positive={false}
+                implementedLabel="PROVIDER READY"
+              />
+
+              <CapabilityValue
+                implemented={giottus.authenticatedReadImplemented}
+                positive={
+                  giottus.readinessState ===
+                  "AUTHENTICATED_READ_VERIFIED"
+                }
+                implementedLabel={
+                  giottus.readinessState ===
+                  "AUTHENTICATED_READ_VERIFIED"
+                    ? "VERIFIED"
+                    : "UNVERIFIED"
+                }
+              />
+
+              <CapabilityValue
+                implemented={giottus.orderAdapterImplemented}
+                positive={false}
+                implementedLabel="REGISTERED / OFF"
+              />
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1714,418 +1703,6 @@ function FleetCapabilityMatrix({
         ).toLocaleString()} · LIVE
         submission allowed: NO
       </p>
-    </section>
-  );
-}
-
-function PaperShadowReadinessMatrix({
-  report,
-}: {
-  report:
-    FiveExchangePaperShadowReadinessReport;
-}) {
-  const paperExtensionExchanges =
-    report.paperExtensionExchanges ??
-    [];
-
-  const displayedExchanges = [
-    ...report.exchanges,
-    ...paperExtensionExchanges,
-  ];
-
-  return (
-    <section className="rounded-xl border border-border-default bg-panel p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">
-            V{report.version}
-          </p>
-
-          <h2 className="mt-1 text-xl font-bold text-text-primary">
-            Core Five + ZebPay PAPER / Shadow Readiness
-          </h2>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">
-            Capability-synchronized
-            depth, fee evidence, and
-            order rules are evaluated
-            together for each target
-            exchange. This stricter
-            market-level count is
-            intentionally different
-            from the live quote-book
-            count on exchange cards.
-          </p>
-        </div>
-
-        <StatusBadge
-          label="LIVE DISABLED"
-          status="warning"
-        />
-      </div>
-
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        <SmallMetric
-          label="Shadow Available"
-          value={`${report.summary.shadowAvailableExchanges}/5`}
-        />
-
-        <SmallMetric
-          label="Paper Available"
-          value={`${report.summary.paperAvailableExchanges}/5`}
-        />
-
-        <SmallMetric
-          label="Shadow-Eligible Markets"
-          value={String(
-            report.summary.totalShadowEligibleMarkets,
-          )}
-        />
-
-        <SmallMetric
-          label="Paper-Eligible Markets"
-          value={String(
-            report.summary.totalPaperEligibleMarkets,
-          )}
-        />
-
-        <SmallMetric
-          label="ZebPay Shadow"
-          value={`${report.paperExtensionSummary?.shadowAvailableExchanges ?? 0}/1`}
-        />
-
-        <SmallMetric
-          label="ZebPay PAPER"
-          value={`${report.paperExtensionSummary?.paperAvailableExchanges ?? 0}/1`}
-        />
-      </div>
-
-      <div className="mt-5 overflow-x-auto">
-        <div className="min-w-[980px] space-y-2">
-          <div className="grid grid-cols-[1.15fr_.8fr_.8fr_.8fr_.8fr_.9fr_.9fr] gap-3 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
-            <span>Exchange</span>
-            <span>Depth-Ready</span>
-            <span>Fee Evidence</span>
-            <span>Order Rules</span>
-            <span>Fee Source</span>
-            <span>Shadow</span>
-            <span>Paper</span>
-          </div>
-
-          {displayedExchanges.map(
-            (exchange) => {
-              const paperExtension =
-                exchange.exchange ===
-                "zebpay";
-
-              const feeSource =
-                Object.entries(
-                  exchange.feeEvidenceSources,
-                )
-                  .filter(([, count]) =>
-                    count > 0,
-                  )
-                  .map(([source, count]) =>
-                    `${source.replaceAll("_", " ")} ${count}`,
-                  )
-                  .join(" / ") ||
-                "NONE";
-
-              return (
-                <div
-                  key={
-                    exchange.exchange
-                  }
-                  className="rounded-lg border border-border-default bg-panel-light px-3 py-3"
-                >
-                  <div className="grid grid-cols-[1.15fr_.8fr_.8fr_.8fr_.8fr_.9fr_.9fr] items-center gap-3 text-xs">
-                    <div>
-                      <p className="font-semibold text-text-primary">
-                        {exchange.displayName}
-                      </p>
-
-                      <p className="mt-1 font-mono text-[10px] text-text-muted">
-                        {exchange.exchange}
-                        {paperExtension
-                          ? " · PAPER EXTENSION"
-                          : " · CORE"}
-                      </p>
-                    </div>
-
-                    <span className="font-mono text-text-primary">
-                      {exchange.executableMarkets}
-                    </span>
-
-                    <span className="font-mono text-text-primary">
-                      {exchange.feeEvidenceMarkets}
-                    </span>
-
-                    <span className="font-mono text-text-primary">
-                      {exchange.completeOrderRuleMarkets}
-                    </span>
-
-                    <span className="text-[10px] leading-4 text-text-muted">
-                      {feeSource}
-                    </span>
-
-                    <StatusBadge
-                      label={`${exchange.shadowAvailability} ${exchange.shadowEligibleMarkets}`}
-                      status={
-                        exchange.shadowAvailability ===
-                        "AVAILABLE"
-                          ? "good"
-                          : "bad"
-                      }
-                    />
-
-                    <StatusBadge
-                      label={`${exchange.paperAvailability} ${exchange.paperEligibleMarkets}`}
-                      status={
-                        exchange.paperAvailability ===
-                        "AVAILABLE"
-                          ? "good"
-                          : "bad"
-                      }
-                    />
-                  </div>
-
-                  {exchange.blockers.length >
-                  0 ? (
-                    <div className="mt-3 border-t border-border-default pt-3">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-warning">
-                        Fail-closed blockers
-                      </p>
-
-                      <ul className="mt-2 space-y-1 text-xs leading-5 text-text-muted">
-                        {exchange.blockers.map(
-                          (blocker) => (
-                            <li
-                              key={
-                                blocker
-                              }
-                            >
-                              {blocker}
-                            </li>
-                          ),
-                        )}
-                      </ul>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            },
-          )}
-        </div>
-      </div>
-
-      <p className="mt-4 text-xs text-text-muted">
-        Generated {new Date(
-          report.generatedAt,
-        ).toLocaleString()} · LIVE
-        submission allowed: NO
-      </p>
-    </section>
-  );
-}
-
-function RollingReadinessEvidence({
-  report,
-}: {
-  report:
-    FiveExchangeReadinessObservationReport;
-}) {
-  const status =
-    report.status ===
-      "STABLE"
-      ? "good"
-      : report.status ===
-          "UNSTABLE"
-        ? "bad"
-        : "warning";
-
-  return (
-    <section className="rounded-xl border border-border-default bg-panel p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">
-            V{report.version}
-          </p>
-
-          <h2 className="mt-1 text-xl font-bold text-text-primary">
-            Persistent Rolling Readiness Evidence
-          </h2>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">
-            Restart-safe observations
-            must earn both a minimum
-            sample count and real
-            elapsed duration. A green
-            point-in-time snapshot is
-            never backfilled into
-            historical readiness.
-          </p>
-        </div>
-
-        <StatusBadge
-          label={
-            report.status.replaceAll(
-              "_",
-              " ",
-            )
-          }
-          status={status}
-        />
-      </div>
-
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <SmallMetric
-          label="Observations"
-          value={`${report.evidence.observationsInWindow}/${report.policy.minimumObservations}`}
-        />
-
-        <SmallMetric
-          label="Elapsed Evidence"
-          value={`${formatDuration(report.evidence.observedDurationMs)} / ${formatDuration(report.policy.minimumDurationMs)}`}
-        />
-
-        <SmallMetric
-          label="Required Availability"
-          value={`${(
-            report.policy.minimumAvailabilityRatio *
-            100
-          ).toFixed(1)}%`}
-        />
-
-        <SmallMetric
-          label="Shadow Stable"
-          value={
-            report.allFiveRollingShadowStable
-              ? "5/5"
-              : "NO"
-          }
-        />
-
-        <SmallMetric
-          label="Paper Stable"
-          value={
-            report.allFiveRollingPaperStable
-              ? "5/5"
-              : "NO"
-          }
-        />
-      </div>
-
-      <div className="mt-5 overflow-x-auto">
-        <div className="min-w-[820px] space-y-2">
-          <div className="grid grid-cols-[1.1fr_.8fr_1fr_1fr_.9fr_.9fr] gap-3 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
-            <span>Exchange</span>
-            <span>Samples</span>
-            <span>Shadow Ratio</span>
-            <span>Paper Ratio</span>
-            <span>Shadow Stable</span>
-            <span>Paper Stable</span>
-          </div>
-
-          {report.exchanges.map(
-            (exchange) => (
-              <div
-                key={
-                  exchange.exchange
-                }
-                className="grid grid-cols-[1.1fr_.8fr_1fr_1fr_.9fr_.9fr] items-center gap-3 rounded-lg border border-border-default bg-panel-light px-3 py-3 text-xs"
-              >
-                <span className="font-semibold uppercase text-text-primary">
-                  {exchange.exchange}
-                </span>
-
-                <span className="font-mono text-text-primary">
-                  {exchange.observations}
-                </span>
-
-                <span className="font-mono text-text-primary">
-                  {(exchange.shadowAvailabilityRatio *
-                    100).toFixed(2)}%
-                </span>
-
-                <span className="font-mono text-text-primary">
-                  {(exchange.paperAvailabilityRatio *
-                    100).toFixed(2)}%
-                </span>
-
-                <StatusBadge
-                  label={
-                    exchange.rollingShadowStable
-                      ? "STABLE"
-                      : "NOT PROVEN"
-                  }
-                  status={
-                    exchange.rollingShadowStable
-                      ? "good"
-                      : "warning"
-                  }
-                />
-
-                <StatusBadge
-                  label={
-                    exchange.rollingPaperStable
-                      ? "STABLE"
-                      : "NOT PROVEN"
-                  }
-                  status={
-                    exchange.rollingPaperStable
-                      ? "good"
-                      : "warning"
-                  }
-                />
-              </div>
-            ),
-          )}
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-3 text-xs text-text-muted">
-        <span>
-          Persistence: {report.evidence.persistenceHealthy
-            ? "HEALTHY"
-            : "FAILED"}
-        </span>
-
-        <span>
-          Write failures: {report.persistence.writeFailures}
-        </span>
-
-        <span>
-          LIVE submission: NO
-        </span>
-      </div>
-
-      {report.blockers.length >
-      0 ? (
-        <div className="mt-4 rounded-lg border border-warning/20 bg-warning/10 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-warning">
-            Rolling evidence blockers
-          </p>
-
-          <ul className="mt-2 space-y-1 text-xs leading-5 text-text-muted">
-            {report.blockers
-              .slice(
-                0,
-                8,
-              )
-              .map(
-                (blocker) => (
-                  <li
-                    key={
-                      blocker
-                    }
-                  >
-                    {blocker}
-                  </li>
-                ),
-              )}
-          </ul>
-        </div>
-      ) : null}
     </section>
   );
 }

@@ -81,6 +81,25 @@ export interface ExchangeFleetCapability {
   };
 }
 
+export interface ExchangeFoundationCapability {
+  exchange: CatProFoundationExchange;
+  displayName: string;
+  officialDocumentationUrl: string;
+  documentedProduct: "SPOT" | "FUTURES" | "LEGACY_SPOT_CLIENT";
+  requiredCredentialVariables: string[];
+  credentialsConfigured: boolean;
+  marketDataAdapterImplemented: boolean;
+  authenticatedReadImplemented: boolean;
+  orderAdapterImplemented: false;
+  liveExecutionEnabled: false;
+  readinessState:
+    | "CREDENTIALS_PENDING"
+    | "AUTHENTICATED_READ_UNVERIFIED"
+    | "AUTHENTICATED_READ_VERIFIED"
+    | "SPOT_CONTRACT_REVIEW_REQUIRED";
+  blockers: string[];
+}
+
 export interface ExchangeFleetCapabilityReport {
   generatedAt: number;
 
@@ -124,24 +143,7 @@ export interface ExchangeFleetCapabilityReport {
 
   foundationExchangeCount: 3;
 
-  foundationExchanges: Array<{
-    exchange: CatProFoundationExchange;
-    displayName: string;
-    officialDocumentationUrl: string;
-    documentedProduct: "SPOT" | "FUTURES" | "LEGACY_SPOT_CLIENT";
-    requiredCredentialVariables: string[];
-    credentialsConfigured: boolean;
-    marketDataAdapterImplemented: boolean;
-    authenticatedReadImplemented: boolean;
-    orderAdapterImplemented: false;
-    liveExecutionEnabled: false;
-    readinessState:
-      | "CREDENTIALS_PENDING"
-      | "AUTHENTICATED_READ_UNVERIFIED"
-      | "AUTHENTICATED_READ_VERIFIED"
-      | "SPOT_CONTRACT_REVIEW_REQUIRED";
-    blockers: string[];
-  }>;
+  foundationExchanges: ExchangeFoundationCapability[];
 
   notes: string[];
 }

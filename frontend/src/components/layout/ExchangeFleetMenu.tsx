@@ -12,7 +12,10 @@ import { ChevronDown, Server } from "lucide-react";
 import { useExchangeClockSafety } from "@/modules/exchange-health/hooks/useExchangeClockSafety";
 import { useExchangeFleetCapabilities } from "@/modules/exchange-health/hooks/useExchangeFleetCapabilities";
 import type { ExchangeClockState } from "@/modules/exchange-health/types/ExchangeClock";
-import type { ExchangeFleetCapability } from "@/modules/exchange-health/types/ExchangeFleet";
+import type {
+  ExchangeFleetCapability,
+  ExchangeFoundationCapability,
+} from "@/modules/exchange-health/types/ExchangeFleet";
 
 interface ExchangeFleetMenuProps {
   onOpenExchangeHealth: () => void;
@@ -60,11 +63,17 @@ export default function ExchangeFleetMenu({
         ...(fleet.observationExchanges ?? []),
       ]
     : [];
+  const giottus = fleet?.foundationExchanges?.find(
+    (exchange) => exchange.exchange === "giottus",
+  );
+  const giottusReadVerified =
+    giottus?.readinessState === "AUTHENTICATED_READ_VERIFIED";
   const verifiedReadAccess = displayedExchanges.filter(
     (exchange) =>
       exchange.authenticatedRead.verificationState === "VERIFIED" &&
       exchange.authenticatedRead.fresh,
-  ).length;
+  ).length + (giottusReadVerified ? 1 : 0);
+  const displayedVenueCount = displayedExchanges.length + (giottus ? 1 : 0);
 
   const handleOpenHealth = () => {
     setOpen(false);
@@ -178,7 +187,7 @@ export default function ExchangeFleetMenu({
           <div
             ref={popupRef}
             role="dialog"
-            aria-label="Six-exchange LIVE fleet"
+            aria-label="Seven-venue execution evidence"
             className="fixed overflow-hidden rounded-xl border border-border-default bg-panel shadow-2xl shadow-black/40"
             style={{
               left: popupPosition.left,
@@ -190,7 +199,7 @@ export default function ExchangeFleetMenu({
             <div className="flex items-start justify-between gap-4 border-b border-border-default bg-app-bg/70 px-4 py-3">
               <div>
                 <p className="text-sm font-semibold text-text-primary">
-                  Six-exchange LIVE fleet
+                  Seven-venue execution evidence
                 </p>
 
                 <p className="mt-1 text-xs text-text-muted">
@@ -209,21 +218,26 @@ export default function ExchangeFleetMenu({
               ) : fleetUnavailable || !fleet ? (
                 <MenuMessage message="Fleet API unavailable. No exchange status has been inferred." />
               ) : (
-                displayedExchanges.map((exchange) => (
-                  <ExchangeRow
-                    key={exchange.exchange}
-                    exchange={exchange}
-                    clock={clockByExchange.get(exchange.exchange)}
-                    clockUnavailable={clockQuery.isError}
-                  />
-                ))
+                <>
+                  {displayedExchanges.map((exchange) => (
+                    <ExchangeRow
+                      key={exchange.exchange}
+                      exchange={exchange}
+                      clock={clockByExchange.get(exchange.exchange)}
+                      clockUnavailable={clockQuery.isError}
+                    />
+                  ))}
+                  {giottus ? (
+                    <FoundationExchangeRow exchange={giottus} />
+                  ) : null}
+                </>
               )}
             </div>
 
             <div className="flex items-center justify-between gap-4 border-t border-border-default bg-app-bg/50 px-4 py-3">
               <p className="text-[11px] text-text-muted">
                 {fleet
-                  ? `Authenticated read verified ${verifiedReadAccess}/${displayedExchanges.length}`
+                  ? `Authenticated read verified ${verifiedReadAccess}/${displayedVenueCount}`
                   : "Waiting for verified fleet evidence"}
               </p>
 
@@ -246,16 +260,12 @@ interface ExchangeRowProps {
   exchange: ExchangeFleetCapability;
   clock: ExchangeClockState | undefined;
   clockUnavailable: boolean;
-  showPaperEligibility?: boolean;
-  paperEligible?: boolean;
 }
 
 function ExchangeRow({
   exchange,
   clock,
   clockUnavailable,
-  showPaperEligibility = false,
-  paperEligible = false,
 }: ExchangeRowProps) {
   const auth = getAuthenticationStatus(exchange);
   const clockStatus = getClockStatus(clock, clockUnavailable);
@@ -280,24 +290,47 @@ function ExchangeRow({
       />
 
       <StatusPill
-        label={
-          showPaperEligibility
-            ? paperEligible
-              ? "PAPER eligible"
-              : "PAPER blocked"
-            : auth.label
-        }
-        tone={
-          showPaperEligibility
-            ? paperEligible
-              ? "success"
-              : "warning"
-            : auth.tone
-        }
+        label={auth.label}
+        tone={auth.tone}
       />
       <StatusPill
-        label={showPaperEligibility ? auth.label : clockStatus.label}
-        tone={showPaperEligibility ? auth.tone : clockStatus.tone}
+        label={clockStatus.label}
+        tone={clockStatus.tone}
+      />
+    </div>
+  );
+}
+
+function FoundationExchangeRow({
+  exchange,
+}: {
+  exchange: ExchangeFoundationCapability;
+}) {
+  const authVerified =
+    exchange.readinessState === "AUTHENTICATED_READ_VERIFIED";
+
+  return (
+    <div className="grid grid-cols-[minmax(7rem,1fr)_auto] gap-3 border-b border-warning/25 bg-warning/5 px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(7rem,1fr)_auto_auto_auto] sm:items-center">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold text-text-primary">
+          {exchange.displayName}
+        </p>
+        <p className="mt-0.5 text-[10px] uppercase tracking-wide text-text-muted">
+          Expansion · LIVE blocked
+        </p>
+      </div>
+
+      <StatusPill
+        label="Data not built"
+        tone="warning"
+      />
+      <StatusPill
+        label={authVerified ? "Auth verified" : "Auth unverified"}
+        tone={authVerified ? "success" : "warning"}
+      />
+      <StatusPill
+        label="Orders blocked"
+        tone="danger"
       />
     </div>
   );

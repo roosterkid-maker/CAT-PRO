@@ -292,6 +292,13 @@ async function main():
       report.foundationExchanges[0]
         ?.readinessState ===
         "AUTHENTICATED_READ_VERIFIED" &&
+      report.foundationExchanges[0]
+        ?.blockers.some(
+          (blocker) =>
+            blocker.includes(
+              "does not return an order ID",
+            ),
+        ) &&
       report.foundationExchanges
         .slice(1)
         .every(
