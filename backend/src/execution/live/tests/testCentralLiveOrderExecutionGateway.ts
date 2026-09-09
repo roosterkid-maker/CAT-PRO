@@ -16,6 +16,7 @@ async function main(): Promise<void> {
     await testJournalBeforeIoAndRestartReconciliation(join(directory, "complete.jsonl"));
     await testUnknownSubmissionNeverRetries(join(directory, "uncertain.jsonl"));
     await testDisabledGatewayPerformsNoIo(join(directory, "disabled.jsonl"));
+    await testPreDispatchValidationBeforeJournalAndIo(join(directory, "pre-dispatch-validation.jsonl"));
     await testPrivateFillIdentityBeforeIo(join(directory, "private-fill-identity.jsonl"));
     await testConfirmedPreAcceptRejectionDisposesOwnershipAndReplays(join(directory, "confirmed-reject.jsonl"),
       join(directory, "unconfirmed-failure.jsonl"));
@@ -177,6 +178,32 @@ async function testDisabledGatewayPerformsNoIo(file: string): Promise<void> {
   assert.equal(gateway.getDiagnostics(now).records, 0);
 }
 
+async function testPreDispatchValidationBeforeJournalAndIo(file: string): Promise<void> {
+  let submissions = 0;
+  const adapter = createAdapter({
+    validateNewSubmission() {
+      throw new Error("Fixture market contract rejected before dispatch.");
+    },
+    async execute(input) {
+      submissions += 1;
+      return result(input);
+    },
+  });
+  const gateway = new CentralLiveOrderExecutionGateway(
+    {enabled: true},
+    createRuntime(adapter),
+    {async inspect() { return feeEvidence(); }},
+    file,
+  );
+
+  assert.throws(
+    () => gateway.validateNewSubmission(orderRequest()),
+    /market contract rejected before dispatch/u,
+  );
+  assert.equal(submissions, 0);
+  assert.equal(gateway.getDiagnostics(now).records, 0);
+}
+
 function createRuntime(adapter: LiveExecutionAdapter) {
   return {getAdapter: () => adapter, getExchangeStatus: () => ({exchange: "binance", adapterRegistered: true,
     capabilities: adapter.getCapabilities(), credentialsConfigured: true, authenticationVerified: true,
@@ -190,7 +217,7 @@ function createAdapter(overrides: Partial<LiveExecutionAdapter>): LiveExecutionA
   return {exchange: "binance", getCapabilities: () => ({products: ["SPOT", "PERPETUAL"], supportsMarketOrders: true,
     supportsLimitOrders: true, supportsPostOnly: true, supportsOrderStatus: true, supportsCancellation: true,
     supportsAmendKeepPriority: false, supportsReduceOnly: true}),
-  async execute(input) { return result(input); }, async getOrderStatus() { return result(orderRequest()); },
+  validateNewSubmission() {}, async execute(input) { return result(input); }, async getOrderStatus() { return result(orderRequest()); },
   async cancelOrder() { return {...result(orderRequest()), status: "CANCELLED", success: false, cancelled: true}; },
   getReadiness: () => ({credentialsConfigured: true, authenticationVerified: true, exchangeApiReachable: true,
     verificationState: "VERIFIED", readOnlyVerificationFresh: true, lastVerifiedAt: now - 100,

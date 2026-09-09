@@ -64,6 +64,49 @@ export class CoinDCXExecutionAdapter
     };
   }
 
+  validateNewSubmission(
+    request: LiveExecutionRequest,
+  ): void {
+    this.validateRequest(request);
+    this.validateAgainstExchangeCapability(request);
+
+    if (request.postOnly === true) {
+      throw new Error(
+        "CoinDCX post-only execution is unsupported by the audited adapter contract.",
+      );
+    }
+
+    if (
+      request.timeInForce !== undefined &&
+      request.timeInForce !== "GTC"
+    ) {
+      throw new Error(
+        "CoinDCX SPOT supports only the audited GTC time-in-force mapping.",
+      );
+    }
+
+    if (
+      request.timeInForce === "GTC" &&
+      (
+        request.orderType !== "limit" ||
+        !request.clientOrderId?.trim() ||
+        !Number.isFinite(request.price) ||
+        (request.price ?? 0) <= 0 ||
+        request.cancelOnTimeout !== true ||
+        !Number.isSafeInteger(request.timeoutMs) ||
+        (request.timeoutMs ?? 0) <= 0 ||
+        (request.timeoutMs ?? 0) > 10_000 ||
+        !Number.isSafeInteger(request.pollingIntervalMs) ||
+        (request.pollingIntervalMs ?? 0) <= 0 ||
+        (request.pollingIntervalMs ?? 0) > 1_000
+      )
+    ) {
+      throw new Error(
+        "CoinDCX audited GTC execution requires a priced limit order, durable client ID, explicit bounded timeout (<=10000 ms), <=1000 ms polling and cancel-on-timeout.",
+      );
+    }
+  }
+
   async execute(
     request: LiveExecutionRequest,
   ): Promise<LiveExecutionResult> {
@@ -83,84 +126,7 @@ export class CoinDCXExecutionAdapter
     );
 
     try {
-      this.validateRequest(
-        request,
-      );
-
-      this.validateAgainstExchangeCapability(
-        request,
-      );
-
-      if (
-        request.postOnly ===
-        true
-      ) {
-        throw new Error(
-          "CoinDCX post-only execution is unsupported by the audited adapter contract.",
-        );
-      }
-
-      if (
-        request.timeInForce !==
-          undefined &&
-        request.timeInForce !==
-          "GTC"
-      ) {
-        throw new Error(
-          "CoinDCX SPOT supports only the audited GTC time-in-force mapping.",
-        );
-      }
-
-      if (
-        request.timeInForce ===
-          "GTC" &&
-        (
-          request.orderType !==
-            "limit" ||
-          !request.clientOrderId
-            ?.trim() ||
-          !Number.isFinite(
-            request.price,
-          ) ||
-          (
-            request.price ??
-            0
-          ) <=
-            0 ||
-          request.cancelOnTimeout !==
-            true ||
-          !Number.isSafeInteger(
-            request.timeoutMs,
-          ) ||
-          (
-            request.timeoutMs ??
-            0
-          ) <=
-            0 ||
-          (
-            request.timeoutMs ??
-            0
-          ) >
-            10_000 ||
-          !Number.isSafeInteger(
-            request.pollingIntervalMs,
-          ) ||
-          (
-            request.pollingIntervalMs ??
-            0
-          ) <=
-            0 ||
-          (
-            request.pollingIntervalMs ??
-            0
-          ) >
-            1_000
-        )
-      ) {
-        throw new Error(
-          "CoinDCX audited GTC execution requires a priced limit order, durable client ID, explicit bounded timeout (<=10000 ms), <=1000 ms polling and cancel-on-timeout.",
-        );
-      }
+      this.validateNewSubmission(request);
 
       const credentials =
         coinDCXCredentialsProvider
@@ -593,8 +559,12 @@ export class CoinDCXExecutionAdapter
           orderType:
             request.orderType,
 
+          // CoinDCX's per-market feed does not publish time-in-force. The
+          // adapter's audited GTC-only bounded-cancel contract above owns this
+          // field, while the shared validator still owns every published
+          // market/quantity/price/notional rule.
           timeInForce:
-            request.timeInForce,
+            undefined,
 
           quantity:
             request.quantity,

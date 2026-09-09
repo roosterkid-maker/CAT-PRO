@@ -84,13 +84,7 @@ export class BinanceExecutionAdapter
     );
 
     try {
-      this.validateRequest(
-        request,
-      );
-
-      this.validateAgainstExchangeCapability(
-        request,
-      );
+      this.validateNewSubmission(request);
 
       const credentials =
         binanceCredentialsProvider
@@ -443,6 +437,13 @@ export class BinanceExecutionAdapter
         this.exchange,
         credentialsConfigured,
       );
+  }
+
+  validateNewSubmission(
+    request: LiveExecutionRequest,
+  ): void {
+    this.validateRequest(request);
+    this.validateAgainstExchangeCapability(request);
   }
 
   private validateRequest(

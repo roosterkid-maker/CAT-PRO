@@ -97,6 +97,22 @@ export class CentralLiveOrderExecutionGateway {
     this.timingEvidence = timingEvidence;
   }
 
+  /**
+   * Cached-only, synchronous submission validation. Two-leg owners call this
+   * for both requests before either leg is allowed to cross its dispatch
+   * boundary. No journal or exchange I/O occurs here.
+   */
+  validateNewSubmission(request: LiveExecutionRequest): void {
+    this.validateReadiness(request);
+    const adapter = this.runtime.getAdapter(request.exchange);
+    if (!adapter.validateNewSubmission) {
+      throw new Error(
+        `Pre-dispatch validation is unavailable for ${request.exchange}.`,
+      );
+    }
+    adapter.validateNewSubmission(request);
+  }
+
   async executeOrReconcile(input: {readonly request: LiveExecutionRequest; readonly idempotencyKey: string;
     readonly allowNewSubmission: boolean; readonly now?: number}): Promise<CentralLiveOrderGatewayResponse> {
     const now = input.now ?? Date.now(); validateTime(now); const key = requireKey(input.idempotencyKey);

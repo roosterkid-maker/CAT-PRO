@@ -337,6 +337,32 @@ async function main(): Promise<void> {
   assert.equal(refreshedDuringInspection.executionPreview.bookAgeMs, 50);
   assert.equal(refreshedDuringInspection.blockers.length, 0);
 
+  const completeCapability = capability(1);
+  const notionalMinimumOnlyCapability: ExchangeMarketCapability = {
+    ...completeCapability,
+    quantity: {
+      ...completeCapability.quantity,
+      minimumQuantity: null,
+    },
+  };
+  const notionalMinimumOnly = await assistant(
+    new FakePairPort(longResidualSession),
+    {
+      timestamp: NOW - 25,
+      bids: [{price: 1.05, quantity: 3}],
+      asks: [{price: 1.06, quantity: 3}],
+    },
+    notionalMinimumOnlyCapability,
+    5,
+    "notional-minimum-only.jsonl",
+  ).inspectSession(longResidualSession.sessionId, NOW);
+  assert.equal(
+    notionalMinimumOnly.state,
+    "READY_FOR_OPERATOR_REVIEW",
+    "Bybit-style minOrderAmt is authoritative when deprecated minOrderQty is absent.",
+  );
+  assert.equal(notionalMinimumOnly.blockers.length, 0);
+
   const futureDatedBeyondCompletion =
     await assistant(
       new FakePairPort(longResidualSession),

@@ -1144,7 +1144,6 @@ export class StrategyOneResidualRecoveryAssistantService {
       capability.quantity.quantityStep <= 0 ||
       capability.price.priceStep === null ||
       capability.price.priceStep <= 0 ||
-      capability.quantity.minimumQuantity === null ||
       capability.notional.minimumNotional === null
     ) {
       blockers.push("Complete recovery quantity/price/notional rules are required.");

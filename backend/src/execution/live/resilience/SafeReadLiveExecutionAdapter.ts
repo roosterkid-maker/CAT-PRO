@@ -48,6 +48,18 @@ export class SafeReadLiveExecutionAdapter
       );
   }
 
+  validateNewSubmission(
+    request: LiveExecutionRequest,
+  ): void {
+    if (!this.delegate.validateNewSubmission) {
+      throw new Error(
+        `Pre-dispatch validation is unavailable for ${this.exchange}.`,
+      );
+    }
+
+    this.delegate.validateNewSubmission(request);
+  }
+
   getOrderStatus(
     orderId:
       string,

@@ -38,6 +38,7 @@ async function main(): Promise<void> {
     await testMismatchedPair(directory);
     await testUnknownOutcomeAndRestart(directory);
     await testInvalidVenueRejectedBeforeGateway(directory);
+    await testLegValidationBlocksBothBeforeDispatch(directory);
     await testExactCoinDCXBinanceCOTILane(directory);
     await testApprovedReverseBBCoinDCXLane(directory);
   } finally {
@@ -56,6 +57,7 @@ async function testSuccessfulConcurrentPair(
   let maximumActive = 0;
   let calls = 0;
   const gateway: StrategyOneTwoLegGatewayPort = {
+    validateNewSubmission() {},
     executeOrReconcile: async (input) => {
       calls += 1;
       active += 1;
@@ -93,6 +95,7 @@ async function testMismatchedPair(
   directory: string,
 ): Promise<void> {
   const gateway: StrategyOneTwoLegGatewayPort = {
+    validateNewSubmission() {},
     executeOrReconcile: async (input) =>
       ready(
         input.request,
@@ -123,6 +126,7 @@ async function testUnknownOutcomeAndRestart(
   const filePath =
     join(directory, "unknown.jsonl");
   const firstGateway: StrategyOneTwoLegGatewayPort = {
+    validateNewSubmission() {},
     executeOrReconcile: async (input) => {
       if (input.request.side === "buy") {
         throw new Error("fixture transport closed after write");
@@ -144,6 +148,7 @@ async function testUnknownOutcomeAndRestart(
 
   const replayAuthorities: boolean[] = [];
   const replayGateway: StrategyOneTwoLegGatewayPort = {
+    validateNewSubmission() {},
     executeOrReconcile: async (gatewayInput) => {
       replayAuthorities.push(gatewayInput.allowNewSubmission);
       return {
@@ -175,6 +180,7 @@ async function testInvalidVenueRejectedBeforeGateway(
   const service =
     new StrategyOneTwoLegLiveExecutionService(
       {
+        validateNewSubmission() {},
         executeOrReconcile: async () => {
           calls += 1;
           throw new Error("Gateway must not be reached.");
@@ -198,6 +204,45 @@ async function testInvalidVenueRejectedBeforeGateway(
   assert.equal(calls, 0);
 }
 
+async function testLegValidationBlocksBothBeforeDispatch(
+  directory: string,
+): Promise<void> {
+  const validated: string[] = [];
+  let dispatches = 0;
+  const gateway: StrategyOneTwoLegGatewayPort = {
+    validateNewSubmission(requestValue) {
+      validated.push(requestValue.side);
+      if (requestValue.side === "sell") {
+        throw new Error("Fixture venue rule rejects the SELL request.");
+      }
+    },
+    async executeOrReconcile() {
+      dispatches += 1;
+      throw new Error("Neither gateway dispatch may occur.");
+    },
+  };
+  const service = new StrategyOneTwoLegLiveExecutionService(
+    gateway,
+    join(directory, "pair-validation-block.jsonl"),
+  );
+  const result = await service.executeOrReconcile(
+    pairInput("pair-validation-block"),
+  );
+
+  assert.deepEqual(validated, ["buy", "sell"]);
+  assert.equal(dispatches, 0);
+  assert.equal(result.session.state, "FAILED");
+  assert.equal(result.buyDispatchedAt, null);
+  assert.equal(result.sellDispatchedAt, null);
+  assert.equal(result.possibleExposure, false);
+  assert.equal(result.recoveryRequired, false);
+  assert.equal(
+    result.session.reasons.some((reason) =>
+      reason.includes("before either leg")),
+    true,
+  );
+}
+
 async function testExactCoinDCXBinanceCOTILane(
   directory: string,
 ): Promise<void> {
@@ -206,6 +251,7 @@ async function testExactCoinDCXBinanceCOTILane(
   const service =
     new StrategyOneTwoLegLiveExecutionService(
       {
+        validateNewSubmission() {},
         executeOrReconcile: async (input) => {
           calls +=
             1;
@@ -283,6 +329,7 @@ async function testExactCoinDCXBinanceCOTILane(
   const reverse =
     new StrategyOneTwoLegLiveExecutionService(
       {
+        validateNewSubmission() {},
         executeOrReconcile: async (gatewayInput) => {
           reverseCalls += 1;
           return ready(
@@ -323,6 +370,7 @@ async function testApprovedReverseBBCoinDCXLane(
   let calls = 0;
   const service = new StrategyOneTwoLegLiveExecutionService(
     {
+      validateNewSubmission() {},
       executeOrReconcile: async (input) => {
         calls += 1;
         return ready(input.request, input.idempotencyKey, input.request.quantity);

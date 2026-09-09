@@ -241,13 +241,7 @@ export class BybitExecutionAdapter
     );
 
     try {
-      this.validateRequest(
-        request,
-      );
-
-      this.validateAgainstExchangeCapability(
-        request,
-      );
+      this.validateNewSubmission(request);
 
       const credentials =
         this.credentialsSource
@@ -582,6 +576,13 @@ export class BybitExecutionAdapter
         this.credentialsSource
           .isConfigured(),
       );
+  }
+
+  validateNewSubmission(
+    request: LiveExecutionRequest,
+  ): void {
+    this.validateRequest(request);
+    this.validateAgainstExchangeCapability(request);
   }
 
   private validateRequest(

@@ -28,6 +28,7 @@ async function main(): Promise<void> {
     const resolutionFile = join(directory, "resolutions.jsonl");
     const initial = new StrategyOneTwoLegLiveExecutionService(
       {
+        validateNewSubmission() {},
         executeOrReconcile: async (input) => {
           if (input.request.side === "buy") {
             throw new Error("fixture connection closed after write");
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
     const reconciliationAuthorities: boolean[] = [];
     const restored = new StrategyOneTwoLegLiveExecutionService(
       {
+        validateNewSubmission() {},
         executeOrReconcile: async (gatewayInput) => {
           reconciliationAuthorities.push(gatewayInput.allowNewSubmission);
           return ready(
@@ -93,6 +95,7 @@ async function main(): Promise<void> {
     const residualResolutionFile = join(directory, "residual-resolutions.jsonl");
     const residualPairs = new StrategyOneTwoLegLiveExecutionService(
       {
+        validateNewSubmission() {},
         executeOrReconcile: async (gatewayInput) =>
           gatewayInput.request.side === "buy"
             ? ready(gatewayInput.request, gatewayInput.idempotencyKey, 1)

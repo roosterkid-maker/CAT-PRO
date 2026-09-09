@@ -64,6 +64,10 @@ export interface StrategyOneTwoLegExecutionResult {
 }
 
 export interface StrategyOneTwoLegGatewayPort {
+  validateNewSubmission(
+    request: LiveExecutionRequest,
+  ): void;
+
   executeOrReconcile(input: {
     readonly request: LiveExecutionRequest;
     readonly idempotencyKey: string;
@@ -249,6 +253,7 @@ export class StrategyOneTwoLegLiveExecutionService {
       persistence: this.store.getDiagnostics(),
       safety: {
         journalBeforeAnyExchangeIo: true,
+        bothLegsValidatedBeforeEitherDispatch: true,
         concurrentLegDispatch: true,
         stablePerLegIdempotency: true,
         unknownOutcomeNeverRetried: true,
@@ -289,6 +294,43 @@ export class StrategyOneTwoLegLiveExecutionService {
       `${input.sessionId}:buy`;
     const sellIdempotencyKey =
       `${input.sessionId}:sell`;
+
+    if (!existing && input.allowNewSubmission) {
+      try {
+        this.gateway.validateNewSubmission(input.buyRequest);
+        this.gateway.validateNewSubmission(input.sellRequest);
+      } catch (error: unknown) {
+        const prepared = this.prepare({
+          ...input,
+          now,
+          requestHash: requestHashValue,
+          buyIdempotencyKey,
+          sellIdempotencyKey,
+        });
+        const failed = deepFreeze({
+          ...clone(prepared),
+          state: "FAILED" as const,
+          updatedAt: Math.max(now, Date.now()),
+          reasons: [
+            ...prepared.reasons,
+            `Pair pre-dispatch validation blocked before either leg: ${message(error)}`,
+            "Neither exchange leg crossed the dispatch boundary and no order submission was attempted.",
+          ],
+        });
+        this.setAndPersist(failed);
+
+        return deepFreeze({
+          session: clone(failed),
+          possibleExposure: false,
+          recoveryRequired: false,
+          buyDispatchedAt: null,
+          sellDispatchedAt: null,
+          buyResponse: null,
+          sellResponse: null,
+        });
+      }
+    }
+
     let session =
       existing ?? this.prepare({
         ...input,

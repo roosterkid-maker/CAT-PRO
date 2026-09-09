@@ -25,6 +25,13 @@ export class ProductRoutingLiveExecutionAdapter implements LiveExecutionAdapter 
   execute(request: LiveExecutionRequest): Promise<LiveExecutionResult> {
     return this.delegate(request.product ?? "SPOT").execute(request);
   }
+  validateNewSubmission(request: LiveExecutionRequest): void {
+    const delegate = this.delegate(request.product ?? "SPOT");
+    if (!delegate.validateNewSubmission) {
+      throw new Error(`Pre-dispatch validation is unavailable for ${this.exchange} ${request.product ?? "SPOT"}.`);
+    }
+    delegate.validateNewSubmission(request);
+  }
   getOrderStatus(orderId: string, market?: string, product: "SPOT" | "PERPETUAL" = "SPOT"): Promise<LiveExecutionResult> {
     return this.delegate(product).getOrderStatus(orderId, market, product);
   }

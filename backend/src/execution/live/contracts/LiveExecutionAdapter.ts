@@ -68,6 +68,15 @@ export interface LiveExecutionAdapter {
 
   getCapabilities(): LiveExecutionAdapterCapabilities;
 
+  /**
+   * Synchronous, cached-only validation for a brand-new submission. Pair
+   * owners use this before either leg reaches its journaled dispatch boundary
+   * so a local rejection on one venue can never release the opposite leg.
+   */
+  validateNewSubmission?(
+    request: LiveExecutionRequest,
+  ): void;
+
   execute(
     request: LiveExecutionRequest,
   ): Promise<LiveExecutionResult>;
