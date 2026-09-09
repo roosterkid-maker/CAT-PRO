@@ -90,10 +90,16 @@ export interface CrossExchangeQuantityNormalizationRequest {
 
   /**
    * Optional LIVE-only ceiling for the smallest shared-increment round-up
-   * that satisfies both venues when round-down fails solely because of an
-   * exchange minimum order rule.
+   * that satisfies both venues and the caller's exact capital floor.
    */
   maximumQuantity?: number;
+
+  /**
+   * Optional exact target floor before shared-step normalization. This is
+   * used only with the explicit bounded round-up policy below; it can never
+   * override maximum quantity, market rules, depth or authenticated balance.
+   */
+  minimumQuantity?: number;
 
   allowMinimumOrderRoundUpWithinHardCap?: boolean;
 }
@@ -323,6 +329,22 @@ export class CrossExchangeExecutableQuantityNormalizer {
     const roundDownBlockers: string[] = [];
 
     if (
+      request.minimumQuantity !==
+        undefined &&
+      (
+        !Number.isFinite(
+          request.minimumQuantity,
+        ) ||
+        request.minimumQuantity <=
+          0
+      )
+    ) {
+      roundDownBlockers.push(
+        "The bounded normalization target floor must be a positive finite quantity.",
+      );
+    }
+
+    if (
       !Number.isFinite(
         roundDownQuantity,
       ) ||
@@ -379,16 +401,55 @@ export class CrossExchangeExecutableQuantityNormalizer {
             ),
           )
         : null;
+    const minimumTargetQuantity =
+      request.minimumQuantity !==
+        undefined &&
+      Number.isFinite(
+        request.minimumQuantity,
+      ) &&
+      request.minimumQuantity >
+        0
+        ? request.minimumQuantity
+        : null;
+    const targetTolerance =
+      minimumTargetQuantity !==
+        null
+        ? Math.max(
+            1e-12,
+            Math.abs(
+              minimumTargetQuantity,
+            ) *
+              1e-12,
+          )
+        : 1e-12;
+    const targetFloorNeedsCushion =
+      minimumTargetQuantity !==
+        null &&
+      roundDownQuantity +
+        targetTolerance <
+        minimumTargetQuantity;
+    const onlyRoundUpSafeBlockers =
+      roundDownBlockers.length ===
+        0 ||
+      roundDownBlockers.every(
+        isMinimumOrderRoundUpBlocker,
+      );
 
     if (
-      roundDownBlockers.length > 0 &&
       request.allowMinimumOrderRoundUpWithinHardCap === true &&
       maximumCushionQuantity !== null &&
-      roundDownBlockers.every(isMinimumOrderRoundUpBlocker)
+      onlyRoundUpSafeBlockers &&
+      (
+        roundDownBlockers.length >
+          0 ||
+        targetFloorNeedsCushion
+      )
     ) {
       const minimumRequiredQuantity = Math.max(
         commonIncrement,
         roundDownQuantity,
+        minimumTargetQuantity ??
+          0,
         ...evaluatedLegs.map((leg) => leg.minimumQuantity ?? 0),
         ...evaluatedLegs.map((leg) =>
           leg.minimumNotional !== null && leg.price > 0
@@ -445,7 +506,7 @@ export class CrossExchangeExecutableQuantityNormalizer {
         minimumPassingQuantity > maximumCushionQuantity + ceilingTolerance
       ) {
         roundDownBlockers.unshift(
-          `Minimum-order normalization requires shared quantity ${minimumPassingQuantity}, above the safe quantity ceiling ${maximumCushionQuantity}.`,
+          `Minimum-order/target-capital normalization requires shared quantity ${minimumPassingQuantity}, above the safe quantity ceiling ${maximumCushionQuantity}.`,
         );
       }
     }

@@ -238,6 +238,8 @@ export class StrategyOneLiveOnlyPreflightService {
             policy.maximumCapitalPerLegInr,
           allowMinimumOrderRoundUpWithinHardCap:
             true,
+          enforceRequestedCapitalFloorWithinHardCap:
+            true,
           fundingBoundary:
             "AUTHENTICATED_LIVE_READINESS",
           now,

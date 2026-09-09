@@ -320,10 +320,390 @@ function main(): void {
 
   testFreshMultiLevelMinimumOrderCushion();
 
+  testTargetCapitalSharedStepCushion();
+
   testFinalPaperStressGate();
 
   console.log("STRATEGY #1 FUNDED ROUTE SERVICE TEST PASSED.");
   console.log("Capital, depth, fee reserve, fresh two-leg balances, market rules and post-stress economics bounded quantity without enabling LIVE orders.");
+}
+
+function testTargetCapitalSharedStepCushion(): void {
+  const market =
+    "WAVESUSDT";
+  const balances =
+    new Map<string, ExchangeBalanceSnapshot>();
+  const capabilities =
+    new Map<string, ExchangeMarketCapability>();
+  const books =
+    new Map<string, OrderBook>();
+
+  for (
+    const exchange
+    of [
+      "coindcx",
+      "bybit",
+    ]
+  ) {
+    capabilities.set(
+      exchange,
+      {
+        ...capability(
+          exchange,
+        ),
+        market,
+        baseAsset:
+          "WAVES",
+        quantity: {
+          minimumQuantity:
+            0.01,
+          maximumQuantity:
+            100_000,
+          quantityStep:
+            0.01,
+          quantityPrecision:
+            2,
+        },
+        notional: {
+          minimumNotional:
+            1,
+          maximumNotional:
+            null,
+        },
+      },
+    );
+  }
+
+  setBalance(
+    balances,
+    "coindcx",
+    "USDT",
+    58.67986773173114,
+  );
+  setBalance(
+    balances,
+    "bybit",
+    "WAVES",
+    19.7764,
+  );
+
+  books.set(
+    `coindcx:${market}`,
+    {
+      exchange:
+        "coindcx",
+      market,
+      bids: [
+        {
+          price:
+            0.3141,
+          quantity:
+            100,
+        },
+      ],
+      asks: [
+        {
+          price:
+            0.3142,
+          quantity:
+            100,
+        },
+      ],
+      timestamp:
+        NOW -
+        50,
+    },
+  );
+  books.set(
+    `bybit:${market}`,
+    {
+      exchange:
+        "bybit",
+      market,
+      bids: [
+        {
+          price:
+            0.3189,
+          quantity:
+            100,
+        },
+      ],
+      asks: [
+        {
+          price:
+            0.319,
+          quantity:
+            100,
+        },
+      ],
+      timestamp:
+        NOW -
+        40,
+    },
+  );
+
+  const service =
+    new StrategyOneFundedRouteService({
+      getCapability: (
+        exchange,
+      ) =>
+        capabilities.get(
+          exchange,
+        ) ??
+        null,
+      getBalance: (
+        exchange,
+        asset,
+      ) =>
+        balances.get(
+          `${exchange}:${asset}`,
+        ) ??
+        null,
+      getSynchronizationReport: () => ({
+        ...synchronizationReport(
+          "SYNCHRONIZED",
+        ),
+        results: [
+          "coindcx",
+          "bybit",
+        ].map(
+          (
+            exchange,
+          ) => ({
+            exchange:
+              exchange as "coindcx" | "bybit",
+            status:
+              "SYNCHRONIZED" as const,
+            synchronizedAt:
+              NOW,
+            synchronizedBalances:
+              1,
+            reasons:
+              [],
+          }),
+        ),
+      }),
+      convertInrToAsset: () => ({
+        targetQuantity:
+          0.3142 *
+          19.1824,
+      }),
+      getTakerFeePercent: () =>
+        0.1,
+      getOrderBook: (
+        exchange,
+        requestedMarket,
+      ) =>
+        books.get(
+          `${exchange}:${requestedMarket}`,
+        ) ??
+        null,
+      normalizeQuantity: (
+        request,
+      ) =>
+        crossExchangeExecutableQuantityNormalizer
+          .normalize(
+            request,
+          ),
+    });
+  const base =
+    opportunity(
+      "waves-target-floor",
+      19.18,
+    );
+  const funded =
+    service.evaluate({
+      opportunity: {
+        ...base,
+        pair: {
+          market,
+          buy: {
+            ...base.pair.buy,
+            exchange:
+              "coindcx",
+            market,
+            bestAskPrice:
+              0.3142,
+            bestAskQty:
+              100,
+            timestamp:
+              NOW -
+              50,
+          },
+          sell: {
+            ...base.pair.sell,
+            exchange:
+              "bybit",
+            market,
+            bestBidPrice:
+              0.3189,
+            bestBidQty:
+              100,
+            timestamp:
+              NOW -
+              40,
+          },
+        },
+        buyPrice:
+          0.3142,
+        sellPrice:
+          0.3189,
+        buyAvailableQty:
+          100,
+        sellAvailableQty:
+          100,
+        availableExecutableQty:
+          100,
+        executableQty:
+          19.18,
+        quoteAsset:
+          "USDT",
+        timestamp:
+          NOW -
+          40,
+      },
+      requestedCapitalInr:
+        600,
+      maximumCapitalPerLegInr:
+        1_000,
+      allowMinimumOrderRoundUpWithinHardCap:
+        true,
+      enforceRequestedCapitalFloorWithinHardCap:
+        true,
+      now:
+        NOW,
+    });
+
+  assert.equal(
+    funded.state,
+    "FUNDED",
+    `Shared-step target-floor cushion should fund: ${JSON.stringify(funded.blockers)}`,
+  );
+  assert.equal(
+    funded.executableQuantity,
+    19.19,
+  );
+  assert.equal(
+    funded.minimumOrderCushionUsed,
+    true,
+  );
+  assert.equal(
+    funded.buyFunding.sufficient,
+    true,
+  );
+  assert.equal(
+    funded.sellFunding.sufficient,
+    true,
+  );
+  assert.ok(
+    (
+      funded.estimatedExecutableCapitalInr ??
+      0
+    ) >=
+      600,
+  );
+  assert.ok(
+    (
+      funded.estimatedBuyRequirementInr ??
+      Number.POSITIVE_INFINITY
+    ) <=
+      1_000,
+  );
+
+  setBalance(
+    balances,
+    "bybit",
+    "WAVES",
+    19.185,
+  );
+  const balanceCeilingBlocked =
+    service.evaluate({
+      opportunity: {
+        ...fundedOpportunity(
+          base,
+          market,
+        ),
+        id:
+          "waves-target-floor-balance-ceiling",
+      },
+      requestedCapitalInr:
+        600,
+      maximumCapitalPerLegInr:
+        1_000,
+      allowMinimumOrderRoundUpWithinHardCap:
+        true,
+      enforceRequestedCapitalFloorWithinHardCap:
+        true,
+      now:
+        NOW,
+    });
+  assert.equal(
+    balanceCeilingBlocked.state,
+    "BLOCKED",
+  );
+  assert.match(
+    balanceCeilingBlocked.blockers.join(
+      " ",
+    ),
+    /target-capital normalization.*safe quantity ceiling/i,
+  );
+}
+
+function fundedOpportunity(
+  base:
+    ArbitrageOpportunity,
+  market:
+    string,
+): ArbitrageOpportunity {
+  return {
+    ...base,
+    pair: {
+      market,
+      buy: {
+        ...base.pair.buy,
+        exchange:
+          "coindcx",
+        market,
+        bestAskPrice:
+          0.3142,
+        bestAskQty:
+          100,
+        timestamp:
+          NOW -
+          50,
+      },
+      sell: {
+        ...base.pair.sell,
+        exchange:
+          "bybit",
+        market,
+        bestBidPrice:
+          0.3189,
+        bestBidQty:
+          100,
+        timestamp:
+          NOW -
+          40,
+      },
+    },
+    buyPrice:
+      0.3142,
+    sellPrice:
+      0.3189,
+    buyAvailableQty:
+      100,
+    sellAvailableQty:
+      100,
+    availableExecutableQty:
+      100,
+    executableQty:
+      19.18,
+    quoteAsset:
+      "USDT",
+    timestamp:
+      NOW -
+      40,
+  };
 }
 
 function testFreshMultiLevelMinimumOrderCushion(): void {

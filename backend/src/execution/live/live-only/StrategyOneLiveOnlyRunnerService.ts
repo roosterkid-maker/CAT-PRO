@@ -36,6 +36,40 @@ import {
   strategyOneLiveOnlyAuthorityService,
 } from "./StrategyOneLiveOnlyAuthorityService";
 
+import {
+  strategyOneActionTimeBookRefreshService,
+  type StrategyOneActionTimeBookRefreshRoute,
+  type StrategyOneActionTimeBookRefreshResult,
+  type StrategyOneAuthorizedFinalBookRefreshResult,
+} from "../tiny-live/StrategyOneActionTimeBookRefreshService";
+
+export interface StrategyOneLiveOnlyRunnerDependencies {
+  runtimeEnabled(): boolean;
+  getPolicy(): ReturnType<typeof getLiveOnlyRuntimePolicy>;
+  subscribe(
+    listener: (snapshot: OpportunitySnapshot) => void,
+  ): () => void;
+  refreshActionCandidate(
+    input: StrategyOneActionTimeBookRefreshRoute,
+  ): Promise<StrategyOneActionTimeBookRefreshResult>;
+  authorize(
+    opportunityId: string,
+    now: number,
+  ): {
+    readonly id: string;
+  };
+  refreshAuthorizedFinalBooks(input: {
+    readonly market: string;
+    readonly buyExchange: string;
+    readonly sellExchange: string;
+  }): Promise<StrategyOneAuthorizedFinalBookRefreshResult>;
+  execute(
+    opportunity: ArbitrageOpportunity,
+    authorityId: string,
+  ): Promise<ArbitrageLiveExecutionResult>;
+  now(): number;
+}
+
 export interface StrategyOneLiveOnlyAttempt {
   readonly opportunityId: string;
   readonly routeKey: string;
@@ -73,6 +107,66 @@ const DEFAULT_FILE =
 const MAXIMUM_ATTEMPT_HISTORY =
   500;
 
+const DEFAULT_DEPENDENCIES:
+  StrategyOneLiveOnlyRunnerDependencies = {
+  runtimeEnabled:
+    isLiveOnlyRuntimeEnabled,
+  getPolicy:
+    getLiveOnlyRuntimePolicy,
+  subscribe: (
+    listener,
+  ) =>
+    opportunityService
+      .subscribeToOpportunitySnapshots(
+        listener,
+      ),
+  refreshActionCandidate: (
+    input,
+  ) =>
+    strategyOneActionTimeBookRefreshService
+      .refresh(
+        input,
+      ),
+  authorize: (
+    opportunityId,
+    now,
+  ) =>
+    strategyOneLiveOnlyAuthorityService
+      .authorize(
+        opportunityId,
+        now,
+      ),
+  refreshAuthorizedFinalBooks: (
+    input,
+  ) =>
+    strategyOneActionTimeBookRefreshService
+      .refreshForAuthorizedAttempt(
+        input,
+      ),
+  execute: (
+    opportunity,
+    authorityId,
+  ) =>
+    arbitrageExecutionCoordinator
+      .execute(
+        opportunity,
+        {
+          actionAuthorityId:
+            authorityId,
+          allowTinyLiveReviewCandidate:
+            false,
+          timeoutMs:
+            3_000,
+          pollingIntervalMs:
+            100,
+          cancelOnTimeout:
+            true,
+        },
+      ),
+  now:
+    Date.now,
+};
+
 /**
  * Standing Strategy #1 LIVE-only runner. Process-level explicit confirmation
  * replaces PAPER readiness and per-route Tiny-LIVE arm/lease controls. Every
@@ -80,6 +174,9 @@ const MAXIMUM_ATTEMPT_HISTORY =
  * three-second authority before the existing journaled two-leg coordinator.
  */
 export class StrategyOneLiveOnlyRunnerService {
+  private readonly dependencies:
+    StrategyOneLiveOnlyRunnerDependencies;
+
   private readonly store:
     JsonlSnapshotStore<PersistedSnapshot>;
 
@@ -117,7 +214,14 @@ export class StrategyOneLiveOnlyRunnerService {
   constructor(
     filePath =
       DEFAULT_FILE,
+    dependencies:
+      Partial<StrategyOneLiveOnlyRunnerDependencies> = {},
   ) {
+    this.dependencies = {
+      ...DEFAULT_DEPENDENCIES,
+      ...dependencies,
+    };
+
     this.store =
       new JsonlSnapshotStore({
         filePath,
@@ -163,14 +267,15 @@ export class StrategyOneLiveOnlyRunnerService {
   start(): void {
     if (
       this.unsubscribe ||
-      !isLiveOnlyRuntimeEnabled()
+      !this.dependencies
+        .runtimeEnabled()
     ) {
       return;
     }
 
     this.unsubscribe =
-      opportunityService
-        .subscribeToOpportunitySnapshots(
+      this.dependencies
+        .subscribe(
           (
             snapshot,
           ) => {
@@ -206,10 +311,12 @@ export class StrategyOneLiveOnlyRunnerService {
 
   getDiagnostics(
     now =
-      Date.now(),
+      this.dependencies
+        .now(),
   ) {
     const policy =
-      getLiveOnlyRuntimePolicy();
+      this.dependencies
+        .getPolicy();
 
     return freeze({
       schemaVersion:
@@ -217,7 +324,8 @@ export class StrategyOneLiveOnlyRunnerService {
       generatedAt:
         now,
       runtimeEnabled:
-        isLiveOnlyRuntimeEnabled(),
+        this.dependencies
+          .runtimeEnabled(),
       running:
         this.unsubscribe !==
         null,
@@ -282,7 +390,7 @@ export class StrategyOneLiveOnlyRunnerService {
     });
   }
 
-  private async observeSnapshot(
+  async observeSnapshot(
     snapshot:
       OpportunitySnapshot,
   ): Promise<void> {
@@ -292,15 +400,18 @@ export class StrategyOneLiveOnlyRunnerService {
     if (
       this.inFlight ||
       this.haltedReason ||
-      !isLiveOnlyRuntimeEnabled()
+      !this.dependencies
+        .runtimeEnabled()
     ) {
       return;
     }
 
     const now =
-      Date.now();
+      this.dependencies
+        .now();
     const policy =
-      getLiveOnlyRuntimePolicy();
+      this.dependencies
+        .getPolicy();
     const candidates =
       snapshot.opportunities
         .filter(
@@ -349,16 +460,21 @@ export class StrategyOneLiveOnlyRunnerService {
     let authorityId:
       string | null =
       null;
+    let actionCandidate =
+      candidate;
 
     try {
+      let refresh:
+        StrategyOneActionTimeBookRefreshResult;
+
       try {
-        authorityId =
-          strategyOneLiveOnlyAuthorityService
-            .authorize(
-              candidate.id,
-              now,
-            )
-            .id;
+        refresh =
+          await this.dependencies
+            .refreshActionCandidate(
+              actionTimeRefreshRequest(
+                candidate,
+              ),
+            );
       } catch (
         error:
           unknown
@@ -372,7 +488,96 @@ export class StrategyOneLiveOnlyRunnerService {
           startedAt:
             now,
           completedAt:
-            Date.now(),
+            this.dependencies
+              .now(),
+          authorityId:
+            null,
+          status:
+            "AUTHORIZATION_BLOCKED",
+          orderSubmissionMayHaveOccurred:
+            false,
+          recoveryRequired:
+            false,
+          possibleExposure:
+            false,
+          reason:
+            `ACTION_TIME_BOOK_REFRESH: ${message(error)}`,
+        });
+
+        return;
+      }
+
+      if (
+        refresh.state !==
+          "REFRESHED" ||
+        !refresh.opportunity ||
+        this.routeKey(
+          refresh.opportunity,
+        ) !==
+          routeKey
+      ) {
+        this.preflightBlocks +=
+          1;
+        this.record({
+          opportunity:
+            candidate,
+          routeKey,
+          startedAt:
+            now,
+          completedAt:
+            this.dependencies
+              .now(),
+          authorityId:
+            null,
+          status:
+            "AUTHORIZATION_BLOCKED",
+          orderSubmissionMayHaveOccurred:
+            false,
+          recoveryRequired:
+            false,
+          possibleExposure:
+            false,
+          reason:
+            `ACTION_TIME_BOOK_REFRESH: ${refresh.blocker ?? "Fresh exact-route opportunity is unavailable."}`,
+        });
+
+        return;
+      }
+
+      actionCandidate =
+        refresh.opportunity;
+      this.attemptedOpportunityIds
+        .add(
+          actionCandidate.id,
+        );
+
+      try {
+        const authorizationTime =
+          this.dependencies
+            .now();
+
+        authorityId =
+          this.dependencies
+            .authorize(
+              actionCandidate.id,
+              authorizationTime,
+            )
+            .id;
+      } catch (
+        error:
+          unknown
+      ) {
+        this.preflightBlocks +=
+          1;
+        this.record({
+          opportunity:
+            actionCandidate,
+          routeKey,
+          startedAt:
+            now,
+          completedAt:
+            this.dependencies
+              .now(),
           authorityId:
             null,
           status:
@@ -392,22 +597,87 @@ export class StrategyOneLiveOnlyRunnerService {
         return;
       }
 
+      let finalBookRefresh:
+        StrategyOneAuthorizedFinalBookRefreshResult;
+
+      try {
+        finalBookRefresh =
+          await this.dependencies
+            .refreshAuthorizedFinalBooks({
+              market:
+                actionCandidate.pair.market,
+              buyExchange:
+                actionCandidate.pair.buy.exchange,
+              sellExchange:
+                actionCandidate.pair.sell.exchange,
+            });
+      } catch (
+        error:
+          unknown
+      ) {
+        this.preflightBlocks +=
+          1;
+        this.record({
+          opportunity:
+            actionCandidate,
+          routeKey,
+          startedAt:
+            now,
+          completedAt:
+            this.dependencies
+              .now(),
+          authorityId,
+          status:
+            "AUTHORIZATION_BLOCKED",
+          orderSubmissionMayHaveOccurred:
+            false,
+          recoveryRequired:
+            false,
+          possibleExposure:
+            false,
+          reason:
+            `AUTHORIZED_FINAL_BOOK_REFRESH: ${message(error)}`,
+        });
+
+        return;
+      }
+
+      if (
+        finalBookRefresh.state !==
+          "REFRESHED"
+      ) {
+        this.preflightBlocks +=
+          1;
+        this.record({
+          opportunity:
+            actionCandidate,
+          routeKey,
+          startedAt:
+            now,
+          completedAt:
+            this.dependencies
+              .now(),
+          authorityId,
+          status:
+            "AUTHORIZATION_BLOCKED",
+          orderSubmissionMayHaveOccurred:
+            false,
+          recoveryRequired:
+            false,
+          possibleExposure:
+            false,
+          reason:
+            `AUTHORIZED_FINAL_BOOK_REFRESH: ${finalBookRefresh.blocker ?? "Fresh public depth is unavailable."}`,
+        });
+
+        return;
+      }
+
       const result =
-        await arbitrageExecutionCoordinator
+        await this.dependencies
           .execute(
-            candidate,
-            {
-              actionAuthorityId:
-                authorityId,
-              allowTinyLiveReviewCandidate:
-                false,
-              timeoutMs:
-                3_000,
-              pollingIntervalMs:
-                100,
-              cancelOnTimeout:
-                true,
-            },
+            actionCandidate,
+            authorityId,
           );
       const possibleExposure =
         result.possibleExposure ===
@@ -415,7 +685,7 @@ export class StrategyOneLiveOnlyRunnerService {
 
       this.record({
         opportunity:
-          candidate,
+          actionCandidate,
         routeKey,
         startedAt:
           now,
@@ -448,7 +718,8 @@ export class StrategyOneLiveOnlyRunnerService {
         this.haltedReason =
           `LIVE-only execution halted after ${result.status}: ${result.reasons.join(" | ")}`;
         this.persist(
-          Date.now(),
+          this.dependencies
+            .now(),
         );
       }
     } finally {
@@ -596,6 +867,44 @@ export class StrategyOneLiveOnlyRunnerService {
         ),
     });
   }
+}
+
+/**
+ * Rebuild the exact route from bounded public depth immediately before LIVE
+ * authorization. The refresh service validates and republishes both books;
+ * these timestamps are evidence floors only and are never fabricated.
+ */
+function actionTimeRefreshRequest(
+  candidate:
+    ArbitrageOpportunity,
+): StrategyOneActionTimeBookRefreshRoute {
+  const buyExchange =
+    candidate.pair.buy.exchange
+      .trim()
+      .toLowerCase();
+  const sellExchange =
+    candidate.pair.sell.exchange
+      .trim()
+      .toLowerCase();
+
+  return {
+    market:
+      candidate.pair.market
+        .trim()
+        .toUpperCase(),
+    buyExchange,
+    sellExchange,
+    refreshExchanges: [
+      buyExchange,
+      sellExchange,
+    ],
+    minimumBuyTimestamp:
+      candidate.pair.buy.timestamp,
+    minimumSellTimestamp:
+      candidate.pair.sell.timestamp,
+    purpose:
+      "live",
+  };
 }
 
 function isSnapshot(

@@ -108,6 +108,7 @@ export interface StrategyOneFundedRouteRequest {
   readonly requestedQuantity?: number;
   readonly fundingBoundary?: StrategyOneFundingBoundary;
   readonly allowMinimumOrderRoundUpWithinHardCap?: boolean;
+  readonly enforceRequestedCapitalFloorWithinHardCap?: boolean;
   readonly now?: number;
 }
 
@@ -126,6 +127,7 @@ export interface StrategyOneFundedRouteDependencies {
     buyCapability: ExchangeMarketCapability | null;
     sellCapability: ExchangeMarketCapability | null;
     allowIncompleteIncrementEvidenceForPaper?: boolean;
+    minimumQuantity?: number;
     maximumQuantity?: number;
     allowMinimumOrderRoundUpWithinHardCap?: boolean;
   }): CrossExchangeQuantityNormalizationReport;
@@ -400,6 +402,15 @@ export class StrategyOneFundedRouteService {
         sellCapability,
         allowIncompleteIncrementEvidenceForPaper:
           fundingBoundary === "ISOLATED_PAPER",
+        minimumQuantity:
+          fundingBoundary ===
+              "AUTHENTICATED_LIVE_READINESS" &&
+            minimumOrderCushionPolicyEnabled &&
+            request.enforceRequestedCapitalFloorWithinHardCap ===
+              true
+            ? capitalQuantity ??
+              undefined
+            : undefined,
         maximumQuantity: maximumNormalizationQuantity ?? undefined,
         allowMinimumOrderRoundUpWithinHardCap:
           fundingBoundary === "AUTHENTICATED_LIVE_READINESS" &&
