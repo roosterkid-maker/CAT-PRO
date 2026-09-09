@@ -47,12 +47,16 @@ import {
 } from "../../exchanges/zebpay/api/ZebPayCredentialsProvider";
 
 import {
-  giottusAccountApi,
-} from "../../exchanges/giottus/api/GiottusAccountApi";
-
-import {
   giottusCredentialsProvider,
 } from "../../exchanges/giottus/api/GiottusCredentialsProvider";
+
+import {
+  giottusAuthenticatedBalanceReadCoordinator,
+} from "../../exchanges/giottus/GiottusAuthenticatedBalanceReadCoordinator";
+
+import {
+  GiottusPrivateRateLimitError,
+} from "../../exchanges/giottus/api/GiottusPrivateRequestGovernor";
 
 import {
   executionAdapterVerificationService,
@@ -1327,14 +1331,20 @@ export class ExchangeBalanceSynchronizationService {
     }
 
     try {
-      const balances =
-        await giottusAccountApi
-          .getBalances(
+      const evidence =
+        await giottusAuthenticatedBalanceReadCoordinator
+          .readBalances(
             giottusCredentialsProvider
               .getCredentials(),
           );
+
+      const balances =
+        evidence
+          .balances;
+
       const synchronizedAt =
-        Date.now();
+        evidence
+          .observedAt;
 
       executionAdapterVerificationService
         .recordSuccess(
@@ -1373,16 +1383,28 @@ export class ExchangeBalanceSynchronizationService {
         synchronizedBalances:
           snapshots.length,
         reasons: [
-          `Synchronized ${snapshots.length} Giottus wallet balances in native asset units.`,
+          `Synchronized ${snapshots.length} Giottus wallet balances from ${evidence.source.toLowerCase()} authenticated evidence in native asset units.`,
         ],
       };
     } catch (error: unknown) {
-      executionAdapterVerificationService
-        .recordFailure(
-          exchange,
-          "SIGNED_BALANCE_READ",
-          error,
-        );
+      if (
+        error instanceof
+          GiottusPrivateRateLimitError
+      ) {
+        executionAdapterVerificationService
+          .recordTransientFailure(
+            exchange,
+            "SIGNED_BALANCE_READ",
+            error,
+          );
+      } else {
+        executionAdapterVerificationService
+          .recordFailure(
+            exchange,
+            "SIGNED_BALANCE_READ",
+            error,
+          );
+      }
 
       return {
         exchange,

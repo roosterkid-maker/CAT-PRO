@@ -19,6 +19,11 @@ import {
 } from "../api/GiottusPrivateHttpClient";
 
 import {
+  GiottusPrivateRateLimitError,
+  GiottusPrivateRequestGovernor,
+} from "../api/GiottusPrivateRequestGovernor";
+
+import {
   GiottusAuthenticatedReadVerificationService,
 } from "../GiottusAuthenticatedReadVerificationService";
 
@@ -202,9 +207,148 @@ async function main():
       diagnostics.openOrderRows === 0 &&
       diagnostics.partiallyFilledOpenOrders === 0 &&
       diagnostics.executionEligible === false &&
-      requestCount === 2 &&
+      requestCount === 1 &&
       nonGetRequestCount === 0,
-      "Giottus signed balance evidence must verify read access without granting execution.",
+      "Giottus verification must reuse the signed balance lane without issuing a parallel open-order probe or granting execution.",
+    );
+
+    let rateLimitedNetworkReads =
+      0;
+
+    let governorNow =
+      timestamp;
+
+    const requestGovernor =
+      new GiottusPrivateRequestGovernor(
+        {
+          minimumRequestIntervalMs:
+            0,
+          minimumRateLimitCooldownMs:
+            30_000,
+          maximumRateLimitCooldownMs:
+            300_000,
+        },
+        () => governorNow,
+      );
+
+    const rateLimitedClient =
+      new GiottusPrivateHttpClient(
+        async () => {
+          rateLimitedNetworkReads +=
+            1;
+
+          return new Response(
+            JSON.stringify({
+              code:
+                -1003,
+              msg:
+                "Too many requests.",
+            }),
+            {
+              status:
+                429,
+              headers: {
+                "Content-Type":
+                  "application/json",
+                "Retry-After":
+                  "2",
+              },
+            },
+          );
+        },
+        undefined,
+        () => governorNow,
+        undefined,
+        undefined,
+        requestGovernor,
+      );
+
+    let firstRateLimit:
+      unknown = null;
+
+    try {
+      await rateLimitedClient
+        .getSigned(
+          "/api/v1/wallet",
+          [],
+          provider
+            .getCredentials(),
+        );
+    } catch (error: unknown) {
+      firstRateLimit =
+        error;
+    }
+
+    let suppressedRateLimit:
+      unknown = null;
+
+    try {
+      await rateLimitedClient
+        .getSigned(
+          "/api/v1/wallet",
+          [],
+          provider
+            .getCredentials(),
+        );
+    } catch (error: unknown) {
+      suppressedRateLimit =
+        error;
+    }
+
+    const governorDiagnostics =
+      requestGovernor
+        .getDiagnostics();
+
+    assertCondition(
+      firstRateLimit instanceof
+        GiottusPrivateRateLimitError &&
+      firstRateLimit.retryAfterMs ===
+        2_000 &&
+      suppressedRateLimit instanceof
+        GiottusPrivateRateLimitError &&
+      suppressedRateLimit.locallySuppressed &&
+      rateLimitedNetworkReads ===
+        1 &&
+      governorDiagnostics.rateLimitResponses ===
+        1 &&
+      governorDiagnostics.locallySuppressedRequests ===
+        1 &&
+      governorDiagnostics.cooldownUntil ===
+        governorNow +
+          30_000,
+      "A Giottus 429 must open one shared bounded cooldown and suppress duplicate signed network probes.",
+    );
+
+    governorNow +=
+      30_001;
+
+    let authoritativeCooldownError:
+      unknown = null;
+
+    try {
+      await requestGovernor
+        .execute(
+          async () => {
+            throw new GiottusPrivateRateLimitError(
+              "Synthetic authoritative Giottus cooldown.",
+              600_000,
+            );
+          },
+        );
+    } catch (error: unknown) {
+      authoritativeCooldownError =
+        error;
+    }
+
+    assertCondition(
+      authoritativeCooldownError instanceof
+        GiottusPrivateRateLimitError &&
+      requestGovernor
+        .getDiagnostics()
+        .cooldownUntil ===
+        governorNow +
+          600_000,
+      "An exchange-declared Giottus Retry-After must never be shortened by the local exponential-backoff cap.",
     );
 
     console.log(

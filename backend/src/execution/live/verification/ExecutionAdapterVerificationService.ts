@@ -169,6 +169,65 @@ export class ExecutionAdapterVerificationService {
     );
   }
 
+  recordTransientFailure(
+    exchange: string,
+    method:
+      LiveExecutionAdapterVerificationMethod,
+    error: unknown,
+    attemptedAt:
+      number = this.now(),
+  ): void {
+    const normalizedExchange =
+      this.requireExchange(
+        exchange,
+      );
+
+    this.requireTimestamp(
+      attemptedAt,
+      "Verification attempt timestamp",
+    );
+
+    const previous =
+      this.evidence.get(
+        normalizedExchange,
+      );
+
+    if (
+      previous
+        ?.successful &&
+      previous.lastVerifiedAt !==
+        null &&
+      previous.verificationExpiresAt !==
+        null &&
+      attemptedAt <=
+        previous.verificationExpiresAt
+    ) {
+      this.evidence.set(
+        normalizedExchange,
+        {
+          ...previous,
+          lastVerificationAttemptAt:
+            attemptedAt,
+          verificationMethod:
+            method,
+          lastVerificationError:
+            this.sanitizeError(
+              error,
+            ),
+        },
+      );
+
+      return;
+    }
+
+    this.recordFailure(
+      normalizedExchange,
+      method,
+      error,
+      attemptedAt,
+    );
+  }
+
   recordNotConfigured(
     exchange: string,
   ): void {

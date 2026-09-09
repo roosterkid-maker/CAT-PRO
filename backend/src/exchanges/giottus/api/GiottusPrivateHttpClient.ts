@@ -16,6 +16,12 @@ import {
   type GiottusSigner,
 } from "./GiottusSigner";
 
+import {
+  GiottusPrivateRateLimitError,
+  giottusPrivateRequestGovernor,
+  type GiottusPrivateRequestGovernor,
+} from "./GiottusPrivateRequestGovernor";
+
 export type GiottusPrivateFetch = (
   input:
     string | URL,
@@ -36,6 +42,9 @@ export class GiottusPrivateHttpClient {
       number = GIOTTUS.REQUEST_TIMEOUT_MS,
     private readonly baseUrl:
       string = GIOTTUS.REST.BASE_URL,
+    private readonly requestGovernor:
+      GiottusPrivateRequestGovernor =
+      giottusPrivateRequestGovernor,
   ) {
     if (
       !Number.isSafeInteger(
@@ -50,6 +59,29 @@ export class GiottusPrivateHttpClient {
   }
 
   async getSigned<T>(
+    path: string,
+    query:
+      ReadonlyArray<
+        readonly [
+          string,
+          GiottusQueryValue,
+        ]
+      >,
+    credentials:
+      GiottusCredentials,
+  ): Promise<T> {
+    return this.requestGovernor
+      .execute(
+        () =>
+          this.executeSignedGet<T>(
+            path,
+            query,
+            credentials,
+          ),
+      );
+  }
+
+  private async executeSignedGet<T>(
     path: string,
     query:
       ReadonlyArray<
@@ -128,15 +160,102 @@ export class GiottusPrivateHttpClient {
               .slice(0, 300)
           : "invalid response payload";
 
-      throw new Error(
+      const sanitized =
         sensitiveDataRedactor
           .redactString(
             `Giottus authenticated GET ${path} failed: HTTP ${response.status}, code ${code}, ${message}.`,
+          );
+
+      if (
+        response.status ===
+          429 ||
+        code ===
+          "-1003"
+      ) {
+        throw new GiottusPrivateRateLimitError(
+          sanitized,
+          this.resolveRetryAfterMs(
+            response.headers,
           ),
+        );
+      }
+
+      throw new Error(
+        sanitized,
       );
     }
 
     return payload as T;
+  }
+
+  private resolveRetryAfterMs(
+    headers: Headers,
+  ): number {
+    const retryAfter =
+      headers.get(
+        "Retry-After",
+      )?.trim() ??
+      "";
+
+    const retryAfterSeconds =
+      Number(
+        retryAfter,
+      );
+
+    const retryAfterDate =
+      Date.parse(
+        retryAfter,
+      );
+
+    const resetSeconds =
+      Number(
+        headers.get(
+          "X-RateLimit-Reset",
+        ),
+      );
+
+    const now =
+      this.now();
+
+    const candidates = [
+      Number.isFinite(
+        retryAfterSeconds,
+      ) &&
+      retryAfterSeconds >=
+        0
+        ? retryAfterSeconds *
+          1_000
+        : Number.NaN,
+      Number.isFinite(
+        retryAfterDate,
+      )
+        ? retryAfterDate -
+          now
+        : Number.NaN,
+      Number.isFinite(
+        resetSeconds,
+      ) &&
+      resetSeconds >
+        0
+        ? resetSeconds *
+            1_000 -
+          now
+        : Number.NaN,
+    ].filter(
+      (value) =>
+        Number.isFinite(
+          value,
+        ) &&
+        value >
+          0,
+    );
+
+    return candidates.length >
+      0
+      ? Math.max(
+          ...candidates,
+        )
+      : GIOTTUS.PRIVATE_RATE_LIMIT_COOLDOWN_MS;
   }
 
   private isRecord(

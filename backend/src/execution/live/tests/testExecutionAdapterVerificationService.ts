@@ -73,7 +73,38 @@ async function main():
   );
 
   now +=
-    30_001;
+    1_000;
+
+  service.recordTransientFailure(
+    "coindcx",
+    "SIGNED_BALANCE_READ",
+    new Error(
+      "Synthetic temporary rate limit.",
+    ),
+    now,
+  );
+
+  const verifiedDuringTransientFailure =
+    service.getReadiness(
+      "coindcx",
+      true,
+    );
+
+  assertCondition(
+    verifiedDuringTransientFailure.verificationState ===
+      "VERIFIED" &&
+    verifiedDuringTransientFailure.authenticationVerified &&
+    verifiedDuringTransientFailure.lastVerifiedAt ===
+      verified.lastVerifiedAt &&
+    verifiedDuringTransientFailure.verificationExpiresAt ===
+      verified.verificationExpiresAt &&
+    verifiedDuringTransientFailure.lastVerificationAttemptAt ===
+      now,
+    "A transient read failure may preserve last-known-good verification only inside its original bounded TTL.",
+  );
+
+  now +=
+    29_001;
 
   const stale =
     service.getReadiness(

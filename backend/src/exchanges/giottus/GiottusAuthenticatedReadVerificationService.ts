@@ -11,7 +11,6 @@ import type {
 } from "../../execution/live/contracts/LiveExecutionAdapter";
 
 import {
-  giottusAccountApi,
   type GiottusBalance,
   type GiottusOpenOrder,
 } from "./api/GiottusAccountApi";
@@ -25,6 +24,16 @@ import {
 import {
   GIOTTUS,
 } from "./constants";
+
+import {
+  giottusAuthenticatedBalanceReadCoordinator,
+  type GiottusAuthenticatedBalanceReadDiagnostics,
+  type GiottusAuthenticatedBalanceReader,
+} from "./GiottusAuthenticatedBalanceReadCoordinator";
+
+import {
+  GiottusPrivateRateLimitError,
+} from "./api/GiottusPrivateRequestGovernor";
 
 export interface GiottusAuthenticatedReadApi {
   getBalances(
@@ -54,6 +63,9 @@ export interface GiottusAuthenticatedReadDiagnostics {
   lastError:
     string | null;
 
+  balanceRead:
+    GiottusAuthenticatedBalanceReadDiagnostics | null;
+
   executionEligible: false;
 
   blocker:
@@ -75,14 +87,17 @@ export interface GiottusAuthenticatedReadVerificationOptions {
 
   refreshIntervalMs?:
     number;
+
+  balanceReader?:
+    GiottusAuthenticatedBalanceReader;
 }
 
 export class GiottusAuthenticatedReadVerificationService {
-  private readonly api:
-    GiottusAuthenticatedReadApi;
-
   private readonly credentialsProvider:
     GiottusCredentialSource;
+
+  private readonly balanceReader:
+    GiottusAuthenticatedBalanceReader;
 
   private readonly now:
     () => number;
@@ -117,6 +132,8 @@ export class GiottusAuthenticatedReadVerificationService {
       null,
     lastError:
       null,
+    balanceRead:
+      null,
     executionEligible:
       false,
     blocker:
@@ -127,10 +144,6 @@ export class GiottusAuthenticatedReadVerificationService {
     options:
       GiottusAuthenticatedReadVerificationOptions = {},
   ) {
-    this.api =
-      options.api ??
-      giottusAccountApi;
-
     this.credentialsProvider =
       options.credentialsProvider ??
       giottusCredentialsProvider;
@@ -138,6 +151,29 @@ export class GiottusAuthenticatedReadVerificationService {
     this.now =
       options.now ??
       (() => Date.now());
+
+    this.balanceReader =
+      options.balanceReader ??
+      (
+        options.api
+          ? {
+              readBalances:
+                async (
+                  credentials,
+                ) => ({
+                  balances:
+                    await options.api!
+                      .getBalances(
+                        credentials,
+                      ),
+                  observedAt:
+                    this.now(),
+                  source:
+                    "REMOTE" as const,
+                }),
+            }
+          : giottusAuthenticatedBalanceReadCoordinator
+      );
 
     this.scheduleTimers =
       options.scheduleTimers ??
@@ -240,6 +276,10 @@ export class GiottusAuthenticatedReadVerificationService {
       credentialsConfigured:
         this.credentialsProvider
           .isConfigured(),
+      balanceRead:
+        this.balanceReader
+          .getDiagnostics?.() ??
+        null,
     };
   }
 
@@ -263,14 +303,23 @@ export class GiottusAuthenticatedReadVerificationService {
     }
 
     try {
-      const credentials = this.credentialsProvider.getCredentials();
-      const [balances, openOrders] = await Promise.all([
-        this.api.getBalances(credentials),
-        this.api.getOpenOrders(credentials),
-      ]);
+      const credentials =
+        this.credentialsProvider
+          .getCredentials();
+
+      const balanceEvidence =
+        await this.balanceReader
+          .readBalances(
+            credentials,
+          );
+
+      const balances =
+        balanceEvidence
+          .balances;
 
       const verifiedAt =
-        this.now();
+        balanceEvidence
+          .observedAt;
 
       this.diagnostics
         .balanceRows =
@@ -282,11 +331,6 @@ export class GiottusAuthenticatedReadVerificationService {
           (balance) =>
             balance.totalBalance > 0,
         ).length;
-
-      this.diagnostics.openOrderRows = openOrders.length;
-      this.diagnostics.partiallyFilledOpenOrders = openOrders.filter(
-        (order) => order.status === "PARTIALLY_FILLED",
-      ).length;
 
       this.diagnostics
         .lastBalanceReadAt =
@@ -316,13 +360,26 @@ export class GiottusAuthenticatedReadVerificationService {
         .lastError =
         sanitized;
 
-      executionAdapterVerificationService
-        .recordFailure(
-          GIOTTUS.NAME,
-          "SIGNED_BALANCE_READ",
-          sanitized,
-          this.now(),
-        );
+      if (
+        error instanceof
+          GiottusPrivateRateLimitError
+      ) {
+        executionAdapterVerificationService
+          .recordTransientFailure(
+            GIOTTUS.NAME,
+            "SIGNED_BALANCE_READ",
+            sanitized,
+            this.now(),
+          );
+      } else {
+        executionAdapterVerificationService
+          .recordFailure(
+            GIOTTUS.NAME,
+            "SIGNED_BALANCE_READ",
+            sanitized,
+            this.now(),
+          );
+      }
 
       throw error;
     }
