@@ -3,10 +3,10 @@ import {
 } from "node:crypto";
 
 import {
+  createReadStream,
   existsSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   renameSync,
   statSync,
   writeFileSync,
@@ -151,8 +151,9 @@ for (
       source,
     );
   const fileEvidence =
-    files.map(
-      (file) => ({
+    await Promise.all(
+      files.map(
+        async (file) => ({
         path:
           relative(
             source,
@@ -162,10 +163,11 @@ for (
             file,
           ),
         sha256:
-          sha256(
+          await sha256(
             file,
           ),
-      }),
+        }),
+      ),
     );
 
   mkdirSync(
@@ -344,15 +346,40 @@ function listFiles(
 function sha256(
   path,
 ) {
-  return createHash(
-    "sha256",
-  )
-    .update(
-      readFileSync(
-        path,
-      ),
-    )
-    .digest(
-      "hex",
-    );
+  return new Promise(
+    (
+      resolveHash,
+      rejectHash,
+    ) => {
+      const hash =
+        createHash(
+          "sha256",
+        );
+      const stream =
+        createReadStream(
+          path,
+        );
+
+      stream.on(
+        "data",
+        (chunk) =>
+          hash.update(
+            chunk,
+          ),
+      );
+      stream.on(
+        "error",
+        rejectHash,
+      );
+      stream.on(
+        "end",
+        () =>
+          resolveHash(
+            hash.digest(
+              "hex",
+            ),
+          ),
+      );
+    },
+  );
 }
