@@ -182,7 +182,7 @@ async function main():
 
   assertCondition(
     report.version ===
-      "19.28" &&
+      "20.0" &&
       report.targetExchangeCount ===
         5 &&
       report.exchanges.length ===
@@ -258,6 +258,30 @@ async function main():
         .paperEligibleMarkets ===
         3,
     "ZebPay PAPER eligibility must be evidence-derived without changing five-exchange LIVE readiness or exposing private execution capability.",
+  );
+
+  assertCondition(
+    report.foundationExchangeCount ===
+      3 &&
+      report.foundationExchanges.length ===
+        3 &&
+      report.foundationExchanges
+        .map(
+          (exchange) =>
+            exchange.exchange,
+        )
+        .join(
+          ",",
+        ) ===
+        "giottus,mudrex,bitbns" &&
+      report.foundationExchanges.every(
+        (exchange) =>
+          !exchange.marketDataAdapterImplemented &&
+          !exchange.authenticatedReadImplemented &&
+          !exchange.orderAdapterImplemented &&
+          !exchange.liveExecutionEnabled,
+      ),
+    "Giottus, Mudrex and Bitbns must remain visible, fail-closed integration foundations without inflating the proven fleet.",
   );
 
   const bybit =

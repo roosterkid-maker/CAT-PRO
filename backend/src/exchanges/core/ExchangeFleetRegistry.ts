@@ -36,9 +36,52 @@ export type CatProTargetExchange =
 export type CatProObservationExchange =
   "zebpay";
 
+export const CAT_PRO_FOUNDATION_EXCHANGES = [
+  "giottus",
+  "mudrex",
+  "bitbns",
+] as const;
+
+export type CatProFoundationExchange =
+  typeof CAT_PRO_FOUNDATION_EXCHANGES[number];
+
 export type CatProFleetExchange =
   | CatProTargetExchange
   | CatProObservationExchange;
+
+export interface ExchangeFoundationCapability {
+  readonly exchange:
+    CatProFoundationExchange;
+
+  readonly displayName: string;
+
+  readonly officialDocumentationUrl: string;
+
+  readonly documentedProduct:
+    | "SPOT"
+    | "FUTURES"
+    | "LEGACY_SPOT_CLIENT";
+
+  readonly requiredCredentialVariables:
+    readonly string[];
+
+  readonly credentialsConfigured: boolean;
+
+  readonly marketDataAdapterImplemented: false;
+
+  readonly authenticatedReadImplemented: false;
+
+  readonly orderAdapterImplemented: false;
+
+  readonly liveExecutionEnabled: false;
+
+  readonly readinessState:
+    | "CREDENTIALS_PENDING"
+    | "SPOT_CONTRACT_REVIEW_REQUIRED";
+
+  readonly blockers:
+    readonly string[];
+}
 
 export type ExchangeCapabilityImplementationState =
   | "IMPLEMENTED"
@@ -121,7 +164,7 @@ export interface ExchangeFleetCapability {
 export interface ExchangeFleetCapabilityReport {
   generatedAt: number;
 
-  version: "19.28";
+  version: "20.0";
 
   targetExchangeCount: 5;
 
@@ -158,6 +201,11 @@ export interface ExchangeFleetCapabilityReport {
 
     paperEligibleMarkets: number;
   };
+
+  foundationExchangeCount: 3;
+
+  foundationExchanges:
+    ExchangeFoundationCapability[];
 
   notes: string[];
 }
@@ -293,6 +341,61 @@ const OBSERVATION_DEFINITIONS:
 
     marketDataImplemented:
       true,
+  },
+] as const;
+
+const FOUNDATION_DEFINITIONS:
+  readonly Omit<
+    ExchangeFoundationCapability,
+    | "credentialsConfigured"
+    | "marketDataAdapterImplemented"
+    | "authenticatedReadImplemented"
+    | "orderAdapterImplemented"
+    | "liveExecutionEnabled"
+    | "readinessState"
+    | "blockers"
+  >[] = [
+  {
+    exchange:
+      "giottus",
+    displayName:
+      "Giottus",
+    officialDocumentationUrl:
+      "https://api.giottus.com/docs/",
+    documentedProduct:
+      "SPOT",
+    requiredCredentialVariables: [
+      "GIOTTUS_API_KEY",
+      "GIOTTUS_API_SECRET",
+    ],
+  },
+  {
+    exchange:
+      "mudrex",
+    displayName:
+      "Mudrex",
+    officialDocumentationUrl:
+      "https://docs.trade.mudrex.com/docs/overview",
+    documentedProduct:
+      "FUTURES",
+    requiredCredentialVariables: [
+      "MUDREX_API_KEY",
+      "MUDREX_API_SECRET",
+    ],
+  },
+  {
+    exchange:
+      "bitbns",
+    displayName:
+      "Bitbns",
+    officialDocumentationUrl:
+      "https://github.com/bitbns-official/node-bitbns-api",
+    documentedProduct:
+      "LEGACY_SPOT_CLIENT",
+    requiredCredentialVariables: [
+      "BITBNS_API_KEY",
+      "BITBNS_API_SECRET",
+    ],
   },
 ] as const;
 
@@ -515,12 +618,70 @@ export class ExchangeFleetRegistry {
             0,
       ).length;
 
+    const foundationExchanges =
+      FOUNDATION_DEFINITIONS.map(
+        (definition) => {
+          const credentialsConfigured =
+            definition.requiredCredentialVariables
+              .every(
+                (variable) =>
+                  Boolean(
+                    process.env[variable]
+                      ?.trim(),
+                  ),
+              );
+          const spotContractReviewRequired =
+            definition.documentedProduct !==
+              "SPOT";
+
+          return {
+            ...definition,
+            credentialsConfigured,
+            marketDataAdapterImplemented:
+              false as const,
+            authenticatedReadImplemented:
+              false as const,
+            orderAdapterImplemented:
+              false as const,
+            liveExecutionEnabled:
+              false as const,
+            readinessState:
+              spotContractReviewRequired
+                ? "SPOT_CONTRACT_REVIEW_REQUIRED" as const
+                : "CREDENTIALS_PENDING" as const,
+            blockers: [
+              "CAT PRO market-data, market-rule, authenticated-read and order adapters have not been implemented or proven yet.",
+              ...(
+                credentialsConfigured
+                  ? []
+                  : [
+                      `Credentials pending: ${definition.requiredCredentialVariables.join(
+                        " + ",
+                      )}.`,
+                    ]
+              ),
+              ...(
+                spotContractReviewRequired
+                  ? [
+                      definition.documentedProduct ===
+                        "FUTURES"
+                        ? "The current official contract is a futures API, so it cannot be inserted into CAT PRO spot arbitrage without a separately verified spot contract."
+                        : "The official Bitbns client is legacy evidence; the current production Spot API contract must be revalidated before implementation.",
+                    ]
+                  : []
+              ),
+              "No market-data connection, balance read, fund movement or order authority is granted by this foundation record.",
+            ],
+          } satisfies ExchangeFoundationCapability;
+        },
+      );
+
     return {
       generatedAt:
         Date.now(),
 
       version:
-        "19.28",
+        "20.0",
 
       targetExchangeCount:
         5,
@@ -600,6 +761,11 @@ export class ExchangeFleetRegistry {
           observationPaperEligibleMarkets,
       },
 
+      foundationExchangeCount:
+        3,
+
+      foundationExchanges,
+
       notes: [
         "The five-exchange target fleet is explicit and authoritative.",
 
@@ -616,6 +782,8 @@ export class ExchangeFleetRegistry {
         "Runtime connectivity and verification fields are evidence-based and default fail-closed.",
 
         "LIVE execution and order submission remain disabled for every exchange.",
+
+        "Giottus, Mudrex and Bitbns are visible integration foundations only. They are excluded from opportunity generation and execution until their current product contract, credentials, rules, signed reads and full order lifecycle are independently implemented and verified.",
       ],
     };
   }

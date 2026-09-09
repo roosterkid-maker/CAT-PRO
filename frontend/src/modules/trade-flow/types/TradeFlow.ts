@@ -1,177 +1,155 @@
-export type TradeIntelligenceWindowId =
-  | "TODAY"
-  | "24H"
-  | "48H"
-  | "7D"
-  | "14D"
-  | "CUSTOM";
+export type LiveOnlyIntelligenceCheckState = "PASS" | "BLOCKED" | "NOT_EVALUATED";
 
-export interface TradeIntelligenceQuery {
-  window: TradeIntelligenceWindowId;
-  startAt?: number;
-  endAt?: number;
+export interface LiveOnlyIntelligencePolicyCheck {
+  key: string;
+  label: string;
+  state: LiveOnlyIntelligenceCheckState;
+  current: string;
+  required: string;
+  reason: string;
 }
 
-export interface TradeIntelligenceRouteRank {
-  rank: number;
-  routeKey: string;
-  market: string;
-  buyExchange: string;
-  sellExchange: string;
-  settlements: number;
-  successfulSettlements: number;
-  settlementSharePercent: number;
-  successRatePercent: number;
-  capitalTurnoverInr: number;
-  realizedPnlInr: number;
-  averagePnlInr: number;
-  deployableCashPnlInr: number;
-  feesInr: number;
-  tdsWithheldInr: number;
-  capitalEfficiencyPercent: number;
-  bestIstHour: number;
-  lastSettledAt: number;
-}
-
-export interface TradeIntelligenceMarketRank {
-  rank: number;
-  market: string;
-  baseAsset: string;
-  quoteAsset: string;
-  settlements: number;
-  successfulSettlements: number;
-  settlementSharePercent: number;
-  successRatePercent: number;
-  uniqueRoutes: number;
-  leadingBuyExchange: string;
-  leadingSellExchange: string;
-  capitalTurnoverInr: number;
-  realizedPnlInr: number;
-  averagePnlInr: number;
-  capitalEfficiencyPercent: number;
-  bestIstHour: number;
-  lastSettledAt: number;
-}
-
-export interface TradeIntelligenceExchangeRank {
-  rank: number;
+export interface LiveOnlyIntelligenceLegPlan {
   side: "BUY" | "SELL";
   exchange: string;
-  settlements: number;
-  settlementSharePercent: number;
-  uniqueMarkets: number;
-  capitalTurnoverInr: number;
-  associatedRoutePnlInr: number;
-  lastSettledAt: number;
+  asset: string;
+  price: number;
+  quantity: number | null;
+  requiredBalance: number | null;
+  availableBalance: number | null;
+  shortfall: number | null;
+  balanceSnapshotAgeMs: number | null;
+  maximumBalanceSnapshotAgeMs: number | null;
+  balanceSufficient: boolean;
+  explanation: string;
 }
 
-export interface TradeIntelligenceHourBucket {
-  hour: number;
-  label: string;
-  state: "DATA" | "ZERO" | "NO_DATA";
-  settlements: number;
-  successfulSettlements: number;
-  capitalTurnoverInr: number;
-  realizedPnlInr: number;
-  averagePnlInr: number;
+export interface LiveOnlyIntelligenceOpportunity {
+  opportunityId: string;
+  market: string;
+  route: string;
+  status: "READY_FOR_FINAL_EXECUTION" | "BLOCKED" | "ANALYTICAL_ONLY";
+  engineDecision: string;
+  netProfitPercent: number;
+  qualityScore: number;
+  generatedAt: number;
+  opportunityAgeMs: number;
+  requestedCapitalPerLegInr: number;
+  maximumCapitalPerLegInr: number;
+  estimatedExecutableCapitalInr: number | null;
+  estimatedBuyRequirementInr: number | null;
+  executionQuantity: number | null;
+  buy: LiveOnlyIntelligenceLegPlan;
+  sell: LiveOnlyIntelligenceLegPlan;
+  postStressNetProfitPercent: number | null;
+  postStressNetProfit: number | null;
+  blockers: string[];
+  whatWouldMakeExecutable: string[];
+  policyChecks: LiveOnlyIntelligencePolicyCheck[];
+  safety: {
+    reportIsReadOnly: true;
+    authorityGranted: false;
+    orderSubmitted: false;
+    finalLastLookStillRequired: true;
+  };
 }
 
-export interface TradeIntelligenceTradeDetail {
-  rank: number;
-  id: string;
-  settledAt: number;
+export interface LiveOnlyRuntimePolicy {
+  enabled: boolean;
+  minimumCapitalPerLegInr: number;
+  preferredCapitalPerLegInr: number;
+  maximumCapitalPerLegInr: number;
+  minimumCurrentNetProfitPercent: number;
+  minimumPostStressNetProfitPercent: number;
+  maximumOpportunityAgeMs: number;
+  routeCooldownMs: number;
+  maximumConcurrentTrades: number;
+  automaticFundMovementEnabled: boolean;
+}
+
+export interface LiveOnlyRuntimeDiagnostics {
+  runtimeEnabled: boolean;
+  running: boolean;
+  inFlight: boolean;
+  halted: boolean;
+  haltedReason: string | null;
+  snapshotsObserved: number;
+  candidatesObserved: number;
+  preflightBlocks: number;
+  attempts: number;
+  completed: number;
+}
+
+export interface LiveOnlyRecentAttempt {
+  opportunityId: string;
   market: string;
   buyExchange: string;
   sellExchange: string;
-  capitalInr: number;
-  quantity: number;
-  buyPrice: number;
-  sellPrice: number;
-  feesInr: number;
-  tdsWithheldInr: number;
-  realizedPnlInr: number;
-  deployableCashPnlInr: number;
-  returnPercent: number;
-  executionDurationMs: number;
-  evidenceBadge: "CREDIBLE_STRATEGY_1_PAPER";
+  netProfitPercent: number;
+  startedAt: number;
+  completedAt: number;
+  status: string;
+  orderSubmissionMayHaveOccurred: boolean;
+  recoveryRequired: boolean;
+  possibleExposure: boolean;
+  reason: string;
 }
 
-export interface StrategyOneTradeIntelligenceReport {
-  version: "154.0";
+export interface LiveOnlyCapitalManagerReport {
+  enabled: boolean;
+  sameExchangeEnabled: boolean;
+  crossExchangeEnabled: boolean;
+  maximumPerTransferUsdt: number;
+  maximumPerDaySameExchangeUsdt: number;
+  maximumPerDayCrossExchangeUsdt: number;
+  withdrawalWhitelistEntries: number;
+  dedicatedBinanceCredentialsConfigured: boolean;
+  runner?: {
+    running?: boolean;
+    halted?: boolean;
+    haltedReason?: string | null;
+  };
+}
+
+export interface ExchangeFoundationCapability {
+  exchange: "giottus" | "mudrex" | "bitbns";
+  displayName: string;
+  officialDocumentationUrl: string;
+  documentedProduct: "SPOT" | "FUTURES" | "LEGACY_SPOT_CLIENT";
+  requiredCredentialVariables: string[];
+  credentialsConfigured: boolean;
+  marketDataAdapterImplemented: false;
+  authenticatedReadImplemented: false;
+  orderAdapterImplemented: false;
+  liveExecutionEnabled: false;
+  readinessState: "CREDENTIALS_PENDING" | "SPOT_CONTRACT_REVIEW_REQUIRED";
+  blockers: string[];
+}
+
+export interface LiveOnlyIntelligenceReport {
+  schemaVersion: "1.0";
   generatedAt: number;
-  sourceRevision: number;
-  timezone: "Asia/Kolkata";
-  mode: "PAPER";
-  basis: "UNIQUE_CREDIBLE_CLOSED_STRATEGY_ONE_SETTLEMENTS";
-  window: {
-    id: TradeIntelligenceWindowId;
-    label: string;
-    startAt: number;
-    endAt: number;
-  };
-  evidence: {
-    storedPaperTrades: number;
-    attributedClosedStrategyOne: number;
-    uniqueStrategyOneSettlements: number;
-    credibleStrategyOneSettlements: number;
-    selectedCredibleSettlements: number;
-    exclusions: {
-      duplicateIdsIgnored: number;
-      distortedSettlements: number;
-      openOrFailed: number;
-      unattributedOrOtherStrategy: number;
-      missingSettlementEconomics: number;
-      syntheticDemos: 0;
-    };
-    syntheticDemoNote: string;
-  };
-  summary: {
-    settlements: number;
-    successfulSettlements: number;
-    negativeSettlements: number;
-    flatSettlements: number;
-    uniqueMarkets: number;
-    uniqueRoutes: number;
-    activeExchanges: number;
-    capitalTurnoverInr: number;
-    realizedPnlInr: number;
-    averagePnlInr: number;
-    medianPnlInr: number;
-    deployableCashPnlInr: number;
-    feesInr: number;
-    tdsWithheldInr: number;
-    successRatePercent: number;
-    capitalEfficiencyPercent: number;
-    lastSettledAt: number | null;
-  };
-  routes: TradeIntelligenceRouteRank[];
-  markets: TradeIntelligenceMarketRank[];
-  buyExchanges: TradeIntelligenceExchangeRank[];
-  sellExchanges: TradeIntelligenceExchangeRank[];
-  routeMatrix: TradeIntelligenceRouteRank[];
-  hourlyIst: TradeIntelligenceHourBucket[];
-  topSuccessfulTrades: TradeIntelligenceTradeDetail[];
-  presentation: {
-    noData: boolean;
-    liveEvidenceAvailable: false;
-    exchangePnlWarning: string;
-    turnoverDefinition: string;
-    refreshAfterMs: 30_000;
-    maximumDetailRows: 10;
-  };
+  sourceOpportunityCount: number;
+  displayedOpportunityCount: number;
+  truncated: boolean;
+  runtime: LiveOnlyRuntimeDiagnostics;
+  policy: LiveOnlyRuntimePolicy;
+  policyReference: LiveOnlyIntelligencePolicyCheck[];
+  capitalManager: LiveOnlyCapitalManagerReport;
+  opportunities: LiveOnlyIntelligenceOpportunity[];
+  recentAttempts: LiveOnlyRecentAttempt[];
+  exchangeFoundations: ExchangeFoundationCapability[];
   safety: {
     readOnly: true;
-    paperEvidenceOnly: true;
-    balancesRead: false;
+    externalRequestPerformed: false;
     balanceMutated: false;
     transferInitiated: false;
     withdrawalInitiated: false;
-    liveExecutionAllowed: false;
     orderSubmissionAllowed: false;
   };
 }
 
-export interface StrategyOneTradeIntelligenceResponse {
+export interface LiveOnlyIntelligenceResponse {
   success: boolean;
-  data: StrategyOneTradeIntelligenceReport;
+  data: LiveOnlyIntelligenceReport;
 }

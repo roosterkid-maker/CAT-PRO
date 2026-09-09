@@ -1639,6 +1639,61 @@ function FleetCapabilityMatrix({
         </div>
       </div>
 
+      <div className="mt-6 border-t border-border-default pt-5">
+        <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-warning">
+              Expansion foundations · {report.foundationExchangeCount ?? 0}
+            </p>
+            <h3 className="mt-1 text-lg font-bold text-text-primary">
+              Giottus, Mudrex and Bitbns — not execution ready
+            </h3>
+          </div>
+          <p className="max-w-xl text-xs leading-5 text-text-muted">
+            API keys alone will not activate these venues. Every adapter, rule,
+            signed read, clock and complete order/fill lifecycle must be built and proven first.
+          </p>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          {(report.foundationExchanges ?? []).map((exchange) => (
+            <article
+              key={exchange.exchange}
+              className="rounded-lg border border-warning/25 bg-warning/5 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-text-primary">{exchange.displayName}</p>
+                  <p className="mt-1 font-mono text-[10px] text-text-muted">
+                    {exchange.documentedProduct.replaceAll("_", " ")}
+                  </p>
+                </div>
+                <StatusBadge
+                  label={exchange.readinessState.replaceAll("_", " ")}
+                  status="warning"
+                />
+              </div>
+              <p className="mt-3 text-xs text-warning">
+                Credentials {exchange.credentialsConfigured ? "configured" : "pending"} · order adapter not implemented
+              </p>
+              <ul className="mt-3 space-y-1 text-[11px] leading-5 text-text-muted">
+                {exchange.blockers.map((blocker) => (
+                  <li key={blocker}>• {blocker}</li>
+                ))}
+              </ul>
+              <a
+                href={exchange.officialDocumentationUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-3 inline-block text-xs font-semibold text-brand hover:underline"
+              >
+                Official API documentation ↗
+              </a>
+            </article>
+          ))}
+        </div>
+      </div>
+
       <p className="mt-4 text-xs text-text-muted">
         Capability evidence generated {new Date(
           report.generatedAt,

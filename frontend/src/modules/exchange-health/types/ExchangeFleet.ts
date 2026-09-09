@@ -9,6 +9,11 @@ export type CatProFleetExchange =
   | CatProTargetExchange
   | "zebpay";
 
+export type CatProFoundationExchange =
+  | "giottus"
+  | "mudrex"
+  | "bitbns";
+
 export type ExchangeCapabilityImplementationState =
   | "IMPLEMENTED"
   | "DOCUMENTED_NOT_IMPLEMENTED";
@@ -79,7 +84,7 @@ export interface ExchangeFleetCapability {
 export interface ExchangeFleetCapabilityReport {
   generatedAt: number;
 
-  version: "19.28";
+  version: "20.0";
 
   targetExchangeCount: 5;
 
@@ -116,6 +121,23 @@ export interface ExchangeFleetCapabilityReport {
 
     paperEligibleMarkets: number;
   };
+
+  foundationExchangeCount: 3;
+
+  foundationExchanges: Array<{
+    exchange: CatProFoundationExchange;
+    displayName: string;
+    officialDocumentationUrl: string;
+    documentedProduct: "SPOT" | "FUTURES" | "LEGACY_SPOT_CLIENT";
+    requiredCredentialVariables: string[];
+    credentialsConfigured: boolean;
+    marketDataAdapterImplemented: false;
+    authenticatedReadImplemented: false;
+    orderAdapterImplemented: false;
+    liveExecutionEnabled: false;
+    readinessState: "CREDENTIALS_PENDING" | "SPOT_CONTRACT_REVIEW_REQUIRED";
+    blockers: string[];
+  }>;
 
   notes: string[];
 }

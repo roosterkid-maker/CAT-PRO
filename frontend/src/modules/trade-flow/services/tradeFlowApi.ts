@@ -1,27 +1,14 @@
-import {
-  api,
-} from "@/api/client";
+import { api } from "@/api/client";
 
-import type {
-  StrategyOneTradeIntelligenceResponse,
-  TradeIntelligenceQuery,
-} from "../types/TradeFlow";
+import type { LiveOnlyIntelligenceResponse } from "../types/TradeFlow";
 
-export async function fetchStrategyOneTradeIntelligence(
-  query: TradeIntelligenceQuery,
-): Promise<StrategyOneTradeIntelligenceResponse> {
-  const response =
-    await api.get<StrategyOneTradeIntelligenceResponse>(
-      "/api/strategies/strategy-one/trade-intelligence",
-      {
-        params: {
-          mode: "PAPER",
-          window: query.window,
-          startAt: query.startAt,
-          endAt: query.endAt,
-        },
-      },
-    );
+export async function fetchLiveOnlyIntelligence(
+  signal?: AbortSignal,
+): Promise<LiveOnlyIntelligenceResponse> {
+  const response = await api.get<LiveOnlyIntelligenceResponse>(
+    "/api/live-only/intelligence",
+    { signal },
+  );
 
   return response.data;
 }

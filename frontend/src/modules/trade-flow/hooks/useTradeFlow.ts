@@ -1,31 +1,14 @@
-import {
-  useQuery,
-} from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
-import {
-  fetchStrategyOneTradeIntelligence,
-} from "../services/tradeFlowApi";
+import { fetchLiveOnlyIntelligence } from "../services/tradeFlowApi";
 
-import type {
-  TradeIntelligenceQuery,
-} from "../types/TradeFlow";
-
-export function useStrategyOneTradeIntelligence(
-  query: TradeIntelligenceQuery,
-) {
+export function useLiveOnlyIntelligence() {
   return useQuery({
-    queryKey: [
-      "strategies",
-      "strategy-one",
-      "trade-intelligence",
-      query.window,
-      query.startAt ?? null,
-      query.endAt ?? null,
-    ],
-    queryFn: () => fetchStrategyOneTradeIntelligence(query),
-    refetchInterval: 30_000,
+    queryKey: ["live-only", "intelligence"],
+    queryFn: ({ signal }) => fetchLiveOnlyIntelligence(signal),
+    refetchInterval: 3_000,
     refetchIntervalInBackground: false,
-    staleTime: 15_000,
+    staleTime: 1_500,
     retry: 2,
   });
 }
