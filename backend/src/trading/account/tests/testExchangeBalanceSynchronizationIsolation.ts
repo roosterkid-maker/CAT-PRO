@@ -105,7 +105,7 @@ async function main():
 
   assertCondition(
     firstReport.successfulExchanges ===
-      5 &&
+      6 &&
       firstReport.failedExchanges ===
         1 &&
       firstUnoCoin?.status ===
@@ -121,7 +121,7 @@ async function main():
           "unocoin",
         ) &&
       !service.isSynchronizationInProgress(),
-    "One unresolved venue must time out without holding the six-venue synchronization cycle open.",
+    "One unresolved venue must time out without holding the seven-venue synchronization cycle open.",
   );
 
   const secondReport =
@@ -136,7 +136,7 @@ async function main():
 
   assertCondition(
     secondReport.successfulExchanges ===
-      5 &&
+      6 &&
       secondReport.failedExchanges ===
         1 &&
       calls.get(
@@ -178,7 +178,7 @@ async function main():
 
   assertCondition(
     recoveredReport.successfulExchanges ===
-      6 &&
+      7 &&
       recoveredReport.failedExchanges ===
         0 &&
       calls.get(

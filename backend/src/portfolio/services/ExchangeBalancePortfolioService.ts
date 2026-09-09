@@ -49,6 +49,12 @@ const EXCHANGES = [
     displayName:
       "ZebPay",
   },
+  {
+    exchange:
+      "giottus",
+    displayName:
+      "Giottus",
+  },
 ] as const satisfies readonly {
   exchange:
     SupportedBalanceExchange;

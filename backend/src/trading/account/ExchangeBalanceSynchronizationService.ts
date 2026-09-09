@@ -47,6 +47,14 @@ import {
 } from "../../exchanges/zebpay/api/ZebPayCredentialsProvider";
 
 import {
+  giottusAccountApi,
+} from "../../exchanges/giottus/api/GiottusAccountApi";
+
+import {
+  giottusCredentialsProvider,
+} from "../../exchanges/giottus/api/GiottusCredentialsProvider";
+
+import {
   executionAdapterVerificationService,
 } from "../../execution/live/verification/ExecutionAdapterVerificationService";
 
@@ -61,7 +69,8 @@ export type SupportedBalanceExchange =
   | "coindcx"
   | "coinswitch"
   | "unocoin"
-  | "zebpay";
+  | "zebpay"
+  | "giottus";
 
 export type ExchangeBalanceSynchronizationStatus =
   | "SYNCHRONIZED"
@@ -120,6 +129,7 @@ const BALANCE_EXCHANGES = [
   "coinswitch",
   "unocoin",
   "zebpay",
+  "giottus",
 ] as const satisfies readonly SupportedBalanceExchange[];
 
 const DEFAULT_MAXIMUM_EXCHANGE_DURATION_MS =
@@ -233,6 +243,9 @@ export class ExchangeBalanceSynchronizationService {
 
       case "zebpay":
         return this.synchronizeZebPay();
+
+      case "giottus":
+        return this.synchronizeGiottus();
 
       default:
         return this.assertNever(
@@ -484,6 +497,9 @@ export class ExchangeBalanceSynchronizationService {
 
       case "zebpay":
         return "ZebPay";
+
+      case "giottus":
+        return "Giottus";
 
       default:
         return this.assertNever(
@@ -1271,6 +1287,115 @@ export class ExchangeBalanceSynchronizationService {
           this.getErrorMessage(
             error,
             "ZebPay wallet balance synchronization failed.",
+          ),
+        ],
+      };
+    }
+  }
+
+  private async synchronizeGiottus():
+    Promise<ExchangeBalanceSynchronizationResult> {
+    const exchange:
+      SupportedBalanceExchange =
+      "giottus";
+
+    if (
+      !giottusCredentialsProvider
+        .isConfigured()
+    ) {
+      executionAdapterVerificationService
+        .recordNotConfigured(
+          exchange,
+        );
+      tradingAccountService
+        .removeExchangeBalances(
+          exchange,
+        );
+
+      return {
+        exchange,
+        status:
+          "NOT_CONFIGURED",
+        synchronizedAt:
+          null,
+        synchronizedBalances:
+          0,
+        reasons: [
+          "Giottus API credentials are not configured.",
+        ],
+      };
+    }
+
+    try {
+      const balances =
+        await giottusAccountApi
+          .getBalances(
+            giottusCredentialsProvider
+              .getCredentials(),
+          );
+      const synchronizedAt =
+        Date.now();
+
+      executionAdapterVerificationService
+        .recordSuccess(
+          exchange,
+          "SIGNED_BALANCE_READ",
+          synchronizedAt,
+        );
+
+      const snapshots:
+        ExchangeBalanceSnapshot[] =
+        balances.map(
+          (balance) => ({
+            exchange,
+            asset:
+              balance.asset,
+            availableBalance:
+              balance.freeBalance,
+            lockedBalance:
+              balance.lockedBalance,
+            totalBalance:
+              balance.totalBalance,
+            synchronizedAt,
+          }),
+        );
+
+      this.replaceExchangeBalances(
+        exchange,
+        snapshots,
+      );
+
+      return {
+        exchange,
+        status:
+          "SYNCHRONIZED",
+        synchronizedAt,
+        synchronizedBalances:
+          snapshots.length,
+        reasons: [
+          `Synchronized ${snapshots.length} Giottus wallet balances in native asset units.`,
+        ],
+      };
+    } catch (error: unknown) {
+      executionAdapterVerificationService
+        .recordFailure(
+          exchange,
+          "SIGNED_BALANCE_READ",
+          error,
+        );
+
+      return {
+        exchange,
+        status:
+          "FAILED",
+        synchronizedAt:
+          null,
+        synchronizedBalances:
+          0,
+        reasons: [
+          this.getErrorMessage(
+            error,
+            "Giottus wallet balance synchronization failed.",
           ),
         ],
       };
