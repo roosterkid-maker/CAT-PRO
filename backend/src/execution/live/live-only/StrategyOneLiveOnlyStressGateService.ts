@@ -41,6 +41,10 @@ export interface StrategyOneLiveOnlyStressReport {
   readonly sellFillPercent: number | null;
   readonly buyVwap: number | null;
   readonly sellVwap: number | null;
+  readonly buyTakerFeePercent: number | null;
+  readonly sellTakerFeePercent: number | null;
+  readonly buyFeeSurchargeMultiplier: number | null;
+  readonly sellFeeSurchargeMultiplier: number | null;
   readonly tradingFees: number | null;
   readonly statutoryCashWithholding: number | null;
   readonly safetyBuffer: number | null;
@@ -176,6 +180,18 @@ export class StrategyOneLiveOnlyStressGateService {
     let tradingFees:
       number | null =
       null;
+    let buyTakerFeePercent:
+      number | null =
+      null;
+    let sellTakerFeePercent:
+      number | null =
+      null;
+    let buyFeeSurchargeMultiplier:
+      number | null =
+      null;
+    let sellFeeSurchargeMultiplier:
+      number | null =
+      null;
     let statutoryCashWithholding:
       number | null =
       null;
@@ -284,6 +300,10 @@ export class StrategyOneLiveOnlyStressGateService {
             "LIVE-only exact-depth notionals are invalid.",
           );
         } else {
+          buyTakerFeePercent =
+            buyFeePercent;
+          sellTakerFeePercent =
+            sellFeePercent;
           const adverseRatio =
             ADVERSE_MOVE_RESERVE_PERCENT_PER_LEG /
             100;
@@ -305,6 +325,11 @@ export class StrategyOneLiveOnlyStressGateService {
               market,
               "SELL",
             );
+
+          buyFeeSurchargeMultiplier =
+            buyCashCost.tradingFeeSurchargeMultiplier;
+          sellFeeSurchargeMultiplier =
+            sellCashCost.tradingFeeSurchargeMultiplier;
 
           cashCostEvidenceIds.push(
             buyCashCost.evidenceId,
@@ -425,6 +450,10 @@ export class StrategyOneLiveOnlyStressGateService {
       sellFillPercent,
       buyVwap,
       sellVwap,
+      buyTakerFeePercent,
+      sellTakerFeePercent,
+      buyFeeSurchargeMultiplier,
+      sellFeeSurchargeMultiplier,
       tradingFees,
       statutoryCashWithholding,
       safetyBuffer,

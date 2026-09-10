@@ -15,6 +15,12 @@ import type {
   LiveOnlyRuntimePolicy,
 } from "../../../config/LiveOnlyRuntimePolicy";
 
+import {
+  LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO,
+  LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT,
+  LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES,
+} from "../../../config/LiveOnlyRuntimePolicy";
+
 import type {
   ExchangeFoundationCapability,
 } from "../../../exchanges/core/ExchangeFleetRegistry";
@@ -82,6 +88,11 @@ export interface LiveOnlyIntelligenceOpportunity {
   readonly sell: LiveOnlyIntelligenceLegPlan;
   readonly postStressNetProfitPercent: number | null;
   readonly postStressNetProfit: number | null;
+  readonly deployableCashPostStressNetProfitPercent: number | null;
+  readonly tradingFees: number | null;
+  readonly statutoryCashWithholding: number | null;
+  readonly buyTakerFeePercent: number | null;
+  readonly sellTakerFeePercent: number | null;
   readonly blockers: readonly string[];
   readonly whatWouldMakeExecutable: readonly string[];
   readonly policyChecks:
@@ -328,6 +339,16 @@ export class StrategyOneLiveOnlyIntelligenceService {
           null,
         postStressNetProfit:
           null,
+        deployableCashPostStressNetProfitPercent:
+          null,
+        tradingFees:
+          null,
+        statutoryCashWithholding:
+          null,
+        buyTakerFeePercent:
+          null,
+        sellTakerFeePercent:
+          null,
         blockers,
         whatWouldMakeExecutable: [
           "Implement and independently verify this exchange route's market rules, signed balances, fees, clock safety and complete order/fill lifecycle before adding it to the LIVE venue pool.",
@@ -418,6 +439,16 @@ export class StrategyOneLiveOnlyIntelligenceService {
           null,
         postStressNetProfit:
           null,
+        deployableCashPostStressNetProfitPercent:
+          null,
+        tradingFees:
+          null,
+        statutoryCashWithholding:
+          null,
+        buyTakerFeePercent:
+          null,
+        sellTakerFeePercent:
+          null,
         blockers: [
           reason,
         ],
@@ -500,6 +531,26 @@ export class StrategyOneLiveOnlyIntelligenceService {
       postStressNetProfit:
         preflight.stress
           ?.postStressNetProfit ??
+        null,
+      deployableCashPostStressNetProfitPercent:
+        preflight.stress
+          ?.deployableCashPostStressNetProfitPercent ??
+        null,
+      tradingFees:
+        preflight.stress
+          ?.tradingFees ??
+        null,
+      statutoryCashWithholding:
+        preflight.stress
+          ?.statutoryCashWithholding ??
+        null,
+      buyTakerFeePercent:
+        preflight.stress
+          ?.buyTakerFeePercent ??
+        null,
+      sellTakerFeePercent:
+        preflight.stress
+          ?.sellTakerFeePercent ??
         null,
       blockers,
       whatWouldMakeExecutable:
@@ -677,7 +728,40 @@ export class StrategyOneLiveOnlyIntelligenceService {
         `≥ ${preflight.capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(
           2,
         )}%`,
-        `Route-specific studied gate; baseline is ${policy.minimumCurrentNetProfitPercent.toFixed(2)}% and the hard adaptive floor is 0.20%.`,
+        `Route-specific studied gate; baseline is ${policy.minimumCurrentNetProfitPercent.toFixed(2)}% and the hard adaptive floor is ${preflight.capitalStudy.hardMinimumCurrentNetProfitPercent.toFixed(2)}%.`,
+      ),
+      check(
+        "price-ratio",
+        "Cross-exchange price integrity",
+        typeof preflight.crossExchangePriceRatio === "number" &&
+          Number.isFinite(preflight.crossExchangePriceRatio) &&
+          preflight.crossExchangePriceRatio >= 1 &&
+          preflight.crossExchangePriceRatio <=
+            LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO
+          ? "PASS"
+          : "BLOCKED",
+        typeof preflight.crossExchangePriceRatio !== "number" ||
+          !Number.isFinite(preflight.crossExchangePriceRatio)
+          ? "Unavailable"
+          : `${preflight.crossExchangePriceRatio.toFixed(4)}x`,
+        `≤ ${LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO.toFixed(2)}x absolute ceiling`,
+        "This absolute integrity ceiling rejects likely pair, decimal, stale-feed or venue-state mismatches.",
+      ),
+      check(
+        "suspicious-spread",
+        "Large-spread corroboration",
+        !preflight.suspiciousSpread ||
+          preflight.capitalStudy.capitalActionQualified
+          ? "PASS"
+          : "BLOCKED",
+        typeof preflight.grossSpreadPercent !== "number" ||
+          !Number.isFinite(preflight.grossSpreadPercent)
+          ? "Unavailable"
+          : `${preflight.grossSpreadPercent.toFixed(3)}% gross · ${preflight.capitalStudy.totalIndependentSamples} samples`,
+        `< ${LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT.toFixed(2)}% or ≥ ${LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES} independent samples`,
+        preflight.suspiciousSpread
+          ? "A large apparent gap is never treated as a jackpot; it needs five complete five-sample route-study cycles before exact preflight."
+          : "The route remains below the large-spread anomaly band.",
       ),
       check(
         "capital-study",
@@ -812,6 +896,29 @@ export class StrategyOneLiveOnlyIntelligenceService {
         depthEvidence
           ?.blockers[0] ??
           "Both legs must retain adequate real depth after quantity normalization.",
+      ),
+      check(
+        "fees",
+        "Exact taker-fee model",
+        preflight.stress?.buyTakerFeePercent !== null &&
+          preflight.stress?.buyTakerFeePercent !== undefined &&
+          preflight.stress?.sellTakerFeePercent !== null &&
+          preflight.stress?.sellTakerFeePercent !== undefined
+          ? "PASS"
+          : preflight.stress
+            ? "BLOCKED"
+            : "NOT_EVALUATED",
+        preflight.stress?.buyTakerFeePercent === null ||
+          preflight.stress?.buyTakerFeePercent === undefined ||
+          preflight.stress?.sellTakerFeePercent === null ||
+          preflight.stress?.sellTakerFeePercent === undefined
+          ? "Unavailable"
+          : `BUY ${preflight.stress.buyTakerFeePercent.toFixed(4)}% + SELL ${preflight.stress.sellTakerFeePercent.toFixed(4)}%`,
+        "Authenticated/published taker fee on both exact legs",
+        preflight.stress?.tradingFees === null ||
+          preflight.stress?.tradingFees === undefined
+          ? "The route cannot pass if either exact venue fee is unknown."
+          : `Exact stressed trading-fee amount is ${formatNumber(preflight.stress.tradingFees)} quote units; no maker fill is assumed.`,
       ),
       check(
         "post-stress-net",
@@ -962,6 +1069,62 @@ export class StrategyOneLiveOnlyIntelligenceService {
           2,
         )}%`,
         "The same hard floor must remain after statutory withholding, so headline profit cannot hide a shrinking exchange-wallet balance.",
+      ),
+      check(
+        "discovery-age",
+        "Discovery snapshot age",
+        "NOT_EVALUATED",
+        "Measured per current opportunity",
+        `≤ ${policy.maximumOpportunityAgeMs} ms`,
+        "The broad opportunity stage is capped at two seconds; LIVE action-time books still have the stricter 500 ms boundary below.",
+      ),
+      check(
+        "spread-anomaly",
+        "Large-spread anomaly policy",
+        "NOT_EVALUATED",
+        `Suspicious from ${LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT.toFixed(2)}%`,
+        `${LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES} fresh samples; absolute ratio ≤ ${LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO.toFixed(2)}x`,
+        "A fixed 1.01x cap would make a 1.30% net floor impossible. Large gaps therefore require five complete study cycles and still fail above the absolute integrity ceiling.",
+      ),
+      check(
+        "fee-formula",
+        "Trading-fee formula",
+        "NOT_EVALUATED",
+        "BUY stressed notional × BUY taker fee + SELL stressed notional × SELL taker fee",
+        "Both exact venue fees known; GST surcharge applied where evidenced",
+        "LIVE never assumes maker pricing. Unknown fee evidence blocks the stress gate.",
+      ),
+      check(
+        "stress-buffer-formula",
+        "Adverse-move reserve",
+        "NOT_EVALUATED",
+        "0.075% BUY + 0.075% SELL + 0.05% safety",
+        "0.20% total modeled reserve",
+        "BUY notional is stressed upward and SELL proceeds downward before the safety buffer and profit floors are tested.",
+      ),
+      check(
+        "liquidity-score-formula",
+        "Liquidity score definition",
+        "NOT_EVALUATED",
+        "min(100, executable quantity ÷ required quantity × 100)",
+        "100% exact two-leg depth at LIVE preflight",
+        "The discovery score is descriptive; LIVE independently walks both current books and rejects any partial quantity.",
+      ),
+      check(
+        "freshness-score-formula",
+        "Freshness score definition",
+        "NOT_EVALUATED",
+        "100 − (oldest quote age ÷ maximum age × 100)",
+        "Fresh discovery plus ≤500 ms exact action-time books",
+        "Score never substitutes for the hard BUY age, SELL age and cross-venue skew gates.",
+      ),
+      check(
+        "drawdown-formula",
+        "Profit drawdown definition",
+        "NOT_EVALUATED",
+        "max(0, (reference net − current net) ÷ reference net × 100)",
+        "≤35% against recent positive synchronized route history",
+        "The reference is the recent 75th-percentile net when at least three samples exist; otherwise the best valid sample.",
       ),
       check(
         "book-age",

@@ -188,6 +188,8 @@ export default function TradeFlowDashboard() {
               key={opportunity.opportunityId}
               opportunity={opportunity}
               rank={index + 1}
+              minimumCurrentNetProfitPercent={report.policy.minimumCurrentNetProfitPercent}
+              minimumPostStressNetProfitPercent={report.policy.minimumPostStressNetProfitPercent}
             />
           ))
         )}
@@ -263,9 +265,13 @@ export default function TradeFlowDashboard() {
 function OpportunityCard({
   opportunity,
   rank,
+  minimumCurrentNetProfitPercent,
+  minimumPostStressNetProfitPercent,
 }: {
   opportunity: LiveOnlyIntelligenceOpportunity;
   rank: number;
+  minimumCurrentNetProfitPercent: number;
+  minimumPostStressNetProfitPercent: number;
 }) {
   const tone = opportunity.status === "READY_FOR_FINAL_EXECUTION"
     ? "success"
@@ -293,9 +299,10 @@ function OpportunityCard({
             </div>
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-4 text-right text-xs">
-          <Value label="Current net" value={`${formatNumber(opportunity.netProfitPercent, 3)}%`} good={opportunity.netProfitPercent >= 0.3} />
-          <Value label="Post-stress net" value={opportunity.postStressNetProfitPercent === null ? "Unavailable" : `${formatNumber(opportunity.postStressNetProfitPercent, 3)}%`} good={(opportunity.postStressNetProfitPercent ?? -1) >= 0.15} />
+        <div className="grid grid-cols-4 gap-4 text-right text-xs">
+          <Value label="Current net" value={`${formatNumber(opportunity.netProfitPercent, 3)}%`} good={opportunity.netProfitPercent >= minimumCurrentNetProfitPercent} />
+          <Value label="Post-stress net" value={opportunity.postStressNetProfitPercent === null ? "Unavailable" : `${formatNumber(opportunity.postStressNetProfitPercent, 3)}%`} good={(opportunity.postStressNetProfitPercent ?? -1) >= minimumPostStressNetProfitPercent} />
+          <Value label="Cash net after TDS" value={opportunity.deployableCashPostStressNetProfitPercent === null ? "Unavailable" : `${formatNumber(opportunity.deployableCashPostStressNetProfitPercent, 3)}%`} good={(opportunity.deployableCashPostStressNetProfitPercent ?? -1) >= minimumPostStressNetProfitPercent} />
           <Value label="Quality" value={`${opportunity.qualityScore}`} good={opportunity.qualityScore >= 80} />
         </div>
       </div>
@@ -326,11 +333,15 @@ function OpportunityCard({
         </div>
       ) : null}
 
-      <div className="grid gap-3 border-y border-border-default bg-black/15 p-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 border-y border-border-default bg-black/15 p-4 sm:grid-cols-2 xl:grid-cols-4">
         <Fact label="Execution quantity" value={formatNullable(opportunity.executionQuantity)} good={opportunity.executionQuantity !== null} />
         <Fact label="Preferred capital / leg" value={formatInr(opportunity.requestedCapitalPerLegInr)} good />
         <Fact label="Estimated executable" value={formatNullableInr(opportunity.estimatedExecutableCapitalInr)} good={opportunity.estimatedExecutableCapitalInr !== null} />
         <Fact label="Estimated BUY need" value={formatNullableInr(opportunity.estimatedBuyRequirementInr)} good={opportunity.estimatedBuyRequirementInr !== null} />
+        <Fact label="BUY taker fee" value={opportunity.buyTakerFeePercent === null ? "Unavailable" : `${formatNumber(opportunity.buyTakerFeePercent, 4)}%`} good={opportunity.buyTakerFeePercent !== null} />
+        <Fact label="SELL taker fee" value={opportunity.sellTakerFeePercent === null ? "Unavailable" : `${formatNumber(opportunity.sellTakerFeePercent, 4)}%`} good={opportunity.sellTakerFeePercent !== null} />
+        <Fact label="Trading fees" value={opportunity.tradingFees === null ? "Unavailable" : formatNumber(opportunity.tradingFees, 8)} good={opportunity.tradingFees !== null} />
+        <Fact label="TDS cash withheld" value={opportunity.statutoryCashWithholding === null ? "Unavailable" : formatNumber(opportunity.statutoryCashWithholding, 8)} good={opportunity.statutoryCashWithholding !== null} />
         <Fact label="Gate score" value={`${passes} pass · ${blocked} blocked`} good={blocked === 0} />
       </div>
 

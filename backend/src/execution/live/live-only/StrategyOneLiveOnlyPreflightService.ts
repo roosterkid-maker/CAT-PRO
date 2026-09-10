@@ -14,6 +14,10 @@ import {
 import {
   getLiveOnlyRuntimePolicy,
   isLiveOnlyRuntimeEnabled,
+  evaluateLiveOnlySpreadIntegrity,
+  LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO,
+  LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT,
+  LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES,
 } from "../../../config/LiveOnlyRuntimePolicy";
 
 import {
@@ -59,6 +63,9 @@ export interface StrategyOneLiveOnlyPreflightReport {
   readonly buyQuoteAgeMs: number;
   readonly sellQuoteAgeMs: number;
   readonly quoteSkewMs: number;
+  readonly grossSpreadPercent: number | null;
+  readonly crossExchangePriceRatio: number | null;
+  readonly suspiciousSpread: boolean;
   readonly capitalStudy: OpportunityCapitalStudyDecision;
   readonly permissionBoundary: StrategyOneApiPermissionBoundaryReport;
   readonly funding: StrategyOneFundedRouteReport;
@@ -122,6 +129,17 @@ export class StrategyOneLiveOnlyPreflightService {
         opportunity.pair.buy.timestamp -
         opportunity.pair.sell.timestamp,
       );
+    const spreadIntegrity =
+      evaluateLiveOnlySpreadIntegrity(
+        opportunity.buyPrice,
+        opportunity.sellPrice,
+      );
+    const grossSpreadPercent =
+      spreadIntegrity.grossSpreadPercent;
+    const crossExchangePriceRatio =
+      spreadIntegrity.priceRatio;
+    const suspiciousSpread =
+      spreadIntegrity.suspicious;
     const blockers:
       string[] =
       [];
@@ -184,6 +202,23 @@ export class StrategyOneLiveOnlyPreflightService {
     ) {
       blockers.push(
         `Current fee-adjusted net must be at least ${capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(2)}% for this studied route.`,
+      );
+    }
+
+    if (
+      !spreadIntegrity.withinAbsoluteCeiling
+    ) {
+      blockers.push(
+        `Cross-exchange price ratio must be finite and at most ${LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO.toFixed(2)}x (current=${crossExchangePriceRatio?.toFixed(4) ?? "unavailable"}x).`,
+      );
+    }
+
+    if (
+      suspiciousSpread &&
+      !capitalStudy.capitalActionQualified
+    ) {
+      blockers.push(
+        `SUSPICIOUS_SPREAD: Gross spread ${grossSpreadPercent?.toFixed(4)}% is at or above ${LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT.toFixed(2)}%; ${LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES} independent fresh exact-route samples are required before LIVE preflight can pass.`,
       );
     }
 
@@ -404,6 +439,9 @@ export class StrategyOneLiveOnlyPreflightService {
       buyQuoteAgeMs,
       sellQuoteAgeMs,
       quoteSkewMs,
+      grossSpreadPercent,
+      crossExchangePriceRatio,
+      suspiciousSpread,
       capitalStudy,
       permissionBoundary,
       funding,

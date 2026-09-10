@@ -2,6 +2,7 @@ import assert
   from "node:assert/strict";
 
 import {
+  evaluateLiveOnlySpreadIntegrity,
   getLiveOnlyRuntimePolicy,
   isLiveOnlyRuntimeEnabled,
   isLiveOnlyRuntimeProfile,
@@ -61,6 +62,18 @@ assert.equal(
   1,
 );
 assert.equal(
+  policy.minimumCurrentNetProfitPercent,
+  1.5,
+);
+assert.equal(
+  policy.minimumPostStressNetProfitPercent,
+  1.3,
+);
+assert.equal(
+  policy.maximumOpportunityAgeMs,
+  2_000,
+);
+assert.equal(
   policy.automaticFundMovementEnabled,
   true,
 );
@@ -92,6 +105,56 @@ for (
       }),
   );
 }
+
+const ordinarySpread =
+  evaluateLiveOnlySpreadIntegrity(
+    100,
+    100.79,
+  );
+assert.equal(
+  ordinarySpread.suspicious,
+  false,
+);
+assert.equal(
+  ordinarySpread.withinAbsoluteCeiling,
+  true,
+);
+
+const corroborationRequired =
+  evaluateLiveOnlySpreadIntegrity(
+    100,
+    103.8,
+  );
+assert.equal(
+  corroborationRequired.suspicious,
+  true,
+);
+assert.equal(
+  corroborationRequired.withinAbsoluteCeiling,
+  true,
+);
+
+const absoluteAnomaly =
+  evaluateLiveOnlySpreadIntegrity(
+    100,
+    105.01,
+  );
+assert.equal(
+  absoluteAnomaly.suspicious,
+  true,
+);
+assert.equal(
+  absoluteAnomaly.withinAbsoluteCeiling,
+  false,
+);
+
+assert.equal(
+  evaluateLiveOnlySpreadIntegrity(
+    0,
+    100,
+  ).withinAbsoluteCeiling,
+  false,
+);
 
 console.log(
   "LIVE-only runtime policy tests passed.",

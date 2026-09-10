@@ -16,7 +16,7 @@ export const defaultArbitragePolicy:
       .discoveryMinimumNetProfitPercent,
 
   maximumQuoteAgeMs:
-    10_000,
+    2_000,
 
   minimumExchangeCount:
     2,

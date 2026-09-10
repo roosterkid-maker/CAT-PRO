@@ -491,7 +491,7 @@ function buildRecommendations(input: {
       `${input.conversion.dispatchReadyCandidateGenerations.toLocaleString("en-IN")} dispatch-ready candidate generations exist, but no durable two-leg LIVE attempt exists.`,
       `attempts=${input.conversion.liveAttempts}; current preflightable=${input.conversion.currentFullyPreflightableRoutes}`,
       "At least 1 independently preflighted, operator-authorized pilot attempt",
-      `Inspect the current gate and top candidate blocker${topReason ? ` (${topReason.reason})` : ""}; do not lower the 0.30% net floor or bypass inventory/freshness checks.`,
+      `Inspect the current gate and top candidate blocker${topReason ? ` (${topReason.reason})` : ""}; do not lower the 1.30% LIVE-only net floor or bypass inventory/freshness checks.`,
       topReason && topReason.count >= MINIMUM_RECOMMENDATION_SAMPLE ? "HIGH" : "MEDIUM",
       topReason?.count ?? input.conversion.dispatchReadyCandidateGenerations,
     ));
@@ -600,7 +600,7 @@ function createCodexPrompt(report: Omit<AgentSakhondraReport, "codexPrompt">): s
     "",
     "Required Codex method:",
     "1. Trace each claim to existing authoritative code and durable evidence before editing.",
-    "2. Do not fabricate fills, relax the 0.30% net-profit floor, bypass book-age/skew/inventory/fee checks, or infer profit from PAPER.",
+    "2. Do not fabricate fills, relax the 1.30% LIVE-only net-profit floor, bypass book-age/skew/inventory/fee checks, or infer profit from PAPER.",
     "3. Implement only evidence-supported, minimal changes with deterministic regressions and before/after P50/P95/P99 measurements.",
     "4. Do not change trading mode, LIVE authority, API permissions, balances, transfers, withdrawals, arms/leases or submit an order.",
     "5. Present policy changes as explicit human-review proposals; never auto-apply them.",

@@ -113,6 +113,11 @@ export interface LiveOnlyIntelligenceOpportunity {
   sell: LiveOnlyIntelligenceLegPlan;
   postStressNetProfitPercent: number | null;
   postStressNetProfit: number | null;
+  deployableCashPostStressNetProfitPercent: number | null;
+  tradingFees: number | null;
+  statutoryCashWithholding: number | null;
+  buyTakerFeePercent: number | null;
+  sellTakerFeePercent: number | null;
   blockers: string[];
   whatWouldMakeExecutable: string[];
   policyChecks: LiveOnlyIntelligencePolicyCheck[];

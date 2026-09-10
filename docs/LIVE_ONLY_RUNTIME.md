@@ -25,15 +25,23 @@ checks the runtime profile before it initializes exchange services.
 ## Automatic trade policy
 
 - USDT Spot routes between Binance, Bybit and CoinDCX only.
-- Current fee-adjusted net must be at least `0.30%`.
-- Exact post-stress economic net must remain at least `0.15%` after fees,
-  venue fee surcharges, a `0.02%` adverse reserve per leg and a `0.05%` safety
-  buffer.
+- Current fee-adjusted net starts at `1.50%` and may step down only through the
+  route-study ladder `1.50% → 1.40% → 1.30%`; it never drops below `1.30%`.
+- Exact post-stress economic net and immediately reusable cash net after TDS
+  must each remain at least `1.30%` after exact taker fees, venue fee
+  surcharges, a `0.075%` adverse reserve per leg and a `0.05%` safety buffer.
+  TDS stays separately reported as a recoverable tax-credit cash lock, not a
+  fabricated trading loss.
 - Capital is at least `₹600`, defaults to `₹600`, and is hard-capped at
   `₹1,000` per leg. Change only `CAT_PRO_LIVE_TRADE_CAPITAL_INR`; code rejects
   values outside this range.
-- Both action-time quote ages must be no more than `500 ms`, timestamp skew no
+- Discovery snapshots must be no more than `2,000 ms` old. Both action-time
+  quote ages must be no more than `500 ms`, timestamp skew no
   more than `500 ms`, and the final execution-grade ceiling remains `560 ms`.
+- A gross spread from `0.80%` is treated as suspicious and needs all `25`
+  independent route-study samples. The absolute cross-exchange price-ratio
+  ceiling remains `1.05x`; a fixed `1.01x` ceiling cannot coexist with a
+  `1.30%` post-stress floor because it would reject every route before costs.
 - Exact current depth must fill the normalized quantity on both legs.
 - One trade may be in flight. A route has a five-second cooldown. The same
   opportunity ID is never retried.

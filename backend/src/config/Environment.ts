@@ -144,7 +144,7 @@ ApplicationEnvironment {
     maximumQuoteAgeMs:
       readPositiveInteger(
         "MAXIMUM_QUOTE_AGE_MS",
-        5_000,
+        2_000,
       ),
 
     minimumNetProfitPercent:

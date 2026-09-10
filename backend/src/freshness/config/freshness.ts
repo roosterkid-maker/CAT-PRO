@@ -50,10 +50,10 @@ export const freshnessIntegrityConfig:
    */
   defaultRule: {
     maximumQuoteAgeMs:
-      5_000,
+      2_000,
 
     maximumPairSkewMs:
-      2_500,
+      1_000,
   },
 
   /*
@@ -66,47 +66,47 @@ export const freshnessIntegrityConfig:
   exchanges: {
     binance: {
       maximumQuoteAgeMs:
+        2_000,
+
+      maximumPairSkewMs:
+        1_000,
+    },
+
+    bybit: {
+      maximumQuoteAgeMs:
+        2_000,
+
+      maximumPairSkewMs:
+        1_000,
+    },
+
+    coindcx: {
+      maximumQuoteAgeMs:
+        2_000,
+
+      maximumPairSkewMs:
+        1_000,
+    },
+
+    /*
+     * UnoCoin order books are bounded REST polls, not websocket deltas. It is
+     * excluded from LIVE order routes, so the 4 second analytical window may
+     * cover one poll interval without weakening the 2 second LIVE venue rule.
+     */
+    unocoin: {
+      maximumQuoteAgeMs:
         4_000,
 
       maximumPairSkewMs:
         2_000,
     },
 
-    bybit: {
-      maximumQuoteAgeMs:
-        6_000,
-
-      maximumPairSkewMs:
-        2_500,
-    },
-
-    coindcx: {
-      maximumQuoteAgeMs:
-        6_000,
-
-      maximumPairSkewMs:
-        3_000,
-    },
-
-    /*
-     * UnoCoin order books are bounded REST polls, not websocket
-     * deltas.  The 9 second window covers two missed 3 second polls
-     * while the adapter's three-strike quarantine remains fail closed.
-     */
-    unocoin: {
-      maximumQuoteAgeMs:
-        9_000,
-
-      maximumPairSkewMs:
-        6_000,
-    },
-
     coinswitch: {
       maximumQuoteAgeMs:
-        6_000,
+        2_000,
 
       maximumPairSkewMs:
-        3_000,
+        1_000,
     },
   },
 };
