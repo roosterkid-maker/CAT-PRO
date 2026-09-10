@@ -52,13 +52,13 @@ function opportunity(): ArbitrageOpportunity {
         market:
           "TESTUSDT",
         lastPrice:
-          101,
+          102,
         bestBidPrice:
-          101,
+          102,
         bestBidQty:
           10,
         bestAskPrice:
-          101.1,
+          102.1,
         bestAskQty:
           10,
         spread:
@@ -74,7 +74,7 @@ function opportunity(): ArbitrageOpportunity {
     buyPrice:
       100,
     sellPrice:
-      101,
+      102,
     buyAvailableQty:
       10,
     sellAvailableQty:
@@ -100,15 +100,15 @@ function opportunity(): ArbitrageOpportunity {
     analysisSummary:
       [],
     rawSpread:
-      1,
+      2,
     rawSpreadPercent:
-      1,
+      2,
     estimatedFees:
       0.2,
     netProfit:
-      0.8,
+      1.8,
     netProfitPercent:
-      0.8,
+      1.8,
     usedLastPriceFallback:
       false,
     quotesAreFresh:
@@ -157,7 +157,7 @@ function setBooks(
     bids: [
       {
         price:
-          101,
+          102,
         quantity:
           depth,
       },
@@ -165,7 +165,7 @@ function setBooks(
     asks: [
       {
         price:
-          101.1,
+          102.1,
         quantity:
           depth,
       },
@@ -203,6 +203,40 @@ async function main(): Promise<void> {
   assert.equal(
     passed.sellFillPercent,
     100,
+  );
+  assert.ok(
+    passed.deployableCashPostStressNetProfitPercent !== null &&
+      passed.deployableCashPostStressNetProfitPercent >= 0.15,
+  );
+
+  const cashNegativeOpportunity =
+    opportunity();
+  cashNegativeOpportunity.pair.sell.lastPrice = 101;
+  cashNegativeOpportunity.pair.sell.bestBidPrice = 101;
+  cashNegativeOpportunity.pair.sell.bestAskPrice = 101.1;
+  cashNegativeOpportunity.sellPrice = 101;
+  cashNegativeOpportunity.rawSpread = 1;
+  cashNegativeOpportunity.rawSpreadPercent = 1;
+  cashNegativeOpportunity.netProfit = 0.8;
+  cashNegativeOpportunity.netProfitPercent = 0.8;
+  orderBookService.replace({
+    exchange: "bybit",
+    market: "TESTUSDT",
+    bids: [{price: 101, quantity: 10}],
+    asks: [{price: 101.1, quantity: 10}],
+    timestamp: NOW - 100,
+  });
+  const cashNegative =
+    strategyOneLiveOnlyStressGateService.evaluate({
+      opportunity: cashNegativeOpportunity,
+      quantity: 1,
+      minimumNetProfitPercent: 0.15,
+      now: NOW,
+    });
+  assert.equal(cashNegative.status, "BLOCKED");
+  assert.match(
+    cashNegative.reasons.join(" "),
+    /deployable-cash net/u,
   );
 
   setBooks(

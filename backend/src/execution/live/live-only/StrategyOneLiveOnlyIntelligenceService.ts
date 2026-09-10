@@ -815,12 +815,13 @@ export class StrategyOneLiveOnlyIntelligenceService {
       ),
       check(
         "post-stress-net",
-        "Post-stress net",
-        preflight.stress?.status ===
-          "PASSED"
+        "Economic post-stress net",
+        preflight.stress?.postStressNetProfitPercent !== null &&
+          preflight.stress?.postStressNetProfitPercent !== undefined &&
+          preflight.stress.postStressNetProfitPercent >=
+            policy.minimumPostStressNetProfitPercent
           ? "PASS"
-          : preflight.stress?.status ===
-              "BLOCKED"
+          : preflight.stress
             ? "BLOCKED"
             : "NOT_EVALUATED",
         preflight.stress
@@ -835,8 +836,32 @@ export class StrategyOneLiveOnlyIntelligenceService {
           2,
         )}%`,
         preflight.stress
-          ?.reasons[0] ??
-          "Net is recalculated after depth, fees, statutory withholding, adverse movement reserve and safety buffer.",
+          ?.reasons.find((reason) =>
+            reason.includes("economic net"),
+          ) ??
+          "Economic net is recalculated after depth, fees, adverse movement reserve and safety buffer; statutory withholding remains a separate tax-credit cash lock.",
+      ),
+      check(
+        "deployable-cash-net",
+        "Reusable cash after TDS",
+        preflight.stress?.deployableCashPostStressNetProfitPercent !== null &&
+          preflight.stress?.deployableCashPostStressNetProfitPercent !== undefined &&
+          preflight.stress.deployableCashPostStressNetProfitPercent >=
+            policy.minimumPostStressNetProfitPercent
+          ? "PASS"
+          : preflight.stress
+            ? "BLOCKED"
+            : "NOT_EVALUATED",
+        preflight.stress?.deployableCashPostStressNetProfitPercent === null ||
+          preflight.stress?.deployableCashPostStressNetProfitPercent === undefined
+          ? "Unavailable"
+          : `${preflight.stress.deployableCashPostStressNetProfitPercent.toFixed(3)}%`,
+        `≥ ${policy.minimumPostStressNetProfitPercent.toFixed(2)}%`,
+        preflight.stress
+          ?.reasons.find((reason) =>
+            reason.includes("deployable-cash net"),
+          ) ??
+          "TDS/withholding is not mislabeled as an economic fee, but withheld value must leave enough immediately reusable exchange cash for another safe cycle.",
       ),
       check(
         "permission-boundary",
@@ -902,13 +927,23 @@ export class StrategyOneLiveOnlyIntelligenceService {
       ),
       check(
         "minimum-stress-net",
-        "Post-stress net threshold",
+        "Economic post-stress net threshold",
         "NOT_EVALUATED",
         "Per exact preflight",
         `≥ ${policy.minimumPostStressNetProfitPercent.toFixed(
           2,
         )}%`,
-        "After VWAP depth, fees, tax withholding, adverse movement and safety buffer.",
+        "After VWAP depth, trading fees, adverse movement and safety buffer; excludes recoverable statutory withholding.",
+      ),
+      check(
+        "minimum-deployable-cash-net",
+        "Reusable cash after TDS threshold",
+        "NOT_EVALUATED",
+        "Per exact preflight",
+        `≥ ${policy.minimumPostStressNetProfitPercent.toFixed(
+          2,
+        )}%`,
+        "The same hard floor must remain after statutory withholding, so headline profit cannot hide a shrinking exchange-wallet balance.",
       ),
       check(
         "book-age",

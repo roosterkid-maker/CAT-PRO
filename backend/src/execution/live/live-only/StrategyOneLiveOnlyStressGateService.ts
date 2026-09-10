@@ -24,7 +24,7 @@ import {
 } from "../evidence/StrategyOneTinyLiveCashCostService";
 
 const ADVERSE_MOVE_RESERVE_PERCENT_PER_LEG =
-  0.02;
+  0.075;
 
 const SAFETY_BUFFER_PERCENT =
   0.05;
@@ -348,6 +348,26 @@ export class StrategyOneLiveOnlyStressGateService {
               `LIVE-only post-stress economic net ${Number.isFinite(postStressNetProfitPercent) ? `${postStressNetProfitPercent.toFixed(4)}%` : "invalid"} is below ${input.minimumNetProfitPercent.toFixed(4)}%.`,
             );
           }
+
+          /*
+           * Statutory withholding is a recoverable tax-credit asset rather
+           * than an economic trading fee, so it remains separately reported.
+           * It still leaves the exchange wallet immediately, however.  A
+           * route must therefore retain the same hard profit floor in reusable
+           * cash after withholding; otherwise repeated LIVE cycles can drain
+           * deployable capital while the headline economic P&L looks positive.
+           */
+          if (
+            !Number.isFinite(
+              deployableCashPostStressNetProfitPercent,
+            ) ||
+            deployableCashPostStressNetProfitPercent + 1e-12 <
+              input.minimumNetProfitPercent
+          ) {
+            reasons.push(
+              `LIVE-only deployable-cash net ${Number.isFinite(deployableCashPostStressNetProfitPercent) ? `${deployableCashPostStressNetProfitPercent.toFixed(4)}%` : "invalid"} after statutory withholding is below ${input.minimumNetProfitPercent.toFixed(4)}%.`,
+            );
+          }
         }
       } catch (
         error:
@@ -414,7 +434,7 @@ export class StrategyOneLiveOnlyStressGateService {
         Object.freeze(
           passed
             ? [
-                `Exact current depth retains ${postStressNetProfitPercent?.toFixed(4)}% economic net after fees, adverse-move reserve and safety buffer.`,
+                `Exact current depth retains ${postStressNetProfitPercent?.toFixed(4)}% economic net and ${deployableCashPostStressNetProfitPercent?.toFixed(4)}% immediately reusable cash net after fees, statutory withholding, adverse-move reserve and safety buffer.`,
               ]
             : [
                 ...new Set(reasons),
