@@ -22,6 +22,7 @@ export interface LiveOnlyRuntimeResponse {
       maximumCapitalPerLegInr: number;
       minimumCurrentNetProfitPercent: number;
       minimumPostStressNetProfitPercent: number;
+      maximumStatutoryCashWithholdingPercentPerAttempt: number;
       maximumOpportunityAgeMs: number;
       routeCooldownMs: number;
       maximumConcurrentTrades: number;

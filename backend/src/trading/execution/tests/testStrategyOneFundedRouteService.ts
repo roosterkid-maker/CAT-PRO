@@ -828,7 +828,7 @@ function testFreshMultiLevelMinimumOrderCushion(): void {
     "coindcx:BTCUSDT",
     orderBook(
       "coindcx",
-      NOW - 501,
+      NOW - 601,
       [[0.000582, 20_000]],
       [[0.0005834, 666], [0.000584, 9_000]],
     ),
@@ -1038,7 +1038,7 @@ function testFinalPaperStressGate(): void {
   });
   assert.equal(pilotStale.status, "BLOCKED");
   assert.match(pilotStale.reasons.join(" "), /maximum 500 ms/i,
-    "Exact Binance/Bybit PAPER last-look must reserve dispatch headroom inside the operator-reviewed 560 ms ceiling.");
+    "The retired PAPER-equivalent fixture keeps its historical 500 ms ceiling; LIVE-only uses the separate 600 ms policy.");
 }
 
 function opportunity(id: string, depth: number): ArbitrageOpportunity {

@@ -90,6 +90,7 @@ export interface LiveOnlyIntelligenceOpportunity {
   readonly deployableCashPostStressNetProfitPercent: number | null;
   readonly tradingFees: number | null;
   readonly statutoryCashWithholding: number | null;
+  readonly statutoryCashWithholdingPercent: number | null;
   readonly buyTakerFeePercent: number | null;
   readonly sellTakerFeePercent: number | null;
   readonly blockers: readonly string[];
@@ -344,6 +345,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
           null,
         statutoryCashWithholding:
           null,
+        statutoryCashWithholdingPercent:
+          null,
         buyTakerFeePercent:
           null,
         sellTakerFeePercent:
@@ -444,6 +447,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
           null,
         statutoryCashWithholding:
           null,
+        statutoryCashWithholdingPercent:
+          null,
         buyTakerFeePercent:
           null,
         sellTakerFeePercent:
@@ -542,6 +547,10 @@ export class StrategyOneLiveOnlyIntelligenceService {
       statutoryCashWithholding:
         preflight.stress
           ?.statutoryCashWithholding ??
+        null,
+      statutoryCashWithholdingPercent:
+        preflight.stress
+          ?.statutoryCashWithholdingPercent ??
         null,
       buyTakerFeePercent:
         preflight.stress
@@ -920,26 +929,26 @@ export class StrategyOneLiveOnlyIntelligenceService {
           "Economic net is recalculated after depth, fees, adverse movement reserve and safety buffer; statutory withholding remains a separate tax-credit cash lock.",
       ),
       check(
-        "deployable-cash-net",
-        "Reusable cash after TDS",
-        preflight.stress?.deployableCashPostStressNetProfitPercent !== null &&
-          preflight.stress?.deployableCashPostStressNetProfitPercent !== undefined &&
-          preflight.stress.deployableCashPostStressNetProfitPercent >=
-            policy.minimumPostStressNetProfitPercent
+        "statutory-cash-lock",
+        "TDS cash-lock per attempt",
+        preflight.stress?.statutoryCashWithholdingPercent !== null &&
+          preflight.stress?.statutoryCashWithholdingPercent !== undefined &&
+          preflight.stress.statutoryCashWithholdingPercent <=
+            policy.maximumStatutoryCashWithholdingPercentPerAttempt
           ? "PASS"
           : preflight.stress
             ? "BLOCKED"
             : "NOT_EVALUATED",
-        preflight.stress?.deployableCashPostStressNetProfitPercent === null ||
-          preflight.stress?.deployableCashPostStressNetProfitPercent === undefined
+        preflight.stress?.statutoryCashWithholdingPercent === null ||
+          preflight.stress?.statutoryCashWithholdingPercent === undefined
           ? "Unavailable"
-          : `${preflight.stress.deployableCashPostStressNetProfitPercent.toFixed(3)}%`,
-        `≥ ${policy.minimumPostStressNetProfitPercent.toFixed(2)}%`,
+          : `${preflight.stress.statutoryCashWithholdingPercent.toFixed(3)}%`,
+        `≤ ${policy.maximumStatutoryCashWithholdingPercentPerAttempt.toFixed(2)}%`,
         preflight.stress
           ?.reasons.find((reason) =>
-            reason.includes("deployable-cash net"),
+            reason.includes("statutory-withholding cash lock"),
           ) ??
-          "TDS/withholding is not mislabeled as an economic fee, but withheld value must leave enough immediately reusable exchange cash for another safe cycle.",
+          "TDS is a separately tracked tax-credit cash lock, not an economic fee; each bounded attempt must remain inside the explicit cash-lock cap.",
       ),
       check(
         "withholding-evidence",
@@ -1032,14 +1041,14 @@ export class StrategyOneLiveOnlyIntelligenceService {
         "After VWAP depth, trading fees, adverse movement and safety buffer; excludes recoverable statutory withholding.",
       ),
       check(
-        "minimum-deployable-cash-net",
-        "Reusable cash after TDS threshold",
+        "maximum-statutory-cash-lock",
+        "TDS cash-lock per attempt",
         "NOT_EVALUATED",
         "Per exact preflight",
-        `≥ ${policy.minimumPostStressNetProfitPercent.toFixed(
+        `≤ ${policy.maximumStatutoryCashWithholdingPercentPerAttempt.toFixed(
           2,
         )}%`,
-        "The same hard floor must remain after statutory withholding, so headline profit cannot hide a shrinking exchange-wallet balance.",
+        "Recoverable statutory withholding is separated from economic profit and capped per bounded attempt; exact balances must still fund the full deduction.",
       ),
       check(
         "discovery-age",
@@ -1047,7 +1056,7 @@ export class StrategyOneLiveOnlyIntelligenceService {
         "NOT_EVALUATED",
         "Measured per current opportunity",
         `≤ ${policy.maximumOpportunityAgeMs} ms`,
-        "The broad opportunity stage is capped at two seconds; LIVE action-time books still have the stricter 500 ms boundary below.",
+        "Discovery and LIVE action-time evidence use the operator-selected 600 ms freshness ceiling.",
       ),
       check(
         "spread-anomaly",
@@ -1086,7 +1095,7 @@ export class StrategyOneLiveOnlyIntelligenceService {
         "Freshness score definition",
         "NOT_EVALUATED",
         "100 − (oldest quote age ÷ maximum age × 100)",
-        "Fresh discovery plus ≤500 ms exact action-time books",
+        "Fresh discovery plus ≤600 ms exact action-time books",
         "Score never substitutes for the hard BUY age, SELL age and cross-venue skew gates.",
       ),
       check(

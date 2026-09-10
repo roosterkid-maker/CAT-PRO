@@ -9,18 +9,18 @@ export interface LiveOnlyRuntimePolicy {
   readonly minimumCapitalPerLegInr: 600;
   readonly preferredCapitalPerLegInr: number;
   readonly maximumCapitalPerLegInr: 1_000;
-  readonly minimumCurrentNetProfitPercent: 1.5;
-  readonly minimumPostStressNetProfitPercent: 1.3;
-  readonly maximumOpportunityAgeMs: 2_000;
+  readonly minimumCurrentNetProfitPercent: 1.0;
+  readonly minimumPostStressNetProfitPercent: 0.7;
+  readonly maximumStatutoryCashWithholdingPercentPerAttempt: 2.1;
+  readonly maximumOpportunityAgeMs: 600;
   readonly routeCooldownMs: 5_000;
   readonly maximumConcurrentTrades: 1;
   readonly automaticFundMovementEnabled: boolean;
 }
 
 /*
- * A fixed 1.01x price-ratio ceiling cannot coexist with a 1.30% post-stress
- * floor: even before fees, reserves and statutory cash withholding, a route
- * needs more than a 1% gross spread to retain 1.30%.  CAT PRO therefore uses
+ * A fixed 1.01x price-ratio ceiling cannot coexist with a 0.70% post-stress
+ * floor once taker fees and adverse-move reserves are included. CAT PRO uses
  * two distinct boundaries:
  *
  * - >= 0.80% gross spread remains visible as anomaly evidence, but persistence
@@ -28,8 +28,9 @@ export interface LiveOnlyRuntimePolicy {
  *   last-look must still pass;
  * - > 1.05x remains an absolute fail-closed quote-integrity rejection.
  *
- * This keeps TDS-aware Indian routes mathematically possible while preserving
- * the action-time integrity ceiling and exposing the anomaly to the operator.
+ * Statutory withholding is kept out of economic profit and bounded separately
+ * to 2.10% of stressed BUY notional per attempt. This prevents TDS cash-lock
+ * from being mislabeled as a permanent fee while keeping every attempt small.
  */
 export const LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT =
   0.8 as const;
@@ -155,11 +156,13 @@ export function getLiveOnlyRuntimePolicy(
     maximumCapitalPerLegInr:
       1_000 as const,
     minimumCurrentNetProfitPercent:
-      1.5 as const,
+      1.0 as const,
     minimumPostStressNetProfitPercent:
-      1.3 as const,
+      0.7 as const,
+    maximumStatutoryCashWithholdingPercentPerAttempt:
+      2.1 as const,
     maximumOpportunityAgeMs:
-      2_000 as const,
+      600 as const,
     routeCooldownMs:
       5_000 as const,
     maximumConcurrentTrades:

@@ -25,11 +25,11 @@ export const CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES = 0;
 export const CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES = 0;
 export const CAPITAL_STUDY_REQUIRED_TOTAL_SAMPLES = 0;
 export const CAPITAL_STUDY_MINIMUM_SAMPLE_SPACING_MS = 750;
-export const CAPITAL_STUDY_BASELINE_NET_PERCENT = 1.50;
-export const CAPITAL_STUDY_HARD_NET_FLOOR_PERCENT = 1.30;
+export const CAPITAL_STUDY_BASELINE_NET_PERCENT = 1.00;
+export const CAPITAL_STUDY_HARD_NET_FLOOR_PERCENT = 0.70;
 
 const MAXIMUM_TRACKED_ROUTES = 64;
-const MAXIMUM_CURRENT_ROUTE_AGE_MS = 2_000;
+const MAXIMUM_CURRENT_ROUTE_AGE_MS = 600;
 const RESET_QUALIFICATION_AFTER_MS = 5 * 60_000;
 
 export type OpportunityCapitalStudyStatus =
@@ -76,8 +76,8 @@ export interface OpportunityCapitalStudyDecision {
   readonly totalIndependentSamples: number;
   readonly requiredTotalSamplesForCapital: 0;
   readonly effectiveMinimumCurrentNetProfitPercent: number;
-  readonly baselineMinimumCurrentNetProfitPercent: 1.5;
-  readonly hardMinimumCurrentNetProfitPercent: 1.3;
+  readonly baselineMinimumCurrentNetProfitPercent: 1.0;
+  readonly hardMinimumCurrentNetProfitPercent: 0.7;
   readonly latestNetProfitPercent: number;
   readonly latestObservedAt: number;
   readonly latestEvidenceAgeMs: number;
@@ -107,7 +107,7 @@ export interface OpportunityCapitalStudyReport {
     readonly qualificationCyclesForCapitalAction: 0;
     readonly independentSamplesForCapitalAction: 0;
     readonly minimumSampleSpacingMs: 750;
-    readonly adaptiveCurrentNetLadderPercent: readonly [1.5];
+    readonly adaptiveCurrentNetLadderPercent: readonly [1.0];
     readonly postStressNetHardFloorPercent: number;
     readonly maximumBookAgeMs: number;
     readonly maximumBookSkewMs: number;
@@ -272,7 +272,7 @@ export class OpportunityCapitalStudyService {
         qualificationCyclesForCapitalAction: 0 as const,
         independentSamplesForCapitalAction: 0 as const,
         minimumSampleSpacingMs: 750 as const,
-        adaptiveCurrentNetLadderPercent: Object.freeze([1.5] as const),
+        adaptiveCurrentNetLadderPercent: Object.freeze([1.0] as const),
         postStressNetHardFloorPercent:
           getLiveOnlyRuntimePolicy().minimumPostStressNetProfitPercent,
         maximumBookAgeMs:
@@ -437,8 +437,8 @@ export class OpportunityCapitalStudyService {
       totalIndependentSamples: state.totalIndependentSamples,
       requiredTotalSamplesForCapital: 0 as const,
       effectiveMinimumCurrentNetProfitPercent: threshold,
-      baselineMinimumCurrentNetProfitPercent: 1.5 as const,
-      hardMinimumCurrentNetProfitPercent: 1.3 as const,
+      baselineMinimumCurrentNetProfitPercent: 1.0 as const,
+      hardMinimumCurrentNetProfitPercent: 0.7 as const,
       latestNetProfitPercent: opportunity?.netProfitPercent ?? state.latestNetProfitPercent,
       latestObservedAt: state.latestObservedAt,
       latestEvidenceAgeMs: evidenceAgeMs,

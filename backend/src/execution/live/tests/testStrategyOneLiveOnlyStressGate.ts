@@ -189,6 +189,8 @@ async function main(): Promise<void> {
           1,
         minimumNetProfitPercent:
           0.15,
+        maximumStatutoryCashWithholdingPercent:
+          2.1,
         now:
           NOW,
       });
@@ -205,8 +207,8 @@ async function main(): Promise<void> {
     100,
   );
   assert.ok(
-    passed.deployableCashPostStressNetProfitPercent !== null &&
-      passed.deployableCashPostStressNetProfitPercent >= 0.15,
+    passed.statutoryCashWithholdingPercent !== null &&
+      passed.statutoryCashWithholdingPercent <= 2.1,
   );
   assert.equal(passed.withholdingEvidenceComplete, true);
 
@@ -232,13 +234,29 @@ async function main(): Promise<void> {
       opportunity: cashNegativeOpportunity,
       quantity: 1,
       minimumNetProfitPercent: 0.15,
+      maximumStatutoryCashWithholdingPercent: 2.1,
       now: NOW,
     });
-  assert.equal(cashNegative.status, "BLOCKED");
-  assert.match(
-    cashNegative.reasons.join(" "),
-    /deployable-cash net/u,
+  assert.equal(cashNegative.status, "PASSED");
+  assert.ok(
+    cashNegative.deployableCashPostStressNetProfitPercent !== null &&
+      cashNegative.deployableCashPostStressNetProfitPercent < 0,
   );
+  assert.ok(
+    cashNegative.postStressNetProfitPercent !== null &&
+      cashNegative.postStressNetProfitPercent >= 0.15,
+  );
+
+  const cashLockCapped =
+    strategyOneLiveOnlyStressGateService.evaluate({
+      opportunity: cashNegativeOpportunity,
+      quantity: 1,
+      minimumNetProfitPercent: 0.15,
+      maximumStatutoryCashWithholdingPercent: 1.5,
+      now: NOW,
+    });
+  assert.equal(cashLockCapped.status, "BLOCKED");
+  assert.match(cashLockCapped.reasons.join(" "), /cash lock/u);
 
   const unknownWithholdingOpportunity = opportunity();
   unknownWithholdingOpportunity.pair.buy.exchange = "binance";
@@ -254,6 +272,7 @@ async function main(): Promise<void> {
       opportunity: unknownWithholdingOpportunity,
       quantity: 1,
       minimumNetProfitPercent: 0.15,
+      maximumStatutoryCashWithholdingPercent: 2.1,
       now: NOW,
     });
   assert.equal(unknownWithholding.status, "BLOCKED");
@@ -264,7 +283,7 @@ async function main(): Promise<void> {
   );
 
   setBooks(
-    NOW - 501,
+    NOW - 601,
   );
   const stale =
     strategyOneLiveOnlyStressGateService
@@ -275,6 +294,8 @@ async function main(): Promise<void> {
           1,
         minimumNetProfitPercent:
           0.15,
+        maximumStatutoryCashWithholdingPercent:
+          2.1,
         now:
           NOW,
       });
@@ -284,7 +305,7 @@ async function main(): Promise<void> {
   );
   assert.match(
     stale.reasons.join(" "),
-    /older than 500 ms/u,
+    /older than 600 ms/u,
   );
 
   setBooks(
@@ -300,6 +321,8 @@ async function main(): Promise<void> {
           1,
         minimumNetProfitPercent:
           0.15,
+        maximumStatutoryCashWithholdingPercent:
+          2.1,
         now:
           NOW,
       });

@@ -207,7 +207,7 @@ export class RebalancingExecutionRunner {
 /**
  * Generic equal-allocation proposals are never sufficient authority for a
  * real withdrawal. Keep only Binance-sourced moves whose destination and
- * amount are justified by a current 25-sample route-specific USDT shortage.
+ * amount are justified by the current exact route's USDT shortage.
  */
 export function bindRebalancingPlanToCapitalStudy(
   plan: RebalancingDecisionPlan,
@@ -233,7 +233,7 @@ export function bindRebalancingPlanToCapitalStudy(
       ...move,
       amountUsdt,
       reason:
-        `${move.reason} Bound to a current five-cycle capital-study USDT shortfall; old opportunities cannot authorize movement.`,
+        `${move.reason} Bound to a current exact-route USDT shortfall; old opportunities cannot authorize movement.`,
     }];
   });
 

@@ -47,6 +47,7 @@ export interface StrategyOneLiveOnlyStressReport {
   readonly sellFeeSurchargeMultiplier: number | null;
   readonly tradingFees: number | null;
   readonly statutoryCashWithholding: number | null;
+  readonly statutoryCashWithholdingPercent: number | null;
   readonly safetyBuffer: number | null;
   readonly postStressNetProfit: number | null;
   readonly postStressNetProfitPercent: number | null;
@@ -54,6 +55,7 @@ export interface StrategyOneLiveOnlyStressReport {
   readonly deployableCashPostStressNetProfitPercent: number | null;
   readonly withholdingEvidenceComplete: boolean;
   readonly minimumNetProfitPercent: number;
+  readonly maximumStatutoryCashWithholdingPercent: number;
   readonly adverseMoveReservePercentPerLeg: number;
   readonly safetyBufferPercent: number;
   readonly cashCostEvidenceIds: readonly string[];
@@ -69,6 +71,7 @@ export class StrategyOneLiveOnlyStressGateService {
     readonly opportunity: ArbitrageOpportunity;
     readonly quantity: number;
     readonly minimumNetProfitPercent: number;
+    readonly maximumStatutoryCashWithholdingPercent: number;
     readonly now?: number;
   }): StrategyOneLiveOnlyStressReport {
     const now =
@@ -114,6 +117,15 @@ export class StrategyOneLiveOnlyStressGateService {
     ) {
       throw new Error(
         "LIVE-only post-stress minimum must be a non-negative finite percentage.",
+      );
+    }
+
+    if (
+      !Number.isFinite(input.maximumStatutoryCashWithholdingPercent) ||
+      input.maximumStatutoryCashWithholdingPercent < 0
+    ) {
+      throw new Error(
+        "LIVE-only statutory cash-withholding cap must be a non-negative finite percentage.",
       );
     }
 
@@ -193,6 +205,9 @@ export class StrategyOneLiveOnlyStressGateService {
       number | null =
       null;
     let statutoryCashWithholding:
+      number | null =
+      null;
+    let statutoryCashWithholdingPercent:
       number | null =
       null;
     let safetyBuffer:
@@ -355,6 +370,10 @@ export class StrategyOneLiveOnlyStressGateService {
               (buyCashCost.withholdingPercent / 100) +
             stressedSellNotional *
               (sellCashCost.withholdingPercent / 100);
+          statutoryCashWithholdingPercent =
+            (statutoryCashWithholding /
+              stressedBuyNotional) *
+            100;
           safetyBuffer =
             stressedBuyNotional *
             (SAFETY_BUFFER_PERCENT / 100);
@@ -386,22 +405,20 @@ export class StrategyOneLiveOnlyStressGateService {
           }
 
           /*
-           * Statutory withholding is a recoverable tax-credit asset rather
-           * than an economic trading fee, so it remains separately reported.
-           * It still leaves the exchange wallet immediately, however.  A
-           * route must therefore retain the same hard profit floor in reusable
-           * cash after withholding; otherwise repeated LIVE cycles can drain
-           * deployable capital while the headline economic P&L looks positive.
+           * Statutory withholding is a recoverable tax-credit asset, not an
+           * economic trading fee. Keep it out of the profit threshold and
+           * instead cap the cash locked by any one bounded attempt. Exact
+           * funding and balance gates still have to cover the full deduction.
            */
           if (
             !Number.isFinite(
-              deployableCashPostStressNetProfitPercent,
+              statutoryCashWithholdingPercent,
             ) ||
-            deployableCashPostStressNetProfitPercent + 1e-12 <
-              input.minimumNetProfitPercent
+            statutoryCashWithholdingPercent - 1e-12 >
+              input.maximumStatutoryCashWithholdingPercent
           ) {
             reasons.push(
-              `LIVE-only deployable-cash net ${Number.isFinite(deployableCashPostStressNetProfitPercent) ? `${deployableCashPostStressNetProfitPercent.toFixed(4)}%` : "invalid"} after statutory withholding is below ${input.minimumNetProfitPercent.toFixed(4)}%.`,
+              `LIVE-only statutory-withholding cash lock ${Number.isFinite(statutoryCashWithholdingPercent) ? `${statutoryCashWithholdingPercent.toFixed(4)}%` : "invalid"} exceeds the per-attempt ${input.maximumStatutoryCashWithholdingPercent.toFixed(4)}% cap.`,
             );
           }
         }
@@ -425,6 +442,7 @@ export class StrategyOneLiveOnlyStressGateService {
       sellVwap !== null &&
       tradingFees !== null &&
       statutoryCashWithholding !== null &&
+      statutoryCashWithholdingPercent !== null &&
       safetyBuffer !== null &&
       postStressNetProfit !== null &&
       postStressNetProfitPercent !== null &&
@@ -456,6 +474,7 @@ export class StrategyOneLiveOnlyStressGateService {
       sellFeeSurchargeMultiplier,
       tradingFees,
       statutoryCashWithholding,
+      statutoryCashWithholdingPercent,
       safetyBuffer,
       postStressNetProfit,
       postStressNetProfitPercent,
@@ -464,6 +483,8 @@ export class StrategyOneLiveOnlyStressGateService {
       withholdingEvidenceComplete,
       minimumNetProfitPercent:
         input.minimumNetProfitPercent,
+      maximumStatutoryCashWithholdingPercent:
+        input.maximumStatutoryCashWithholdingPercent,
       adverseMoveReservePercentPerLeg:
         ADVERSE_MOVE_RESERVE_PERCENT_PER_LEG,
       safetyBufferPercent:

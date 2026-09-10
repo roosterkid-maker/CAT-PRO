@@ -41,11 +41,13 @@ const policy:
   maximumCapitalPerLegInr:
     1_000,
   minimumCurrentNetProfitPercent:
-    1.5,
+    1.0,
   minimumPostStressNetProfitPercent:
-    1.3,
+    0.7,
+  maximumStatutoryCashWithholdingPercentPerAttempt:
+    2.1,
   maximumOpportunityAgeMs:
-    2_000,
+    600,
   routeCooldownMs:
     5_000,
   maximumConcurrentTrades:
@@ -424,9 +426,9 @@ function capitalStudyDecision(current: ArbitrageOpportunity) {
     requiredQualificationCycles: 0 as const,
     totalIndependentSamples: 1,
     requiredTotalSamplesForCapital: 0 as const,
-    effectiveMinimumCurrentNetProfitPercent: 1.5,
-    baselineMinimumCurrentNetProfitPercent: 1.5 as const,
-    hardMinimumCurrentNetProfitPercent: 1.3 as const,
+    effectiveMinimumCurrentNetProfitPercent: 1.0,
+    baselineMinimumCurrentNetProfitPercent: 1.0 as const,
+    hardMinimumCurrentNetProfitPercent: 0.7 as const,
     latestNetProfitPercent: current.netProfitPercent,
     latestObservedAt: NOW,
     latestEvidenceAgeMs: 0,
@@ -458,10 +460,10 @@ function capitalStudyReport() {
       qualificationCyclesForCapitalAction: 0 as const,
       independentSamplesForCapitalAction: 0 as const,
       minimumSampleSpacingMs: 750 as const,
-      adaptiveCurrentNetLadderPercent: [1.5] as const,
-      postStressNetHardFloorPercent: 1.3,
-      maximumBookAgeMs: 500,
-      maximumBookSkewMs: 500,
+      adaptiveCurrentNetLadderPercent: [1.0] as const,
+      postStressNetHardFloorPercent: 0.7,
+      maximumBookAgeMs: 600,
+      maximumBookSkewMs: 600,
     },
     routes: [],
   };

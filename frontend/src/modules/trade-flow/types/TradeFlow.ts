@@ -116,6 +116,7 @@ export interface LiveOnlyIntelligenceOpportunity {
   deployableCashPostStressNetProfitPercent: number | null;
   tradingFees: number | null;
   statutoryCashWithholding: number | null;
+  statutoryCashWithholdingPercent: number | null;
   buyTakerFeePercent: number | null;
   sellTakerFeePercent: number | null;
   blockers: string[];
@@ -137,6 +138,7 @@ export interface LiveOnlyRuntimePolicy {
   maximumCapitalPerLegInr: number;
   minimumCurrentNetProfitPercent: number;
   minimumPostStressNetProfitPercent: number;
+  maximumStatutoryCashWithholdingPercentPerAttempt: number;
   maximumOpportunityAgeMs: number;
   routeCooldownMs: number;
   maximumConcurrentTrades: number;

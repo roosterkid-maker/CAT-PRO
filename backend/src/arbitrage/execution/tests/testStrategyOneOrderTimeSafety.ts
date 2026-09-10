@@ -966,12 +966,12 @@ async function main(): Promise<void> {
     opportunity: opportunity(),
     quantity: 1,
     now: NOW,
-    authorizedMaximumBookAgeMs: 561,
+    authorizedMaximumBookAgeMs: 601,
   });
   assert.equal(invalidAuthorizedTtl.decision, "BLOCKED");
   assert.match(
     invalidAuthorizedTtl.reasons.join(" "),
-    /LIVE 560 ms ceiling/iu,
+    /LIVE 600 ms ceiling/iu,
   );
 
   const mixedTimeInForce =

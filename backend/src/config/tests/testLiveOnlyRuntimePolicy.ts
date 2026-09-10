@@ -63,15 +63,19 @@ assert.equal(
 );
 assert.equal(
   policy.minimumCurrentNetProfitPercent,
-  1.5,
+  1.0,
 );
 assert.equal(
   policy.minimumPostStressNetProfitPercent,
-  1.3,
+  0.7,
+);
+assert.equal(
+  policy.maximumStatutoryCashWithholdingPercentPerAttempt,
+  2.1,
 );
 assert.equal(
   policy.maximumOpportunityAgeMs,
-  2_000,
+  600,
 );
 assert.equal(
   policy.automaticFundMovementEnabled,

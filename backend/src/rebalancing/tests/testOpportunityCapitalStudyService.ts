@@ -21,7 +21,7 @@ function main(): void {
   verifiesStaleAndHardFailureBlockImmediately();
   verifiesGenericRebalancingCannotAuthorizeWithdrawal();
   console.log(
-    "Opportunity capital readiness passed: no persistence counter remains; current exact books, fixed 1.50% net, funding, freshness and recovery still fail closed.",
+    "Opportunity capital readiness passed: no persistence counter remains; current exact books, fixed 1.00% net, funding, freshness and recovery still fail closed.",
   );
 }
 
@@ -49,12 +49,12 @@ function verifiesGenericRebalancingCannotAuthorizeWithdrawal(): void {
 function verifiesCurrentExactRouteQualifiesWithoutPersistence(): void {
   let now = START;
   const service = createService(() => cleanSafety(), () => now);
-  const current = opportunity("current", now, 1.51);
+  const current = opportunity("current", now, 1.01);
   service.observeSnapshot({generatedAt: now, opportunities: [current]});
   const decision = service.getDecision(current, now);
   assert.equal(decision.executionQualified, true);
   assert.equal(decision.capitalActionQualified, true);
-  assert.equal(decision.effectiveMinimumCurrentNetProfitPercent, 1.5);
+  assert.equal(decision.effectiveMinimumCurrentNetProfitPercent, 1.0);
   assert.equal(decision.requiredCurrentSamples, 0);
   assert.equal(decision.requiredQualificationCycles, 0);
   assert.equal(decision.requiredTotalSamplesForCapital, 0);
@@ -67,12 +67,12 @@ function verifiesCurrentCapitalActionRequiresCleanRecovery(): void {
     () => ({...cleanSafety(), executionRecoveryPending: recoveryPending}),
     () => now,
   );
-  const latest = opportunity("current-capital", now, 1.51);
+  const latest = opportunity("current-capital", now, 1.01);
   service.observeSnapshot({generatedAt: now, opportunities: [latest]});
 
   const ready = service.getDecision(latest, now);
   assert.equal(ready.capitalActionQualified, true);
-  assert.equal(ready.effectiveMinimumCurrentNetProfitPercent, 1.5);
+  assert.equal(ready.effectiveMinimumCurrentNetProfitPercent, 1.0);
   assert.equal(ready.recommendation, "ADD_USDT_TO_BUY_EXCHANGE");
   const authorizations = service.getCrossExchangeMovementAuthorizations(now);
   assert.equal(authorizations.length, 1);
@@ -92,12 +92,12 @@ function verifiesCurrentCapitalActionRequiresCleanRecovery(): void {
 function verifiesStaleAndHardFailureBlockImmediately(): void {
   let now = START;
   const service = createService(() => cleanSafety(), () => now);
-  const latest = opportunity("safe", now, 1.51);
+  const latest = opportunity("safe", now, 1.01);
   service.observeSnapshot({generatedAt: now, opportunities: [latest]});
   assert.equal(service.getDecision(latest, now).executionQualified, true);
 
   now += 800;
-  const stale = opportunity("stale", now - 1_000, 1.51);
+  const stale = opportunity("stale", now - 1_000, 1.01);
   service.observeSnapshot({generatedAt: now, opportunities: [stale]});
   assert.equal(service.getDecision(stale, now).executionQualified, false);
   assert.equal(service.getDecision(stale, now).currentConsecutiveSamples, 0);

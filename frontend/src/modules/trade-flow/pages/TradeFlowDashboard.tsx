@@ -190,6 +190,7 @@ export default function TradeFlowDashboard() {
               rank={index + 1}
               minimumCurrentNetProfitPercent={report.policy.minimumCurrentNetProfitPercent}
               minimumPostStressNetProfitPercent={report.policy.minimumPostStressNetProfitPercent}
+              maximumStatutoryCashWithholdingPercentPerAttempt={report.policy.maximumStatutoryCashWithholdingPercentPerAttempt}
             />
           ))
         )}
@@ -267,11 +268,13 @@ function OpportunityCard({
   rank,
   minimumCurrentNetProfitPercent,
   minimumPostStressNetProfitPercent,
+  maximumStatutoryCashWithholdingPercentPerAttempt,
 }: {
   opportunity: LiveOnlyIntelligenceOpportunity;
   rank: number;
   minimumCurrentNetProfitPercent: number;
   minimumPostStressNetProfitPercent: number;
+  maximumStatutoryCashWithholdingPercentPerAttempt: number;
 }) {
   const tone = opportunity.status === "READY_FOR_FINAL_EXECUTION"
     ? "success"
@@ -302,7 +305,7 @@ function OpportunityCard({
         <div className="grid grid-cols-4 gap-4 text-right text-xs">
           <Value label="Current net" value={`${formatNumber(opportunity.netProfitPercent, 3)}%`} good={opportunity.netProfitPercent >= minimumCurrentNetProfitPercent} />
           <Value label="Post-stress net" value={opportunity.postStressNetProfitPercent === null ? "Unavailable" : `${formatNumber(opportunity.postStressNetProfitPercent, 3)}%`} good={(opportunity.postStressNetProfitPercent ?? -1) >= minimumPostStressNetProfitPercent} />
-          <Value label="Cash net after TDS" value={opportunity.deployableCashPostStressNetProfitPercent === null ? "Unavailable" : `${formatNumber(opportunity.deployableCashPostStressNetProfitPercent, 3)}%`} good={(opportunity.deployableCashPostStressNetProfitPercent ?? -1) >= minimumPostStressNetProfitPercent} />
+          <Value label="TDS cash lock" value={opportunity.statutoryCashWithholdingPercent === null ? "Unavailable" : `${formatNumber(opportunity.statutoryCashWithholdingPercent, 3)}%`} good={(opportunity.statutoryCashWithholdingPercent ?? Number.POSITIVE_INFINITY) <= maximumStatutoryCashWithholdingPercentPerAttempt} />
           <Value label="Quality" value={`${opportunity.qualityScore}`} good={opportunity.qualityScore >= 80} />
         </div>
       </div>

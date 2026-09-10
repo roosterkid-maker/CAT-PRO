@@ -4,10 +4,10 @@
  * LIVE-only entrypoint never has to import historical PAPER evidence stores.
  */
 export const STRATEGY_ONE_LIVE_MAXIMUM_BOOK_AGE_MS =
-  560 as const;
+  600 as const;
 
 export const STRATEGY_ONE_LIVE_DISPATCH_RESERVED_MAXIMUM_BOOK_AGE_MS =
-  500 as const;
+  600 as const;
 
 export const STRATEGY_ONE_LIVE_MAXIMUM_BOOK_SKEW_MS =
-  500 as const;
+  600 as const;

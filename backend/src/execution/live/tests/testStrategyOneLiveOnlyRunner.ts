@@ -45,11 +45,13 @@ const POLICY:
   maximumCapitalPerLegInr:
     1_000,
   minimumCurrentNetProfitPercent:
-    1.5,
+    1.0,
   minimumPostStressNetProfitPercent:
-    1.3,
+    0.7,
+  maximumStatutoryCashWithholdingPercentPerAttempt:
+    2.1,
   maximumOpportunityAgeMs:
-    2_000,
+    600,
   routeCooldownMs:
     5_000,
   maximumConcurrentTrades:

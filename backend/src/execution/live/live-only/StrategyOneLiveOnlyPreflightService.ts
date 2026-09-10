@@ -315,6 +315,8 @@ export class StrategyOneLiveOnlyPreflightService {
                 funding.executableQuantity,
               minimumNetProfitPercent:
                 policy.minimumPostStressNetProfitPercent,
+              maximumStatutoryCashWithholdingPercent:
+                policy.maximumStatutoryCashWithholdingPercentPerAttempt,
               now,
             })
         : null;
