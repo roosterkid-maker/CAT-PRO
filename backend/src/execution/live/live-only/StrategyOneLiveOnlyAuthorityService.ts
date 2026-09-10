@@ -23,6 +23,10 @@ import {
 } from "../../../core/persistence/JsonlSnapshotStore";
 
 import {
+  strategyOneTwoLegRecoveryResolutionService,
+} from "../recovery/StrategyOneTwoLegRecoveryResolutionService";
+
+import {
   getLiveOnlyRuntimePolicy,
   isLiveOnlyRuntimeEnabled,
 } from "../../../config/LiveOnlyRuntimePolicy";
@@ -100,6 +104,15 @@ export class StrategyOneLiveOnlyAuthorityService {
   constructor(
     filePath =
       DEFAULT_FILE,
+    private readonly isPairResolved: (
+      sessionId: string,
+    ) => boolean = (
+      sessionId,
+    ) =>
+      strategyOneTwoLegRecoveryResolutionService
+        .isSessionResolved(
+          sessionId,
+        ),
   ) {
     this.store =
       new JsonlSnapshotStore({
@@ -505,7 +518,27 @@ export class StrategyOneLiveOnlyAuthorityService {
           record.state ===
             "FINALIZED"
         ) {
-          return record.requiresRecovery;
+          if (
+            !record.requiresRecovery
+          ) {
+            return false;
+          }
+
+          if (
+            record.pairSessionId ===
+              null
+          ) {
+            return true;
+          }
+
+          try {
+            return !this
+              .isPairResolved(
+                record.pairSessionId,
+              );
+          } catch {
+            return true;
+          }
         }
 
         if (
