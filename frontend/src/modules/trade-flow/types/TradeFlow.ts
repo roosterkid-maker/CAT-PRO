@@ -45,7 +45,7 @@ export interface OpportunityCapitalStudyDecision {
   buyExchange: string;
   sellExchange: string;
   opportunityId: string;
-  status: "STUDYING" | "EXECUTION_STUDY_READY" | "CAPITAL_STUDY_READY";
+  status: "CURRENT_ROUTE_BLOCKED" | "CURRENT_ROUTE_READY";
   executionQualified: boolean;
   capitalActionQualified: boolean;
   currentConsecutiveSamples: number;
@@ -66,7 +66,7 @@ export interface OpportunityCapitalStudyDecision {
   blockers: string[];
   safety: {
     studyOnly: true;
-    restartResetsQualification: true;
+    restartResetsQualification: false;
     hardGatesAutoRelaxed: false;
     recoveryClean: boolean;
     movementAllowed: boolean;

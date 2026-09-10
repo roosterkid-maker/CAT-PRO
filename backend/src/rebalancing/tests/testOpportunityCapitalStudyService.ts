@@ -16,12 +16,12 @@ import type {
 const START = 1_800_000_000_000;
 
 function main(): void {
-  verifiesFiveIndependentChecksAndAdaptiveFloor();
-  verifiesCapitalActionNeedsFiveCyclesAndCleanRecovery();
-  verifiesRestartAndHardFailureResetCurrentQualification();
+  verifiesCurrentExactRouteQualifiesWithoutPersistence();
+  verifiesCurrentCapitalActionRequiresCleanRecovery();
+  verifiesStaleAndHardFailureBlockImmediately();
   verifiesGenericRebalancingCannotAuthorizeWithdrawal();
   console.log(
-    "Opportunity capital study passed: routes need five independent books, adaptive net never drops below 1.30%, capital movement needs 25 samples, and recovery/restart fail closed.",
+    "Opportunity capital readiness passed: no persistence counter remains; current exact books, fixed 1.50% net, funding, freshness and recovery still fail closed.",
   );
 }
 
@@ -46,54 +46,33 @@ function verifiesGenericRebalancingCannotAuthorizeWithdrawal(): void {
   assert.equal(bound.desiredMoves[0]?.amountUsdt, 6);
 }
 
-function verifiesFiveIndependentChecksAndAdaptiveFloor(): void {
+function verifiesCurrentExactRouteQualifiesWithoutPersistence(): void {
   let now = START;
   const service = createService(() => cleanSafety(), () => now);
-
-  for (let index = 0; index < 4; index += 1) {
-    now = START + index * 800;
-    const candidate = opportunity(`sample-${index}`, now, 1.32);
-    service.observeSnapshot({generatedAt: now, opportunities: [candidate]});
-  }
-  const fourth = opportunity("sample-3", now, 1.32);
-  assert.equal(service.getDecision(fourth, now).currentConsecutiveSamples, 4);
-  assert.equal(service.getDecision(fourth, now).executionQualified, false);
-
-  service.observeSnapshot({generatedAt: now, opportunities: [fourth]});
-  assert.equal(
-    service.getDecision(fourth, now).currentConsecutiveSamples,
-    4,
-    "The same cached BUY/SELL timestamps must never count twice.",
-  );
-
-  now += 800;
-  const fifth = opportunity("sample-4", now, 1.32);
-  service.observeSnapshot({generatedAt: now, opportunities: [fifth]});
-  const decision = service.getDecision(fifth, now);
+  const current = opportunity("current", now, 1.51);
+  service.observeSnapshot({generatedAt: now, opportunities: [current]});
+  const decision = service.getDecision(current, now);
   assert.equal(decision.executionQualified, true);
-  assert.equal(decision.effectiveMinimumCurrentNetProfitPercent, 1.3);
-  assert.equal(decision.completedQualificationCycles, 1);
-  assert.equal(decision.capitalActionQualified, false);
+  assert.equal(decision.capitalActionQualified, true);
+  assert.equal(decision.effectiveMinimumCurrentNetProfitPercent, 1.5);
+  assert.equal(decision.requiredCurrentSamples, 0);
+  assert.equal(decision.requiredQualificationCycles, 0);
+  assert.equal(decision.requiredTotalSamplesForCapital, 0);
 }
 
-function verifiesCapitalActionNeedsFiveCyclesAndCleanRecovery(): void {
+function verifiesCurrentCapitalActionRequiresCleanRecovery(): void {
   let now = START;
   let recoveryPending = false;
   const service = createService(
     () => ({...cleanSafety(), executionRecoveryPending: recoveryPending}),
     () => now,
   );
-  let latest = opportunity("initial", now, 1.42);
-  for (let index = 0; index < 25; index += 1) {
-    now = START + index * 800;
-    latest = opportunity(`capital-${index}`, now, 1.42);
-    service.observeSnapshot({generatedAt: now, opportunities: [latest]});
-  }
+  const latest = opportunity("current-capital", now, 1.51);
+  service.observeSnapshot({generatedAt: now, opportunities: [latest]});
 
   const ready = service.getDecision(latest, now);
-  assert.equal(ready.completedQualificationCycles, 5);
   assert.equal(ready.capitalActionQualified, true);
-  assert.equal(ready.effectiveMinimumCurrentNetProfitPercent, 1.4);
+  assert.equal(ready.effectiveMinimumCurrentNetProfitPercent, 1.5);
   assert.equal(ready.recommendation, "ADD_USDT_TO_BUY_EXCHANGE");
   const authorizations = service.getCrossExchangeMovementAuthorizations(now);
   assert.equal(authorizations.length, 1);
@@ -110,15 +89,11 @@ function verifiesCapitalActionNeedsFiveCyclesAndCleanRecovery(): void {
   assert.equal(service.getDecision(latest, now).safety.movementAllowed, false);
 }
 
-function verifiesRestartAndHardFailureResetCurrentQualification(): void {
+function verifiesStaleAndHardFailureBlockImmediately(): void {
   let now = START;
   const service = createService(() => cleanSafety(), () => now);
-  let latest = opportunity("safe", now, 1.51);
-  for (let index = 0; index < 5; index += 1) {
-    now = START + index * 800;
-    latest = opportunity(`safe-${index}`, now, 1.51);
-    service.observeSnapshot({generatedAt: now, opportunities: [latest]});
-  }
+  const latest = opportunity("safe", now, 1.51);
+  service.observeSnapshot({generatedAt: now, opportunities: [latest]});
   assert.equal(service.getDecision(latest, now).executionQualified, true);
 
   now += 800;
@@ -130,7 +105,7 @@ function verifiesRestartAndHardFailureResetCurrentQualification(): void {
   const restarted = createService(() => cleanSafety(), () => now);
   const reset = restarted.getDecision(latest, now);
   assert.equal(reset.currentConsecutiveSamples, 0);
-  assert.equal(reset.safety.restartResetsQualification, true);
+  assert.equal(reset.safety.restartResetsQualification, false);
 }
 
 function createService(

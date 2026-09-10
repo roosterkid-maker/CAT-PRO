@@ -84,7 +84,7 @@ export interface LiveOnlyRuntimeResponse {
         market: string;
         buyExchange: string;
         sellExchange: string;
-        status: "STUDYING" | "EXECUTION_STUDY_READY" | "CAPITAL_STUDY_READY";
+        status: "CURRENT_ROUTE_BLOCKED" | "CURRENT_ROUTE_READY";
         currentConsecutiveSamples: number;
         requiredCurrentSamples: number;
         completedQualificationCycles: number;

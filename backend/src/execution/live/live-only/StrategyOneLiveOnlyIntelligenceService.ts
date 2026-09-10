@@ -18,7 +18,6 @@ import type {
 import {
   LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO,
   LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT,
-  LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES,
 } from "../../../config/LiveOnlyRuntimePolicy";
 
 import type {
@@ -728,7 +727,7 @@ export class StrategyOneLiveOnlyIntelligenceService {
         `≥ ${preflight.capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(
           2,
         )}%`,
-        `Route-specific studied gate; baseline is ${policy.minimumCurrentNetProfitPercent.toFixed(2)}% and the hard adaptive floor is ${preflight.capitalStudy.hardMinimumCurrentNetProfitPercent.toFixed(2)}%.`,
+        `Fixed current-route gate is ${policy.minimumCurrentNetProfitPercent.toFixed(2)}%; no persistence counter or adaptive relaxation is applied.`,
       ),
       check(
         "price-ratio",
@@ -746,34 +745,6 @@ export class StrategyOneLiveOnlyIntelligenceService {
           : `${preflight.crossExchangePriceRatio.toFixed(4)}x`,
         `≤ ${LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO.toFixed(2)}x absolute ceiling`,
         "This absolute integrity ceiling rejects likely pair, decimal, stale-feed or venue-state mismatches.",
-      ),
-      check(
-        "suspicious-spread",
-        "Large-spread corroboration",
-        !preflight.suspiciousSpread ||
-          preflight.capitalStudy.capitalActionQualified
-          ? "PASS"
-          : "BLOCKED",
-        typeof preflight.grossSpreadPercent !== "number" ||
-          !Number.isFinite(preflight.grossSpreadPercent)
-          ? "Unavailable"
-          : `${preflight.grossSpreadPercent.toFixed(3)}% gross · ${preflight.capitalStudy.totalIndependentSamples} samples`,
-        `< ${LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT.toFixed(2)}% or ≥ ${LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES} independent samples`,
-        preflight.suspiciousSpread
-          ? "A large apparent gap is never treated as a jackpot; it needs five complete five-sample route-study cycles before exact preflight."
-          : "The route remains below the large-spread anomaly band.",
-      ),
-      check(
-        "capital-study",
-        "Independent route confirmations",
-        preflight.capitalStudy.executionQualified
-          ? "PASS"
-          : "BLOCKED",
-        `${preflight.capitalStudy.currentConsecutiveSamples}/${preflight.capitalStudy.requiredCurrentSamples}`,
-        `${preflight.capitalStudy.requiredCurrentSamples} fresh independent samples`,
-        preflight.capitalStudy.executionQualified
-          ? "This exact market and BUY/SELL venue direction earned the current route threshold."
-          : "The same cached book never counts twice; a new route still needs fresh independent confirmations.",
       ),
       check(
         "freshness",
@@ -1083,8 +1054,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
         "Large-spread anomaly policy",
         "NOT_EVALUATED",
         `Suspicious from ${LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT.toFixed(2)}%`,
-        `${LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES} fresh samples; absolute ratio ≤ ${LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO.toFixed(2)}x`,
-        "A fixed 1.01x cap would make a 1.30% net floor impossible. Large gaps therefore require five complete study cycles and still fail above the absolute integrity ceiling.",
+        `Informational flag; absolute ratio ≤ ${LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO.toFixed(2)}x`,
+        "Persistence waiting is retired. Exact action-time books, depth, funding, stress economics and the absolute integrity ceiling remain mandatory.",
       ),
       check(
         "fee-formula",

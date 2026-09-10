@@ -149,19 +149,19 @@ export default function TradeFlowDashboard() {
       <Panel>
         <SectionTitle
           icon={<Landmark />}
-          eyebrow="Adaptive capital study"
-          title="5 fresh checks per route · 5 cycles before capital movement"
-          detail="Har market + BUY exchange + SELL exchange alag study hota hai. Same cached book dobara count nahi hota; restart par qualification safe-side se zero hoti hai."
+          eyebrow="Current-route capital readiness"
+          title="No persistence waiting"
+          detail="Har current exact market + BUY exchange + SELL exchange ko present-time funding, recovery and execution gates par evaluate kiya jata hai."
         />
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Fact label="Study service" value={report.capitalStudy.running ? "RUNNING" : "STOPPED"} good={report.capitalStudy.running} />
           <Fact label="Tracked routes" value={formatCount(report.capitalStudy.trackedRoutes)} good={report.capitalStudy.trackedRoutes > 0} />
-          <Fact label="Execution study ready" value={formatCount(report.capitalStudy.executionStudyReadyRoutes)} good={report.capitalStudy.executionStudyReadyRoutes > 0} />
-          <Fact label="Capital study ready" value={formatCount(report.capitalStudy.capitalStudyReadyRoutes)} good={report.capitalStudy.capitalStudyReadyRoutes > 0} />
+          <Fact label="Execution ready now" value={formatCount(report.capitalStudy.executionStudyReadyRoutes)} good={report.capitalStudy.executionStudyReadyRoutes > 0} />
+          <Fact label="Capital action ready now" value={formatCount(report.capitalStudy.capitalStudyReadyRoutes)} good={report.capitalStudy.capitalStudyReadyRoutes > 0} />
         </div>
         <p className="mt-3 text-[10px] leading-5 text-text-muted">
-          Adaptive current-net ladder: {report.capitalStudy.policy.adaptiveCurrentNetLadderPercent.map((value) => `${value.toFixed(2)}%`).join(" → ")}.
-          Post-stress floor {report.capitalStudy.policy.postStressNetHardFloorPercent.toFixed(2)}%, fresh books, depth, balances, recovery and ₹1,000 cap kabhi auto-relax nahi hote.
+          Current-net gate: {report.policy.minimumCurrentNetProfitPercent.toFixed(2)}%.
+          Post-stress floor {report.capitalStudy.policy.postStressNetHardFloorPercent.toFixed(2)}%, fresh books, depth, balances, recovery and ₹1,000 cap remain mandatory.
         </p>
       </Panel>
 
@@ -316,7 +316,7 @@ function OpportunityCard({
         <div className="border-t border-border-default bg-cyan-400/5 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">Route-specific adaptive study</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">Current-route capital readiness</p>
               <p className="mt-1 text-xs text-text-muted">{opportunity.capitalStudy.recommendationDetail}</p>
             </div>
             <StatusPill
@@ -324,10 +324,9 @@ function OpportunityCard({
               tone={opportunity.capitalStudy.executionQualified ? "success" : "warning"}
             />
           </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Fact label="Fresh confirmations" value={`${opportunity.capitalStudy.currentConsecutiveSamples}/${opportunity.capitalStudy.requiredCurrentSamples}`} good={opportunity.capitalStudy.executionQualified} />
-            <Fact label="Capital cycles" value={`${opportunity.capitalStudy.completedQualificationCycles}/${opportunity.capitalStudy.requiredQualificationCycles}`} good={opportunity.capitalStudy.capitalActionQualified} />
-            <Fact label="Earned current-net gate" value={`${opportunity.capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(2)}%`} good={opportunity.netProfitPercent >= opportunity.capitalStudy.effectiveMinimumCurrentNetProfitPercent} />
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <Fact label="Current execution gate" value={opportunity.capitalStudy.executionQualified ? "PASS" : "BLOCKED"} good={opportunity.capitalStudy.executionQualified} />
+            <Fact label="Current net gate" value={`${opportunity.capitalStudy.effectiveMinimumCurrentNetProfitPercent.toFixed(2)}%`} good={opportunity.netProfitPercent >= opportunity.capitalStudy.effectiveMinimumCurrentNetProfitPercent} />
             <Fact label="Fund action" value={opportunity.capitalStudy.recommendation.replaceAll("_", " ")} good={opportunity.capitalStudy.recommendation === "FUNDED"} />
           </div>
         </div>

@@ -23,21 +23,19 @@ export interface LiveOnlyRuntimePolicy {
  * needs more than a 1% gross spread to retain 1.30%.  CAT PRO therefore uses
  * two distinct boundaries:
  *
- * - >= 0.80% gross spread is anomalous and needs the full 25 independent
- *   route samples used by the capital study;
+ * - >= 0.80% gross spread remains visible as anomaly evidence, but persistence
+ *   waiting is not an execution gate; exact action-time books and the final
+ *   last-look must still pass;
  * - > 1.05x remains an absolute fail-closed quote-integrity rejection.
  *
- * This keeps large apparent gaps out of the fast path without silently making
- * every TDS-aware Indian route mathematically impossible.
+ * This keeps TDS-aware Indian routes mathematically possible while preserving
+ * the action-time integrity ceiling and exposing the anomaly to the operator.
  */
 export const LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT =
   0.8 as const;
 
 export const LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO =
   1.05 as const;
-
-export const LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES =
-  25 as const;
 
 export interface LiveOnlySpreadIntegrity {
   readonly grossSpreadPercent: number | null;

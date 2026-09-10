@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     await testFinalRefreshFailureNeverExecutes(
       directory,
     );
-    await testFiveStudyConfirmationsRequired(
+    await testCurrentRouteDecisionDoesNotWaitForPersistence(
       directory,
     );
     await testRecoveryHaltReleaseRequiresCleanAuthoritativeEvidence(
@@ -151,18 +151,17 @@ async function testRecoveryHaltReleaseRequiresCleanAuthoritativeEvidence(
   );
 }
 
-async function testFiveStudyConfirmationsRequired(
+async function testCurrentRouteDecisionDoesNotWaitForPersistence(
   directory: string,
 ): Promise<void> {
-  let studyReads = 0;
   let executions = 0;
   const service = runner(
     join(directory, "study-gate.jsonl"),
     {
       getCapitalStudyDecision: (candidate) => ({
         opportunityId: candidate.id,
-        executionQualified: ++studyReads >= 5,
-        effectiveMinimumCurrentNetProfitPercent: 0.2,
+        executionQualified: true,
+        effectiveMinimumCurrentNetProfitPercent: 0.3,
       } as OpportunityCapitalStudyDecision),
       execute: async (candidate) => {
         executions += 1;
@@ -171,12 +170,10 @@ async function testFiveStudyConfirmationsRequired(
     },
   );
 
-  for (let index = 0; index < 5; index += 1) {
-    await service.observeSnapshot({
-      generatedAt: NOW + index,
-      opportunities: [opportunity(`study-${index}`, NOW)],
-    });
-  }
+  await service.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [opportunity("current-route", NOW)],
+  });
 
   assert.equal(executions, 1);
   assert.equal(service.getDiagnostics(NOW + 100).attempts, 1);

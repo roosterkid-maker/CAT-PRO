@@ -21,14 +21,11 @@ import {
   type CapitalManagerSafetyContext,
 } from "./CapitalManagerSafetyContextService";
 
-export const CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES = 5;
-export const CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES = 5;
-export const CAPITAL_STUDY_REQUIRED_TOTAL_SAMPLES =
-  CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES *
-  CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES;
+export const CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES = 0;
+export const CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES = 0;
+export const CAPITAL_STUDY_REQUIRED_TOTAL_SAMPLES = 0;
 export const CAPITAL_STUDY_MINIMUM_SAMPLE_SPACING_MS = 750;
 export const CAPITAL_STUDY_BASELINE_NET_PERCENT = 1.50;
-export const CAPITAL_STUDY_INTERMEDIATE_NET_PERCENT = 1.40;
 export const CAPITAL_STUDY_HARD_NET_FLOOR_PERCENT = 1.30;
 
 const MAXIMUM_TRACKED_ROUTES = 64;
@@ -36,9 +33,8 @@ const MAXIMUM_CURRENT_ROUTE_AGE_MS = 2_000;
 const RESET_QUALIFICATION_AFTER_MS = 5 * 60_000;
 
 export type OpportunityCapitalStudyStatus =
-  | "STUDYING"
-  | "EXECUTION_STUDY_READY"
-  | "CAPITAL_STUDY_READY";
+  | "CURRENT_ROUTE_BLOCKED"
+  | "CURRENT_ROUTE_READY";
 
 export type OpportunityCapitalRecommendation =
   | "WAIT_FOR_MORE_EVIDENCE"
@@ -74,11 +70,11 @@ export interface OpportunityCapitalStudyDecision {
   readonly executionQualified: boolean;
   readonly capitalActionQualified: boolean;
   readonly currentConsecutiveSamples: number;
-  readonly requiredCurrentSamples: 5;
+  readonly requiredCurrentSamples: 0;
   readonly completedQualificationCycles: number;
-  readonly requiredQualificationCycles: 5;
+  readonly requiredQualificationCycles: 0;
   readonly totalIndependentSamples: number;
-  readonly requiredTotalSamplesForCapital: 25;
+  readonly requiredTotalSamplesForCapital: 0;
   readonly effectiveMinimumCurrentNetProfitPercent: number;
   readonly baselineMinimumCurrentNetProfitPercent: 1.5;
   readonly hardMinimumCurrentNetProfitPercent: 1.3;
@@ -91,7 +87,7 @@ export interface OpportunityCapitalStudyDecision {
   readonly blockers: readonly string[];
   readonly safety: {
     readonly studyOnly: true;
-    readonly restartResetsQualification: true;
+    readonly restartResetsQualification: false;
     readonly hardGatesAutoRelaxed: false;
     readonly recoveryClean: boolean;
     readonly movementAllowed: boolean;
@@ -107,11 +103,11 @@ export interface OpportunityCapitalStudyReport {
   readonly executionStudyReadyRoutes: number;
   readonly capitalStudyReadyRoutes: number;
   readonly policy: {
-    readonly independentSamplesPerExecutionDecision: 5;
-    readonly qualificationCyclesForCapitalAction: 5;
-    readonly independentSamplesForCapitalAction: 25;
+    readonly independentSamplesPerExecutionDecision: 0;
+    readonly qualificationCyclesForCapitalAction: 0;
+    readonly independentSamplesForCapitalAction: 0;
     readonly minimumSampleSpacingMs: 750;
-    readonly adaptiveCurrentNetLadderPercent: readonly [1.5, 1.4, 1.3];
+    readonly adaptiveCurrentNetLadderPercent: readonly [1.5];
     readonly postStressNetHardFloorPercent: number;
     readonly maximumBookAgeMs: number;
     readonly maximumBookSkewMs: number;
@@ -182,9 +178,9 @@ const DEFAULT_DEPENDENCIES: OpportunityCapitalStudyDependencies = {
 };
 
 /**
- * Continuously studies each exact BUY/SELL route without exchange I/O. It can
- * lower only the route's first current-net admission gate, never a safety,
- * depth, balance, recovery, capital-cap or post-stress gate.
+ * Tracks the latest exact BUY/SELL route without adding a persistence wait.
+ * One current snapshot may proceed only when all market, depth, balance,
+ * recovery, capital-cap and profitability gates pass at that moment.
  */
 export class OpportunityCapitalStudyService {
   private readonly routes = new Map<string, RouteState>();
@@ -272,11 +268,11 @@ export class OpportunityCapitalStudyService {
       executionStudyReadyRoutes: routes.filter((route) => route.executionQualified).length,
       capitalStudyReadyRoutes: routes.filter((route) => route.capitalActionQualified).length,
       policy: Object.freeze({
-        independentSamplesPerExecutionDecision: 5 as const,
-        qualificationCyclesForCapitalAction: 5 as const,
-        independentSamplesForCapitalAction: 25 as const,
+        independentSamplesPerExecutionDecision: 0 as const,
+        qualificationCyclesForCapitalAction: 0 as const,
+        independentSamplesForCapitalAction: 0 as const,
         minimumSampleSpacingMs: 750 as const,
-        adaptiveCurrentNetLadderPercent: Object.freeze([1.5, 1.4, 1.3] as const),
+        adaptiveCurrentNetLadderPercent: Object.freeze([1.5] as const),
         postStressNetHardFloorPercent:
           getLiveOnlyRuntimePolicy().minimumPostStressNetProfitPercent,
         maximumBookAgeMs:
@@ -323,7 +319,11 @@ export class OpportunityCapitalStudyService {
     state.opportunityId = opportunity.id;
     state.latestNetProfitPercent = opportunity.netProfitPercent;
     state.latestObservedAt = now;
-    const currentMarketBlockers = this.marketEvidenceBlockers(opportunity, now);
+    const currentMarketBlockers = this.marketEvidenceBlockers(
+      opportunity,
+      now,
+      CAPITAL_STUDY_BASELINE_NET_PERCENT,
+    );
     if (currentMarketBlockers.length > 0) {
       state.latestSampleBlockers = [...new Set(currentMarketBlockers)];
       state.currentConsecutiveSamples = 0;
@@ -376,22 +376,8 @@ export class OpportunityCapitalStudyService {
       return;
     }
 
-    state.currentConsecutiveSamples = Math.min(
-      CAPITAL_STUDY_REQUIRED_TOTAL_SAMPLES,
-      state.currentConsecutiveSamples + 1,
-    );
-    state.samplesInQualificationCycle += 1;
-    state.recentSafeNetProfitPercents.push(opportunity.netProfitPercent);
-    state.recentSafeNetProfitPercents = state.recentSafeNetProfitPercents.slice(
-      -CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES,
-    );
-    if (state.samplesInQualificationCycle >= CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES) {
-      state.completedQualificationCycles = Math.min(
-        CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES,
-        state.completedQualificationCycles + 1,
-      );
-      state.samplesInQualificationCycle = 0;
-    }
+    // Persistence sampling was deliberately retired for LIVE-only operation.
+    // The latest independent observation remains audit evidence, not a timer.
   }
 
   private buildDecision(
@@ -402,18 +388,15 @@ export class OpportunityCapitalStudyService {
   ): OpportunityCapitalStudyDecision {
     const safety = suppliedSafety ?? this.safeContext(now);
     const evidenceAgeMs = Math.max(0, now - state.lastIndependentSampleAt);
-    const threshold = this.effectiveThreshold(state);
+    const threshold = CAPITAL_STUDY_BASELINE_NET_PERCENT;
     const currentBlockers = opportunity
       ? this.marketEvidenceBlockers(opportunity, now, threshold)
       : state.latestSampleBlockers;
     const executionQualified =
-      state.currentConsecutiveSamples >= CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES &&
-      state.recentSafeNetProfitPercents.length >= CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES &&
+      state.lastIndependentSampleAt > 0 &&
       evidenceAgeMs >= 0 && evidenceAgeMs <= MAXIMUM_CURRENT_ROUTE_AGE_MS &&
       currentBlockers.length === 0;
-    const capitalActionQualified =
-      executionQualified &&
-      state.completedQualificationCycles >= CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES;
+    const capitalActionQualified = executionQualified;
     const recommendation = this.recommend(
       state.funding,
       executionQualified,
@@ -426,26 +409,14 @@ export class OpportunityCapitalStudyService {
     const blockers = [...new Set([
       ...state.latestSampleBlockers,
       ...currentBlockers,
-      ...(executionQualified
+      ...(state.lastIndependentSampleAt > 0
         ? []
-        : [`Need ${Math.max(
-            0,
-            CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES - state.currentConsecutiveSamples,
-          )} more consecutive independent safe sample(s).`]),
-      ...(capitalActionQualified
-        ? []
-        : [`Capital action needs ${Math.max(
-            0,
-            CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES -
-              state.completedQualificationCycles,
-          )} more five-sample qualification cycle(s).`]),
+        : ["A current independent exact-route observation is required."]),
       ...(recoveryClean ? [] : ["Recovery, settlement or emergency-stop safety blocks capital movement."]),
     ])];
     const status: OpportunityCapitalStudyStatus = capitalActionQualified
-      ? "CAPITAL_STUDY_READY"
-      : executionQualified
-        ? "EXECUTION_STUDY_READY"
-        : "STUDYING";
+      ? "CURRENT_ROUTE_READY"
+      : "CURRENT_ROUTE_BLOCKED";
 
     return Object.freeze({
       routeKey: state.routeKey,
@@ -460,11 +431,11 @@ export class OpportunityCapitalStudyService {
         CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES,
         state.currentConsecutiveSamples,
       ),
-      requiredCurrentSamples: 5 as const,
+      requiredCurrentSamples: 0 as const,
       completedQualificationCycles: state.completedQualificationCycles,
-      requiredQualificationCycles: 5 as const,
+      requiredQualificationCycles: 0 as const,
       totalIndependentSamples: state.totalIndependentSamples,
-      requiredTotalSamplesForCapital: 25 as const,
+      requiredTotalSamplesForCapital: 0 as const,
       effectiveMinimumCurrentNetProfitPercent: threshold,
       baselineMinimumCurrentNetProfitPercent: 1.5 as const,
       hardMinimumCurrentNetProfitPercent: 1.3 as const,
@@ -477,7 +448,7 @@ export class OpportunityCapitalStudyService {
       blockers: Object.freeze(blockers),
       safety: Object.freeze({
         studyOnly: true as const,
-        restartResetsQualification: true as const,
+        restartResetsQualification: false as const,
         hardGatesAutoRelaxed: false as const,
         recoveryClean,
         movementAllowed: recoveryClean && capitalActionQualified,
@@ -544,20 +515,6 @@ export class OpportunityCapitalStudyService {
     return blockers;
   }
 
-  private effectiveThreshold(state: RouteState): number {
-    if (state.recentSafeNetProfitPercents.length < CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES) {
-      return CAPITAL_STUDY_BASELINE_NET_PERCENT;
-    }
-    const minimum = Math.min(...state.recentSafeNetProfitPercents);
-    if (minimum >= CAPITAL_STUDY_BASELINE_NET_PERCENT) {
-      return CAPITAL_STUDY_BASELINE_NET_PERCENT;
-    }
-    if (minimum >= CAPITAL_STUDY_INTERMEDIATE_NET_PERCENT) {
-      return CAPITAL_STUDY_INTERMEDIATE_NET_PERCENT;
-    }
-    return CAPITAL_STUDY_HARD_NET_FLOOR_PERCENT;
-  }
-
   private toFundingStudy(report: StrategyOneFundedRouteReport): OpportunityCapitalFundingStudy {
     const buyShortfall = shortfall(report.buyFunding.requiredBalance, report.buyFunding.availableBalance);
     const sellShortfall = shortfall(report.sellFunding.requiredBalance, report.sellFunding.availableBalance);
@@ -585,7 +542,7 @@ export class OpportunityCapitalStudyService {
     if (!executionQualified) {
       return {
         action: "WAIT_FOR_MORE_EVIDENCE",
-        detail: "Keep observing this exact route; no old snapshot can execute or move capital.",
+        detail: "The current exact route does not pass all mandatory LIVE gates.",
       };
     }
     if (!funding || funding.buyAvailable === null || funding.sellAvailable === null) {
@@ -597,7 +554,7 @@ export class OpportunityCapitalStudyService {
     if (funding.buySufficient && funding.sellSufficient) {
       return capitalActionQualified
         ? {action: "FUNDED", detail: "Both exact legs are funded; wait for a new full preflight and final last-look."}
-        : {action: "READY_FOR_EXACT_PREFLIGHT", detail: "Execution study passed and both legs are funded; capital movement is unnecessary."};
+        : {action: "READY_FOR_EXACT_PREFLIGHT", detail: "Both exact legs are funded; capital movement is unnecessary."};
     }
     if (!funding.buySufficient && !funding.sellSufficient) {
       return {
@@ -608,7 +565,7 @@ export class OpportunityCapitalStudyService {
     if (!funding.buySufficient) {
       return {
         action: "ADD_USDT_TO_BUY_EXCHANGE",
-        detail: "After five qualification cycles, only a bounded whitelisted USDT move may cover this exact BUY shortfall.",
+        detail: "A bounded whitelisted USDT move may cover this current exact BUY shortfall.",
       };
     }
     return {

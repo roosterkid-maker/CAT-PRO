@@ -16,8 +16,6 @@ import {
   isLiveOnlyRuntimeEnabled,
   evaluateLiveOnlySpreadIntegrity,
   LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO,
-  LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT,
-  LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES,
 } from "../../../config/LiveOnlyRuntimePolicy";
 
 import {
@@ -210,21 +208,6 @@ export class StrategyOneLiveOnlyPreflightService {
     ) {
       blockers.push(
         `Cross-exchange price ratio must be finite and at most ${LIVE_ONLY_ABSOLUTE_MAXIMUM_PRICE_RATIO.toFixed(2)}x (current=${crossExchangePriceRatio?.toFixed(4) ?? "unavailable"}x).`,
-      );
-    }
-
-    if (
-      suspiciousSpread &&
-      !capitalStudy.capitalActionQualified
-    ) {
-      blockers.push(
-        `SUSPICIOUS_SPREAD: Gross spread ${grossSpreadPercent?.toFixed(4)}% is at or above ${LIVE_ONLY_SUSPICIOUS_GROSS_SPREAD_PERCENT.toFixed(2)}%; ${LIVE_ONLY_SUSPICIOUS_ROUTE_MINIMUM_SAMPLES} independent fresh exact-route samples are required before LIVE preflight can pass.`,
-      );
-    }
-
-    if (!capitalStudy.executionQualified) {
-      blockers.push(
-        `CAPITAL_STUDY: Exact route has ${capitalStudy.currentConsecutiveSamples}/${capitalStudy.requiredCurrentSamples} consecutive independent safe samples.`,
       );
     }
 
