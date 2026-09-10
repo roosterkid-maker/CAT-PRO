@@ -108,6 +108,9 @@ export interface StrategyOneResidualRecoveryPreview {
     readonly estimatedAdverseMoveLossQuote: number | null;
     readonly estimatedTotalLossQuote: number | null;
     readonly maximumAllowedLossQuote: number | null;
+    readonly boundedPriceDirection: "MAXIMUM_BUY" | "MINIMUM_SELL" | null;
+    readonly worstAcceptableLimitPrice: number | null;
+    readonly estimatedLossAtPriceBoundaryQuote: number | null;
     readonly balanceAsset: string | null;
     readonly requiredBalance: number | null;
     readonly availableBalance: number | null;
@@ -124,7 +127,9 @@ export interface StrategyOneResidualRecoveryPreview {
     readonly authoritativeReadReconciliationOnly: true;
     readonly exactResidualNeverIncreased: true;
     readonly fullDepthRequired: true;
+    readonly inspectionTimePublicBookRefreshRequired: true;
     readonly actionTimePublicBookRefreshRequired: true;
+    readonly operatorApprovedBoundedPriceRequired: true;
     readonly currentRulesRequired: true;
     readonly freshBalanceRequired: true;
     readonly maximumLossCapRequired: true;
@@ -399,9 +404,9 @@ export class StrategyOneResidualRecoveryAssistantService {
 
   /**
    * Revalidates an explicitly approved preview immediately before a separate
-   * recovery execution owner is allowed to journal an order. This method only
-   * performs known-order reconciliation and cached evidence reads; it has no
-   * exchange order submission port.
+   * recovery execution owner is allowed to journal an order. This method
+   * performs known-order reconciliation and one exact-venue public book
+   * refresh; it has no exchange order submission port.
    */
   async getApprovedExecutionBoundary(
     previewIdValue: string,
@@ -493,6 +498,15 @@ export class StrategyOneResidualRecoveryAssistantService {
       );
     }
 
+    if (
+      !Number.isSafeInteger(refresh.completedAt) ||
+      refresh.completedAt <= 0
+    ) {
+      throw new Error(
+        "Action-time recovery public book refresh returned an invalid completion time.",
+      );
+    }
+
     const actionTimeAssessmentTime = Math.max(
       assessmentTime,
       refresh.completedAt,
@@ -519,7 +533,7 @@ export class StrategyOneResidualRecoveryAssistantService {
     }
 
     assertSameRecoveryIntent(approved, actionTime);
-    assertNoWorseRecoveryPrice(approved, actionTime);
+    assertRecoveryPriceWithinApprovedBoundary(approved, actionTime);
 
     return freeze({
       approvedPreview: clone(approved),
@@ -584,6 +598,10 @@ export class StrategyOneResidualRecoveryAssistantService {
       StrategyOneTwoLegSessionRecord;
     let reconciliationFailure:
       string | null = null;
+    let inspectionRefreshFailure:
+      string | null = null;
+    let inspectionRefreshCompletedAt:
+      number | null = null;
 
     try {
       const reconciled =
@@ -598,6 +616,37 @@ export class StrategyOneResidualRecoveryAssistantService {
           : "Unknown authoritative reconciliation failure.";
     }
 
+    const refreshInput =
+      reconciliationFailure === null
+        ? recoveryBookRefreshInput(session)
+        : null;
+
+    if (refreshInput) {
+      try {
+        const refresh =
+          await this.dependencies.refreshEvidenceBoundRecoveryBook(refreshInput);
+
+        if (
+          !Number.isSafeInteger(refresh.completedAt) ||
+          refresh.completedAt <= 0
+        ) {
+          inspectionRefreshFailure =
+            "refresh completion time is invalid";
+        } else {
+          inspectionRefreshCompletedAt = refresh.completedAt;
+        }
+
+        if (refresh.state !== "REFRESHED") {
+          inspectionRefreshFailure =
+            refresh.blocker ??
+            "fresh exact recovery depth was unavailable";
+        }
+      } catch (error: unknown) {
+        inspectionRefreshFailure =
+          `public book refresh failed closed: ${message(error)}`;
+      }
+    }
+
     // Reconciliation and authenticated reads are asynchronous. The caller's
     // timestamp marks when inspection started, so a book refreshed during
     // those reads can legitimately be newer than that timestamp. Assess
@@ -605,6 +654,7 @@ export class StrategyOneResidualRecoveryAssistantService {
     // future timestamps used by deterministic callers.
     const assessmentTime = Math.max(
       now,
+      inspectionRefreshCompletedAt ?? 0,
       this.dependencies.currentTime(),
     );
     validateTime(assessmentTime);
@@ -615,6 +665,7 @@ export class StrategyOneResidualRecoveryAssistantService {
         assessmentTime,
         reconciliationFailure,
         oneTimeLossAuthorization,
+        inspectionRefreshFailure,
       );
     this.setAndPersist(preview, assessmentTime);
     return clone(preview);
@@ -629,6 +680,7 @@ export class StrategyOneResidualRecoveryAssistantService {
       readonly confirmation: string;
       readonly authorizedAt?: number;
     } | null = null,
+    inspectionRefreshFailure: string | null = null,
   ): StrategyOneResidualRecoveryPreview {
     const blockers:
       string[] = [];
@@ -647,6 +699,12 @@ export class StrategyOneResidualRecoveryAssistantService {
     if (reconciliationFailure) {
       blockers.push(
         `Authoritative reconciliation failed: ${reconciliationFailure}`,
+      );
+    }
+
+    if (inspectionRefreshFailure) {
+      blockers.push(
+        `Inspection-time recovery public book refresh is blocked: ${inspectionRefreshFailure}`,
       );
     }
 
@@ -773,6 +831,12 @@ export class StrategyOneResidualRecoveryAssistantService {
     let estimatedTotalLossQuote:
       number | null = null;
     let maximumAllowedLossQuote:
+      number | null = null;
+    let boundedPriceDirection:
+      "MAXIMUM_BUY" | "MINIMUM_SELL" | null = null;
+    let worstAcceptableLimitPrice:
+      number | null = null;
+    let estimatedLossAtPriceBoundaryQuote:
       number | null = null;
     let balanceAsset:
       string | null = null;
@@ -968,26 +1032,67 @@ export class StrategyOneResidualRecoveryAssistantService {
       if (
         executableQuantity !== null &&
         executableQuantity > 0 &&
-        vwapPrice !== null &&
+        limitPrice !== null &&
         referenceEntryPrice !== null &&
         takerFeePercent !== null
       ) {
         const recoveryNotional =
-          executableQuantity * vwapPrice;
+          executableQuantity * limitPrice;
         const referenceNotional =
           executableQuantity * referenceEntryPrice;
-        estimatedFeeQuote =
-          recoveryNotional * takerFeePercent / 100;
+        const lossAtCurrentLimit =
+          recoveryLossAtLimitPrice(
+            executableQuantity,
+            limitPrice,
+            referenceEntryPrice,
+            takerFeePercent,
+            side,
+          );
+        estimatedFeeQuote = lossAtCurrentLimit.feeQuote;
         estimatedAdverseMoveLossQuote =
-          side === "SELL"
-            ? Math.max(0, referenceNotional - recoveryNotional)
-            : Math.max(0, recoveryNotional - referenceNotional);
-        estimatedTotalLossQuote =
-          estimatedAdverseMoveLossQuote + estimatedFeeQuote;
+          lossAtCurrentLimit.adverseMoveLossQuote;
+        estimatedTotalLossQuote = lossAtCurrentLimit.totalLossQuote;
         maximumAllowedLossQuote =
           oneTimeLossAuthorization?.maximumLossQuote ??
           referenceNotional *
             this.configuration.maximumLossPercentOfResidual / 100;
+        boundedPriceDirection =
+          side === "BUY"
+            ? "MAXIMUM_BUY"
+            : "MINIMUM_SELL";
+        worstAcceptableLimitPrice =
+          recoveryWorstAcceptableLimitPrice(
+            executableQuantity,
+            referenceEntryPrice,
+            takerFeePercent,
+            maximumAllowedLossQuote,
+            capability?.price.priceStep ?? null,
+            side,
+          );
+
+        if (worstAcceptableLimitPrice === null) {
+          blockers.push(
+            "A loss-cap-bounded recovery price cannot be derived from current rules.",
+          );
+        } else {
+          estimatedLossAtPriceBoundaryQuote =
+            recoveryLossAtLimitPrice(
+              executableQuantity,
+              worstAcceptableLimitPrice,
+              referenceEntryPrice,
+              takerFeePercent,
+              side,
+            ).totalLossQuote;
+
+          if (
+            estimatedLossAtPriceBoundaryQuote >
+            maximumAllowedLossQuote + lossTolerance(maximumAllowedLossQuote)
+          ) {
+            blockers.push(
+              "The normalized recovery price boundary exceeds the maximum allowed loss.",
+            );
+          }
+        }
 
         if (
           referenceNotional >
@@ -1127,6 +1232,9 @@ export class StrategyOneResidualRecoveryAssistantService {
         estimatedAdverseMoveLossQuote,
         estimatedTotalLossQuote,
         maximumAllowedLossQuote,
+        boundedPriceDirection,
+        worstAcceptableLimitPrice,
+        estimatedLossAtPriceBoundaryQuote,
         balanceAsset,
         requiredBalance,
         availableBalance,
@@ -1313,6 +1421,90 @@ function recoveryLimitPrice(
     : null;
 }
 
+function recoveryLossAtLimitPrice(
+  quantity: number,
+  limitPrice: number,
+  referenceEntryPrice: number,
+  takerFeePercent: number,
+  side: "BUY" | "SELL",
+): {
+  readonly feeQuote: number;
+  readonly adverseMoveLossQuote: number;
+  readonly totalLossQuote: number;
+} {
+  const recoveryNotional = quantity * limitPrice;
+  const referenceNotional = quantity * referenceEntryPrice;
+  const feeQuote = recoveryNotional * takerFeePercent / 100;
+  const adverseMoveLossQuote =
+    side === "SELL"
+      ? Math.max(0, referenceNotional - recoveryNotional)
+      : Math.max(0, recoveryNotional - referenceNotional);
+
+  return {
+    feeQuote,
+    adverseMoveLossQuote,
+    totalLossQuote: adverseMoveLossQuote + feeQuote,
+  };
+}
+
+function recoveryWorstAcceptableLimitPrice(
+  quantity: number,
+  referenceEntryPrice: number,
+  takerFeePercent: number,
+  maximumLossQuote: number,
+  priceStep: number | null,
+  side: "BUY" | "SELL",
+): number | null {
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0 ||
+    !Number.isFinite(referenceEntryPrice) ||
+    referenceEntryPrice <= 0 ||
+    !Number.isFinite(takerFeePercent) ||
+    takerFeePercent < 0 ||
+    takerFeePercent >= 100 ||
+    !Number.isFinite(maximumLossQuote) ||
+    maximumLossQuote <= 0 ||
+    priceStep === null ||
+    !Number.isFinite(priceStep) ||
+    priceStep <= 0
+  ) {
+    return null;
+  }
+
+  const feeRate = takerFeePercent / 100;
+  const referenceNotional = quantity * referenceEntryPrice;
+  const feeAtReference = referenceNotional * feeRate;
+  let rawBoundary: number;
+
+  if (side === "BUY") {
+    rawBoundary =
+      maximumLossQuote >= feeAtReference || feeRate === 0
+        ? (referenceNotional + maximumLossQuote) /
+          (quantity * (1 + feeRate))
+        : maximumLossQuote / (quantity * feeRate);
+  } else {
+    if (maximumLossQuote < feeAtReference) {
+      return null;
+    }
+
+    rawBoundary = Math.max(
+      priceStep,
+      (referenceNotional - maximumLossQuote) /
+        (quantity * (1 - feeRate)),
+    );
+  }
+  const steps = rawBoundary / priceStep;
+  const normalized =
+    side === "BUY"
+      ? Math.floor(steps + 1e-12) * priceStep
+      : Math.ceil(steps - 1e-12) * priceStep;
+
+  return normalized > 0 && Number.isFinite(normalized)
+    ? normalized
+    : null;
+}
+
 function normalizeQuantityDown(
   quantity: number,
   step: number | null,
@@ -1481,7 +1673,9 @@ function safety() {
     authoritativeReadReconciliationOnly: true as const,
     exactResidualNeverIncreased: true as const,
     fullDepthRequired: true as const,
+    inspectionTimePublicBookRefreshRequired: true as const,
     actionTimePublicBookRefreshRequired: true as const,
+    operatorApprovedBoundedPriceRequired: true as const,
     currentRulesRequired: true as const,
     freshBalanceRequired: true as const,
     maximumLossCapRequired: true as const,
@@ -1493,6 +1687,54 @@ function safety() {
     transferAllowed: false as const,
     withdrawalAllowed: false as const,
   });
+}
+
+function recoveryBookRefreshInput(
+  session: StrategyOneTwoLegSessionRecord,
+): {
+  readonly market: string;
+  readonly buyExchange: string;
+  readonly sellExchange: string;
+  readonly recoveryExchange: string;
+} | null {
+  const buy = session.buyResponse?.record?.result ?? null;
+  const sell = session.sellResponse?.record?.result ?? null;
+
+  if (
+    !buy ||
+    !sell ||
+    !terminal(buy.status) ||
+    !terminal(sell.status)
+  ) {
+    return null;
+  }
+
+  const buyFilled = finiteNonNegative(buy.filledQuantity);
+  const sellFilled = finiteNonNegative(sell.filledQuantity);
+
+  if (buyFilled === null || sellFilled === null) {
+    return null;
+  }
+
+  const tolerance =
+    Math.max(1e-12, Math.max(buyFilled, sellFilled) * 1e-9);
+  const recoveryExchange =
+    buyFilled > sellFilled + tolerance
+      ? normalizeExchange(session.buyRequest.exchange)
+      : sellFilled > buyFilled + tolerance
+        ? normalizeExchange(session.sellRequest.exchange)
+        : null;
+
+  if (!recoveryExchange) {
+    return null;
+  }
+
+  return {
+    market: normalizeMarket(session.buyRequest.market),
+    buyExchange: normalizeExchange(session.buyRequest.exchange),
+    sellExchange: normalizeExchange(session.sellRequest.exchange),
+    recoveryExchange,
+  };
 }
 
 function validateOneTimeLossAuthorization(
@@ -1671,8 +1913,15 @@ function assertSameRecoveryIntent(
     approved.residual.exactQuantity === current.residual.exactQuantity &&
     approved.residual.executableQuantity === current.residual.executableQuantity &&
     approved.residual.dustQuantity === current.residual.dustQuantity &&
+    approved.residual.referenceEntryPrice === current.residual.referenceEntryPrice &&
     approved.executionPreview.selectedTimeInForce ===
-      current.executionPreview.selectedTimeInForce;
+      current.executionPreview.selectedTimeInForce &&
+    approved.executionPreview.maximumAllowedLossQuote ===
+      current.executionPreview.maximumAllowedLossQuote &&
+    sameLossAuthorization(
+      approved.oneTimeLossAuthorization,
+      current.oneTimeLossAuthorization,
+    );
 
   if (!unchanged) {
     throw new Error(
@@ -1681,51 +1930,72 @@ function assertSameRecoveryIntent(
   }
 }
 
-function assertNoWorseRecoveryPrice(
+function assertRecoveryPriceWithinApprovedBoundary(
   approved: StrategyOneResidualRecoveryPreview,
   current: StrategyOneResidualRecoveryPreview,
 ): void {
-  const approvedPrice = approved.executionPreview.limitPrice;
   const currentPrice = current.executionPreview.limitPrice;
   const side = approved.residual.side;
-
-  const priceIsWorse =
-    (side === "SELL" &&
-      approvedPrice !== null &&
-      currentPrice !== null &&
-      currentPrice < approvedPrice) ||
-    (side === "BUY" &&
-      approvedPrice !== null &&
-      currentPrice !== null &&
-      currentPrice > approvedPrice);
-  const approvedAuthorization =
-    approved.oneTimeLossAuthorization;
-  const currentAuthorization =
-    current.oneTimeLossAuthorization;
+  const approvedDirection =
+    approved.executionPreview.boundedPriceDirection;
+  const currentDirection =
+    current.executionPreview.boundedPriceDirection;
+  const approvedBoundary =
+    approved.executionPreview.worstAcceptableLimitPrice;
+  const currentBoundary =
+    current.executionPreview.worstAcceptableLimitPrice;
+  const approvedMaximumLoss =
+    approved.executionPreview.maximumAllowedLossQuote;
+  const currentMaximumLoss =
+    current.executionPreview.maximumAllowedLossQuote;
   const currentEstimatedLoss =
     current.executionPreview.estimatedTotalLossQuote;
-  const authorizedWorsePrice =
-    priceIsWorse &&
-    approvedAuthorization !== null &&
-    currentAuthorization !== null &&
-    currentAuthorization.maximumLossQuote ===
-      approvedAuthorization.maximumLossQuote &&
-    currentAuthorization.confirmation ===
-      approvedAuthorization.confirmation &&
-    currentEstimatedLoss !== null &&
-    currentEstimatedLoss <=
-      approvedAuthorization.maximumLossQuote + 1e-12;
 
   if (
-    approvedPrice === null ||
     currentPrice === null ||
     (side !== "SELL" && side !== "BUY") ||
-    (priceIsWorse && !authorizedWorsePrice)
+    approvedBoundary === null ||
+    currentBoundary === null ||
+    approvedMaximumLoss === null ||
+    currentMaximumLoss === null ||
+    currentEstimatedLoss === null ||
+    approvedDirection !== (side === "BUY" ? "MAXIMUM_BUY" : "MINIMUM_SELL") ||
+    currentDirection !== approvedDirection ||
+    (side === "BUY" &&
+      (currentPrice > approvedBoundary + priceTolerance(approvedBoundary) ||
+        currentPrice > currentBoundary + priceTolerance(currentBoundary))) ||
+    (side === "SELL" &&
+      (currentPrice < approvedBoundary - priceTolerance(approvedBoundary) ||
+        currentPrice < currentBoundary - priceTolerance(currentBoundary))) ||
+    currentEstimatedLoss >
+      approvedMaximumLoss + lossTolerance(approvedMaximumLoss) ||
+    currentEstimatedLoss >
+      currentMaximumLoss + lossTolerance(currentMaximumLoss)
   ) {
     throw new Error(
-      "Action-time recovery price is worse than the explicitly approved limit; inspect and approve again.",
+      "Action-time recovery price is outside the explicitly approved bounded-price and maximum-loss ceiling; inspect and approve again.",
     );
   }
+}
+
+function sameLossAuthorization(
+  first: StrategyOneResidualRecoveryPreview["oneTimeLossAuthorization"],
+  second: StrategyOneResidualRecoveryPreview["oneTimeLossAuthorization"],
+): boolean {
+  return first === null
+    ? second === null
+    : second !== null &&
+      first.maximumLossQuote === second.maximumLossQuote &&
+      first.confirmation === second.confirmation &&
+      first.authorizedAt === second.authorizedAt;
+}
+
+function priceTolerance(value: number): number {
+  return Math.max(1e-12, Math.abs(value) * 1e-12);
+}
+
+function lossTolerance(value: number): number {
+  return Math.max(1e-12, Math.abs(value) * 1e-12);
 }
 
 function message(error: unknown): string {

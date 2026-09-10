@@ -727,6 +727,11 @@ function preview(
       estimatedTotalLossQuote:
         estimatedAdverseMoveLossQuote + estimatedFeeQuote,
       maximumAllowedLossQuote: 0.04968,
+      boundedPriceDirection: "MINIMUM_SELL",
+      worstAcceptableLimitPrice: 0.0357,
+      estimatedLossAtPriceBoundaryQuote:
+        Math.max(0, 138 * 0.036 - 138 * 0.0357) +
+        138 * 0.0357 * 0.001,
       balanceAsset: "TUT",
       requiredBalance: 138,
       availableBalance: 506.493,
@@ -741,7 +746,9 @@ function preview(
       authoritativeReadReconciliationOnly: true,
       exactResidualNeverIncreased: true,
       fullDepthRequired: true,
+      inspectionTimePublicBookRefreshRequired: true,
       actionTimePublicBookRefreshRequired: true,
+      operatorApprovedBoundedPriceRequired: true,
       currentRulesRequired: true,
       freshBalanceRequired: true,
       maximumLossCapRequired: true,

@@ -74,7 +74,10 @@ async function main(): Promise<void> {
           sellExchange: "binance",
           recoveryExchange: "coindcx",
         });
-        return successfulRecoveryRefresh(input, NOW + 2);
+        return successfulRecoveryRefresh(
+          input,
+          actionTimeRefreshes === 1 ? NOW : NOW + 2,
+        );
       },
     );
   const preview =
@@ -141,13 +144,28 @@ async function main(): Promise<void> {
     approved.sourceSessionFingerprint,
     "volatile reconciliation timestamps and reasons must not invalidate approval",
   );
-  assert.equal(actionTimeRefreshes, 1);
+  assert.equal(actionTimeRefreshes, 2);
+  assert.equal(
+    preview.safety.inspectionTimePublicBookRefreshRequired,
+    true,
+  );
   assert.equal(
     executionBoundary.actionTimePreview.safety
       .actionTimePublicBookRefreshRequired,
     true,
   );
+  assert.equal(preview.safety.operatorApprovedBoundedPriceRequired, true);
+  assert.equal(
+    preview.executionPreview.boundedPriceDirection,
+    "MINIMUM_SELL",
+  );
+  assert.equal(preview.executionPreview.worstAcceptableLimitPrice, 0.992);
+  assert.ok(
+    (preview.executionPreview.estimatedLossAtPriceBoundaryQuote ?? Infinity) <=
+      (preview.executionPreview.maximumAllowedLossQuote ?? 0),
+  );
 
+  let blockedRefreshes = 0;
   const blockedRefreshService = assistant(
     new FakePairPort(longResidualSession),
     {
@@ -159,11 +177,16 @@ async function main(): Promise<void> {
     5,
     "blocked-action-time-refresh.jsonl",
     NOW,
-    async (input) => ({
-      ...successfulRecoveryRefresh(input, NOW + 2),
-      state: "BLOCKED" as const,
-      blocker: "Fixture public-depth timeout.",
-    }),
+    async (input) => {
+      blockedRefreshes += 1;
+      return blockedRefreshes === 1
+        ? successfulRecoveryRefresh(input, NOW)
+        : {
+          ...successfulRecoveryRefresh(input, NOW + 2),
+          state: "BLOCKED" as const,
+          blocker: "Fixture public-depth timeout.",
+        };
+    },
   );
   const blockedRefreshPreview = await blockedRefreshService.inspectSession(
     longResidualSession.sessionId,
@@ -180,6 +203,31 @@ async function main(): Promise<void> {
       NOW + 2,
     ),
     /public book refresh is blocked: Fixture public-depth timeout/u,
+  );
+
+  const inspectionRefreshBlocked = await assistant(
+    new FakePairPort(longResidualSession),
+    {
+      timestamp: NOW - 25,
+      bids: [{price: 1.05, quantity: 3}],
+      asks: [{price: 1.06, quantity: 3}],
+    },
+    capability(1),
+    5,
+    "blocked-inspection-refresh.jsonl",
+    NOW,
+    async (input) => ({
+      ...successfulRecoveryRefresh(input, NOW),
+      state: "BLOCKED" as const,
+      blocker: "Fixture inspection public-depth timeout.",
+    }),
+  ).inspectSession(longResidualSession.sessionId, NOW);
+  assert.equal(inspectionRefreshBlocked.state, "BLOCKED");
+  assert.ok(
+    inspectionRefreshBlocked.blockers.some((blocker) =>
+      blocker.includes(
+        "Inspection-time recovery public book refresh is blocked: Fixture inspection public-depth timeout.",
+      )),
   );
 
   const rescuedBook = {
@@ -288,6 +336,10 @@ async function main(): Promise<void> {
     0.5,
   );
   assert.equal(
+    oneTimeLossPreview.executionPreview.worstAcceptableLimitPrice,
+    0.7516,
+  );
+  assert.equal(
     oneTimeLossPreview.oneTimeLossAuthorization?.maximumLossQuote,
     0.5,
   );
@@ -350,12 +402,84 @@ async function main(): Promise<void> {
     NOW + 1,
   );
   strictPriceBook.bids[0]!.price = 1.04;
+  const boundedPriceMove =
+    await strictPriceService.getApprovedExecutionBoundary(
+      strictPricePreview.id,
+      NOW + 2,
+    );
+  assert.equal(
+    boundedPriceMove.actionTimePreview.executionPreview.limitPrice,
+    1.04,
+    "a worse tick remains authorized when it stays inside the approved loss-cap boundary",
+  );
+  strictPriceBook.bids[0]!.price = 0.9919;
   await assert.rejects(
     strictPriceService.getApprovedExecutionBoundary(
       strictPricePreview.id,
       NOW + 2,
     ),
-    /price is worse than the explicitly approved limit/u,
+    /maximum allowed loss|exceeds cap|bounded-price/u,
+  );
+
+  const shortResidualSession = session({
+    buyFilled: 8,
+    sellFilled: 10,
+    buyStatus: "CANCELLED",
+    sellStatus: "FILLED",
+    buyAveragePrice: 1,
+    sellAveragePrice: 1.02,
+    state: "RECOVERY_REQUIRED",
+    sessionId: "strategy-one-session-short-price-boundary",
+  });
+  const buyBoundaryBook = {
+    timestamp: NOW - 25,
+    bids: [{price: 1, quantity: 3}],
+    asks: [{price: 1.01, quantity: 3}],
+  };
+  const buyBoundaryService = assistant(
+    new FakePairPort(shortResidualSession),
+    buyBoundaryBook,
+    capability(1),
+    5,
+    "buy-price-boundary.jsonl",
+  );
+  const buyBoundaryPreview = await buyBoundaryService.inspectSession(
+    shortResidualSession.sessionId,
+    NOW,
+  );
+  assert.equal(buyBoundaryPreview.state, "READY_FOR_OPERATOR_REVIEW");
+  assert.equal(buyBoundaryPreview.residual.side, "BUY");
+  assert.equal(
+    buyBoundaryPreview.executionPreview.boundedPriceDirection,
+    "MAXIMUM_BUY",
+  );
+  assert.equal(
+    buyBoundaryPreview.executionPreview.worstAcceptableLimitPrice,
+    1.0281,
+  );
+  buyBoundaryService.approvePreview(
+    buyBoundaryPreview.id,
+    buyBoundaryPreview.requiredApprovalPhrase ?? "",
+    NOW + 1,
+  );
+  buyBoundaryBook.asks[0]!.price = 1.02;
+  const boundedBuyMove =
+    await buyBoundaryService.getApprovedExecutionBoundary(
+      buyBoundaryPreview.id,
+      NOW + 2,
+    );
+  assert.equal(
+    boundedBuyMove.actionTimePreview.executionPreview.limitPrice,
+    1.02,
+    "a BUY price may move inside the preview-bound maximum-loss ceiling",
+  );
+  buyBoundaryBook.asks[0]!.price = 1.0282;
+  await assert.rejects(
+    buyBoundaryService.getApprovedExecutionBoundary(
+      buyBoundaryPreview.id,
+      NOW + 3,
+    ),
+    /maximum allowed loss|exceeds cap|bounded-price/u,
   );
 
   const materialPair =
@@ -404,6 +528,8 @@ async function main(): Promise<void> {
       capability(1),
       5,
       "stale.jsonl",
+      NOW,
+      async (input) => successfulRecoveryRefresh(input, NOW),
     ).inspectSession(longResidualSession.sessionId, NOW);
 
   assert.equal(stale.state, "BLOCKED");
@@ -428,7 +554,7 @@ async function main(): Promise<void> {
 
   assert.equal(refreshedDuringInspection.state, "READY_FOR_OPERATOR_REVIEW");
   assert.equal(refreshedDuringInspection.createdAt, NOW + 550);
-  assert.equal(refreshedDuringInspection.executionPreview.bookAgeMs, 50);
+  assert.equal(refreshedDuringInspection.executionPreview.bookAgeMs, 0);
   assert.equal(refreshedDuringInspection.blockers.length, 0);
 
   const completeCapability = capability(1);
@@ -469,6 +595,7 @@ async function main(): Promise<void> {
       5,
       "future-dated-beyond-completion.jsonl",
       NOW + 550,
+      async (input) => successfulRecoveryRefresh(input, NOW + 550),
     ).inspectSession(longResidualSession.sessionId, NOW);
 
   assert.equal(futureDatedBeyondCompletion.state, "BLOCKED");
@@ -728,11 +855,18 @@ function assistant(
   availableBalance: number,
   file: string,
   currentTime = NOW,
-  refreshEvidenceBoundRecoveryBook: (
+  refreshEvidenceBoundRecoveryBook?: (
     input: RecoveryRefreshInput,
-  ) => Promise<StrategyOneEvidenceBoundRecoveryBookRefreshResult> =
-    async (input) => successfulRecoveryRefresh(input, currentTime),
+  ) => Promise<StrategyOneEvidenceBoundRecoveryBookRefreshResult>,
 ): StrategyOneResidualRecoveryAssistantService {
+  let refreshedTimestamp: number | null = null;
+  const refresh =
+    refreshEvidenceBoundRecoveryBook ??
+    (async (input: RecoveryRefreshInput) => {
+      refreshedTimestamp = currentTime;
+      return successfulRecoveryRefresh(input, currentTime);
+    });
+
   return new StrategyOneResidualRecoveryAssistantService(
     pairs,
     {
@@ -740,7 +874,7 @@ function assistant(
       getOrderBook: () => ({
         exchange: "coindcx",
         market: "COTIUSDT",
-        timestamp: book.timestamp,
+        timestamp: refreshedTimestamp ?? book.timestamp,
         bids: book.bids.map((level) => ({...level})),
         asks: book.asks.map((level) => ({...level})),
       }),
@@ -762,7 +896,7 @@ function assistant(
         authoritativeFillConfirmationReady: true,
         authoritativeFeeReconciliationReady: true,
       }),
-      refreshEvidenceBoundRecoveryBook,
+      refreshEvidenceBoundRecoveryBook: refresh,
     },
     {
       maximumLossPercentOfResidual: 1,
