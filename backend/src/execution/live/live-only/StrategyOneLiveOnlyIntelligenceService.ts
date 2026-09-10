@@ -864,6 +864,24 @@ export class StrategyOneLiveOnlyIntelligenceService {
           "TDS/withholding is not mislabeled as an economic fee, but withheld value must leave enough immediately reusable exchange cash for another safe cycle.",
       ),
       check(
+        "withholding-evidence",
+        "Venue TDS evidence",
+        preflight.stress?.withholdingEvidenceComplete === true
+          ? "PASS"
+          : preflight.stress
+            ? "BLOCKED"
+            : "NOT_EVALUATED",
+        preflight.stress?.cashCostEvidenceIds.length
+          ? preflight.stress.cashCostEvidenceIds.join(" · ")
+          : "Unavailable",
+        "Verified for both exact venue legs",
+        preflight.stress
+          ?.reasons.find((reason) =>
+            reason.includes("withholding treatment"),
+          ) ??
+          "Each leg needs venue/account evidence proving whether statutory withholding is deducted; an assumed zero cannot authorize LIVE.",
+      ),
+      check(
         "permission-boundary",
         "API permission boundary",
         preflight.permissionBoundary.ready

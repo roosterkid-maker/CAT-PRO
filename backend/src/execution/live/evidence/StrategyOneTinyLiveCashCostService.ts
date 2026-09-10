@@ -8,6 +8,8 @@ export interface StrategyOneTinyLiveCashCostProfile {
   readonly tradingFeeSurchargeMultiplier: number;
   /** Immediate statutory withholding as a percent of consideration. */
   readonly withholdingPercent: number;
+  /** Whether current account/venue evidence proves the modeled withholding treatment. */
+  readonly withholdingEvidenceComplete: boolean;
   readonly evidenceId: string;
 }
 
@@ -37,15 +39,18 @@ export function getStrategyOneTinyLiveCashCostProfile(
 
   if (exchange === "bybit" && cryptoToCrypto) {
     return freeze({exchange, market, side, tradingFeeSurchargeMultiplier: 0.18, withholdingPercent: 1,
+      withholdingEvidenceComplete: true,
       evidenceId: "BYBIT_SIGNED_EXECUTION_IND_GST_IND_TDS_V1"});
   }
   if (exchange === "coindcx") {
     return freeze({exchange, market, side, tradingFeeSurchargeMultiplier: 0,
       withholdingPercent: cryptoToCrypto || side === "SELL" ? 1 : 0,
+      withholdingEvidenceComplete: true,
       evidenceId: "COINDCX_PUBLISHED_SECTION_194S_V1"});
   }
   return freeze({exchange, market, side, tradingFeeSurchargeMultiplier: 0, withholdingPercent: 0,
-    evidenceId: "NO_VENUE_CASH_WITHHOLDING_OVERLAY"});
+    withholdingEvidenceComplete: false,
+    evidenceId: "VENUE_CASH_WITHHOLDING_UNVERIFIED"});
 }
 
 function freeze<T>(value: T): T { return Object.freeze(value); }

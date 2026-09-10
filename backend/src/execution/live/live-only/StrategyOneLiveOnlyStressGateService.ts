@@ -48,6 +48,7 @@ export interface StrategyOneLiveOnlyStressReport {
   readonly postStressNetProfitPercent: number | null;
   readonly deployableCashPostStressNetProfit: number | null;
   readonly deployableCashPostStressNetProfitPercent: number | null;
+  readonly withholdingEvidenceComplete: boolean;
   readonly minimumNetProfitPercent: number;
   readonly adverseMoveReservePercentPerLeg: number;
   readonly safetyBufferPercent: number;
@@ -196,6 +197,8 @@ export class StrategyOneLiveOnlyStressGateService {
     const cashCostEvidenceIds:
       string[] =
       [];
+    let withholdingEvidenceComplete =
+      false;
 
     if (
       buyBook &&
@@ -307,6 +310,14 @@ export class StrategyOneLiveOnlyStressGateService {
             buyCashCost.evidenceId,
             sellCashCost.evidenceId,
           );
+          withholdingEvidenceComplete =
+            buyCashCost.withholdingEvidenceComplete &&
+            sellCashCost.withholdingEvidenceComplete;
+          if (!withholdingEvidenceComplete) {
+            reasons.push(
+              "LIVE-only statutory-withholding treatment is not verified for both exact venue legs.",
+            );
+          }
           tradingFees =
             stressedBuyNotional *
               (buyFeePercent / 100) *
@@ -393,7 +404,8 @@ export class StrategyOneLiveOnlyStressGateService {
       postStressNetProfit !== null &&
       postStressNetProfitPercent !== null &&
       deployableCashPostStressNetProfit !== null &&
-      deployableCashPostStressNetProfitPercent !== null;
+      deployableCashPostStressNetProfitPercent !== null &&
+      withholdingEvidenceComplete;
 
     return Object.freeze({
       schemaVersion:
@@ -420,6 +432,7 @@ export class StrategyOneLiveOnlyStressGateService {
       postStressNetProfitPercent,
       deployableCashPostStressNetProfit,
       deployableCashPostStressNetProfitPercent,
+      withholdingEvidenceComplete,
       minimumNetProfitPercent:
         input.minimumNetProfitPercent,
       adverseMoveReservePercentPerLeg:

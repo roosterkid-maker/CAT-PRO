@@ -24,7 +24,7 @@ function opportunity(): ArbitrageOpportunity {
         "TESTUSDT",
       buy: {
         exchange:
-          "binance",
+          "coindcx",
         market:
           "TESTUSDT",
         lastPrice:
@@ -52,13 +52,13 @@ function opportunity(): ArbitrageOpportunity {
         market:
           "TESTUSDT",
         lastPrice:
-          102,
+          103,
         bestBidPrice:
-          102,
+          103,
         bestBidQty:
           10,
         bestAskPrice:
-          102.1,
+          103.1,
         bestAskQty:
           10,
         spread:
@@ -74,7 +74,7 @@ function opportunity(): ArbitrageOpportunity {
     buyPrice:
       100,
     sellPrice:
-      102,
+      103,
     buyAvailableQty:
       10,
     sellAvailableQty:
@@ -100,15 +100,15 @@ function opportunity(): ArbitrageOpportunity {
     analysisSummary:
       [],
     rawSpread:
-      2,
+      3,
     rawSpreadPercent:
-      2,
+      3,
     estimatedFees:
       0.2,
     netProfit:
-      1.8,
+      2.8,
     netProfitPercent:
-      1.8,
+      2.8,
     usedLastPriceFallback:
       false,
     quotesAreFresh:
@@ -128,7 +128,7 @@ function setBooks(
 ): void {
   orderBookService.replace({
     exchange:
-      "binance",
+      "coindcx",
     market:
       "TESTUSDT",
     bids: [
@@ -157,7 +157,7 @@ function setBooks(
     bids: [
       {
         price:
-          102,
+          103,
         quantity:
           depth,
       },
@@ -165,7 +165,7 @@ function setBooks(
     asks: [
       {
         price:
-          102.1,
+          103.1,
         quantity:
           depth,
       },
@@ -208,6 +208,7 @@ async function main(): Promise<void> {
     passed.deployableCashPostStressNetProfitPercent !== null &&
       passed.deployableCashPostStressNetProfitPercent >= 0.15,
   );
+  assert.equal(passed.withholdingEvidenceComplete, true);
 
   const cashNegativeOpportunity =
     opportunity();
@@ -237,6 +238,29 @@ async function main(): Promise<void> {
   assert.match(
     cashNegative.reasons.join(" "),
     /deployable-cash net/u,
+  );
+
+  const unknownWithholdingOpportunity = opportunity();
+  unknownWithholdingOpportunity.pair.buy.exchange = "binance";
+  orderBookService.replace({
+    exchange: "binance",
+    market: "TESTUSDT",
+    bids: [{price: 99.9, quantity: 10}],
+    asks: [{price: 100, quantity: 10}],
+    timestamp: NOW - 100,
+  });
+  const unknownWithholding =
+    strategyOneLiveOnlyStressGateService.evaluate({
+      opportunity: unknownWithholdingOpportunity,
+      quantity: 1,
+      minimumNetProfitPercent: 0.15,
+      now: NOW,
+    });
+  assert.equal(unknownWithholding.status, "BLOCKED");
+  assert.equal(unknownWithholding.withholdingEvidenceComplete, false);
+  assert.match(
+    unknownWithholding.reasons.join(" "),
+    /withholding treatment is not verified/u,
   );
 
   setBooks(
