@@ -293,7 +293,7 @@ export class StrategyOneResidualRecoveryAssistantService {
       });
 
     const latest =
-      this.store.readAll().at(-1);
+      this.store.readLatest();
 
     if (latest) {
       for (const preview of latest.previews) {

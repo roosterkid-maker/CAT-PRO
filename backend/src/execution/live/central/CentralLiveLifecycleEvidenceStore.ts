@@ -36,7 +36,7 @@ export class CentralLiveLifecycleEvidenceStore {
   constructor(private readonly filePath = DEFAULT_FILE, private readonly maximumRecords = 5_000) {
     if (!Number.isSafeInteger(maximumRecords) || maximumRecords <= 0) throw new Error("Central LIVE evidence capacity must be positive.");
     this.store = new JsonlSnapshotStore({filePath, isPayload: isSnapshot});
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
     if (latest) for (const record of latest.records) this.records.set(composite(record.kind, record.planId, record.dispatchId,
       record.evidenceKey), freeze(clone(record)));
   }

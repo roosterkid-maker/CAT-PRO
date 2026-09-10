@@ -143,7 +143,7 @@ export class CentralPaperPositionAccountingService {
     this.restoredAt = null;
   }
 
-  private restore(): void { const latest = this.store.readAll().at(-1); if (latest) for (const record of latest.records) this.records.set(record.positionGroupId, freeze(clone(record))); this.restoredAt = Date.now(); }
+  private restore(): void { const latest = this.store.readLatest(); if (latest) for (const record of latest.records) this.records.set(record.positionGroupId, freeze(clone(record))); this.restoredAt = Date.now(); }
   private persist(now: number): void { this.store.append({version: "44.0", savedAt: now, records: [...this.records.values()].map(clone)}); }
 }
 

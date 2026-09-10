@@ -256,7 +256,7 @@ export class CentralPaperPositionLedgerService {
   }
 
   private restore(): void {
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
     if (latest) for (const group of latest.groups) this.groups.set(group.resultId, freeze(clone(group)));
     this.restoredAt = Date.now();
   }

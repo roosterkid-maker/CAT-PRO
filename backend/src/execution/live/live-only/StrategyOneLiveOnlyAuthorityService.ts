@@ -123,8 +123,7 @@ export class StrategyOneLiveOnlyAuthorityService {
 
     const restored =
       this.store
-        .readAll()
-        .at(-1);
+        .readLatest();
 
     for (
       const record

@@ -30,7 +30,7 @@ export class CentralLiveExecutionAdmissionJournalService {
   constructor(private readonly filePath = DEFAULT_FILE, private readonly maximumRecords = 1_000) {
     if (!Number.isSafeInteger(maximumRecords) || maximumRecords <= 0) throw new Error("Central LIVE admission journal capacity must be positive.");
     this.store = new JsonlSnapshotStore({filePath, isPayload: isSnapshot});
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
     if (latest) for (const item of latest.records) this.records.set(item.id, freeze(clone(item)));
   }
 

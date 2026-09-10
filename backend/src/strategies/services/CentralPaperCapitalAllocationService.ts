@@ -117,7 +117,7 @@ export class CentralPaperCapitalAllocationService {
   }
 
   private restore(): void {
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
     if (latest) for (const item of latest.allocations) this.set(freeze(clone(item)));
     this.restoredAt = Date.now();
     for (const item of [...this.allocations.values()]) if (item.state === "PENDING_RESERVE" || item.state === "PENDING_RELEASE") this.reconcile(item, this.restoredAt);

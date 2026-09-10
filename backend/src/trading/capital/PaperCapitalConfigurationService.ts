@@ -106,8 +106,7 @@ export class PaperCapitalConfigurationService {
 
     const restored =
       this.store
-        .readAll()
-        .at(-1);
+        .readLatest();
 
     this.configuration =
       restored ??

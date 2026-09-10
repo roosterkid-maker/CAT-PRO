@@ -88,7 +88,7 @@ export class CentralLiveOrderExecutionGateway {
     this.enabled = configuration.enabled ?? false; this.maximumRecords = configuration.maximumRecords ?? 2_000;
     if (!Number.isSafeInteger(this.maximumRecords) || this.maximumRecords <= 0) throw new Error("Central LIVE order gateway capacity must be positive.");
     this.store = new JsonlSnapshotStore({filePath, isPayload: isSnapshot});
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
     if (latest) for (const record of latest.records) this.records.set(record.idempotencyKey, freeze(clone(record)));
     this.restoreConfirmedPreAcceptRejections();
   }

@@ -201,7 +201,7 @@ export class StrategyOneResidualRecoveryExecutionService {
       isPayload: isSnapshot,
     });
 
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
 
     for (const record of latest?.records ?? []) {
       this.records.set(record.idempotencyKey, freeze(clone(record)));

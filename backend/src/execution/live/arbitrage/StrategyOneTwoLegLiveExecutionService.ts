@@ -133,7 +133,7 @@ export class StrategyOneTwoLegLiveExecutionService {
       });
 
     const latest =
-      this.store.readAll().at(-1);
+      this.store.readLatest();
 
     if (latest) {
       for (const session of latest.sessions) {

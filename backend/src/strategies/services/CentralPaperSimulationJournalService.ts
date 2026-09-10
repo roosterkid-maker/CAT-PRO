@@ -144,7 +144,7 @@ export class CentralPaperSimulationJournalService {
   }
 
   private restore(): void {
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
     if (latest) for (const record of latest.records) this.records.set(record.resultId, freeze(clone(record)));
     this.restoredAt = Date.now();
   }

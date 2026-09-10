@@ -41,7 +41,7 @@ export class CentralLiveExecutionQueueService {
   constructor(private readonly filePath = DEFAULT_FILE, private readonly maximumRecords = 1_000) {
     if (!Number.isSafeInteger(maximumRecords) || maximumRecords <= 0) throw new Error("Central LIVE queue capacity must be positive.");
     this.store = new JsonlSnapshotStore({filePath, isPayload: isSnapshot});
-    const latest = this.store.readAll().at(-1);
+    const latest = this.store.readLatest();
     if (latest) for (const record of latest.records) this.set(normalizeRecord(record));
   }
 
