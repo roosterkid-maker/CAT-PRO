@@ -42,6 +42,10 @@ import {
 } from "../../../rebalancing/services/OpportunityCapitalStudyService";
 
 import {
+  strategyOneTwoLegRestartRecoveryService,
+} from "../recovery/StrategyOneTwoLegRestartRecoveryService";
+
+import {
   strategyOneActionTimeBookRefreshService,
   type StrategyOneActionTimeBookRefreshRoute,
   type StrategyOneActionTimeBookRefreshResult,
@@ -76,6 +80,15 @@ export interface StrategyOneLiveOnlyRunnerDependencies {
     opportunity: ArbitrageOpportunity,
     now: number,
   ): OpportunityCapitalStudyDecision;
+  getRecoveryClearance(now: number): {
+    readonly classification: "CLEAN" | "REVIEW_REQUIRED" | "POSSIBLE_EXPOSURE";
+    readonly allowNewLivePreparation: boolean;
+    readonly summary: {
+      readonly unresolvedSessions: number;
+      readonly possibleExposureSessions: number;
+      readonly persistenceIntegrityProblems: number;
+    };
+  };
   now(): number;
 }
 
@@ -179,6 +192,13 @@ const DEFAULT_DEPENDENCIES:
     opportunityCapitalStudyService
       .getDecision(
         opportunity,
+        now,
+      ),
+  getRecoveryClearance: (
+    now,
+  ) =>
+    strategyOneTwoLegRestartRecoveryService
+      .getReport(
         now,
       ),
   now:
@@ -325,6 +345,48 @@ export class StrategyOneLiveOnlyRunnerService {
     this.unsubscribe?.();
     this.unsubscribe =
       null;
+  }
+
+  releaseAuthoritativelyResolvedRecoveryHalt(
+    sessionIdValue: string,
+    now = this.dependencies.now(),
+  ): boolean {
+    const sessionId = sessionIdValue.trim();
+
+    if (!this.dependencies.runtimeEnabled()) {
+      return false;
+    }
+
+    if (!sessionId) {
+      throw new Error(
+        "An exact resolved recovery session is required before releasing the LIVE-only halt.",
+      );
+    }
+
+    if (this.haltedReason === null) {
+      return true;
+    }
+
+    const recovery = this.dependencies.getRecoveryClearance(now);
+    const safeToRelease =
+      this.unsubscribe !== null &&
+      !this.inFlight &&
+      this.haltedReason.includes("RECOVERY_REQUIRED") &&
+      recovery.classification === "CLEAN" &&
+      recovery.allowNewLivePreparation &&
+      recovery.summary.unresolvedSessions === 0 &&
+      recovery.summary.possibleExposureSessions === 0 &&
+      recovery.summary.persistenceIntegrityProblems === 0;
+
+    if (!safeToRelease) {
+      throw new Error(
+        `LIVE-only recovery halt remains locked for ${sessionId}; the runner is not idle or authoritative recovery is not completely clean.`,
+      );
+    }
+
+    this.haltedReason = null;
+    this.persist(now);
+    return true;
   }
 
   getDiagnostics(

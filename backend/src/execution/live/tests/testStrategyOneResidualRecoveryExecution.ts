@@ -343,14 +343,103 @@ async function main(): Promise<void> {
       "Must remain blocked.",
       NOW,
     ),
-    /emergency stop active/u,
+    /legacy enabled PAPER emergency-stop boundary/u,
   );
   assert.equal(blockedGateway.calls, 0);
+
+  const liveOnlyPreviewId = "recovery-preview-live-only-halted";
+  const liveOnlyGateway = new FakeGateway("FILLED");
+  const liveOnlyFile = resolve(
+    tmpdir(),
+    "cat-pro-test-residual-recovery-live-only.jsonl",
+  );
+  rmSync(liveOnlyFile, {force: true});
+  const liveOnlyService = new StrategyOneResidualRecoveryExecutionService(
+    new FakeAssistant(boundary(liveOnlyPreviewId)),
+    liveOnlyGateway,
+    new FakeResolutions(),
+    enabledNonEmergencyAccount(),
+    liveOnlyFile,
+    liveOnlyRecoveryRuntime(),
+  );
+  const liveOnlyCompleted = await liveOnlyService.execute(
+    liveOnlyPreviewId,
+    `EXECUTE ONE-TIME RECOVERY ${liveOnlyPreviewId}`,
+    "Exact LIVE-only halted recovery remained evidence bound.",
+    NOW,
+  );
+  assert.equal(liveOnlyCompleted.state, "COMPLETED_RESOLVED");
+  assert.equal(liveOnlyGateway.calls, 1);
+  assert.equal(
+    liveOnlyCompleted.reasons.includes(
+      "Authoritative recovery is clean; the persisted LIVE-only runner halt was released after resolution.",
+    ),
+    true,
+  );
+
+  const unsafeLiveOnlyStates = [
+    {
+      name: "runner not halted",
+      runtime: liveOnlyRecoveryRuntime({runnerHalted: false}),
+    },
+    {
+      name: "trade already in flight",
+      runtime: liveOnlyRecoveryRuntime({runnerInFlight: true}),
+    },
+    {
+      name: "different unresolved session",
+      runtime: liveOnlyRecoveryRuntime({
+        unresolvedSessions: [{
+          sessionId: "strategy-one:different-session",
+          state: "RECOVERY_REQUIRED",
+        }],
+      }),
+    },
+    {
+      name: "recovery persistence damaged",
+      runtime: liveOnlyRecoveryRuntime({persistenceIntegrityProblems: 1}),
+    },
+  ];
+
+  for (const unsafe of unsafeLiveOnlyStates) {
+    const unsafeGateway = new FakeGateway("FILLED");
+    const unsafePreviewId = `recovery-preview-live-only-${unsafe.name.replaceAll(" ", "-")}`;
+    const unsafeFile = resolve(
+      tmpdir(),
+      `cat-pro-test-residual-recovery-${unsafe.name.replaceAll(" ", "-")}.jsonl`,
+    );
+    rmSync(unsafeFile, {force: true});
+    const unsafeService = new StrategyOneResidualRecoveryExecutionService(
+      new FakeAssistant(boundary(unsafePreviewId)),
+      unsafeGateway,
+      new FakeResolutions(),
+      enabledNonEmergencyAccount(),
+      unsafeFile,
+      unsafe.runtime,
+    );
+
+    await assert.rejects(
+      unsafeService.execute(
+        unsafePreviewId,
+        `EXECUTE ONE-TIME RECOVERY ${unsafePreviewId}`,
+        `Must reject ${unsafe.name}.`,
+        NOW,
+      ),
+      /LIVE-only runtime halted on this exact persisted RECOVERY_REQUIRED session/u,
+    );
+    assert.equal(
+      unsafeGateway.calls,
+      0,
+      `${unsafe.name} must fail before gateway I/O`,
+    );
+    rmSync(unsafeFile, {force: true});
+  }
 
   rmSync(file, {force: true});
   rmSync(cancelledFile, {force: true});
   rmSync(uncertainFile, {force: true});
   rmSync(secondAttemptFile, {force: true});
+  rmSync(liveOnlyFile, {force: true});
   console.log(
     "V202 recovery execution test passed: exact FOK execution remained idempotent, and only a deterministic zero-fill Binance HTTP rejection could receive one fresh separately authorized second attempt while cancelled/uncertain outcomes stayed blocked.",
   );
@@ -514,6 +603,49 @@ class FakeResolutions {
 function paperEmergencyAccount() {
   return {
     getAccount: () => ({mode: "PAPER", enabled: true, emergencyStop: true}),
+  };
+}
+
+function enabledNonEmergencyAccount() {
+  return {
+    getAccount: () => ({mode: "LIVE", enabled: true, emergencyStop: false}),
+  };
+}
+
+function liveOnlyRecoveryRuntime(
+  overrides: Partial<{
+    liveOnlyRuntimeEnabled: boolean;
+    runnerRunning: boolean;
+    runnerHalted: boolean;
+    runnerInFlight: boolean;
+    runnerHaltedReason: string | null;
+    recoveryClassification: "CLEAN" | "REVIEW_REQUIRED" | "POSSIBLE_EXPOSURE";
+    allowNewLivePreparation: boolean;
+    unresolvedSessions: readonly {
+      readonly sessionId: string;
+      readonly state: string;
+    }[];
+    persistenceIntegrityProblems: number;
+  }> = {},
+) {
+  return {
+    getContext: () => ({
+      liveOnlyRuntimeEnabled: true,
+      runnerRunning: true,
+      runnerHalted: true,
+      runnerInFlight: false,
+      runnerHaltedReason:
+        "LIVE-only execution halted after RECOVERY_REQUIRED.",
+      recoveryClassification: "POSSIBLE_EXPOSURE" as const,
+      allowNewLivePreparation: false,
+      unresolvedSessions: [{
+        sessionId: "strategy-one:residual-test-session",
+        state: "RECOVERY_REQUIRED",
+      }],
+      persistenceIntegrityProblems: 0,
+      ...overrides,
+    }),
+    releaseResolvedHalt: () => true,
   };
 }
 

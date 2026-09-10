@@ -80,6 +80,9 @@ async function main(): Promise<void> {
     await testFiveStudyConfirmationsRequired(
       directory,
     );
+    await testRecoveryHaltReleaseRequiresCleanAuthoritativeEvidence(
+      directory,
+    );
   } finally {
     rmSync(
       directory,
@@ -94,6 +97,57 @@ async function main(): Promise<void> {
 
   console.log(
     "LIVE-only runner action-time refresh passed: exact public books are rebuilt before authority, refreshed again after authority, and every refresh failure remains order-I/O free.",
+  );
+}
+
+async function testRecoveryHaltReleaseRequiresCleanAuthoritativeEvidence(
+  directory: string,
+): Promise<void> {
+  let recoveryClean = false;
+  const filePath = join(directory, "recovery-halt.jsonl");
+  const candidate = opportunity("recovery-required", NOW);
+  const service = runner(
+    filePath,
+    {
+      getRecoveryClearance: () => recoveryClean
+        ? cleanRecoveryClearance()
+        : possibleExposureRecoveryClearance(),
+      execute: async () => recoveryRequiredResult(candidate, NOW + 100),
+    },
+  );
+
+  service.start();
+  await service.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [candidate],
+  });
+
+  assert.equal(service.getDiagnostics(NOW + 100).halted, true);
+  assert.throws(
+    () => service.releaseAuthoritativelyResolvedRecoveryHalt(
+      "strategy-one:recovery-required",
+      NOW + 101,
+    ),
+    /authoritative recovery is not completely clean/u,
+  );
+  assert.equal(service.getDiagnostics(NOW + 101).halted, true);
+
+  recoveryClean = true;
+  assert.equal(
+    service.releaseAuthoritativelyResolvedRecoveryHalt(
+      "strategy-one:recovery-required",
+      NOW + 102,
+    ),
+    true,
+  );
+  assert.equal(service.getDiagnostics(NOW + 102).halted, false);
+  service.stop();
+
+  const restored = runner(filePath, {});
+  assert.equal(
+    restored.getDiagnostics(NOW + 103).halted,
+    false,
+    "the released recovery halt must remain cleared after restart",
   );
 }
 
@@ -476,6 +530,7 @@ function runner(
         executionQualified: true,
         effectiveMinimumCurrentNetProfitPercent: 0.3,
       } as OpportunityCapitalStudyDecision),
+      getRecoveryClearance: () => cleanRecoveryClearance(),
       now: () =>
         NOW +
         100,
@@ -514,6 +569,30 @@ function runner(
       ...overrides,
     },
   );
+}
+
+function possibleExposureRecoveryClearance() {
+  return {
+    classification: "POSSIBLE_EXPOSURE" as const,
+    allowNewLivePreparation: false,
+    summary: {
+      unresolvedSessions: 1,
+      possibleExposureSessions: 1,
+      persistenceIntegrityProblems: 0,
+    },
+  };
+}
+
+function cleanRecoveryClearance() {
+  return {
+    classification: "CLEAN" as const,
+    allowNewLivePreparation: true,
+    summary: {
+      unresolvedSessions: 0,
+      possibleExposureSessions: 0,
+      persistenceIntegrityProblems: 0,
+    },
+  };
 }
 
 function refreshResult(
@@ -697,6 +776,25 @@ function completedResult(
       false,
     reasons:
       [],
+  };
+}
+
+function recoveryRequiredResult(
+  candidate: ArbitrageOpportunity,
+  now: number,
+): ArbitrageLiveExecutionResult {
+  return {
+    ...completedResult(candidate, now),
+    success: false,
+    status: "RECOVERY_REQUIRED",
+    matchedFilledQuantity: 0,
+    unmatchedBuyQuantity: 0,
+    unmatchedSellQuantity: candidate.executableQty,
+    recoveryRequired: true,
+    possibleExposure: true,
+    reasons: [
+      "RECOVERY_REQUIRED: exact residual requires authoritative recovery.",
+    ],
   };
 }
 

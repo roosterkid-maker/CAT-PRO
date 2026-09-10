@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 import {resolve} from "node:path";
 
 import {JsonlSnapshotStore} from "../../../core/persistence/JsonlSnapshotStore";
+import {isLiveOnlyRuntimeEnabled} from "../../../config/LiveOnlyRuntimePolicy";
 import {tradingAccountService} from "../../../trading/account/TradingAccountService";
 import {
   centralLiveOrderExecutionGateway,
@@ -10,10 +11,14 @@ import {
 } from "../central/CentralLiveOrderExecutionGateway";
 import {parseBinancePreAcceptRejection} from "../central/BinancePreAcceptRejectionEvidence";
 import type {LiveExecutionRequest} from "../models/LiveExecutionRequest";
+import {strategyOneLiveOnlyRunnerService} from "../live-only/StrategyOneLiveOnlyRunnerService";
 import {
   strategyOneResidualRecoveryAssistantService,
   type StrategyOneApprovedResidualExecutionBoundary,
 } from "./StrategyOneResidualRecoveryAssistantService";
+import {
+  strategyOneTwoLegRestartRecoveryService,
+} from "./StrategyOneTwoLegRestartRecoveryService";
 import {
   strategyOneTwoLegRecoveryResolutionService,
   type StrategyOneCompensatingOrderEvidence,
@@ -101,6 +106,57 @@ interface AccountPort {
   };
 }
 
+interface RecoveryExecutionRuntimeContext {
+  readonly liveOnlyRuntimeEnabled: boolean;
+  readonly runnerRunning: boolean;
+  readonly runnerHalted: boolean;
+  readonly runnerInFlight: boolean;
+  readonly runnerHaltedReason: string | null;
+  readonly recoveryClassification: "CLEAN" | "REVIEW_REQUIRED" | "POSSIBLE_EXPOSURE";
+  readonly allowNewLivePreparation: boolean;
+  readonly unresolvedSessions: readonly {
+    readonly sessionId: string;
+    readonly state: string;
+  }[];
+  readonly persistenceIntegrityProblems: number;
+}
+
+interface RecoveryExecutionRuntimePort {
+  getContext(now?: number): RecoveryExecutionRuntimeContext;
+  releaseResolvedHalt(sessionId: string, now?: number): boolean;
+}
+
+const DEFAULT_RUNTIME: RecoveryExecutionRuntimePort = {
+  getContext(now = Date.now()) {
+    const runner = strategyOneLiveOnlyRunnerService.getDiagnostics(now);
+    const recovery = strategyOneTwoLegRestartRecoveryService.getReport(now);
+
+    return {
+      liveOnlyRuntimeEnabled: isLiveOnlyRuntimeEnabled(),
+      runnerRunning: runner.running,
+      runnerHalted: runner.halted,
+      runnerInFlight: runner.inFlight,
+      runnerHaltedReason: runner.haltedReason,
+      recoveryClassification: recovery.classification,
+      allowNewLivePreparation: recovery.allowNewLivePreparation,
+      unresolvedSessions: recovery.unresolved.map((session) => ({
+        sessionId: session.sessionId,
+        state: session.state,
+      })),
+      persistenceIntegrityProblems:
+      recovery.summary.persistenceIntegrityProblems,
+    };
+  },
+  releaseResolvedHalt(sessionId, now = Date.now()) {
+    return strategyOneLiveOnlyRunnerService
+      .releaseAuthoritativelyResolvedRecoveryHalt(sessionId, now);
+  },
+};
+
+type RecoveryExecutionBoundaryMode =
+  | "LEGACY_PAPER_EMERGENCY_STOP"
+  | "LIVE_ONLY_RECOVERY_HALT";
+
 interface PersistedSnapshot {
   readonly schemaVersion: "202.0";
   readonly savedAt: number;
@@ -138,6 +194,7 @@ export class StrategyOneResidualRecoveryExecutionService {
       strategyOneTwoLegRecoveryResolutionService,
     private readonly account: AccountPort = tradingAccountService,
     filePath = DEFAULT_FILE,
+    private readonly runtime: RecoveryExecutionRuntimePort = DEFAULT_RUNTIME,
   ) {
     this.store = new JsonlSnapshotStore({
       filePath,
@@ -335,7 +392,9 @@ export class StrategyOneResidualRecoveryExecutionService {
     }
 
     if (previewRecord?.state === "COMPLETED_RESOLVED") {
-      return clone(previewRecord);
+      return clone(
+        this.releaseResolvedLiveOnlyHalt(previewRecord, now),
+      );
     }
 
     if (secondAttempt && !previewRecord) {
@@ -349,14 +408,6 @@ export class StrategyOneResidualRecoveryExecutionService {
       }
     }
 
-    const account = this.account.getAccount();
-
-    if (!account.enabled || account.mode !== "PAPER" || !account.emergencyStop) {
-      throw new Error(
-        "One-time residual recovery requires an enabled PAPER account with the emergency stop active.",
-      );
-    }
-
     const ownedGatewayRecord = previewRecord
       ? this.gateway.get(previewRecord.idempotencyKey)
       : null;
@@ -368,6 +419,14 @@ export class StrategyOneResidualRecoveryExecutionService {
     if (!previewRecord && !boundary) {
       throw new Error("Recovery execution ownership is internally inconsistent.");
     }
+
+    const recoverySessionId = previewRecord?.sessionId ??
+      boundary?.approvedPreview.sessionId ?? "";
+    const recoveryBoundaryMode = this.assertRecoveryExecutionContext(
+      this.account.getAccount(),
+      recoverySessionId,
+      now,
+    );
 
     const request = previewRecord?.request ?? requestFrom(
       boundary as StrategyOneApprovedResidualExecutionBoundary,
@@ -555,7 +614,86 @@ export class StrategyOneResidualRecoveryExecutionService {
         "Exact compensating fill and fee evidence durably resolved the original residual.",
       ]),
     });
+
+    if (recoveryBoundaryMode === "LIVE_ONLY_RECOVERY_HALT") {
+      record = this.releaseResolvedLiveOnlyHalt(record, completedAt);
+    }
     return clone(record);
+  }
+
+  private assertRecoveryExecutionContext(
+    account: ReturnType<AccountPort["getAccount"]>,
+    sessionId: string,
+    now: number,
+  ): RecoveryExecutionBoundaryMode {
+    const legacyPaperRecovery =
+      account.enabled &&
+      account.mode === "PAPER" &&
+      account.emergencyStop;
+
+    if (legacyPaperRecovery) {
+      return "LEGACY_PAPER_EMERGENCY_STOP";
+    }
+
+    const runtime = this.runtime.getContext(now);
+    const exactUnresolvedRecovery = runtime.unresolvedSessions.some(
+      (session) =>
+        session.sessionId === sessionId &&
+        session.state === "RECOVERY_REQUIRED",
+    );
+    const liveOnlyRecoveryHalt =
+      account.enabled &&
+      runtime.liveOnlyRuntimeEnabled &&
+      runtime.runnerRunning &&
+      runtime.runnerHalted &&
+      !runtime.runnerInFlight &&
+      runtime.runnerHaltedReason?.includes("RECOVERY_REQUIRED") === true &&
+      runtime.recoveryClassification === "POSSIBLE_EXPOSURE" &&
+      !runtime.allowNewLivePreparation &&
+      runtime.persistenceIntegrityProblems === 0 &&
+      exactUnresolvedRecovery;
+
+    if (!liveOnlyRecoveryHalt) {
+      throw new Error(
+        "One-time residual recovery requires either the legacy enabled PAPER emergency-stop boundary or an enabled LIVE-only runtime halted on this exact persisted RECOVERY_REQUIRED session with no trade in flight.",
+      );
+    }
+
+    return "LIVE_ONLY_RECOVERY_HALT";
+  }
+
+  private releaseResolvedLiveOnlyHalt(
+    record: StrategyOneResidualRecoveryExecutionRecord,
+    now: number,
+  ): StrategyOneResidualRecoveryExecutionRecord {
+    try {
+      const released = this.runtime.releaseResolvedHalt(
+        record.sessionId,
+        now,
+      );
+
+      if (!released) {
+        return record;
+      }
+
+      return this.persist({
+        ...record,
+        updatedAt: Math.max(record.updatedAt, now),
+        reasons: unique([
+          ...record.reasons,
+          "Authoritative recovery is clean; the persisted LIVE-only runner halt was released after resolution.",
+        ]),
+      });
+    } catch (error: unknown) {
+      return this.persist({
+        ...record,
+        updatedAt: Math.max(record.updatedAt, now),
+        reasons: unique([
+          ...record.reasons,
+          `Authoritative recovery resolved, but the LIVE-only runner remains halted: ${message(error)}`,
+        ]),
+      });
+    }
   }
 
   private prepare(input: {
@@ -835,8 +973,15 @@ function requestHash(request: LiveExecutionRequest): string {
 
 function safety() {
   return freeze({
-    emergencyStopRequired: true as const,
-    paperModeRequired: true as const,
+    legacyPaperEmergencyStopBoundarySupported: true as const,
+    liveOnlyRecoveryHaltBoundarySupported: true as const,
+    liveOnlyRuntimeEnabledRequired: true as const,
+    liveOnlyRunnerHaltedRequired: true as const,
+    liveOnlyRunnerInFlightForbidden: true as const,
+    exactPersistedRecoverySessionRequired: true as const,
+    cleanRecoveryPersistenceRequired: true as const,
+    haltReleasedOnlyAfterAuthoritativeResolution: true as const,
+    normalLiveRunnerAllowed: false as const,
     explicitlyApprovedPreviewRequired: true as const,
     actionTimeRevalidationRequired: true as const,
     exactFokLimitOnly: true as const,
