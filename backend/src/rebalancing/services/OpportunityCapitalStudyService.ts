@@ -396,16 +396,21 @@ export class OpportunityCapitalStudyService {
       state.lastIndependentSampleAt > 0 &&
       evidenceAgeMs >= 0 && evidenceAgeMs <= MAXIMUM_CURRENT_ROUTE_AGE_MS &&
       currentBlockers.length === 0;
-    const capitalActionQualified = executionQualified;
+    const recoveryClean =
+      !safety.executionRecoveryPending &&
+      !safety.settlementReconciliationPending &&
+      !safety.emergencyStopActive;
+    const fundingEvidenceComplete =
+      state.funding !== null &&
+      state.funding.buyAvailable !== null &&
+      state.funding.sellAvailable !== null;
+    const capitalActionQualified =
+      executionQualified && recoveryClean && fundingEvidenceComplete;
     const recommendation = this.recommend(
       state.funding,
       executionQualified,
       capitalActionQualified,
     );
-    const recoveryClean =
-      !safety.executionRecoveryPending &&
-      !safety.settlementReconciliationPending &&
-      !safety.emergencyStopActive;
     const blockers = [...new Set([
       ...state.latestSampleBlockers,
       ...currentBlockers,

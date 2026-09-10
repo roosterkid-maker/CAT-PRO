@@ -156,8 +156,8 @@ export default function TradeFlowDashboard() {
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Fact label="Study service" value={report.capitalStudy.running ? "RUNNING" : "STOPPED"} good={report.capitalStudy.running} />
           <Fact label="Tracked routes" value={formatCount(report.capitalStudy.trackedRoutes)} good={report.capitalStudy.trackedRoutes > 0} />
-          <Fact label="Execution ready now" value={formatCount(report.capitalStudy.executionStudyReadyRoutes)} good={report.capitalStudy.executionStudyReadyRoutes > 0} />
-          <Fact label="Capital action ready now" value={formatCount(report.capitalStudy.capitalStudyReadyRoutes)} good={report.capitalStudy.capitalStudyReadyRoutes > 0} />
+          <Fact label="Route evidence ready now" value={formatCount(report.capitalStudy.executionStudyReadyRoutes)} good={report.capitalStudy.executionStudyReadyRoutes > 0} />
+          <Fact label="Funding study complete now" value={formatCount(report.capitalStudy.capitalStudyReadyRoutes)} good={report.capitalStudy.capitalStudyReadyRoutes > 0} />
         </div>
         <p className="mt-3 text-[10px] leading-5 text-text-muted">
           Current-net gate: {report.policy.minimumCurrentNetProfitPercent.toFixed(2)}%.

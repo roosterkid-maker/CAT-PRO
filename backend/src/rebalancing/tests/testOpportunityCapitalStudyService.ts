@@ -18,6 +18,7 @@ const START = 1_800_000_000_000;
 function main(): void {
   verifiesCurrentExactRouteQualifiesWithoutPersistence();
   verifiesCurrentCapitalActionRequiresCleanRecovery();
+  verifiesUnknownBalanceDoesNotClaimCapitalReadiness();
   verifiesStaleAndHardFailureBlockImmediately();
   verifiesGenericRebalancingCannotAuthorizeWithdrawal();
   console.log(
@@ -86,7 +87,35 @@ function verifiesCurrentCapitalActionRequiresCleanRecovery(): void {
 
   recoveryPending = true;
   assert.equal(service.getCrossExchangeMovementAuthorizations(now).length, 0);
+  assert.equal(service.getDecision(latest, now).capitalActionQualified, false);
   assert.equal(service.getDecision(latest, now).safety.movementAllowed, false);
+}
+
+function verifiesUnknownBalanceDoesNotClaimCapitalReadiness(): void {
+  const now = START;
+  const service = new OpportunityCapitalStudyService({
+    subscribe: () => () => undefined,
+    evaluateFunding: (candidate, evaluatedAt) => ({
+      ...funding(candidate, evaluatedAt),
+      sellFunding: {
+        ...funding(candidate, evaluatedAt).sellFunding,
+        availableBalance: null,
+        sufficient: false,
+      },
+    }),
+    getSafetyContext: () => cleanSafety(),
+    now: () => now,
+  });
+  const latest = opportunity("unknown-sell-balance", now, 1.01);
+  service.observeSnapshot({generatedAt: now, opportunities: [latest]});
+
+  const decision = service.getDecision(latest, now);
+  assert.equal(decision.executionQualified, true);
+  assert.equal(decision.capitalActionQualified, false);
+  assert.equal(decision.status, "CURRENT_ROUTE_BLOCKED");
+  assert.equal(decision.recommendation, "WAIT_FOR_FRESH_BALANCES");
+  assert.equal(decision.safety.movementAllowed, false);
+  assert.equal(service.getCrossExchangeMovementAuthorizations(now).length, 0);
 }
 
 function verifiesStaleAndHardFailureBlockImmediately(): void {
