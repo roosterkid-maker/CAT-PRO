@@ -139,6 +139,35 @@ export interface StrategyOneAuthorizedFinalBookRefreshResult {
   };
 }
 
+export interface StrategyOneEvidenceBoundRecoveryBookRefreshResult {
+  readonly schemaVersion: "203.0";
+  readonly state:
+    | "REFRESHED"
+    | "BLOCKED";
+  readonly route: {
+    readonly market: string;
+    readonly buyExchange: StrategyOneTinyLiveBasketExchange;
+    readonly sellExchange: StrategyOneTinyLiveBasketExchange;
+  };
+  readonly recoveryExchange: StrategyOneTinyLiveBasketExchange;
+  readonly startedAt: number;
+  readonly completedAt: number;
+  readonly durationMs: number;
+  readonly leg: StrategyOneActionTimeBookRefreshLeg | null;
+  readonly blocker: string | null;
+  readonly safety: {
+    readonly publicReadOnly: true;
+    readonly evidenceBoundRecoveryOnly: true;
+    readonly exactRecoveryVenueOnly: true;
+    readonly thresholdChanged: false;
+    readonly timestampFabricationAllowed: false;
+    readonly orderSubmissionAllowed: false;
+    readonly automaticRetryAllowed: false;
+    readonly transferAllowed: false;
+    readonly withdrawalAllowed: false;
+  };
+}
+
 export interface StrategyOneActionTimeBookRefreshDependencies {
   refreshCoinDCX(
     market: string,
@@ -593,6 +622,81 @@ export class StrategyOneActionTimeBookRefreshService {
       result;
 
     return result;
+  }
+
+  /**
+   * One bounded public-depth refresh for the exact residual venue after a
+   * recovery preview has been explicitly approved. It does not evaluate a
+   * new opportunity or grant order authority; the recovery assistant still
+   * rebuilds every rule, balance, fee, loss, depth, freshness and price gate
+   * from the resulting canonical book before the recovery executor can own
+   * an order.
+   */
+  async refreshEvidenceBoundRecoveryVenue(
+    input: StrategyOneActionTimeBookRefreshRoute & {
+      readonly recoveryExchange: string;
+    },
+  ): Promise<StrategyOneEvidenceBoundRecoveryBookRefreshResult> {
+    const route = normalizeRoute(input);
+    const recoveryExchange = input.recoveryExchange
+      .trim()
+      .toLowerCase();
+
+    if (
+      recoveryExchange !== route.buyExchange &&
+      recoveryExchange !== route.sellExchange
+    ) {
+      throw new Error(
+        "Recovery public-book refresh is restricted to the exact approved route venue.",
+      );
+    }
+
+    const exactExchange =
+      recoveryExchange as StrategyOneTinyLiveBasketExchange;
+    const startedAt = this.dependencies.now();
+    let legs: readonly StrategyOneActionTimeBookRefreshLeg[];
+
+    try {
+      legs = await this.refreshRouteLegs(
+        route,
+        [exactExchange],
+      );
+    } catch (error: unknown) {
+      return recoveryRefreshReport({
+        state: "BLOCKED",
+        route,
+        recoveryExchange: exactExchange,
+        startedAt,
+        completedAt: this.dependencies.now(),
+        leg: null,
+        blocker: error instanceof Error
+          ? `Evidence-bound recovery public book refresh failed closed: ${error.message}`
+          : "Evidence-bound recovery public book refresh failed closed.",
+      });
+    }
+
+    const leg = legs.length === 1
+      ? legs[0] ?? null
+      : null;
+    const completedAt = this.dependencies.now();
+    const accepted =
+      leg !== null &&
+      leg.exchange === exactExchange &&
+      leg.market.trim().toUpperCase() === route.market &&
+      leg.accepted &&
+      leg.receivedAt !== null;
+
+    return recoveryRefreshReport({
+      state: accepted ? "REFRESHED" : "BLOCKED",
+      route,
+      recoveryExchange: exactExchange,
+      startedAt,
+      completedAt,
+      leg,
+      blocker: accepted
+        ? null
+        : `${exactExchange}: ${leg?.error ?? "fresh exact recovery public depth was unavailable"}`,
+    });
   }
 
   getDiagnostics() {
@@ -1151,6 +1255,36 @@ function finalRefreshReport(
         false as const,
       withdrawalAllowed:
         false as const,
+    },
+  });
+}
+
+function recoveryRefreshReport(
+  input: {
+    readonly state: StrategyOneEvidenceBoundRecoveryBookRefreshResult["state"];
+    readonly route: StrategyOneEvidenceBoundRecoveryBookRefreshResult["route"];
+    readonly recoveryExchange: StrategyOneTinyLiveBasketExchange;
+    readonly startedAt: number;
+    readonly completedAt: number;
+    readonly leg: StrategyOneActionTimeBookRefreshLeg | null;
+    readonly blocker: string | null;
+  },
+): StrategyOneEvidenceBoundRecoveryBookRefreshResult {
+  return freeze({
+    schemaVersion: "203.0" as const,
+    ...input,
+    durationMs: Math.max(0, input.completedAt - input.startedAt),
+    leg: input.leg ? clone(input.leg) : null,
+    safety: {
+      publicReadOnly: true as const,
+      evidenceBoundRecoveryOnly: true as const,
+      exactRecoveryVenueOnly: true as const,
+      thresholdChanged: false as const,
+      timestampFabricationAllowed: false as const,
+      orderSubmissionAllowed: false as const,
+      automaticRetryAllowed: false as const,
+      transferAllowed: false as const,
+      withdrawalAllowed: false as const,
     },
   });
 }

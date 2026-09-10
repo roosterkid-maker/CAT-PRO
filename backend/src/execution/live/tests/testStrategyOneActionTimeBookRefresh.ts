@@ -35,6 +35,7 @@ async function main(): Promise<void> {
   await testExactRejectionEvidenceIsPreserved();
   await testAuthorizedFinalRefreshIsParallelAndPublicOnly();
   await testAuthorizedFinalRefreshFailsClosed();
+  await testEvidenceBoundRecoveryRefreshTargetsOnlyExactVenue();
 
   console.log(
     "V190 action-time book refresh passed: policy-qualified dynamic-pool venues refresh only stale route legs, preserve validated timestamps for reused legs, keep authorized final reads parallel, and grant no threshold/order/fund authority.",
@@ -378,6 +379,86 @@ async function testAuthorizedFinalRefreshFailsClosed(): Promise<void> {
   assert.match(result.blocker ?? "", /coindcx.*bounded timeout/iu);
   assert.equal(evaluations, 0);
   assert.equal(service.getDiagnostics().finalRefreshBlocks, 1);
+}
+
+async function testEvidenceBoundRecoveryRefreshTargetsOnlyExactVenue(): Promise<void> {
+  let coinDCXReads = 0;
+  let binanceReads = 0;
+  let bybitReads = 0;
+  let evaluations = 0;
+  let bybitAccepted = true;
+  const service = new StrategyOneActionTimeBookRefreshService({
+    refreshCoinDCX: async () => {
+      coinDCXReads += 1;
+      throw new Error("The non-residual CoinDCX venue must not be refreshed.");
+    },
+    refreshBinance: async () => {
+      binanceReads += 1;
+      throw new Error("An exchange outside the approved route must not be refreshed.");
+    },
+    refreshBybit: async (market, timeoutMs) => {
+      bybitReads += 1;
+      assert.equal(market, "WAVESUSDT");
+      assert.equal(timeoutMs, 250);
+      return {
+        exchange: "bybit",
+        market,
+        accepted: bybitAccepted,
+        requestedAt: NOW,
+        receivedAt: bybitAccepted ? NOW + 20 : null,
+        roundTripMs: 20,
+        error: bybitAccepted ? null : "bounded public-depth timeout",
+      };
+    },
+    evaluateExactRoute: () => {
+      evaluations += 1;
+      throw new Error("A recovery-only public read must not mint an opportunity.");
+    },
+    now: () => NOW + 20,
+  });
+
+  const refreshed = await service.refreshEvidenceBoundRecoveryVenue({
+    market: "wavesusdt",
+    buyExchange: "coindcx",
+    sellExchange: "bybit",
+    recoveryExchange: "BYBIT",
+  });
+
+  assert.equal(refreshed.schemaVersion, "203.0");
+  assert.equal(refreshed.state, "REFRESHED");
+  assert.equal(refreshed.recoveryExchange, "bybit");
+  assert.equal(refreshed.leg?.exchange, "bybit");
+  assert.equal(bybitReads, 1);
+  assert.equal(coinDCXReads, 0);
+  assert.equal(binanceReads, 0);
+  assert.equal(evaluations, 0);
+  assert.equal(refreshed.safety.publicReadOnly, true);
+  assert.equal(refreshed.safety.exactRecoveryVenueOnly, true);
+  assert.equal(refreshed.safety.thresholdChanged, false);
+  assert.equal(refreshed.safety.orderSubmissionAllowed, false);
+
+  await assert.rejects(
+    service.refreshEvidenceBoundRecoveryVenue({
+      market: "WAVESUSDT",
+      buyExchange: "coindcx",
+      sellExchange: "bybit",
+      recoveryExchange: "binance",
+    }),
+    /restricted to the exact approved route venue/iu,
+  );
+  assert.equal(binanceReads, 0);
+
+  bybitAccepted = false;
+  const blocked = await service.refreshEvidenceBoundRecoveryVenue({
+    market: "WAVESUSDT",
+    buyExchange: "coindcx",
+    sellExchange: "bybit",
+    recoveryExchange: "bybit",
+  });
+  assert.equal(blocked.state, "BLOCKED");
+  assert.match(blocked.blocker ?? "", /bybit.*bounded public-depth timeout/iu);
+  assert.equal(blocked.safety.orderSubmissionAllowed, false);
+  assert.equal(evaluations, 0);
 }
 
 async function testHungLegFailsClosedAndReleasesInFlight(): Promise<void> {

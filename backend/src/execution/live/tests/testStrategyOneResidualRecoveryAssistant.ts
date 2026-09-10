@@ -24,6 +24,9 @@ import type {
 import {
   StrategyOneResidualRecoveryAssistantService,
 } from "../recovery/StrategyOneResidualRecoveryAssistantService";
+import type {
+  StrategyOneEvidenceBoundRecoveryBookRefreshResult,
+} from "../tiny-live/StrategyOneActionTimeBookRefreshService";
 
 import type {
   StrategyOneTwoLegExecutionResult,
@@ -46,6 +49,7 @@ async function main(): Promise<void> {
     });
   const pair =
     new FakePairPort(longResidualSession);
+  let actionTimeRefreshes = 0;
   const service =
     assistant(
       pair,
@@ -61,6 +65,17 @@ async function main(): Promise<void> {
       capability(1),
       5,
       "ready.jsonl",
+      NOW,
+      async (input) => {
+        actionTimeRefreshes += 1;
+        assert.deepEqual(input, {
+          market: "COTIUSDT",
+          buyExchange: "coindcx",
+          sellExchange: "binance",
+          recoveryExchange: "coindcx",
+        });
+        return successfulRecoveryRefresh(input, NOW + 2);
+      },
     );
   const preview =
     await service.inspectSession(
@@ -125,6 +140,85 @@ async function main(): Promise<void> {
     executionBoundary.actionTimePreview.sourceSessionFingerprint,
     approved.sourceSessionFingerprint,
     "volatile reconciliation timestamps and reasons must not invalidate approval",
+  );
+  assert.equal(actionTimeRefreshes, 1);
+  assert.equal(
+    executionBoundary.actionTimePreview.safety
+      .actionTimePublicBookRefreshRequired,
+    true,
+  );
+
+  const blockedRefreshService = assistant(
+    new FakePairPort(longResidualSession),
+    {
+      timestamp: NOW - 25,
+      bids: [{price: 1.05, quantity: 3}],
+      asks: [{price: 1.06, quantity: 3}],
+    },
+    capability(1),
+    5,
+    "blocked-action-time-refresh.jsonl",
+    NOW,
+    async (input) => ({
+      ...successfulRecoveryRefresh(input, NOW + 2),
+      state: "BLOCKED" as const,
+      blocker: "Fixture public-depth timeout.",
+    }),
+  );
+  const blockedRefreshPreview = await blockedRefreshService.inspectSession(
+    longResidualSession.sessionId,
+    NOW,
+  );
+  blockedRefreshService.approvePreview(
+    blockedRefreshPreview.id,
+    blockedRefreshPreview.requiredApprovalPhrase ?? "",
+    NOW + 1,
+  );
+  await assert.rejects(
+    blockedRefreshService.getApprovedExecutionBoundary(
+      blockedRefreshPreview.id,
+      NOW + 2,
+    ),
+    /public book refresh is blocked: Fixture public-depth timeout/u,
+  );
+
+  const rescuedBook = {
+    timestamp: NOW - 25,
+    bids: [{price: 1.05, quantity: 3}],
+    asks: [{price: 1.06, quantity: 3}],
+  };
+  const refreshedBoundaryService = assistant(
+    new FakePairPort(longResidualSession),
+    rescuedBook,
+    capability(1),
+    5,
+    "refreshed-action-time-book.jsonl",
+    NOW,
+    async (input) => {
+      rescuedBook.timestamp = NOW + 2;
+      return successfulRecoveryRefresh(input, NOW + 2);
+    },
+  );
+  const refreshedBoundaryPreview =
+    await refreshedBoundaryService.inspectSession(
+      longResidualSession.sessionId,
+      NOW,
+    );
+  refreshedBoundaryService.approvePreview(
+    refreshedBoundaryPreview.id,
+    refreshedBoundaryPreview.requiredApprovalPhrase ?? "",
+    NOW + 1,
+  );
+  rescuedBook.timestamp = NOW - 2_000;
+  const refreshedBoundary =
+    await refreshedBoundaryService.getApprovedExecutionBoundary(
+      refreshedBoundaryPreview.id,
+      NOW + 2,
+    );
+  assert.equal(
+    refreshedBoundary.actionTimePreview.executionPreview.bookAgeMs,
+    0,
+    "the evidence-bound refresh must replace a stale cached book before final recovery checks",
   );
 
   const lossSession =
@@ -634,6 +728,10 @@ function assistant(
   availableBalance: number,
   file: string,
   currentTime = NOW,
+  refreshEvidenceBoundRecoveryBook: (
+    input: RecoveryRefreshInput,
+  ) => Promise<StrategyOneEvidenceBoundRecoveryBookRefreshResult> =
+    async (input) => successfulRecoveryRefresh(input, currentTime),
 ): StrategyOneResidualRecoveryAssistantService {
   return new StrategyOneResidualRecoveryAssistantService(
     pairs,
@@ -664,12 +762,52 @@ function assistant(
         authoritativeFillConfirmationReady: true,
         authoritativeFeeReconciliationReady: true,
       }),
+      refreshEvidenceBoundRecoveryBook,
     },
     {
       maximumLossPercentOfResidual: 1,
     },
     resolve(process.cwd(), file),
   );
+}
+
+interface RecoveryRefreshInput {
+  readonly market: string;
+  readonly buyExchange: string;
+  readonly sellExchange: string;
+  readonly recoveryExchange: string;
+}
+
+function successfulRecoveryRefresh(
+  input: RecoveryRefreshInput,
+  completedAt: number,
+): StrategyOneEvidenceBoundRecoveryBookRefreshResult {
+  return {
+    schemaVersion: "203.0",
+    state: "REFRESHED",
+    route: {
+      market: input.market,
+      buyExchange: input.buyExchange as "coindcx",
+      sellExchange: input.sellExchange as "binance",
+    },
+    recoveryExchange: input.recoveryExchange as "coindcx",
+    startedAt: completedAt - 1,
+    completedAt,
+    durationMs: 1,
+    leg: null,
+    blocker: null,
+    safety: {
+      publicReadOnly: true,
+      evidenceBoundRecoveryOnly: true,
+      exactRecoveryVenueOnly: true,
+      thresholdChanged: false,
+      timestampFabricationAllowed: false,
+      orderSubmissionAllowed: false,
+      automaticRetryAllowed: false,
+      transferAllowed: false,
+      withdrawalAllowed: false,
+    },
+  };
 }
 
 function capability(

@@ -741,6 +741,7 @@ function preview(
       authoritativeReadReconciliationOnly: true,
       exactResidualNeverIncreased: true,
       fullDepthRequired: true,
+      actionTimePublicBookRefreshRequired: true,
       currentRulesRequired: true,
       freshBalanceRequired: true,
       maximumLossCapRequired: true,

@@ -41,6 +41,11 @@ import {
 } from "../contracts/StrategyOneLiveVenueContractRegistry";
 
 import {
+  strategyOneActionTimeBookRefreshService,
+  type StrategyOneEvidenceBoundRecoveryBookRefreshResult,
+} from "../tiny-live/StrategyOneActionTimeBookRefreshService";
+
+import {
   strategyOneTwoLegLiveExecutionService,
   type StrategyOneTwoLegExecutionResult,
   type StrategyOneTwoLegSessionRecord,
@@ -119,6 +124,7 @@ export interface StrategyOneResidualRecoveryPreview {
     readonly authoritativeReadReconciliationOnly: true;
     readonly exactResidualNeverIncreased: true;
     readonly fullDepthRequired: true;
+    readonly actionTimePublicBookRefreshRequired: true;
     readonly currentRulesRequired: true;
     readonly freshBalanceRequired: true;
     readonly maximumLossCapRequired: true;
@@ -166,6 +172,12 @@ export interface StrategyOneResidualRecoveryAssistantDependencies {
     },
     now: number,
   ): StrategyOneVenueOrderContract | null;
+  refreshEvidenceBoundRecoveryBook(input: {
+    readonly market: string;
+    readonly buyExchange: string;
+    readonly sellExchange: string;
+    readonly recoveryExchange: string;
+  }): Promise<StrategyOneEvidenceBoundRecoveryBookRefreshResult>;
 }
 
 export interface StrategyOneResidualRecoveryAssistantConfiguration {
@@ -218,6 +230,13 @@ const DEFAULT_DEPENDENCIES:
         exchange,
         route,
         now,
+      ),
+  refreshEvidenceBoundRecoveryBook: (
+    input,
+  ) =>
+    strategyOneActionTimeBookRefreshService
+      .refreshEvidenceBoundRecoveryVenue(
+        input,
       ),
 };
 
@@ -445,9 +464,50 @@ export class StrategyOneResidualRecoveryAssistantService {
       );
     }
 
+    const recoveryExchange = approved.residual.venue;
+
+    if (!recoveryExchange) {
+      throw new Error(
+        "The approved Strategy #1 recovery preview has no exact residual venue.",
+      );
+    }
+
+    let refresh: StrategyOneEvidenceBoundRecoveryBookRefreshResult;
+
+    try {
+      refresh = await this.dependencies.refreshEvidenceBoundRecoveryBook({
+        market: approved.market,
+        buyExchange: approved.buyExchange,
+        sellExchange: approved.sellExchange,
+        recoveryExchange,
+      });
+    } catch (error: unknown) {
+      throw new Error(
+        `Action-time recovery public book refresh failed closed: ${message(error)}`,
+      );
+    }
+
+    if (refresh.state !== "REFRESHED") {
+      throw new Error(
+        `Action-time recovery public book refresh is blocked: ${refresh.blocker ?? "fresh exact recovery depth was unavailable"}`,
+      );
+    }
+
+    const actionTimeAssessmentTime = Math.max(
+      assessmentTime,
+      refresh.completedAt,
+      this.dependencies.currentTime(),
+    );
+
+    if (approved.expiresAt <= actionTimeAssessmentTime) {
+      throw new Error(
+        "The approved Strategy #1 recovery preview expired during action-time public book refresh; inspect and approve again.",
+      );
+    }
+
     const actionTime = this.buildPreview(
       session,
-      assessmentTime,
+      actionTimeAssessmentTime,
       null,
       approved.oneTimeLossAuthorization,
     );
@@ -1421,6 +1481,7 @@ function safety() {
     authoritativeReadReconciliationOnly: true as const,
     exactResidualNeverIncreased: true as const,
     fullDepthRequired: true as const,
+    actionTimePublicBookRefreshRequired: true as const,
     currentRulesRequired: true as const,
     freshBalanceRequired: true as const,
     maximumLossCapRequired: true as const,
