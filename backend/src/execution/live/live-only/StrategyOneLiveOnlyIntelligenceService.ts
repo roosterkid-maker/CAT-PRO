@@ -59,6 +59,7 @@ export interface LiveOnlyIntelligenceLegPlan {
   readonly requiredBalance: number | null;
   readonly availableBalance: number | null;
   readonly shortfall: number | null;
+  readonly balanceSynchronizationStatus: string;
   readonly balanceSnapshotAgeMs: number | null;
   readonly maximumBalanceSnapshotAgeMs: number | null;
   readonly balanceSufficient: boolean;
@@ -593,6 +594,7 @@ export class StrategyOneLiveOnlyIntelligenceService {
       readonly asset: string | null;
       readonly requiredBalance: number | null;
       readonly availableBalance: number | null;
+      readonly synchronizationStatus: string;
       readonly snapshotAgeMs: number | null;
       readonly maximumSnapshotAgeMs: number;
       readonly sufficient: boolean;
@@ -612,6 +614,11 @@ export class StrategyOneLiveOnlyIntelligenceService {
     const asset =
       funding.asset ??
       "UNKNOWN";
+    const synchronizationStatus =
+      typeof funding.synchronizationStatus === "string" &&
+      funding.synchronizationStatus.trim()
+        ? funding.synchronizationStatus.trim().toUpperCase()
+        : "NO_REPORT";
 
     return deepFreeze({
       side,
@@ -625,6 +632,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
       availableBalance:
         funding.availableBalance,
       shortfall,
+      balanceSynchronizationStatus:
+        synchronizationStatus,
       balanceSnapshotAgeMs:
         funding.snapshotAgeMs,
       maximumBalanceSnapshotAgeMs:
@@ -639,7 +648,9 @@ export class StrategyOneLiveOnlyIntelligenceService {
             ? `${funding.exchange} needs ${formatNumber(
                 shortfall,
               )} more ${asset} for this exact ${side} leg.`
-            : `${funding.exchange} needs a fresh authenticated ${asset} balance before this ${side} leg can execute.`,
+            : synchronizationStatus === "SYNCHRONIZED"
+              ? `${funding.exchange} balance synchronization completed, but ${asset} was absent from the returned wallet rows; the available amount remains unknown rather than being assumed to be zero.`
+              : `${funding.exchange} authenticated balance synchronization is ${synchronizationStatus}; a fresh ${asset} balance is required before this ${side} leg can execute.`,
     });
   }
 
@@ -672,6 +683,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
         null,
       shortfall:
         null,
+      balanceSynchronizationStatus:
+        "NO_REPORT",
       balanceSnapshotAgeMs:
         null,
       maximumBalanceSnapshotAgeMs:

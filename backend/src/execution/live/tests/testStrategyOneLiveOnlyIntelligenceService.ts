@@ -358,6 +358,8 @@ function blockedPreflight(
           10,
         availableBalance:
           7,
+        synchronizationStatus:
+          "SYNCHRONIZED",
         snapshotAgeMs:
           1_000,
         maximumSnapshotAgeMs:
@@ -374,6 +376,8 @@ function blockedPreflight(
           10,
         availableBalance:
           12,
+        synchronizationStatus:
+          "SYNCHRONIZED",
         snapshotAgeMs:
           1_000,
         maximumSnapshotAgeMs:

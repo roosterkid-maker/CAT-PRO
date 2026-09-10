@@ -403,7 +403,7 @@ function LegCard({ leg }: { leg: LiveOnlyIntelligenceLegPlan }) {
         <p className="mt-3 text-[11px] leading-5 text-emerald-300">{leg.explanation}</p>
       )}
       <p className="mt-2 text-[9px] text-text-muted">
-        Balance evidence age: {leg.balanceSnapshotAgeMs === null ? "unknown" : `${leg.balanceSnapshotAgeMs} ms`}
+        Sync status: {leg.balanceSynchronizationStatus.replaceAll("_", " ")} · Balance evidence age: {leg.balanceSnapshotAgeMs === null ? "unknown" : `${leg.balanceSnapshotAgeMs} ms`}
         {leg.maximumBalanceSnapshotAgeMs === null ? "" : ` · maximum ${leg.maximumBalanceSnapshotAgeMs} ms`}
       </p>
     </div>

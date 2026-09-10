@@ -18,6 +18,7 @@ export interface LiveOnlyIntelligenceLegPlan {
   requiredBalance: number | null;
   availableBalance: number | null;
   shortfall: number | null;
+  balanceSynchronizationStatus: string;
   balanceSnapshotAgeMs: number | null;
   maximumBalanceSnapshotAgeMs: number | null;
   balanceSufficient: boolean;
