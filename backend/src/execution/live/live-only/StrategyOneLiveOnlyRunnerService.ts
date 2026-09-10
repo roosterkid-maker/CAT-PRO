@@ -267,10 +267,17 @@ export class StrategyOneLiveOnlyRunnerService {
           isSnapshot,
       });
 
+    /*
+     * Each record is a complete cumulative runner snapshot. Restoring the
+     * whole append-only file needlessly materialized every historical copy
+     * before keeping only the last one. In production that journal can grow
+     * to hundreds of megabytes, creating a large startup/RSS spike. The
+     * snapshot store's bounded tail reader preserves the same crash-tolerant
+     * newest-valid-record semantics without loading the complete journal.
+     */
     const restored =
       this.store
-        .readAll()
-        .at(-1);
+        .readLatest();
 
     if (restored) {
       this.haltedReason =
