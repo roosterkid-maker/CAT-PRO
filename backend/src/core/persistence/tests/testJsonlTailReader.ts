@@ -312,6 +312,35 @@ function main(): void {
         isPayload:
           isFixture,
       });
+
+    const streamedSnapshotReader =
+      new JsonlSnapshotStore<FixtureRecord>({
+        filePath:
+          snapshotPath,
+        isPayload:
+          isFixture,
+      });
+    const streamedSnapshots =
+      streamedSnapshotReader.readAll();
+    const streamedSnapshotDiagnostics =
+      streamedSnapshotReader.getDiagnostics();
+
+    assertCondition(
+      streamedSnapshots.length ===
+        2_000 &&
+      streamedSnapshots[0]?.sequence ===
+        1 &&
+      streamedSnapshots.at(-1)?.sequence ===
+        2_000 &&
+      streamedSnapshotDiagnostics.linesRead ===
+        2_001 &&
+      streamedSnapshotDiagnostics.malformedRecordsIgnored ===
+        1 &&
+      streamedSnapshotDiagnostics.lastSequence ===
+        2_000,
+      "Forward JSONL restore must preserve complete chronological semantics across chunk boundaries while ignoring a truncated tail.",
+    );
+
     const latestSnapshot =
       snapshotReader.readLatest();
     const snapshotDiagnostics =

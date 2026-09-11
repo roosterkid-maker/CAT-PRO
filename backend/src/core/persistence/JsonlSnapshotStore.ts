@@ -6,7 +6,7 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -456,111 +456,245 @@ export class JsonlSnapshotStore<T> {
       return [];
     }
 
+    let descriptor:
+      number | null =
+      null;
+
     try {
-      const text =
-        readFileSync(
+      descriptor =
+        openSync(
           this.options
             .filePath,
-
-          "utf8",
+          "r",
         );
-
-      const lines =
-        text
-          .split(
-            /\r?\n/,
-          )
-          .map(
-            (
-              line,
-            ) =>
-              line.trim(),
-          )
-          .filter(
-            Boolean,
-          );
-
-      this.linesRead =
-        lines.length;
 
       const records:
         T[] = [];
 
-      for (
-        const line
-        of lines
-      ) {
-        try {
-          const parsed:
-            unknown =
-            JSON.parse(
-              line,
-            );
+      const inspect =
+        (
+          line:
+            Buffer,
+        ): void => {
+          const text =
+            line
+              .toString(
+                "utf8",
+              )
+              .trim();
 
-          const envelope =
-            this.decodeEnvelope(
-              parsed,
-            );
+          if (!text) {
+            return;
+          }
 
-          if (
-            envelope
-          ) {
-            records.push(
-              structuredClone(
-                envelope.payload,
-              ),
-            );
+          this.linesRead +=
+            1;
 
-            this.validRecordsRead +=
-              1;
-
-            this.sequence =
-              Math.max(
-                this.sequence,
-                envelope.sequence,
+          try {
+            const parsed:
+              unknown =
+              JSON.parse(
+                text,
               );
 
+            const envelope =
+              this.decodeEnvelope(
+                parsed,
+              );
+
+            if (
+              envelope
+            ) {
+              records.push(
+                structuredClone(
+                  envelope.payload,
+                ),
+              );
+
+              this.validRecordsRead +=
+                1;
+
+              this.sequence =
+                Math.max(
+                  this.sequence,
+                  envelope.sequence,
+                );
+
+              return;
+            }
+
+            const legacy =
+              this.options
+                .decodeLegacy?.(
+                  parsed,
+                ) ??
+              null;
+
+            if (
+              legacy
+            ) {
+              records.push(
+                structuredClone(
+                  legacy,
+                ),
+              );
+
+              this.validRecordsRead +=
+                1;
+
+              this.legacyRecordsRead +=
+                1;
+
+              return;
+            }
+
+            this.malformedRecordsIgnored +=
+              1;
+          } catch {
+            /*
+             * Crash-tolerant JSONL:
+             *
+             * malformed / truncated records do not
+             * prevent valid historical records from
+             * being restored.
+             */
+            this.malformedRecordsIgnored +=
+              1;
+          }
+        };
+
+      /*
+       * Event journals genuinely need every record, but loading one large
+       * UTF-8 string and then splitting it retained several full-file copies
+       * during startup. Parse fixed-size forward chunks instead; only the
+       * decoded payload array required by the existing API remains resident.
+       */
+      const chunkSizeBytes =
+        64 *
+        1_024;
+
+      const chunk =
+        Buffer.allocUnsafe(
+          chunkSizeBytes,
+        );
+
+      const partialFragments:
+        Buffer[] = [];
+
+      let partialLength =
+        0;
+
+      for (;;) {
+        const bytesRead =
+          readSync(
+            descriptor,
+            chunk,
+            0,
+            chunk.length,
+            null,
+          );
+
+        if (
+          bytesRead ===
+          0
+        ) {
+          break;
+        }
+
+        const available =
+          chunk.subarray(
+            0,
+            bytesRead,
+          );
+
+        let lineStart =
+          0;
+
+        for (
+          let index =
+            0;
+          index <
+            available.length;
+          index +=
+            1
+        ) {
+          if (
+            available[index] !==
+            0x0a
+          ) {
             continue;
           }
 
-          const legacy =
-            this.options
-              .decodeLegacy?.(
-                parsed,
-              ) ??
-            null;
+          const fragment =
+            available.subarray(
+              lineStart,
+              index,
+            );
 
           if (
-            legacy
+            partialLength ===
+            0
           ) {
-            records.push(
-              structuredClone(
-                legacy,
+            inspect(
+              fragment,
+            );
+          } else {
+            partialFragments.push(
+              Buffer.from(
+                fragment,
               ),
             );
 
-            this.validRecordsRead +=
-              1;
+            inspect(
+              Buffer.concat(
+                partialFragments,
+                partialLength +
+                  fragment.length,
+              ),
+            );
 
-            this.legacyRecordsRead +=
-              1;
+            partialFragments.length =
+              0;
 
-            continue;
+            partialLength =
+              0;
           }
 
-          this.malformedRecordsIgnored +=
-            1;
-        } catch {
-          /*
-           * Crash-tolerant JSONL:
-           *
-           * malformed / truncated records do not
-           * prevent valid historical records from
-           * being restored.
-           */
-          this.malformedRecordsIgnored +=
+          lineStart =
+            index +
             1;
         }
+
+        const trailingFragment =
+          available.subarray(
+            lineStart,
+          );
+
+        if (
+          trailingFragment.length >
+          0
+        ) {
+          partialFragments.push(
+            Buffer.from(
+              trailingFragment,
+            ),
+          );
+
+          partialLength +=
+            trailingFragment.length;
+        }
+      }
+
+      if (
+        partialLength >
+        0
+      ) {
+        inspect(
+          Buffer.concat(
+            partialFragments,
+            partialLength,
+          ),
+        );
       }
 
       this.lastReadAt =
@@ -583,6 +717,15 @@ export class JsonlSnapshotStore<T> {
           : "Unknown JSONL snapshot read error.";
 
       return [];
+    } finally {
+      if (
+        descriptor !==
+        null
+      ) {
+        closeSync(
+          descriptor,
+        );
+      }
     }
   }
 
