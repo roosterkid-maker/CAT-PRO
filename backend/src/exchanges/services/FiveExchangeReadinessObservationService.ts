@@ -308,7 +308,9 @@ export class FiveExchangeReadinessObservationService {
 
     this.observations =
       this.store
-        .readAll()
+        .readRecent(
+          MAXIMUM_RESTORED_OBSERVATIONS,
+        )
         .sort(
           (first, second) =>
             first.observedAt -

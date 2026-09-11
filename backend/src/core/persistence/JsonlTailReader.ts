@@ -25,6 +25,20 @@ export interface JsonlTailReadResult<T> {
   oversizedLinesIgnored: number;
 }
 
+export interface JsonlTailReadBatchResult<T> {
+  values: T[];
+
+  fileSizeBytes: number;
+
+  bytesRead: number;
+
+  linesInspected: number;
+
+  malformedLinesIgnored: number;
+
+  oversizedLinesIgnored: number;
+}
+
 export interface JsonlTailReaderOptions {
   chunkSizeBytes?: number;
 
@@ -60,6 +74,82 @@ export function readLatestValidJsonlRecord<T>(
     selected: T,
   ) => boolean,
 ): JsonlTailReadResult<T> | null {
+  const result =
+    readValidJsonlRecordsFromTail(
+      filePath,
+      isValid,
+      1,
+      options,
+      selectBetter,
+    );
+
+  if (!result) {
+    return null;
+  }
+
+  const {
+    values,
+    ...diagnostics
+  } = result;
+
+  return {
+    value:
+      values[0],
+    ...diagnostics,
+  };
+}
+
+/**
+ * Restore the newest valid records without materializing an append-only
+ * JSONL file. Values are returned in chronological order so callers can use
+ * the result as a bounded in-memory event window.
+ */
+export function readRecentValidJsonlRecords<T>(
+  filePath: string,
+  isValid: (
+    value: unknown,
+  ) => value is T,
+  maximumRecords: number,
+  options:
+    JsonlTailReaderOptions = {},
+): JsonlTailReadBatchResult<T> | null {
+  const result =
+    readValidJsonlRecordsFromTail(
+      filePath,
+      isValid,
+      positiveInteger(
+        maximumRecords,
+        "JSONL maximum records",
+      ),
+      options,
+    );
+
+  if (!result) {
+    return null;
+  }
+
+  return {
+    ...result,
+    values:
+      result.values
+        .slice()
+        .reverse(),
+  };
+}
+
+function readValidJsonlRecordsFromTail<T>(
+  filePath: string,
+  isValid: (
+    value: unknown,
+  ) => value is T,
+  maximumRecords: number,
+  options:
+    JsonlTailReaderOptions = {},
+  selectBetter?: (
+    candidate: T,
+    selected: T,
+  ) => boolean,
+): JsonlTailReadBatchResult<T> | null {
   const chunkSizeBytes =
     positiveInteger(
       options.chunkSizeBytes ??
@@ -95,6 +185,9 @@ export function readLatestValidJsonlRecord<T>(
   let selectedValue:
     T | null =
     null;
+
+  const selectedValues:
+    T[] = [];
 
   try {
     const fileSizeBytes =
@@ -295,20 +388,30 @@ export function readLatestValidJsonlRecord<T>(
               value;
           }
         } else if (value) {
-          const result = {
+          selectedValues.push(
             value,
-            fileSizeBytes,
-            bytesRead,
-            linesInspected,
-            malformedLinesIgnored,
-            oversizedLinesIgnored,
-          };
-
-          options.onComplete?.(
-            result,
           );
 
-          return result;
+          if (
+            selectedValues.length >=
+            maximumRecords
+          ) {
+            const result = {
+              values:
+                selectedValues,
+              fileSizeBytes,
+              bytesRead,
+              linesInspected,
+              malformedLinesIgnored,
+              oversizedLinesIgnored,
+            };
+
+            options.onComplete?.(
+              result,
+            );
+
+            return result;
+          }
         }
 
         lineEnd =
@@ -392,20 +495,9 @@ export function readLatestValidJsonlRecord<T>(
             value;
         }
       } else if (value) {
-        const result = {
+        selectedValues.push(
           value,
-          fileSizeBytes,
-          bytesRead,
-          linesInspected,
-          malformedLinesIgnored,
-          oversizedLinesIgnored,
-        };
-
-        options.onComplete?.(
-          result,
         );
-
-        return result;
       }
     }
 
@@ -426,8 +518,21 @@ export function readLatestValidJsonlRecord<T>(
       null
     ) {
       return {
-        value:
+        values: [
           selectedValue,
+        ],
+
+        ...diagnostics,
+      };
+    }
+
+    if (
+      selectedValues.length >
+      0
+    ) {
+      return {
+        values:
+          selectedValues,
 
         ...diagnostics,
       };

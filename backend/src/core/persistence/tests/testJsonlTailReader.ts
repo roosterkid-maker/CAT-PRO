@@ -15,6 +15,7 @@ import {
 import {
   type JsonlTailReadDiagnostics,
   readLatestValidJsonlRecord,
+  readRecentValidJsonlRecords,
 } from "../JsonlTailReader";
 
 import {
@@ -141,6 +142,37 @@ function main(): void {
 
     console.log(
       `Recovered sequence ${result.value.sequence} after reading ${result.bytesRead}/${result.fileSizeBytes} bytes.`,
+    );
+
+    const recent =
+      readRecentValidJsonlRecords(
+        filePath,
+        isFixture,
+        5,
+        {
+          chunkSizeBytes:
+            1_024,
+          maximumLineBytes:
+            16 *
+            1_024,
+        },
+      );
+
+    assertCondition(
+      recent !==
+        null &&
+      recent.values
+        .map(
+          (record) =>
+            record.sequence,
+        )
+        .join(",") ===
+        "1996,1997,1998,1999,2000" &&
+      recent.malformedLinesIgnored ===
+        1 &&
+      recent.bytesRead <
+        recent.fileSizeBytes,
+      "Bounded JSONL window restore must return the newest valid records chronologically without loading the full file.",
     );
 
     const noMatchCompletion: {
@@ -293,6 +325,37 @@ function main(): void {
       snapshotDiagnostics.lastSequence ===
         2_000,
       "Cumulative snapshot restore must skip a broken tail, read only the latest valid envelope and retain its append sequence.",
+    );
+
+    const recentSnapshotReader =
+      new JsonlSnapshotStore<FixtureRecord>({
+        filePath:
+          snapshotPath,
+        isPayload:
+          isFixture,
+      });
+    const recentSnapshots =
+      recentSnapshotReader.readRecent(
+        5,
+      );
+    const recentSnapshotDiagnostics =
+      recentSnapshotReader.getDiagnostics();
+
+    assertCondition(
+      recentSnapshots
+        .map(
+          (record) =>
+            record.sequence,
+        )
+        .join(",") ===
+        "1996,1997,1998,1999,2000" &&
+      recentSnapshotDiagnostics.linesRead ===
+        6 &&
+      recentSnapshotDiagnostics.validRecordsRead ===
+        5 &&
+      recentSnapshotDiagnostics.lastSequence ===
+        2_000,
+      "Snapshot-store bounded window restore must preserve chronological payload order, diagnostics and the durable append sequence.",
     );
 
     appendFileSync(

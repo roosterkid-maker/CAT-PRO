@@ -18,6 +18,7 @@ import {
 
 import {
   readLatestValidJsonlRecord,
+  readRecentValidJsonlRecords,
   type JsonlTailReadDiagnostics,
 } from "./JsonlTailReader";
 
@@ -724,6 +725,166 @@ export class JsonlSnapshotStore<T> {
           : "Unknown JSONL bounded-tail read error.";
 
       return null;
+    }
+  }
+
+  /**
+   * Restore a bounded chronological window from the end of an append-only
+   * snapshot stream. This is intended for rolling analytics that retain only
+   * recent samples and must not pay the startup cost of parsing all history.
+   */
+  readRecent(
+    maximumRecords: number,
+  ):
+    T[] {
+    this.resetReadDiagnostics();
+
+    if (
+      !existsSync(
+        this.options
+          .filePath,
+      )
+    ) {
+      this.lastReadAt =
+        Date.now();
+
+      return [];
+    }
+
+    const completion: {
+      value:
+        JsonlTailReadDiagnostics | null;
+    } = {
+      value:
+        null,
+    };
+
+    try {
+      const result =
+        readRecentValidJsonlRecords<
+          JsonlSnapshotEnvelope<T> | T
+        >(
+          this.options
+            .filePath,
+          (
+            value,
+          ): value is JsonlSnapshotEnvelope<T> | T =>
+            this.decodeEnvelope(
+              value,
+            ) !==
+              null ||
+            (
+              this.options
+                .decodeLegacy?.(
+                  value,
+                ) ??
+              null
+            ) !==
+              null,
+          maximumRecords,
+          {
+            onComplete:
+              (
+                diagnostics,
+              ) => {
+                completion.value =
+                  diagnostics;
+              },
+          },
+        );
+
+      const diagnostics =
+        result ??
+        completion.value;
+
+      if (diagnostics) {
+        this.linesRead =
+          diagnostics.linesInspected;
+
+        this.malformedRecordsIgnored =
+          diagnostics.malformedLinesIgnored +
+          diagnostics.oversizedLinesIgnored;
+      }
+
+      this.lastReadAt =
+        Date.now();
+
+      this.lastError =
+        null;
+
+      if (!result) {
+        return [];
+      }
+
+      const records:
+        T[] = [];
+
+      for (
+        const value
+        of result.values
+      ) {
+        const envelope =
+          this.decodeEnvelope(
+            value,
+          );
+
+        if (envelope) {
+          this.sequence =
+            Math.max(
+              this.sequence,
+              envelope.sequence,
+            );
+
+          this.validRecordsRead +=
+            1;
+
+          records.push(
+            structuredClone(
+              envelope.payload,
+            ),
+          );
+
+          continue;
+        }
+
+        const legacy =
+          this.options
+            .decodeLegacy?.(
+              value,
+            ) ??
+          null;
+
+        if (!legacy) {
+          continue;
+        }
+
+        this.validRecordsRead +=
+          1;
+
+        this.legacyRecordsRead +=
+          1;
+
+        records.push(
+          structuredClone(
+            legacy,
+          ),
+        );
+      }
+
+      return records;
+    } catch (
+      error:
+        unknown
+    ) {
+      this.lastReadAt =
+        Date.now();
+
+      this.lastError =
+        error instanceof Error
+          ? error.message
+          : "Unknown JSONL bounded-window read error.";
+
+      return [];
     }
   }
 
