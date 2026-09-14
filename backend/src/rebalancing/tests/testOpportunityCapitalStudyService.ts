@@ -22,7 +22,7 @@ function main(): void {
   verifiesStaleAndHardFailureBlockImmediately();
   verifiesGenericRebalancingCannotAuthorizeWithdrawal();
   console.log(
-    "Opportunity capital readiness passed: no persistence counter remains; current exact books, fixed 1.00% net, funding, freshness and recovery still fail closed.",
+    "Opportunity capital readiness passed: no persistence counter remains; current exact books, fixed 0.20% net, funding, freshness and recovery still fail closed.",
   );
 }
 
@@ -55,7 +55,7 @@ function verifiesCurrentExactRouteQualifiesWithoutPersistence(): void {
   const decision = service.getDecision(current, now);
   assert.equal(decision.executionQualified, true);
   assert.equal(decision.capitalActionQualified, true);
-  assert.equal(decision.effectiveMinimumCurrentNetProfitPercent, 1.0);
+  assert.equal(decision.effectiveMinimumCurrentNetProfitPercent, 0.2);
   assert.equal(decision.requiredCurrentSamples, 0);
   assert.equal(decision.requiredQualificationCycles, 0);
   assert.equal(decision.requiredTotalSamplesForCapital, 0);
@@ -73,7 +73,7 @@ function verifiesCurrentCapitalActionRequiresCleanRecovery(): void {
 
   const ready = service.getDecision(latest, now);
   assert.equal(ready.capitalActionQualified, true);
-  assert.equal(ready.effectiveMinimumCurrentNetProfitPercent, 1.0);
+  assert.equal(ready.effectiveMinimumCurrentNetProfitPercent, 0.2);
   assert.equal(ready.recommendation, "ADD_USDT_TO_BUY_EXCHANGE");
   const authorizations = service.getCrossExchangeMovementAuthorizations(now);
   assert.equal(authorizations.length, 1);

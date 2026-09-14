@@ -9,8 +9,8 @@ export interface LiveOnlyRuntimePolicy {
   readonly minimumCapitalPerLegInr: 600;
   readonly preferredCapitalPerLegInr: number;
   readonly maximumCapitalPerLegInr: 1_000;
-  readonly minimumCurrentNetProfitPercent: 1.0;
-  readonly minimumPostStressNetProfitPercent: 0.7;
+  readonly minimumCurrentNetProfitPercent: 0.2;
+  readonly minimumPostStressNetProfitPercent: 0.1;
   readonly maximumStatutoryCashWithholdingPercentPerAttempt: 2.1;
   readonly maximumOpportunityAgeMs: 600;
   readonly routeCooldownMs: 5_000;
@@ -156,9 +156,9 @@ export function getLiveOnlyRuntimePolicy(
     maximumCapitalPerLegInr:
       1_000 as const,
     minimumCurrentNetProfitPercent:
-      1.0 as const,
+      0.2 as const,
     minimumPostStressNetProfitPercent:
-      0.7 as const,
+      0.1 as const,
     maximumStatutoryCashWithholdingPercentPerAttempt:
       2.1 as const,
     maximumOpportunityAgeMs:

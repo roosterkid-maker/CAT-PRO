@@ -45,9 +45,9 @@ const POLICY:
   maximumCapitalPerLegInr:
     1_000,
   minimumCurrentNetProfitPercent:
-    1.0,
+    0.2,
   minimumPostStressNetProfitPercent:
-    0.7,
+    0.1,
   maximumStatutoryCashWithholdingPercentPerAttempt:
     2.1,
   maximumOpportunityAgeMs:
