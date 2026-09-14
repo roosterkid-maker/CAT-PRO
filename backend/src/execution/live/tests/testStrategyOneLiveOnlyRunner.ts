@@ -274,7 +274,7 @@ async function testRefreshAuthorizeFinalRefreshExecute(
             route,
             {
               market:
-                "COTIUSDT",
+                "BTCUSDT",
               buyExchange:
                 "coindcx",
               sellExchange:
@@ -669,7 +669,7 @@ function finalRefreshResult(
     state,
     route: {
       market:
-        "COTIUSDT",
+        "BTCUSDT",
       buyExchange:
         "coindcx",
       sellExchange:
@@ -807,12 +807,12 @@ function opportunity(
     id,
     pair: {
       market:
-        "COTIUSDT",
+        "BTCUSDT",
       buy: {
         exchange:
           "coindcx",
         market:
-          "COTIUSDT",
+          "BTCUSDT",
         lastPrice:
           0.0099,
         bestBidPrice:
@@ -835,7 +835,7 @@ function opportunity(
         exchange:
           "binance",
         market:
-          "COTIUSDT",
+          "BTCUSDT",
         lastPrice:
           0.01,
         bestBidPrice:

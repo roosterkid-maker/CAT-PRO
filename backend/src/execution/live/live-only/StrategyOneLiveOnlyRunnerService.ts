@@ -129,6 +129,52 @@ const DEFAULT_FILE =
 const MAXIMUM_ATTEMPT_HISTORY =
   500;
 
+/*
+ * StrategyOneTinyLiveBasketPolicy's route pool deliberately leaves `markets`
+ * unpinned - it is shared by PAPER analytics, timing calibration and many
+ * other read-only observers, so bounding it there would also change what
+ * those unrelated surfaces track. But StrategyOneFundedRouteService requires
+ * the SELL exchange to already hold the traded base asset before a LIVE
+ * attempt proceeds (Capital Manager auto-funding only tops up the BUY side's
+ * USDT - it deliberately never auto-converts/auto-buys base inventory, see
+ * OpportunityCapitalStudyService.recommend()). With the pool fully dynamic,
+ * every attempt in practice targets a different rarely-held altcoin (LSK,
+ * HEMI, KAVA, CSPR, REZ, ZIG, ...), so the SELL-side funding check was
+ * failing on effectively every attempt: 500/500 observed, 0 completed.
+ *
+ * Bound the runner - the actual real-money execution gate - to a small set
+ * of liquid, widely-listed bases the operator can realistically pre-fund on
+ * both legs on all three pool venues. This does not touch the shared pool
+ * policy, so PAPER/analytics/calibration coverage is unaffected.
+ */
+const LIVE_ONLY_PRE_FUNDABLE_BASE_ASSETS = new Set([
+  "BTC",
+  "ETH",
+  "SOL",
+  "XRP",
+  "DOGE",
+]);
+
+function isPreFundableMarket(
+  market:
+    string,
+): boolean {
+  const normalized =
+    market
+      .trim()
+      .toUpperCase();
+
+  return normalized.endsWith(
+    "USDT",
+  ) &&
+    LIVE_ONLY_PRE_FUNDABLE_BASE_ASSETS.has(
+      normalized.slice(
+        0,
+        -"USDT".length,
+      ),
+    );
+}
+
 const DEFAULT_DEPENDENCIES:
   StrategyOneLiveOnlyRunnerDependencies = {
   runtimeEnabled:
@@ -853,6 +899,9 @@ export class StrategyOneLiveOnlyRunnerService {
         sellExchange:
           opportunity.pair.sell.exchange,
       }) &&
+      isPreFundableMarket(
+        opportunity.pair.market,
+      ) &&
       opportunity.quotesAreFresh &&
       !opportunity.usedLastPriceFallback &&
       capitalStudy.executionQualified &&
