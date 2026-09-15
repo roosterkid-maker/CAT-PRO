@@ -963,8 +963,27 @@ export class StrategyOneLiveOnlyRunnerService {
         opportunity.pair.market,
       );
 
-    return opportunity.decision ===
-        "EXECUTE" &&
+    /*
+     * opportunity.decision deliberately is NOT required here (it used to
+     * be). It comes from DecisionAnalyzer's blended quality score, whose
+     * Spread and Fee components (SpreadAnalyzer/FeeAnalyzer) are scored
+     * against a large-spread assumption from the era of the 1.0%/0.7%
+     * thresholds: Spread score is spreadPercent*50 (needs ~2% gross for
+     * full marks) and Fee score is 100-feeImpactPercent (fees eating a
+     * large share of a THIN gross spread craters it even when net profit
+     * stays positive). Below the 65-point cutoff that shared engine emits
+     * SKIP regardless of real economics, silently blocking exactly the
+     * thin-but-profitable routes this runner now targets. That engine is
+     * shared by PAPER analytics and other strategies, so its formulas
+     * were not changed; this runner instead relies on its own preflight
+     * (StrategyOneLiveOnlyStressGateService, funding, exact depth,
+     * freshness, absolute price-integrity ceiling) to independently,
+     * more rigorously verify everything that check used to gate,
+     * calibrated to this runner's own (already relaxed) economics.
+     * opportunity.enoughLiquidity is kept - it is a plain top-of-book
+     * depth check with no stale-formula problem.
+     */
+    return opportunity.enoughLiquidity &&
       isStrategyOneTinyLiveDynamicRoute({
         market:
           opportunity.pair.market,
