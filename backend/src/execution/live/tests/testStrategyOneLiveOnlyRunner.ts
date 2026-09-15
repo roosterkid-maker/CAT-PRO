@@ -85,6 +85,12 @@ async function main(): Promise<void> {
     await testRecoveryHaltReleaseRequiresCleanAuthoritativeEvidence(
       directory,
     );
+    await testSafePreDispatchRejectionExcludesMarketWithoutHalting(
+      directory,
+    );
+    await testUnrecognizedFailureStillHalts(
+      directory,
+    );
   } finally {
     rmSync(
       directory,
@@ -151,6 +157,104 @@ async function testRecoveryHaltReleaseRequiresCleanAuthoritativeEvidence(
     false,
     "the released recovery halt must remain cleared after restart",
   );
+}
+
+async function testSafePreDispatchRejectionExcludesMarketWithoutHalting(
+  directory: string,
+): Promise<void> {
+  const filePath = join(directory, "safe-pre-dispatch-rejection.jsonl");
+  const first = opportunity("axl-attempt-1", NOW);
+  const second = opportunity("axl-attempt-2", NOW + 10_000);
+
+  const service = runner(
+    filePath,
+    {
+      execute: async (candidate) =>
+        safePreDispatchRejectedResult(candidate, NOW + 100),
+    },
+  );
+
+  service.start();
+  await service.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [first],
+  });
+
+  const diagnostics = service.getDiagnostics(NOW + 100);
+  assert.equal(
+    diagnostics.halted,
+    false,
+    "a safe pre-dispatch rejection (no exposure, no dispatch) must not halt the runner",
+  );
+  assert.equal(diagnostics.attempts, 1);
+
+  const excluded = diagnostics.excludedMarkets;
+  assert.equal(excluded.length, 1);
+  assert.equal(excluded[0]?.exchange, "binance");
+  assert.equal(excluded[0]?.market, "BTCUSDT");
+
+  /*
+   * The rejection text named "Binance" specifically (not the buy-leg
+   * exchange, coindcx) - attribution must exclude only the leg that was
+   * actually named, not both legs.
+   */
+  assert.equal(
+    excluded.some((item) => item.exchange === "coindcx"),
+    false,
+    "attribution must not exclude the unrelated coindcx buy leg",
+  );
+
+  await service.observeSnapshot({
+    generatedAt: NOW + 10_000,
+    opportunities: [second],
+  });
+  assert.equal(
+    service.getDiagnostics(NOW + 10_100).attempts,
+    1,
+    "an excluded (exchange, market) must never be attempted again",
+  );
+  service.stop();
+
+  const restored = runner(filePath, {});
+  const restoredDiagnostics = restored.getDiagnostics(NOW + 20_000);
+  assert.equal(
+    restoredDiagnostics.halted,
+    false,
+  );
+  assert.equal(
+    restoredDiagnostics.excludedMarkets.length,
+    1,
+    "the learned exclusion must survive a restart",
+  );
+}
+
+async function testUnrecognizedFailureStillHalts(
+  directory: string,
+): Promise<void> {
+  const filePath = join(directory, "unrecognized-failure.jsonl");
+  const candidate = opportunity("unrecognized-failure", NOW);
+  const service = runner(
+    filePath,
+    {
+      execute: async () =>
+        unrecognizedFailedResult(candidate, NOW + 100),
+    },
+  );
+
+  service.start();
+  await service.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [candidate],
+  });
+
+  const diagnostics = service.getDiagnostics(NOW + 100);
+  assert.equal(
+    diagnostics.halted,
+    true,
+    "a FAILED result outside the recognized safe pattern must still halt for manual review",
+  );
+  assert.equal(diagnostics.excludedMarkets.length, 0);
+  service.stop();
 }
 
 async function testCurrentRouteDecisionDoesNotWaitForPersistence(
@@ -794,6 +898,47 @@ function recoveryRequiredResult(
     possibleExposure: true,
     reasons: [
       "RECOVERY_REQUIRED: exact residual requires authoritative recovery.",
+    ],
+  };
+}
+
+function safePreDispatchRejectedResult(
+  candidate: ArbitrageOpportunity,
+  now: number,
+): ArbitrageLiveExecutionResult {
+  return {
+    ...completedResult(candidate, now),
+    success: false,
+    status: "FAILED",
+    matchedFilledQuantity: 0,
+    unmatchedBuyQuantity: 0,
+    unmatchedSellQuantity: 0,
+    recoveryRequired: false,
+    possibleExposure: false,
+    reasons: [
+      "Two-leg identity was durably prepared before either gateway call.",
+      "Pair pre-dispatch validation blocked before either leg: Binance order rejected by exchange-rule validation: Time in force FOK is not supported for this market.",
+      "Neither exchange leg crossed the dispatch boundary and no order submission was attempted.",
+      "One or more execution legs did not return a result.",
+    ],
+  };
+}
+
+function unrecognizedFailedResult(
+  candidate: ArbitrageOpportunity,
+  now: number,
+): ArbitrageLiveExecutionResult {
+  return {
+    ...completedResult(candidate, now),
+    success: false,
+    status: "FAILED",
+    matchedFilledQuantity: 0,
+    unmatchedBuyQuantity: 0,
+    unmatchedSellQuantity: 0,
+    recoveryRequired: false,
+    possibleExposure: false,
+    reasons: [
+      "An unexpected internal failure occurred with no recognized safe pattern.",
     ],
   };
 }

@@ -119,11 +119,23 @@ export interface StrategyOneLiveOnlyAttempt {
   readonly reason: string;
 }
 
+export interface StrategyOneLiveOnlyMarketExclusion {
+  readonly exchange: string;
+  readonly market: string;
+  readonly reason: string;
+  readonly excludedAt: number;
+}
+
 interface PersistedSnapshot {
   readonly schemaVersion: "1.0";
   readonly savedAt: number;
   readonly haltedReason: string | null;
   readonly attempts: readonly StrategyOneLiveOnlyAttempt[];
+  /**
+   * Optional for backward compatibility with snapshots written before this
+   * field existed - absent means "no exclusions restored yet", not invalid.
+   */
+  readonly excludedMarkets?: readonly StrategyOneLiveOnlyMarketExclusion[];
 }
 
 const DEFAULT_FILE =
@@ -175,6 +187,27 @@ const STRATEGY_ONE_LIVE_ONLY_POOL_VENUES = new Set([
  */
 const MINIMUM_HELD_VALUE_USDT =
   1;
+
+function marketExclusionKey(
+  exchange:
+    string,
+  market:
+    string,
+): string {
+  return `${exchange.trim().toLowerCase()}|${market.trim().toUpperCase()}`;
+}
+
+/*
+ * Real exchange rejections that reach this literal, code-owned marker are
+ * structurally guaranteed safe: StrategyOneTwoLegLiveExecutionService only
+ * emits it from the pre-dispatch validation catch block, whose return is
+ * hardcoded to possibleExposure:false, recoveryRequired:false - neither
+ * order ever crossed the dispatch boundary. This is a stable string CAT PRO
+ * itself controls (unlike an exchange's own error wording), so matching on
+ * it is far more reliable than parsing the exchange-specific message.
+ */
+const SAFE_PRE_DISPATCH_REJECTION_MARKER =
+  "Neither exchange leg crossed the dispatch boundary and no order submission was attempted.";
 
 function extractBaseAsset(
   market:
@@ -355,6 +388,18 @@ export class StrategyOneLiveOnlyRunnerService {
     string | null =
     null;
 
+  /*
+   * Learned, persisted exclusions for (exchange, market) pairs that a real
+   * exchange rejected before either leg crossed the dispatch boundary - see
+   * the safe-pre-dispatch-rejection handling below. Keyed by
+   * "<exchange>|<market>".
+   */
+  private readonly excludedMarkets =
+    new Map<
+      string,
+      StrategyOneLiveOnlyMarketExclusion
+    >();
+
   private snapshotsObserved =
     0;
 
@@ -419,6 +464,65 @@ export class StrategyOneLiveOnlyRunnerService {
               0,
             attempt.startedAt,
           ),
+        );
+      }
+
+      for (
+        const exclusion
+        of restored.excludedMarkets ??
+          []
+      ) {
+        this.excludedMarkets.set(
+          marketExclusionKey(
+            exclusion.exchange,
+            exclusion.market,
+          ),
+          exclusion,
+        );
+      }
+
+      /*
+       * Self-heal a halt that was set before this exclusion mechanism
+       * existed: if the persisted halt reason is exactly the safe
+       * pre-dispatch-rejection pattern, convert it into a learned
+       * exclusion (using the triggering attempt's own route, the most
+       * recent one recorded) and clear the halt - no manual intervention
+       * needed on the next deploy. Any other halt reason is left exactly
+       * as it was; it still requires the existing explicit release path.
+       */
+      const lastAttempt =
+        this.attempts.at(
+          -1,
+        );
+
+      if (
+        this.haltedReason !==
+          null &&
+        this.haltedReason.includes(
+          SAFE_PRE_DISPATCH_REJECTION_MARKER,
+        ) &&
+        lastAttempt
+      ) {
+        this.recordSafePreDispatchRejection(
+          {
+            market:
+              lastAttempt.market,
+            buyExchange:
+              lastAttempt.buyExchange,
+            sellExchange:
+              lastAttempt.sellExchange,
+          },
+          [
+            this.haltedReason,
+          ],
+          this.dependencies
+            .now(),
+        );
+        this.haltedReason =
+          null;
+        this.persist(
+          this.dependencies
+            .now(),
         );
       }
     }
@@ -564,6 +668,10 @@ export class StrategyOneLiveOnlyRunnerService {
           .map(
             clone,
           ),
+      excludedMarkets:
+        [
+          ...this.excludedMarkets.values(),
+        ],
       authority:
         strategyOneLiveOnlyAuthorityService
           .getDiagnostics(
@@ -909,7 +1017,33 @@ export class StrategyOneLiveOnlyRunnerService {
           result.status,
       });
 
-      if (
+      const safePreDispatchRejection =
+        result.status ===
+          "FAILED" &&
+        !result.recoveryRequired &&
+        !possibleExposure &&
+        result.reasons.some(
+          (reason) =>
+            reason.includes(
+              SAFE_PRE_DISPATCH_REJECTION_MARKER,
+            ),
+        );
+
+      if (safePreDispatchRejection) {
+        this.recordSafePreDispatchRejection(
+          {
+            market:
+              actionCandidate.pair.market,
+            buyExchange:
+              actionCandidate.pair.buy.exchange,
+            sellExchange:
+              actionCandidate.pair.sell.exchange,
+          },
+          result.reasons,
+          this.dependencies
+            .now(),
+        );
+      } else if (
         result.recoveryRequired ||
         possibleExposure ||
         result.status ===
@@ -928,6 +1062,140 @@ export class StrategyOneLiveOnlyRunnerService {
       this.inFlight =
         false;
     }
+  }
+
+  private isMarketExcluded(
+    exchange:
+      string,
+    market:
+      string,
+  ): boolean {
+    return this.excludedMarkets.has(
+      marketExclusionKey(
+        exchange,
+        market,
+      ),
+    );
+  }
+
+  getExcludedMarkets():
+    readonly StrategyOneLiveOnlyMarketExclusion[] {
+    return [
+      ...this.excludedMarkets.values(),
+    ];
+  }
+
+  /*
+   * A real exchange rejected the pair before either leg crossed the
+   * dispatch boundary (see SAFE_PRE_DISPATCH_REJECTION_MARKER above) -
+   * structurally no exposure, no recovery, no order I/O. Rather than
+   * halting the whole runner for a human to manually clear (as any other
+   * FAILED result still does below), permanently learn to skip this exact
+   * (exchange, market) pair and keep running. Best-effort attributes the
+   * rejection to whichever leg's exchange name appears in the reasons text
+   * (matching how StrategyOneTwoLegLiveExecutionService wraps the real
+   * exchange error); if neither or both match, conservatively excludes
+   * both legs' exchange rather than guessing wrong and excluding nothing.
+   */
+  private recordSafePreDispatchRejection(
+    route: {
+      readonly market:
+        string;
+      readonly buyExchange:
+        string;
+      readonly sellExchange:
+        string;
+    },
+    reasons:
+      readonly string[],
+    now:
+      number,
+  ): void {
+    const combinedReasons =
+      reasons
+        .join(
+          " ",
+        )
+        .toLowerCase();
+    const buyExchange =
+      route.buyExchange;
+    const sellExchange =
+      route.sellExchange;
+    const buyMentioned =
+      combinedReasons.includes(
+        buyExchange
+          .trim()
+          .toLowerCase(),
+      );
+    const sellMentioned =
+      combinedReasons.includes(
+        sellExchange
+          .trim()
+          .toLowerCase(),
+      );
+    const exchangesToExclude =
+      buyMentioned &&
+      !sellMentioned
+        ? [buyExchange]
+        : sellMentioned &&
+            !buyMentioned
+          ? [sellExchange]
+          : [
+              buyExchange,
+              sellExchange,
+            ];
+
+    const reasonSummary =
+      reasons.join(
+        " | ",
+      );
+
+    for (
+      const exchange
+      of exchangesToExclude
+    ) {
+      const key =
+        marketExclusionKey(
+          exchange,
+          route.market,
+        );
+
+      if (
+        !this.excludedMarkets.has(
+          key,
+        )
+      ) {
+        this.excludedMarkets.set(
+          key,
+          {
+            exchange:
+              exchange
+                .trim()
+                .toLowerCase(),
+            market:
+              route.market
+                .trim()
+                .toUpperCase(),
+            reason:
+              reasonSummary,
+            excludedAt:
+              now,
+          },
+        );
+      }
+    }
+
+    this.persist(
+      now,
+    );
+
+    console.warn(
+      "[LIVE-only Runner] Excluded market after safe pre-dispatch rejection (no exposure, no dispatch, runner continues):",
+      exchangesToExclude.join(
+        ",",
+      ),
+      route.market,
+    );
   }
 
   private isEligible(
@@ -992,6 +1260,14 @@ export class StrategyOneLiveOnlyRunnerService {
         sellExchange:
           opportunity.pair.sell.exchange,
       }) &&
+      !this.isMarketExcluded(
+        opportunity.pair.buy.exchange,
+        opportunity.pair.market,
+      ) &&
+      !this.isMarketExcluded(
+        opportunity.pair.sell.exchange,
+        opportunity.pair.market,
+      ) &&
       baseAsset !==
         null &&
       this.dependencies
@@ -1105,6 +1381,10 @@ export class StrategyOneLiveOnlyRunnerService {
         this.attempts.map(
           clone,
         ),
+      excludedMarkets:
+        [
+          ...this.excludedMarkets.values(),
+        ],
     });
   }
 }
