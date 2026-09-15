@@ -88,12 +88,13 @@ export class CentralLiveExecutionQueueService {
     return {queued: true, duplicate: false, record: clone(record)};
   }
 
-  leaseNext(workerId: string, now = Date.now(), ttlMs = 5_000): CentralLiveQueueRecord | null {
+  leaseNext(workerId: string, now = Date.now(), ttlMs = 5_000, excludedStrategyIds: ReadonlySet<string> = new Set()): CentralLiveQueueRecord | null {
     this.validateTime(now);
     if (!workerId.trim()) throw new Error("Central LIVE queue worker ID is required.");
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > 10_000) throw new Error("Central LIVE queue lease TTL must be 1000-10000 ms.");
     const changed = this.sweep(now, false);
-    const next = [...this.records.values()].filter((item) => item.state === "QUEUED" && effectiveExpiry(item) >= now)
+    const next = [...this.records.values()].filter((item) => item.state === "QUEUED" && effectiveExpiry(item) >= now &&
+        !excludedStrategyIds.has(item.plan.strategyId))
       .sort((a, b) => a.queuedAt - b.queuedAt || a.id.localeCompare(b.id))[0];
     if (!next) { if (changed > 0) this.persist(now); return null; }
     const leased = freeze({...clone(next), state: "LEASED" as const, updatedAt: now, attempts: next.attempts + 1,

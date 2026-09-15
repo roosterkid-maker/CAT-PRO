@@ -107,6 +107,7 @@ const DETERMINISTIC_TESTS = [
   "execution/live/tests/testCentralSpotMakerLifecycleService.js",
   "execution/live/tests/testCentralLiveExecutionAdmissionQueue.js",
   "execution/live/tests/testSequentialThreeLegLiveLifecycleHandler.js",
+  "recovery/tests/testSharedRecoveryResolutionAndHalt.js",
   "execution/live/tests/testTwoSidedPassiveMakerLiveLifecycleHandler.js",
   "execution/live/tests/testPassiveMakerThenHedgeLiveLifecycleHandler.js",
   "execution/live/tests/testDerivativeOrderContracts.js",

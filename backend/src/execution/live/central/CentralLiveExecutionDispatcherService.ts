@@ -2,6 +2,7 @@ import type {CentralLiveDispatchJournalRecord} from "./CentralLiveExecutionOutco
 import {CentralLiveExecutionOutcomeJournalService} from "./CentralLiveExecutionOutcomeJournalService";
 import {CentralLiveLifecycleHandlerRegistry, type CentralLiveLifecycleOutcome} from "./CentralLiveLifecycleHandlerRegistry";
 import {CentralLiveExecutionQueueService, type CentralLiveQueueRecord} from "./CentralLiveExecutionQueueService";
+import {sharedRecoveryHaltGateService, type SharedRecoveryHaltGateService} from "../../../recovery/services/SharedRecoveryHaltGateService";
 
 export interface CentralLiveExecutionDispatcherConfiguration {
   readonly enabled?: boolean;
@@ -31,6 +32,7 @@ export class CentralLiveExecutionDispatcherService {
     private readonly queue: CentralLiveExecutionQueueService,
     private readonly journal: CentralLiveExecutionOutcomeJournalService,
     private readonly handlers: CentralLiveLifecycleHandlerRegistry,
+    private readonly haltGate: Pick<SharedRecoveryHaltGateService, "getHaltedStrategyIds"> = sharedRecoveryHaltGateService,
   ) {
     this.enabled = configuration.enabled ?? false;
     this.workerId = configuration.workerId?.trim() || "central-live-dispatcher";
@@ -65,8 +67,19 @@ export class CentralLiveExecutionDispatcherService {
         return this.resume(dispatchRecord, pending, now);
       }
 
-      const leased = this.queue.leaseNext(this.workerId, now, this.leaseTtlMs);
-      if (!leased?.leaseId) return this.result("NO_DATA", null, null, null, false, ["No eligible central LIVE plan is queued."], now);
+      // Excludes any strategy with an unresolved SharedRecoveryIntent from
+      // being leased for NEW work - an in-flight/pending dispatch (the two
+      // branches above this one) is always resumed regardless, since a
+      // stuck operation must still be allowed to finish or reconcile; only
+      // starting something new for that strategy is gated.
+      const haltedStrategyIds = this.haltGate.getHaltedStrategyIds(now);
+      const leased = this.queue.leaseNext(this.workerId, now, this.leaseTtlMs, haltedStrategyIds);
+      if (!leased?.leaseId) {
+        const reason = haltedStrategyIds.size > 0
+          ? [`No eligible central LIVE plan is queued (excluding halted strategies: ${[...haltedStrategyIds].join(", ")}).`]
+          : ["No eligible central LIVE plan is queued."];
+        return this.result("NO_DATA", null, null, null, false, reason, now);
+      }
       const started = this.journal.begin(leased, now).record;
       const dispatchRecord = this.queue.beginDispatch(leased.id, leased.leaseId, started.id, now, started.startedAt);
       return this.resume(dispatchRecord, started, now);
@@ -76,10 +89,12 @@ export class CentralLiveExecutionDispatcherService {
   }
 
   getDiagnostics(now = Date.now()) {
+    const haltedStrategyIds = [...this.haltGate.getHaltedStrategyIds(now)];
     return freeze({version: "70.0" as const, generatedAt: now, enabled: this.enabled, running: this.running, workerId: this.workerId,
       leaseTtlMs: this.leaseTtlMs, queue: this.queue.getDiagnostics(now), journal: this.journal.getDiagnostics(now), handlers: this.handlers.getDiagnostics(),
+      sharedRecoveryHalt: {haltedStrategyIds},
       safety: {journalStartedBeforeHandler: true, idempotencyKeyRequired: true, pendingDispatchResumedBeforeNewWork: true,
-        inFlightDispatchNeverBlindlyExpired: true, defaultEnabled: false}});
+        inFlightDispatchNeverBlindlyExpired: true, defaultEnabled: false, newLeasesBlockedForUnresolvedSharedRecovery: true}});
   }
 
   private async resume(queueRecord: CentralLiveQueueRecord, dispatch: CentralLiveDispatchJournalRecord, now: number): Promise<CentralLiveExecutionDispatcherRun> {
