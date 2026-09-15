@@ -43,7 +43,7 @@ const policy:
   minimumCurrentNetProfitPercent:
     0.2,
   minimumPostStressNetProfitPercent:
-    0.1,
+    0.07,
   maximumStatutoryCashWithholdingPercentPerAttempt:
     2.1,
   maximumOpportunityAgeMs:
