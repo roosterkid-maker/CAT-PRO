@@ -538,14 +538,20 @@ function compensatedTerminalEvidence(
 }
 
 /**
- * Covers the exact real-incident shape seen on WAVESUSDT and PYBOBOUSDT: the
- * SELL leg genuinely FILLED (spot only - a real exchange cannot fill a spot
- * sell from balance it does not hold) while the paired BUY leg terminated
- * with zero fill. The account is never in a naked short here; it sold from
- * pre-existing inventory instead of from freshly-bought inventory. This is
- * only "resolved" once a LIVE authoritative balance check (not the cached
- * snapshot, which can be stale) confirms zero borrow and a non-negative
- * remaining balance of that exact asset on that exact exchange.
+ * Covers the exact real-incident shape seen on WAVESUSDT and PYBOBOUSDT (SELL
+ * genuinely FILLED, BUY terminated with zero fill - the account sold from
+ * pre-existing inventory, never a naked short, since a real spot exchange
+ * cannot fill a sell from balance it does not hold) as well as the mirrored
+ * TUTUSDT shape (BUY genuinely FILLED, SELL terminated with zero fill - the
+ * account simply holds surplus spot inventory it paid real quote currency
+ * for; that can never be a liability since nothing was borrowed against it).
+ * Either shape is only "resolved" once a LIVE authoritative balance check
+ * (not the cached snapshot, which can be stale) confirms zero borrow for
+ * that exact asset on the exchange that actually filled, spot only (never
+ * PERPETUAL/reduceOnly/positionSide). For the sell-filled shape, any
+ * non-negative remaining balance is sufficient proof no deficit exists. For
+ * the buy-filled shape, the remaining balance must still cover at least the
+ * bought quantity, confirming the surplus itself is still accounted for.
  */
 function preExistingInventoryCoverageEvidence(
   session: StrategyOneTwoLegSessionRecord,
@@ -569,34 +575,47 @@ function preExistingInventoryCoverageEvidence(
     return null;
   }
 
-  if (buy.filledQuantity !== 0 || sell.filledQuantity <= 0) {
+  const sellFilled = buy.filledQuantity === 0 && sell.filledQuantity > 0;
+  const buyFilled = sell.filledQuantity === 0 && buy.filledQuantity > 0;
+
+  if (!sellFilled && !buyFilled) {
     return null;
   }
 
+  const filledLeg = sellFilled ? sell : buy;
+  const filledLegRequest = sellFilled
+    ? session.sellRequest
+    : session.buyRequest;
+  const filledQuantity = sellFilled
+    ? sell.filledQuantity
+    : buy.filledQuantity;
+
   if (
-    sell.status !== "FILLED" ||
-    session.sellRequest.product === "PERPETUAL" ||
-    sell.product === "PERPETUAL" ||
-    Boolean(sell.reduceOnly) ||
-    Boolean(sell.positionSide)
+    filledLeg.status !== "FILLED" ||
+    filledLegRequest.product === "PERPETUAL" ||
+    filledLeg.product === "PERPETUAL" ||
+    Boolean(filledLeg.reduceOnly) ||
+    Boolean(filledLeg.positionSide)
   ) {
     return null;
   }
 
-  const baseAsset = extractBaseAsset(session.sellRequest.market);
+  const baseAsset = extractBaseAsset(filledLegRequest.market);
 
   if (
     !baseAsset ||
     normalizeExchange(balanceEvidence.exchange) !==
-      normalizeExchange(session.sellRequest.exchange) ||
+      normalizeExchange(filledLegRequest.exchange) ||
     normalizeAsset(balanceEvidence.asset) !== normalizeAsset(baseAsset)
   ) {
     return null;
   }
 
+  const requiredAvailableBalance = sellFilled ? 0 : filledQuantity;
+
   if (
     balanceEvidence.borrowedAmount !== 0 ||
-    balanceEvidence.availableBalance < 0
+    balanceEvidence.availableBalance < requiredAvailableBalance
   ) {
     return null;
   }

@@ -418,14 +418,16 @@ router.post(
 );
 
 /*
- * Explicit, evidence-bound resolution for the "SELL leg genuinely filled from
- * pre-existing inventory, paired BUY leg terminated with zero fill" incident
- * shape (real precedent: WAVESUSDT, PYBOBOUSDT). The caller must supply a
- * LIVE, freshly-queried authoritative balance for the held asset on the
- * exchange that filled - not the cached snapshot - proving zero borrow and a
- * non-negative remaining balance. This endpoint performs no exchange I/O
- * itself; it only journals the operator-supplied evidence and validates it
- * against the persisted session.
+ * Explicit, evidence-bound resolution for a session where exactly one leg
+ * genuinely FILLED and the paired leg terminated with zero fill - either the
+ * SELL leg filled from pre-existing inventory (real precedent: WAVESUSDT,
+ * PYBOBOUSDT) or the BUY leg filled leaving surplus inventory never sold
+ * (real precedent: TUTUSDT). The caller must supply a LIVE, freshly-queried
+ * authoritative balance for the held asset on the exchange that filled - not
+ * the cached snapshot - proving zero borrow and a sufficient remaining
+ * balance. This endpoint performs no exchange I/O itself; it only journals
+ * the operator-supplied evidence and validates it against the persisted
+ * session.
  */
 router.post(
   "/strategy-one-two-leg/:sessionId/resolve-by-balance",

@@ -239,6 +239,86 @@ async function main(): Promise<void> {
     ).getReport(NOW + 31);
     assert.equal(coveredGate.classification, "CLEAN");
     assert.equal(coveredGate.allowNewLivePreparation, true);
+
+    // Mirrored real-incident shape (TUTUSDT): BUY leg genuinely FILLS,
+    // paired SELL leg terminates with zero fill, leaving surplus spot
+    // inventory that was paid for - never a liability, since nothing was
+    // borrowed against it.
+    const surplusPairFile = join(directory, "surplus-pairs.jsonl");
+    const surplusResolutionFile = join(directory, "surplus-resolutions.jsonl");
+    const surplusPairs = new StrategyOneTwoLegLiveExecutionService(
+      {
+        validateNewSubmission() {},
+        executeOrReconcile: async (gatewayInput) =>
+          gatewayInput.request.side === "buy"
+            ? ready(gatewayInput.request, gatewayInput.idempotencyKey, 1)
+            : failed(gatewayInput.request, gatewayInput.idempotencyKey),
+      },
+      surplusPairFile,
+    );
+    const surplusInput = {
+      ...pairInput(),
+      sessionId: "strategy-one:v202:surplus-session",
+      opportunityId: "opportunity:v202:surplus",
+    };
+    const surplus = await surplusPairs.executeOrReconcile(surplusInput);
+
+    assert.equal(surplus.session.state, "RECOVERY_REQUIRED");
+    const surplusResolutions = new StrategyOneTwoLegRecoveryResolutionService(
+      surplusPairs,
+      surplusResolutionFile,
+    );
+
+    // The bought leg's exchange is "binance" here (pairInput()'s buyRequest),
+    // so evidence for the balance still held on the *sell* exchange must
+    // fail closed - the surplus lives on the buy exchange, not the sell one.
+    await assert.rejects(
+      surplusResolutions.resolveByPreExistingInventoryCoverage(
+        surplusInput.sessionId,
+        balanceEvidence({exchange: "bybit"}),
+        "Wrong venue must fail closed.",
+        NOW + 40,
+      ),
+      /recovery remains unresolved/u,
+    );
+
+    // A remaining balance below the bought quantity must fail closed - the
+    // surplus itself must still be accounted for, not merely "some balance".
+    await assert.rejects(
+      surplusResolutions.resolveByPreExistingInventoryCoverage(
+        surplusInput.sessionId,
+        {...balanceEvidence({exchange: "binance"}), availableBalance: 0.5},
+        "Insufficient remaining surplus must fail closed.",
+        NOW + 40,
+      ),
+      /recovery remains unresolved/u,
+    );
+
+    const surplusCovered = await surplusResolutions
+      .resolveByPreExistingInventoryCoverage(
+        surplusInput.sessionId,
+        balanceEvidence({exchange: "binance"}),
+        "Live authoritative Binance balance confirms zero borrow and the bought BTC still held.",
+        NOW + 40,
+      );
+
+    assert.equal(
+      surplusCovered.basis,
+      "AUTHORITATIVE_PRE_EXISTING_INVENTORY_COVERED",
+    );
+    assert.equal(surplusCovered.buyFilledQuantity, 1);
+    assert.equal(surplusCovered.sellFilledQuantity, 0);
+    assert.equal(surplusCovered.balanceEvidence?.exchange, "binance");
+    assert.equal(
+      surplusResolutions.isSessionResolved(surplusInput.sessionId),
+      true,
+    );
+    const surplusGate = new StrategyOneTwoLegRestartRecoveryService(
+      surplusPairs,
+      surplusResolutions,
+    ).getReport(NOW + 41);
+    assert.equal(surplusGate.classification, "CLEAN");
+    assert.equal(surplusGate.allowNewLivePreparation, true);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
