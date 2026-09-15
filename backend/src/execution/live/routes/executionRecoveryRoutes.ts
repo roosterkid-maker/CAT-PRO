@@ -35,8 +35,38 @@ import {
 } from "../recovery/StrategyOneResidualRecoveryExecutionService";
 
 import {
+  strategyOneLiveOnlyRunnerService,
+} from "../live-only/StrategyOneLiveOnlyRunnerService";
+
+import {
   readConfirmationPhrase,
 } from "./executionSafetyMetadata";
+
+/*
+ * A successful resolveSession()/resolveCompensatingOrder()/
+ * resolveByPreExistingInventoryCoverage() call only updates the resolution
+ * ledger; it does not by itself resume the LIVE-only runner, which tracks
+ * its own halted/haltedReason state independently (cleared only via
+ * releaseAuthoritativelyResolvedRecoveryHalt(), or a redeploy for the
+ * unrelated self-healing pre-dispatch-rejection case). Attempt the release
+ * right after every successful resolution so the runner resumes as soon as
+ * every unresolved session is accounted for, without needing a separate
+ * manual call or a redeploy. releaseAuthoritativelyResolvedRecoveryHalt()
+ * already fails closed (throws) when other sessions remain unresolved or the
+ * runner is mid-attempt - that is the expected, common case while multiple
+ * incidents are being worked through one at a time, so it is swallowed here
+ * rather than surfaced as a failure of the resolution itself.
+ */
+function tryReleaseRunnerHalt(sessionId: string): void {
+  try {
+    strategyOneLiveOnlyRunnerService.releaseAuthoritativelyResolvedRecoveryHalt(
+      sessionId,
+    );
+  } catch {
+    // Expected while other sessions remain unresolved or the runner is
+    // mid-attempt; the resolution itself still succeeded.
+  }
+}
 
 const router =
   Router();
@@ -394,6 +424,7 @@ router.post(
           request.params.sessionId,
           resolutionNote,
         );
+      tryReleaseRunnerHalt(resolution.sessionId);
 
       response.json({
         success: true,
@@ -401,6 +432,8 @@ router.post(
           resolution,
           recoveryGate:
             strategyOneTwoLegRestartRecoveryService.getReport(),
+          runner:
+            strategyOneLiveOnlyRunnerService.getDiagnostics(),
         },
       });
     } catch (error: unknown) {
@@ -470,6 +503,7 @@ router.post(
             },
             resolutionNote,
           );
+      tryReleaseRunnerHalt(resolution.sessionId);
 
       response.json({
         success: true,
@@ -477,6 +511,8 @@ router.post(
           resolution,
           recoveryGate:
             strategyOneTwoLegRestartRecoveryService.getReport(),
+          runner:
+            strategyOneLiveOnlyRunnerService.getDiagnostics(),
         },
       });
     } catch (error: unknown) {
