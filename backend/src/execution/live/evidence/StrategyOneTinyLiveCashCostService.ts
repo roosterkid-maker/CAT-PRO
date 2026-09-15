@@ -21,6 +21,13 @@ export interface StrategyOneTinyLiveCashCostProfile {
  * component and IND_GST equal to 18% of the trading fee. CoinDCX documents
  * 1% withholding on both sides of crypto-to-crypto Spot trades; its existing
  * CAT PRO fee resolver already includes GST in the quoted fee percentage.
+ * Binance's real signed trade history on this account (15+ fills across
+ * HEMIUSDT, COTIUSDT, BBUSDT, TUTUSDT, CHIPUSDT, HOLOUSDT, MORPHOUSDT,
+ * ETHUSDT, BTCUSDT, both buy and sell, spanning ~7 months) shows only the
+ * standard ~0.1% commission on every fill with no separate withholding
+ * line item - Binance does not deduct any statutory withholding at
+ * execution time on this account. This is about immediate trade-time cash
+ * flow only, not the operator's own downstream tax filing obligations.
  */
 export function getStrategyOneTinyLiveCashCostProfile(
   exchangeValue: string,
@@ -41,6 +48,11 @@ export function getStrategyOneTinyLiveCashCostProfile(
     return freeze({exchange, market, side, tradingFeeSurchargeMultiplier: 0.18, withholdingPercent: 1,
       withholdingEvidenceComplete: true,
       evidenceId: "BYBIT_SIGNED_EXECUTION_IND_GST_IND_TDS_V1"});
+  }
+  if (exchange === "binance" && cryptoToCrypto) {
+    return freeze({exchange, market, side, tradingFeeSurchargeMultiplier: 0, withholdingPercent: 0,
+      withholdingEvidenceComplete: true,
+      evidenceId: "BINANCE_SIGNED_TRADE_HISTORY_NO_WITHHOLDING_V1"});
   }
   if (exchange === "coindcx") {
     return freeze({exchange, market, side, tradingFeeSurchargeMultiplier: 0,

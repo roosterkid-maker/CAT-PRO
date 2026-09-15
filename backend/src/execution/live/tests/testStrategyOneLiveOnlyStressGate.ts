@@ -259,9 +259,9 @@ async function main(): Promise<void> {
   assert.match(cashLockCapped.reasons.join(" "), /cash lock/u);
 
   const unknownWithholdingOpportunity = opportunity();
-  unknownWithholdingOpportunity.pair.buy.exchange = "binance";
+  unknownWithholdingOpportunity.pair.buy.exchange = "kucoin";
   orderBookService.replace({
-    exchange: "binance",
+    exchange: "kucoin",
     market: "TESTUSDT",
     bids: [{price: 99.9, quantity: 10}],
     asks: [{price: 100, quantity: 10}],
