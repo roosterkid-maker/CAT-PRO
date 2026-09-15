@@ -22,7 +22,16 @@ services:
       # movement remains fail-closed until the dedicated key and exact
       # destination whitelist are present in backend/.env.
       CAT_PRO_REBALANCER_ENABLED: "true"
-      CAT_PRO_REBALANCER_SAME_EXCHANGE_ENABLED: "true"
+
+      # Same-exchange top-up only moves Binance Spot USDT into USDS-M Futures
+      # margin - it exists for this codebase's perpetual/derivatives
+      # strategies, none of which are running under this LIVE-only profile
+      # (only Strategy #1 spot arbitrage is active here). Left enabled it
+      # would periodically drain Spot USDT that Strategy #1 needs for its
+      # own BUY-leg funding into unused Futures margin. Disabled here; the
+      # cross-exchange path (which only rebalances Strategy #1's own Spot
+      # USDT between binance/coindcx/bybit) is unaffected.
+      CAT_PRO_REBALANCER_SAME_EXCHANGE_ENABLED: "false"
       CAT_PRO_REBALANCER_CROSS_EXCHANGE_ENABLED: "true"
       CAT_PRO_REBALANCER_MAX_PER_TRANSFER_USDT: ${CAT_PRO_REBALANCER_MAX_PER_TRANSFER_USDT:-10}
       CAT_PRO_REBALANCER_MAX_PER_DAY_SAME_EXCHANGE_USDT: ${CAT_PRO_REBALANCER_MAX_PER_DAY_SAME_EXCHANGE_USDT:-60}
