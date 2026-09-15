@@ -254,7 +254,13 @@ export class TriangularArbitrageSimulationEngine {
     return initialCapacity;
   }
 
-  private evaluateLeg(exchange: string, leg: TriangularDiscoveryLeg, inputQuantity: number,
+  /**
+   * Public so CentralLiveTriangularSizingService can reuse the exact same
+   * real-depth/fee/capability-checked pricing logic at LIVE dispatch time
+   * instead of re-deriving it - the SHADOW simulation and the LIVE sizing
+   * evidence must never be able to drift apart.
+   */
+  evaluateLeg(exchange: string, leg: TriangularDiscoveryLeg, inputQuantity: number,
     configuration: TriangularArbitrageConfiguration, now: number): {blockers: TriangularArbitrageBlocker[]; simulation: TriangularArbitrageLegSimulation | null} {
     const blockers: TriangularArbitrageBlocker[] = [];
     if (!Number.isFinite(leg.timestamp) || leg.timestamp <= 0 || leg.timestamp > now || now - leg.timestamp > configuration.maximumOpportunityAgeMs) blockers.push("STALE_LEG_EVIDENCE");

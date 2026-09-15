@@ -220,6 +220,13 @@ import {
   strategyOneLiveOnlyRunnerService,
 } from "./execution/live/live-only/StrategyOneLiveOnlyRunnerService";
 
+import centralLiveTriangularRoutes
+  from "./execution/live/routes/centralLiveTriangularRoutes";
+
+import {
+  centralLiveTriangularBridgeService,
+} from "./execution/live/central/CentralLiveTriangularBridgeService";
+
 import {
   opportunityCapitalStudyService,
 } from "./rebalancing/services/OpportunityCapitalStudyService";
@@ -543,6 +550,11 @@ app.use(
 );
 
 app.use(
+  "/api/execution/live/central/triangular",
+  centralLiveTriangularRoutes,
+);
+
+app.use(
   "/api/optimizer",
   optimizerRoutes,
 );
@@ -863,6 +875,60 @@ server.listen(
        */
       strategyOneLiveOnlyRunnerService
         .start();
+
+      /*
+       * Central LIVE triangular-arbitrage pipeline. Ships inert: the
+       * bridge only subscribes to real signals (turning would-be trades
+       * into read-only "candidates") when the operator has explicitly set
+       * CAT_PRO_CENTRAL_LIVE_TRIANGULAR_ENABLED=true, and a candidate can
+       * only ever become a real order once the operator separately calls
+       * POST /api/execution/live/central/triangular/arm with the exact
+       * CONFIRM_CENTRAL_STRATEGY_LIVE_ACTION phrase (never done here).
+       * The dispatch timer below is a resiliency net only - the bridge
+       * already calls runDispatchOnce() itself immediately after a
+       * successful intake, since real triangular admissions are queued
+       * and must be dispatched well inside the ~30s arm window.
+       */
+      const centralLiveTriangularEnabled =
+        process.env.CAT_PRO_CENTRAL_LIVE_TRIANGULAR_ENABLED
+          ?.trim()
+          .toLowerCase() === "true";
+
+      if (
+        centralLiveTriangularEnabled
+      ) {
+        centralLiveTriangularBridgeService
+          .start();
+
+        setInterval(
+          () => {
+            centralLiveTriangularBridgeService
+              .runDispatchOnce()
+              .catch(
+                (
+                  error:
+                    unknown,
+                ) => {
+                  console.error(
+                    "[Central LIVE Triangular] Dispatch tick failed:",
+                    error instanceof Error
+                      ? error.message
+                      : error,
+                  );
+                },
+              );
+          },
+          2_000,
+        );
+
+        console.log(
+          "[Central LIVE Triangular] Bridge started - subscribed to real signals, dispatcher tick active. A real order still requires an explicit operator arm (POST /api/execution/live/central/triangular/arm).",
+        );
+      } else {
+        console.log(
+          "[Central LIVE Triangular] Disabled (set CAT_PRO_CENTRAL_LIVE_TRIANGULAR_ENABLED=true to enable) - pipeline code is loaded but inert.",
+        );
+      }
 
       applicationInitializationState =
         "READY";
