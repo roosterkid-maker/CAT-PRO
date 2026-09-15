@@ -49,7 +49,7 @@ const policy:
   maximumOpportunityAgeMs:
     600,
   routeCooldownMs:
-    5_000,
+    1_500,
   maximumConcurrentTrades:
     1,
   automaticFundMovementEnabled:

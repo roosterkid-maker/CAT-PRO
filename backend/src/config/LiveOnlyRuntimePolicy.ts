@@ -13,7 +13,7 @@ export interface LiveOnlyRuntimePolicy {
   readonly minimumPostStressNetProfitPercent: 0.1;
   readonly maximumStatutoryCashWithholdingPercentPerAttempt: 2.1;
   readonly maximumOpportunityAgeMs: 600;
-  readonly routeCooldownMs: 5_000;
+  readonly routeCooldownMs: 1_500;
   readonly maximumConcurrentTrades: 1;
   readonly automaticFundMovementEnabled: boolean;
 }
@@ -164,7 +164,7 @@ export function getLiveOnlyRuntimePolicy(
     maximumOpportunityAgeMs:
       600 as const,
     routeCooldownMs:
-      5_000 as const,
+      1_500 as const,
     maximumConcurrentTrades:
       1 as const,
     automaticFundMovementEnabled,
