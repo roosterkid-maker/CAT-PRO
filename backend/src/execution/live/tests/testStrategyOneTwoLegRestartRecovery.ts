@@ -151,6 +151,94 @@ async function main(): Promise<void> {
     ).getReport(NOW + 22);
     assert.equal(compensatedGate.classification, "CLEAN");
     assert.equal(compensatedGate.allowNewLivePreparation, true);
+
+    // Real-incident shape (WAVESUSDT, PYBOBOUSDT): BUY leg terminates with
+    // zero fill, SELL leg genuinely FILLS from pre-existing inventory.
+    const shortPairFile = join(directory, "short-pairs.jsonl");
+    const shortResolutionFile = join(directory, "short-resolutions.jsonl");
+    const shortPairs = new StrategyOneTwoLegLiveExecutionService(
+      {
+        validateNewSubmission() {},
+        executeOrReconcile: async (gatewayInput) =>
+          gatewayInput.request.side === "sell"
+            ? ready(gatewayInput.request, gatewayInput.idempotencyKey, 1)
+            : failed(gatewayInput.request, gatewayInput.idempotencyKey),
+      },
+      shortPairFile,
+    );
+    const shortInput = {
+      ...pairInput(),
+      sessionId: "strategy-one:v202:short-session",
+      opportunityId: "opportunity:v202:short",
+    };
+    const short = await shortPairs.executeOrReconcile(shortInput);
+
+    assert.equal(short.session.state, "RECOVERY_REQUIRED");
+    const shortResolutions = new StrategyOneTwoLegRecoveryResolutionService(
+      shortPairs,
+      shortResolutionFile,
+    );
+
+    await assert.rejects(
+      shortResolutions.resolveByPreExistingInventoryCoverage(
+        shortInput.sessionId,
+        balanceEvidence({exchange: "binance"}),
+        "Wrong venue must fail closed.",
+        NOW + 30,
+      ),
+      /recovery remains unresolved/u,
+    );
+
+    await assert.rejects(
+      shortResolutions.resolveByPreExistingInventoryCoverage(
+        shortInput.sessionId,
+        balanceEvidence({borrowedAmount: 5}),
+        "Non-zero borrow must fail closed.",
+        NOW + 30,
+      ),
+      /recovery remains unresolved/u,
+    );
+
+    // validateBalanceEvidence() rejects malformed/stale evidence
+    // synchronously (fail-fast on garbage input), the same convention
+    // resolveCompensatingOrder() uses for validateCompensatingEvidence() -
+    // it never returns a promise to reject in this case.
+    assert.throws(
+      () =>
+        shortResolutions.resolveByPreExistingInventoryCoverage(
+          shortInput.sessionId,
+          balanceEvidence({queriedAt: NOW - 6 * 60 * 1000}),
+          "Stale evidence must fail closed.",
+          NOW + 30,
+        ),
+      /stale/u,
+    );
+
+    const covered = await shortResolutions.resolveByPreExistingInventoryCoverage(
+      shortInput.sessionId,
+      balanceEvidence({}),
+      "Live authoritative Bybit balance confirms zero borrow and positive remaining BTC.",
+      NOW + 30,
+    );
+
+    assert.equal(
+      covered.basis,
+      "AUTHORITATIVE_PRE_EXISTING_INVENTORY_COVERED",
+    );
+    assert.equal(covered.buyFilledQuantity, 0);
+    assert.equal(covered.sellFilledQuantity, 1);
+    assert.equal(covered.automaticOrderActionPerformed, false);
+    assert.equal(covered.balanceEvidence?.exchange, "bybit");
+    assert.equal(
+      shortResolutions.isSessionResolved(shortInput.sessionId),
+      true,
+    );
+    const coveredGate = new StrategyOneTwoLegRestartRecoveryService(
+      shortPairs,
+      shortResolutions,
+    ).getReport(NOW + 31);
+    assert.equal(coveredGate.classification, "CLEAN");
+    assert.equal(coveredGate.allowNewLivePreparation, true);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
@@ -279,6 +367,21 @@ function compensatingEvidence(exchange: string) {
     averageFillPrice: 101,
     feeEvidenceId: "fee-evidence-binance-recovery",
     completedAt: NOW + 19,
+  };
+}
+
+function balanceEvidence(overrides: {
+  readonly exchange?: string;
+  readonly borrowedAmount?: number;
+  readonly queriedAt?: number;
+}) {
+  return {
+    exchange: overrides.exchange ?? "bybit",
+    asset: "BTC",
+    availableBalance: 4.5,
+    borrowedAmount: overrides.borrowedAmount ?? 0,
+    queriedAt: overrides.queriedAt ?? NOW + 29,
+    evidenceSource: "BYBIT_WALLET_BALANCE_LIVE_QUERY",
   };
 }
 

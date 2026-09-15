@@ -418,6 +418,80 @@ router.post(
 );
 
 /*
+ * Explicit, evidence-bound resolution for the "SELL leg genuinely filled from
+ * pre-existing inventory, paired BUY leg terminated with zero fill" incident
+ * shape (real precedent: WAVESUSDT, PYBOBOUSDT). The caller must supply a
+ * LIVE, freshly-queried authoritative balance for the held asset on the
+ * exchange that filled - not the cached snapshot - proving zero borrow and a
+ * non-negative remaining balance. This endpoint performs no exchange I/O
+ * itself; it only journals the operator-supplied evidence and validates it
+ * against the persisted session.
+ */
+router.post(
+  "/strategy-one-two-leg/:sessionId/resolve-by-balance",
+  async (
+    request,
+    response,
+  ) => {
+    try {
+      const resolutionNote =
+        typeof request.body?.resolutionNote === "string"
+          ? request.body.resolutionNote
+          : "";
+      const body = request.body ?? {};
+
+      const resolution =
+        await strategyOneTwoLegRecoveryResolutionService
+          .resolveByPreExistingInventoryCoverage(
+            request.params.sessionId,
+            {
+              exchange:
+                typeof body.exchange === "string" ? body.exchange : "",
+              asset:
+                typeof body.asset === "string" ? body.asset : "",
+              availableBalance:
+                typeof body.availableBalance === "number"
+                  ? body.availableBalance
+                  : Number.NaN,
+              borrowedAmount:
+                typeof body.borrowedAmount === "number"
+                  ? body.borrowedAmount
+                  : Number.NaN,
+              queriedAt:
+                typeof body.queriedAt === "number"
+                  ? body.queriedAt
+                  : Number.NaN,
+              evidenceSource:
+                typeof body.evidenceSource === "string"
+                  ? body.evidenceSource
+                  : "",
+            },
+            resolutionNote,
+          );
+
+      response.json({
+        success: true,
+        data: {
+          resolution,
+          recoveryGate:
+            strategyOneTwoLegRestartRecoveryService.getReport(),
+        },
+      });
+    } catch (error: unknown) {
+      response.status(409).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Strategy #1 two-leg balance-coverage resolution failed.",
+        recoveryGate:
+          strategyOneTwoLegRestartRecoveryService.getReport(),
+      });
+    }
+  },
+);
+
+/*
  * VERSION 18 BUILD 13
  *
  * POST

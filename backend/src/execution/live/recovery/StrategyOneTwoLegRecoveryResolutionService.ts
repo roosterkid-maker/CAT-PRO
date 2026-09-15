@@ -22,7 +22,8 @@ export interface StrategyOneTwoLegRecoveryResolutionRecord {
   readonly basis:
     | "PERSISTED_PRE_DISPATCH_NO_ORDER"
     | "AUTHORITATIVE_TERMINAL_BALANCED"
-    | "AUTHORITATIVE_COMPENSATING_ORDER_BALANCED";
+    | "AUTHORITATIVE_COMPENSATING_ORDER_BALANCED"
+    | "AUTHORITATIVE_PRE_EXISTING_INVENTORY_COVERED";
   readonly evidenceFingerprint: string;
   readonly resolutionNote: string;
   readonly resolvedAt: number;
@@ -30,6 +31,7 @@ export interface StrategyOneTwoLegRecoveryResolutionRecord {
   readonly sellFilledQuantity: number;
   readonly terminalStatuses: readonly string[];
   readonly compensatingOrder?: StrategyOneCompensatingOrderEvidence | null;
+  readonly balanceEvidence?: StrategyOneAuthoritativeBalanceEvidence | null;
   readonly automaticOrderActionPerformed: boolean;
 }
 
@@ -46,6 +48,23 @@ export interface StrategyOneCompensatingOrderEvidence {
   readonly averageFillPrice: number;
   readonly feeEvidenceId: string;
   readonly completedAt: number;
+}
+
+/**
+ * A live, authoritative (freshly signed-request) account balance check for
+ * the asset left over by a session where one leg genuinely FILLED (spot,
+ * never PERPETUAL) and the other leg terminated with zero fill. Proves the
+ * filled leg's economic residual was absorbed by inventory the account
+ * already held - not a naked/borrowed short - because a real spot exchange
+ * cannot fill a sell order from balance the account does not have.
+ */
+export interface StrategyOneAuthoritativeBalanceEvidence {
+  readonly exchange: string;
+  readonly asset: string;
+  readonly availableBalance: number;
+  readonly borrowedAmount: number;
+  readonly queriedAt: number;
+  readonly evidenceSource: string;
 }
 
 interface PairPort {
@@ -239,6 +258,71 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     });
   }
 
+  resolveByPreExistingInventoryCoverage(
+    sessionIdValue: string,
+    balanceEvidenceValue: StrategyOneAuthoritativeBalanceEvidence,
+    resolutionNoteValue: string,
+    now = Date.now(),
+  ): Promise<StrategyOneTwoLegRecoveryResolutionRecord> {
+    const sessionId = requireText(sessionIdValue, "sessionId");
+    const resolutionNote = requireText(resolutionNoteValue, "resolutionNote");
+    validateTime(now);
+    const balanceEvidence = validateBalanceEvidence(balanceEvidenceValue, now);
+
+    const active = this.inFlight.get(sessionId);
+
+    if (active) {
+      return active;
+    }
+
+    const work = this.resolveByPreExistingInventoryCoverageInternal(
+      sessionId,
+      balanceEvidence,
+      resolutionNote,
+      now,
+    ).finally(() => {
+      this.inFlight.delete(sessionId);
+    });
+
+    this.inFlight.set(sessionId, work);
+    return work;
+  }
+
+  private async resolveByPreExistingInventoryCoverageInternal(
+    sessionId: string,
+    balanceEvidence: StrategyOneAuthoritativeBalanceEvidence,
+    resolutionNote: string,
+    now: number,
+  ): Promise<StrategyOneTwoLegRecoveryResolutionRecord> {
+    const existing = this.pairs.getSession(sessionId);
+
+    if (!existing) {
+      throw new Error("No persisted Strategy #1 two-leg session exists.");
+    }
+
+    const reconciled = await this.pairs.reconcileSession(sessionId, now);
+    const session = reconciled.session;
+    const covered = preExistingInventoryCoverageEvidence(
+      session,
+      balanceEvidence,
+    );
+
+    if (!covered) {
+      throw new Error(
+        "Strategy #1 recovery remains unresolved: a genuine spot fill on exactly one leg, a zero-fill terminal on the other, and a live authoritative zero-borrow balance for the held asset are all required.",
+      );
+    }
+
+    return this.persist({
+      session,
+      basis: "AUTHORITATIVE_PRE_EXISTING_INVENTORY_COVERED",
+      resolutionNote,
+      resolvedAt: now,
+      balanceEvidence,
+      ...covered,
+    });
+  }
+
   isSessionResolved(
     sessionId: string,
   ): boolean {
@@ -251,6 +335,7 @@ export class StrategyOneTwoLegRecoveryResolutionService {
       resolution.evidenceFingerprint === resolutionFingerprint(
         session,
         resolution.compensatingOrder ?? null,
+        resolution.balanceEvidence ?? null,
       ),
     );
   }
@@ -298,8 +383,10 @@ export class StrategyOneTwoLegRecoveryResolutionService {
     readonly sellFilledQuantity: number;
     readonly terminalStatuses: readonly string[];
     readonly compensatingOrder?: StrategyOneCompensatingOrderEvidence | null;
+    readonly balanceEvidence?: StrategyOneAuthoritativeBalanceEvidence | null;
   }): StrategyOneTwoLegRecoveryResolutionRecord {
     const compensatingOrder = input.compensatingOrder ?? null;
+    const balanceEvidence = input.balanceEvidence ?? null;
     const record = freeze({
       schemaVersion: "109.0" as const,
       sessionId: input.session.sessionId,
@@ -308,6 +395,7 @@ export class StrategyOneTwoLegRecoveryResolutionService {
       evidenceFingerprint: resolutionFingerprint(
         input.session,
         compensatingOrder,
+        balanceEvidence,
       ),
       resolutionNote: input.resolutionNote,
       resolvedAt: input.resolvedAt,
@@ -315,6 +403,7 @@ export class StrategyOneTwoLegRecoveryResolutionService {
       sellFilledQuantity: input.sellFilledQuantity,
       terminalStatuses: [...input.terminalStatuses],
       compensatingOrder: compensatingOrder ? clone(compensatingOrder) : null,
+      balanceEvidence: balanceEvidence ? clone(balanceEvidence) : null,
       automaticOrderActionPerformed: compensatingOrder !== null,
     });
 
@@ -446,6 +535,126 @@ function compensatedTerminalEvidence(
     sellFilledQuantity: effectiveSell,
     terminalStatuses: [buy.status, sell.status, evidence.status],
   };
+}
+
+/**
+ * Covers the exact real-incident shape seen on WAVESUSDT and PYBOBOUSDT: the
+ * SELL leg genuinely FILLED (spot only - a real exchange cannot fill a spot
+ * sell from balance it does not hold) while the paired BUY leg terminated
+ * with zero fill. The account is never in a naked short here; it sold from
+ * pre-existing inventory instead of from freshly-bought inventory. This is
+ * only "resolved" once a LIVE authoritative balance check (not the cached
+ * snapshot, which can be stale) confirms zero borrow and a non-negative
+ * remaining balance of that exact asset on that exact exchange.
+ */
+function preExistingInventoryCoverageEvidence(
+  session: StrategyOneTwoLegSessionRecord,
+  balanceEvidence: StrategyOneAuthoritativeBalanceEvidence,
+): {
+  readonly buyFilledQuantity: number;
+  readonly sellFilledQuantity: number;
+  readonly terminalStatuses: readonly string[];
+} | null {
+  const buy = session.buyResponse?.record?.result;
+  const sell = session.sellResponse?.record?.result;
+
+  if (!buy || !sell || !terminal(buy.status) || !terminal(sell.status)) {
+    return null;
+  }
+
+  if (
+    !Number.isFinite(buy.filledQuantity) ||
+    !Number.isFinite(sell.filledQuantity)
+  ) {
+    return null;
+  }
+
+  if (buy.filledQuantity !== 0 || sell.filledQuantity <= 0) {
+    return null;
+  }
+
+  if (
+    sell.status !== "FILLED" ||
+    session.sellRequest.product === "PERPETUAL" ||
+    sell.product === "PERPETUAL" ||
+    Boolean(sell.reduceOnly) ||
+    Boolean(sell.positionSide)
+  ) {
+    return null;
+  }
+
+  const baseAsset = extractBaseAsset(session.sellRequest.market);
+
+  if (
+    !baseAsset ||
+    normalizeExchange(balanceEvidence.exchange) !==
+      normalizeExchange(session.sellRequest.exchange) ||
+    normalizeAsset(balanceEvidence.asset) !== normalizeAsset(baseAsset)
+  ) {
+    return null;
+  }
+
+  if (
+    balanceEvidence.borrowedAmount !== 0 ||
+    balanceEvidence.availableBalance < 0
+  ) {
+    return null;
+  }
+
+  return {
+    buyFilledQuantity: buy.filledQuantity,
+    sellFilledQuantity: sell.filledQuantity,
+    terminalStatuses: [buy.status, sell.status],
+  };
+}
+
+function extractBaseAsset(market: string): string | null {
+  const normalized = market.trim().toUpperCase();
+
+  if (!normalized.endsWith("USDT")) {
+    return null;
+  }
+
+  const baseAsset = normalized.slice(0, -"USDT".length);
+  return baseAsset || null;
+}
+
+function normalizeAsset(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+/**
+ * The evidence must reflect account state queried AFTER the incident, close
+ * enough to "now" that it cannot be stale leftover evidence from an earlier,
+ * unrelated resolution attempt. 5 minutes mirrors the freshness discipline
+ * used elsewhere in this codebase for authoritative balance evidence.
+ */
+const MAXIMUM_BALANCE_EVIDENCE_AGE_MS = 5 * 60 * 1000;
+
+function validateBalanceEvidence(
+  value: StrategyOneAuthoritativeBalanceEvidence,
+  now: number,
+): StrategyOneAuthoritativeBalanceEvidence {
+  const valid =
+    typeof value === "object" &&
+    value !== null &&
+    Boolean(requireText(value.exchange, "balance exchange")) &&
+    Boolean(requireText(value.asset, "balance asset")) &&
+    Number.isFinite(value.availableBalance) &&
+    Number.isFinite(value.borrowedAmount) &&
+    Number.isSafeInteger(value.queriedAt) &&
+    value.queriedAt > 0 &&
+    value.queriedAt <= now &&
+    now - value.queriedAt <= MAXIMUM_BALANCE_EVIDENCE_AGE_MS &&
+    Boolean(requireText(value.evidenceSource, "balance evidenceSource"));
+
+  if (!valid) {
+    throw new Error(
+      "Authoritative balance evidence is incomplete or stale (must be queried within the last 5 minutes).",
+    );
+  }
+
+  return freeze(clone(value));
 }
 
 function terminal(value: string): boolean {
@@ -583,8 +792,9 @@ function gatewayEvidence(
 function resolutionFingerprint(
   session: StrategyOneTwoLegSessionRecord,
   compensatingOrder: StrategyOneCompensatingOrderEvidence | null,
+  balanceEvidence: StrategyOneAuthoritativeBalanceEvidence | null = null,
 ): string {
-  if (!compensatingOrder) {
+  if (!compensatingOrder && !balanceEvidence) {
     return fingerprint(session);
   }
 
@@ -592,6 +802,7 @@ function resolutionFingerprint(
     .update(JSON.stringify({
       session,
       compensatingOrder,
+      balanceEvidence,
     }))
     .digest("hex");
 }
