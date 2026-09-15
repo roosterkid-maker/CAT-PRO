@@ -42,6 +42,10 @@ import {
 } from "../../../rebalancing/services/OpportunityCapitalStudyService";
 
 import {
+  normalizedInventorySnapshotService,
+} from "../../../rebalancing/services/NormalizedInventorySnapshotService";
+
+import {
   strategyOneTwoLegRestartRecoveryService,
 } from "../recovery/StrategyOneTwoLegRestartRecoveryService";
 
@@ -80,6 +84,10 @@ export interface StrategyOneLiveOnlyRunnerDependencies {
     opportunity: ArbitrageOpportunity,
     now: number,
   ): OpportunityCapitalStudyDecision;
+  isBaseAssetPreFundable(
+    baseAsset: string,
+    now: number,
+  ): boolean;
   getRecoveryClearance(now: number): {
     readonly classification: "CLEAN" | "REVIEW_REQUIRED" | "POSSIBLE_EXPOSURE";
     readonly allowNewLivePreparation: boolean;
@@ -142,54 +150,96 @@ const MAXIMUM_ATTEMPT_HISTORY =
  * HEMI, KAVA, CSPR, REZ, ZIG, ...), so the SELL-side funding check was
  * failing on effectively every attempt: 500/500 observed, 0 completed.
  *
- * Bound the runner - the actual real-money execution gate - to a set of
- * liquid, widely-listed bases the operator can realistically pre-fund on
- * both legs on all three pool venues. This does not touch the shared pool
- * policy, so PAPER/analytics/calibration coverage is unaffected.
- *
- * This list only widens which markets the runner is willing to *attempt* -
- * it does not by itself create funding. Each added base still needs real
- * SELL-side inventory on at least one of binance/coindcx/bybit before any
- * route using it can pass StrategyOneFundedRouteService; an unfunded base
- * added here simply joins BTC/ETH/SOL/XRP/DOGE's prior behavior of failing
- * closed at the FUNDING gate instead of ever being a live risk.
+ * A hand-maintained coin list was tried first and reverted: it still let
+ * unfunded listed coins waste attempts, and required a code change for
+ * every coin the operator actually funds. Bound the runner - the actual
+ * real-money execution gate - to whatever base assets the account
+ * currently, verifiably holds on a pool venue instead, via the same
+ * read-only inventory truth the Capital Manager itself uses. This does not
+ * touch the shared pool policy, so PAPER/analytics/calibration coverage is
+ * unaffected, and it self-updates the moment the operator's real holdings
+ * change - no redeploy needed to add or remove a coin.
  */
-const LIVE_ONLY_PRE_FUNDABLE_BASE_ASSETS = new Set([
-  "BTC",
-  "ETH",
-  "SOL",
-  "XRP",
-  "DOGE",
-  "BNB",
-  "ADA",
-  "TRX",
-  "LINK",
-  "LTC",
-  "DOT",
-  "AVAX",
-  "BCH",
-  "MATIC",
-  "ATOM",
+const STRATEGY_ONE_LIVE_ONLY_POOL_VENUES = new Set([
+  "binance",
+  "coindcx",
+  "bybit",
 ]);
 
-function isPreFundableMarket(
+/*
+ * Filters out true dust (a leftover fraction of a coin worth a few cents)
+ * without trying to predict the exact quantity a real attempt will need -
+ * StrategyOneFundedRouteService still makes that precise, authoritative
+ * check later in the pipeline. This only decides whether it's worth
+ * attempting at all.
+ */
+const MINIMUM_HELD_VALUE_USDT =
+  1;
+
+function extractBaseAsset(
   market:
     string,
-): boolean {
+): string | null {
   const normalized =
     market
       .trim()
       .toUpperCase();
 
-  return normalized.endsWith(
-    "USDT",
-  ) &&
-    LIVE_ONLY_PRE_FUNDABLE_BASE_ASSETS.has(
-      normalized.slice(
-        0,
-        -"USDT".length,
-      ),
+  if (
+    !normalized.endsWith(
+      "USDT",
+    )
+  ) {
+    return null;
+  }
+
+  const baseAsset =
+    normalized.slice(
+      0,
+      -"USDT".length,
     );
+
+  return baseAsset || null;
+}
+
+function isBaseAssetHeldOnPoolVenue(
+  baseAsset:
+    string,
+  now:
+    number,
+): boolean {
+  const snapshot =
+    normalizedInventorySnapshotService
+      .getSnapshot(
+        now,
+      );
+
+  return snapshot.exchanges.some(
+    (
+      exchange,
+    ) =>
+      STRATEGY_ONE_LIVE_ONLY_POOL_VENUES.has(
+        exchange.exchange
+          .trim()
+          .toLowerCase(),
+      ) &&
+      exchange.balanceUsableForDecision &&
+      exchange.assets.some(
+        (
+          asset,
+        ) =>
+          asset.asset ===
+            baseAsset &&
+          asset.availableAfterReservations >
+            0 &&
+          (
+            asset.valuation
+              .availableAfterReservationsValueUsdt ??
+            0
+          ) >=
+            MINIMUM_HELD_VALUE_USDT,
+      ),
+  );
 }
 
 const DEFAULT_DEPENDENCIES:
@@ -257,6 +307,8 @@ const DEFAULT_DEPENDENCIES:
         opportunity,
         now,
       ),
+  isBaseAssetPreFundable:
+    isBaseAssetHeldOnPoolVenue,
   getRecoveryClearance: (
     now,
   ) =>
@@ -906,6 +958,11 @@ export class StrategyOneLiveOnlyRunnerService {
           now,
         );
 
+    const baseAsset =
+      extractBaseAsset(
+        opportunity.pair.market,
+      );
+
     return opportunity.decision ===
         "EXECUTE" &&
       isStrategyOneTinyLiveDynamicRoute({
@@ -916,9 +973,13 @@ export class StrategyOneLiveOnlyRunnerService {
         sellExchange:
           opportunity.pair.sell.exchange,
       }) &&
-      isPreFundableMarket(
-        opportunity.pair.market,
-      ) &&
+      baseAsset !==
+        null &&
+      this.dependencies
+        .isBaseAssetPreFundable(
+          baseAsset,
+          now,
+        ) &&
       opportunity.quotesAreFresh &&
       !opportunity.usedLastPriceFallback &&
       capitalStudy.executionQualified &&

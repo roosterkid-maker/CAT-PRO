@@ -530,6 +530,7 @@ function runner(
         effectiveMinimumCurrentNetProfitPercent: 0.3,
       } as OpportunityCapitalStudyDecision),
       getRecoveryClearance: () => cleanRecoveryClearance(),
+      isBaseAssetPreFundable: () => true,
       now: () =>
         NOW +
         100,
