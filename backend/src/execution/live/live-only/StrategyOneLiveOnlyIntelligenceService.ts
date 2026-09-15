@@ -33,6 +33,10 @@ import type {
   OpportunityCapitalStudyReport,
 } from "../../../rebalancing/services/OpportunityCapitalStudyService";
 
+import type {
+  StrategyOneLiveOnlyMarketExclusion,
+} from "./StrategyOneLiveOnlyRunnerService";
+
 export type LiveOnlyIntelligenceCheckState =
   | "PASS"
   | "BLOCKED"
@@ -154,6 +158,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
       readonly unknown[];
     readonly exchangeFoundations:
       readonly ExchangeFoundationCapability[];
+    readonly excludedMarkets:
+      readonly StrategyOneLiveOnlyMarketExclusion[];
     readonly evaluatePreflight: (
       opportunity: ArbitrageOpportunity,
       now: number,
@@ -193,6 +199,7 @@ export class StrategyOneLiveOnlyIntelligenceService {
             opportunity,
             input.policy,
             input.evaluatePreflight,
+            input.excludedMarkets,
             now,
           ),
       );
@@ -253,6 +260,8 @@ export class StrategyOneLiveOnlyIntelligenceService {
         opportunity: ArbitrageOpportunity,
         now: number,
       ) => StrategyOneLiveOnlyPreflightReport,
+    excludedMarkets:
+      readonly StrategyOneLiveOnlyMarketExclusion[],
     now:
       number,
   ): LiveOnlyIntelligenceOpportunity {
@@ -282,6 +291,124 @@ export class StrategyOneLiveOnlyIntelligenceService {
         market,
         opportunity.quoteAsset,
       );
+
+    /*
+     * The runner already permanently learned this exact (exchange, market)
+     * pair is real-rejected (e.g. an exchange's own order-type/timeInForce
+     * rule) and will never attempt it again - see
+     * StrategyOneLiveOnlyRunnerService.recordSafePreDispatchRejection().
+     * Show that plainly instead of running a full preflight that would
+     * otherwise look "READY" and mislead the operator into expecting an
+     * attempt that structurally cannot happen.
+     */
+    const exclusion =
+      excludedMarkets.find(
+        (item) =>
+          item.market ===
+            market &&
+          (
+            item.exchange ===
+              buyExchange ||
+            item.exchange ===
+              sellExchange
+          ),
+      );
+
+    if (exclusion) {
+      const blockers = [
+        `PERMANENTLY EXCLUDED: ${exclusion.exchange} rejected this exact market before dispatch and it will never be attempted again on this venue.`,
+      ];
+
+      return deepFreeze({
+        opportunityId:
+          opportunity.id,
+        market,
+        route:
+          `${buyExchange} → ${sellExchange}`,
+        status:
+          "BLOCKED" as const,
+        engineDecision:
+          opportunity.decision,
+        netProfitPercent:
+          opportunity.netProfitPercent,
+        qualityScore:
+          opportunity.score,
+        generatedAt:
+          opportunity.timestamp,
+        opportunityAgeMs,
+        requestedCapitalPerLegInr:
+          policy.preferredCapitalPerLegInr,
+        maximumCapitalPerLegInr:
+          policy.maximumCapitalPerLegInr,
+        estimatedExecutableCapitalInr:
+          opportunity.executableCapitalInr ??
+          null,
+        estimatedBuyRequirementInr:
+          null,
+        executionQuantity:
+          finitePositive(
+            opportunity.executableQty,
+          ),
+        buy:
+          this.unverifiedLeg(
+            "BUY",
+            buyExchange,
+            assets.quoteAsset,
+            opportunity.buyPrice,
+            opportunity.executableQty,
+            exclusion.exchange ===
+              buyExchange
+              ? `Excluded: ${exclusion.exchange} rejected this exact market before dispatch.`
+              : "This leg's venue was not the one that rejected the market; the pair is still excluded because both legs must be attempted together.",
+          ),
+        sell:
+          this.unverifiedLeg(
+            "SELL",
+            sellExchange,
+            assets.baseAsset,
+            opportunity.sellPrice,
+            opportunity.executableQty,
+            exclusion.exchange ===
+              sellExchange
+              ? `Excluded: ${exclusion.exchange} rejected this exact market before dispatch.`
+              : "This leg's venue was not the one that rejected the market; the pair is still excluded because both legs must be attempted together.",
+          ),
+        postStressNetProfitPercent:
+          null,
+        postStressNetProfit:
+          null,
+        deployableCashPostStressNetProfitPercent:
+          null,
+        tradingFees:
+          null,
+        statutoryCashWithholding:
+          null,
+        statutoryCashWithholdingPercent:
+          null,
+        buyTakerFeePercent:
+          null,
+        sellTakerFeePercent:
+          null,
+        blockers,
+        whatWouldMakeExecutable: [
+          "This exact (exchange, market) pair was excluded after a real, confirmed-safe exchange rejection (no exposure, no dispatch). No code or config change is needed for other markets - only this specific pair on this specific exchange is affected.",
+        ],
+        policyChecks: [
+          check(
+            "exclusion",
+            "Learned exchange exclusion",
+            "BLOCKED",
+            exclusion.exchange,
+            "No prior real rejection on this exact market",
+            blockers[0],
+          ),
+        ],
+        capitalStudy:
+          null,
+        safety:
+          readOnlySafety(),
+      });
+    }
 
     if (!routeEligible) {
       const blockers = [

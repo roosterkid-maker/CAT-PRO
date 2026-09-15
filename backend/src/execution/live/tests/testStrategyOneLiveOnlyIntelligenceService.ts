@@ -85,6 +85,16 @@ async function main():
           sellExchange:
             "zebpay",
         }),
+        opportunity({
+          id:
+            "excluded",
+          market:
+            "XYZUSDT",
+          buyExchange:
+            "coindcx",
+          sellExchange:
+            "binance",
+        }),
       ],
       policy,
       runtime: {
@@ -100,6 +110,19 @@ async function main():
         [],
       exchangeFoundations:
         [],
+      excludedMarkets:
+        [
+          {
+            exchange:
+              "binance",
+            market:
+              "XYZUSDT",
+            reason:
+              "Binance order rejected by exchange-rule validation: Time in force FOK is not supported for this market.",
+            excludedAt:
+              NOW,
+          },
+        ],
       evaluatePreflight:
         (
           current,
@@ -165,6 +188,44 @@ async function main():
         ?.state ===
         "BLOCKED",
     "An exchange outside the audited pool must remain visible without running an execution preflight.",
+  );
+
+  const excluded =
+    report.opportunities.find(
+      (item) =>
+        item.opportunityId ===
+        "excluded",
+    );
+
+  assertCondition(
+    excluded?.status ===
+      "BLOCKED" &&
+      excluded.blockers.some(
+        (item) =>
+          item.includes(
+            "PERMANENTLY EXCLUDED",
+          ) &&
+          item.includes(
+            "binance",
+          ),
+      ) &&
+      excluded.sell.explanation.includes(
+        "Excluded: binance rejected",
+      ) &&
+      excluded.policyChecks.some(
+        (item) =>
+          item.key ===
+            "exclusion" &&
+          item.state ===
+            "BLOCKED",
+      ),
+    "A runner-learned market exclusion must be shown plainly instead of a misleading READY preflight, and must not run the exact preflight either.",
+  );
+
+  assertCondition(
+    preflightEvaluations ===
+      1,
+    "The excluded opportunity must not run the exact preflight either - only the truly eligible one does.",
   );
 
   assertCondition(

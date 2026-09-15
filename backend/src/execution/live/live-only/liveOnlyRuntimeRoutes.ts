@@ -123,6 +123,8 @@ router.get(
               runtime.recentAttempts,
             exchangeFoundations:
               fleet.foundationExchanges,
+            excludedMarkets:
+              runtime.excludedMarkets,
             evaluatePreflight:
               (
                 opportunity,
