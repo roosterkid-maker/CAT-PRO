@@ -142,10 +142,17 @@ const MAXIMUM_ATTEMPT_HISTORY =
  * HEMI, KAVA, CSPR, REZ, ZIG, ...), so the SELL-side funding check was
  * failing on effectively every attempt: 500/500 observed, 0 completed.
  *
- * Bound the runner - the actual real-money execution gate - to a small set
- * of liquid, widely-listed bases the operator can realistically pre-fund on
+ * Bound the runner - the actual real-money execution gate - to a set of
+ * liquid, widely-listed bases the operator can realistically pre-fund on
  * both legs on all three pool venues. This does not touch the shared pool
  * policy, so PAPER/analytics/calibration coverage is unaffected.
+ *
+ * This list only widens which markets the runner is willing to *attempt* -
+ * it does not by itself create funding. Each added base still needs real
+ * SELL-side inventory on at least one of binance/coindcx/bybit before any
+ * route using it can pass StrategyOneFundedRouteService; an unfunded base
+ * added here simply joins BTC/ETH/SOL/XRP/DOGE's prior behavior of failing
+ * closed at the FUNDING gate instead of ever being a live risk.
  */
 const LIVE_ONLY_PRE_FUNDABLE_BASE_ASSETS = new Set([
   "BTC",
@@ -153,6 +160,16 @@ const LIVE_ONLY_PRE_FUNDABLE_BASE_ASSETS = new Set([
   "SOL",
   "XRP",
   "DOGE",
+  "BNB",
+  "ADA",
+  "TRX",
+  "LINK",
+  "LTC",
+  "DOT",
+  "AVAX",
+  "BCH",
+  "MATIC",
+  "ATOM",
 ]);
 
 function isPreFundableMarket(
