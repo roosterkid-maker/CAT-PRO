@@ -61,6 +61,12 @@ const TriangularPaperClosurePanel = lazy(() =>
   })),
 );
 
+const CentralLiveTriangularBridgePanel = lazy(() =>
+  import("../components/CentralLiveTriangularBridgePanel").then((module) => ({
+    default: module.CentralLiveTriangularBridgePanel,
+  })),
+);
+
 const SpotPerpetualBasisPaperClosurePanel = lazy(() =>
   import("../components/SpotPerpetualBasisPaperClosurePanel").then((module) => ({
     default: module.SpotPerpetualBasisPaperClosurePanel,
@@ -386,7 +392,10 @@ export default function StrategyDashboard() {
         ) : null}
 
         {strategy.metadata.id === "triangular-arbitrage" ? (
-          <TriangularPaperClosurePanel />
+          <>
+            <CentralLiveTriangularBridgePanel />
+            <TriangularPaperClosurePanel />
+          </>
         ) : null}
 
         {strategy.metadata.id === "spot-perpetual-basis-arbitrage" ? (

@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  fetchCentralLiveTriangularBridge,
   fetchCentralPaperLifecycle,
   fetchCentralStrategyLiveReadiness,
   fetchEightStrategyPaperReadiness,
@@ -164,6 +165,16 @@ export function useTriangularPaperClosure() {
   return useQuery({
     queryKey: ["strategies", "triangular-arbitrage", "paper-closure"],
     queryFn: fetchTriangularPaperClosure,
+    refetchInterval: 3_000,
+    staleTime: 2_000,
+    retry: 2,
+  });
+}
+
+export function useCentralLiveTriangularBridge() {
+  return useQuery({
+    queryKey: ["strategies", "triangular-arbitrage", "central-live-bridge"],
+    queryFn: fetchCentralLiveTriangularBridge,
     refetchInterval: 3_000,
     staleTime: 2_000,
     retry: 2,

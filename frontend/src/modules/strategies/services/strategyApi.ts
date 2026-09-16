@@ -32,6 +32,10 @@ import type {
 } from "../types/TriangularPaperClosure";
 
 import type {
+  CentralLiveTriangularBridgeResponse,
+} from "../types/CentralLiveTriangularBridge";
+
+import type {
   SpotPerpetualBasisPaperClosureResponse,
 } from "../types/SpotPerpetualBasisPaperClosure";
 
@@ -152,6 +156,15 @@ export async function fetchTriangularPaperClosure():
 Promise<TriangularPaperClosureResponse> {
   const response = await api.get<TriangularPaperClosureResponse>(
     "/api/strategies/triangular-arbitrage/paper-closure",
+  );
+
+  return response.data;
+}
+
+export async function fetchCentralLiveTriangularBridge():
+Promise<CentralLiveTriangularBridgeResponse> {
+  const response = await api.get<CentralLiveTriangularBridgeResponse>(
+    "/api/execution/live/central/triangular",
   );
 
   return response.data;
