@@ -15,6 +15,10 @@ import {
   useLiveOnlyRuntime,
 } from "../hooks/useLiveOnlyRuntime";
 
+import {
+  CentralLiveTriangularSection,
+} from "../components/CentralLiveTriangularSection";
+
 export default function LiveOnlyDashboard() {
   const runtimeQuery =
     useLiveOnlyRuntime();
@@ -107,6 +111,8 @@ export default function LiveOnlyDashboard() {
           ))}
         </div>
       </section>
+
+      <CentralLiveTriangularSection />
 
       <section className="grid gap-4 xl:grid-cols-2">
         <EvidencePanel title="Non-negotiable order boundary" icon={<ShieldCheck className="size-5" />} facts={[
