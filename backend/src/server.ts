@@ -228,6 +228,10 @@ import {
 } from "./execution/live/central/CentralLiveTriangularBridgeService";
 
 import {
+  strategyOrchestrator,
+} from "./strategies/bootstrap/StrategyBootstrap";
+
+import {
   opportunityCapitalStudyService,
 } from "./rebalancing/services/OpportunityCapitalStudyService";
 
@@ -874,6 +878,20 @@ server.listen(
        * fill ownership are already running before it can observe a candidate.
        */
       strategyOneLiveOnlyRunnerService
+        .start();
+
+      /*
+       * Shadow strategy controllers #2-#8 (XEMM, triangular, spot/perpetual
+       * basis, funding-rate, perpetual/perpetual, dynamic market-making,
+       * statistical arbitrage). Read-only signal generation only - no
+       * PAPER, LIVE, capital or order action. Each controller independently
+       * no-ops unless its own strategy id is listed in the operator's
+       * CAT_PRO_SHADOW_STRATEGIES env var (all default OFF), so starting
+       * the orchestrator itself is always safe to do unconditionally; the
+       * Central LIVE triangular bridge below has nothing to observe until
+       * "triangular-arbitrage" is present in that list AND this starts.
+       */
+      strategyOrchestrator
         .start();
 
       /*
