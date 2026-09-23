@@ -199,7 +199,8 @@ function EdgeChart({points, gate}: {points: Array<{at: number; value: number}>; 
 }
 
 function NetWorthPanel({inventory, loading}: {inventory: Inventory | undefined; loading: boolean}) {
-  const exchanges = [...(inventory?.exchanges ?? [])].sort((first, second) => second.knownTotalValueUsdt - first.knownTotalValueUsdt);
+  const exchangeTotal = (exchange: Inventory["exchanges"][number]) => exchange.knownTotalValueUsdt + exchange.estimatedValueUsdt;
+  const exchanges = [...(inventory?.exchanges ?? [])].sort((first, second) => exchangeTotal(second) - exchangeTotal(first));
   const unit = inventory?.usdtInr ? "INR" : "USDT";
 
   return (
@@ -211,9 +212,12 @@ function NetWorthPanel({inventory, loading}: {inventory: Inventory | undefined; 
         <p className="mt-4 text-xs text-red-300">Wallet inventory unavailable.</p>
       ) : (
         <>
-          <p className="mt-3 font-mono text-4xl font-medium tabular-nums text-text-primary">{formatMoney(inventory.knownTotalValueUsdt, inventory.usdtInr)}</p>
+          <p className="mt-3 font-mono text-4xl font-medium tabular-nums text-text-primary">{formatMoney(inventory.knownTotalValueUsdt + inventory.estimatedValueUsdt, inventory.usdtInr)}</p>
+          {inventory.estimatedValueUsdt > 0 ? (
+            <p className="mt-1 text-[10px] text-text-muted">incl. {formatMoney(inventory.estimatedValueUsdt, inventory.usdtInr)} valued from other-venue prices <span className="text-cyan-300">≈</span></p>
+          ) : null}
           {inventory.unavailableValuations > 0 ? (
-            <p className="mt-1 text-[10px] text-amber-300">{inventory.unavailableValuations} asset(s) without a price are not counted</p>
+            <p className="mt-1 text-[10px] text-amber-300">{inventory.unavailableValuations} asset(s) without any price are not counted</p>
           ) : null}
           <div className="mt-6 grid grid-cols-2 gap-x-6 gap-y-5">
             {exchanges.map((exchange) => (
@@ -222,7 +226,10 @@ function NetWorthPanel({inventory, loading}: {inventory: Inventory | undefined; 
                   <span className={`inline-block size-1.5 ${exchange.balanceUsableForDecision ? "bg-emerald-400" : "bg-amber-400"}`} />
                   {exchange.displayName}
                 </p>
-                <p className="mt-1 truncate font-mono text-base tabular-nums text-text-primary">{formatMoney(exchange.knownTotalValueUsdt, inventory.usdtInr)}</p>
+                <p className="mt-1 truncate font-mono text-base tabular-nums text-text-primary">
+                  {formatMoney(exchangeTotal(exchange), inventory.usdtInr)}
+                  {exchange.estimatedValueUsdt > 0 ? <span className="ml-1 text-cyan-300" title="Includes assets valued from other-venue prices">≈</span> : null}
+                </p>
               </div>
             ))}
           </div>

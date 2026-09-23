@@ -110,6 +110,7 @@ export interface LiveOnlyInventoryAsset {
   availableAfterReservations: number;
   totalValueUsdt: number | null;
   priceUsdt: number | null;
+  estimated: boolean;
 }
 
 export interface LiveOnlyInventoryResponse {
@@ -119,6 +120,7 @@ export interface LiveOnlyInventoryResponse {
     state: string;
     usdtInr: number | null;
     knownTotalValueUsdt: number;
+    estimatedValueUsdt: number;
     unavailableValuations: number;
     exchanges: Array<{
       exchange: string;
@@ -126,6 +128,7 @@ export interface LiveOnlyInventoryResponse {
       balanceUsableForDecision: boolean;
       lastSynchronizedAt: number | null;
       knownTotalValueUsdt: number;
+      estimatedValueUsdt: number;
       assets: LiveOnlyInventoryAsset[];
     }>;
   };

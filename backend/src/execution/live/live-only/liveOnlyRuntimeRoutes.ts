@@ -239,6 +239,103 @@ router.get(
       "no-store",
     );
 
+    const validUsdtInr =
+      usdtInr !== null &&
+      Number.isFinite(usdtInr) &&
+      usdtInr > 0
+        ? usdtInr
+        : null;
+    const estimatePriceUsdt =
+      buildDisplayPriceEstimator(
+        snapshot,
+        validUsdtInr,
+      );
+    let estimatedTotalValueUsdt =
+      0;
+    let unpricedAssets =
+      0;
+
+    const exchanges =
+      snapshot.exchanges.map(
+        (exchange) => {
+          let exchangeEstimatedValueUsdt =
+            0;
+
+          const assets =
+            exchange.assets
+              .filter(
+                (asset) =>
+                  asset.totalBalance > 0,
+              )
+              .map(
+                (asset) => {
+                  const venueValue =
+                    asset.valuation.totalValueUsdt;
+                  const estimatedPrice =
+                    venueValue === null
+                      ? estimatePriceUsdt(
+                          asset.asset,
+                        )
+                      : null;
+                  const estimatedValue =
+                    estimatedPrice === null
+                      ? null
+                      : asset.totalBalance *
+                        estimatedPrice;
+
+                  if (
+                    estimatedValue !== null
+                  ) {
+                    exchangeEstimatedValueUsdt +=
+                      estimatedValue;
+                  } else if (
+                    venueValue === null
+                  ) {
+                    unpricedAssets +=
+                      1;
+                  }
+
+                  return {
+                    asset:
+                      asset.asset,
+                    totalBalance:
+                      asset.totalBalance,
+                    availableAfterReservations:
+                      asset.availableAfterReservations,
+                    totalValueUsdt:
+                      venueValue ??
+                      estimatedValue,
+                    priceUsdt:
+                      asset.valuation.priceUsdt ??
+                      estimatedPrice,
+                    estimated:
+                      venueValue === null &&
+                      estimatedValue !== null,
+                  };
+                },
+              );
+
+          estimatedTotalValueUsdt +=
+            exchangeEstimatedValueUsdt;
+
+          return {
+            exchange:
+              exchange.exchange,
+            displayName:
+              exchange.displayName,
+            balanceUsableForDecision:
+              exchange.balanceUsableForDecision,
+            lastSynchronizedAt:
+              exchange.lastSynchronizedAt,
+            knownTotalValueUsdt:
+              exchange.totals.knownTotalValueUsdt,
+            estimatedValueUsdt:
+              exchangeEstimatedValueUsdt,
+            assets,
+          };
+        },
+      );
+
     response.json({
       success:
         true,
@@ -248,54 +345,154 @@ router.get(
         state:
           snapshot.state,
         usdtInr:
-          usdtInr !== null &&
-          Number.isFinite(usdtInr) &&
-          usdtInr > 0
-            ? usdtInr
-            : null,
+          validUsdtInr,
         knownTotalValueUsdt:
           snapshot.totals.knownTotalValueUsdt,
+        estimatedValueUsdt:
+          estimatedTotalValueUsdt,
         unavailableValuations:
-          snapshot.totals.unavailableValuations,
-        exchanges:
-          snapshot.exchanges.map(
-            (exchange) => ({
-              exchange:
-                exchange.exchange,
-              displayName:
-                exchange.displayName,
-              balanceUsableForDecision:
-                exchange.balanceUsableForDecision,
-              lastSynchronizedAt:
-                exchange.lastSynchronizedAt,
-              knownTotalValueUsdt:
-                exchange.totals.knownTotalValueUsdt,
-              assets:
-                exchange.assets
-                  .filter(
-                    (asset) =>
-                      asset.totalBalance > 0,
-                  )
-                  .map(
-                    (asset) => ({
-                      asset:
-                        asset.asset,
-                      totalBalance:
-                        asset.totalBalance,
-                      availableAfterReservations:
-                        asset.availableAfterReservations,
-                      totalValueUsdt:
-                        asset.valuation.totalValueUsdt,
-                      priceUsdt:
-                        asset.valuation.priceUsdt,
-                    }),
-                  ),
-            }),
-          ),
+          unpricedAssets,
+        exchanges,
       },
     });
   },
 );
+
+const DISPLAY_ESTIMATE_MAX_QUOTE_AGE_MS =
+  10 * 60_000;
+
+/*
+ * Display-only fallback for assets the holding venue itself cannot value
+ * (no cached quote there). Tries, in order: the same asset's valuation on
+ * another venue in this snapshot, a fresh cached <ASSET>USDT last price on
+ * any venue, a fresh <ASSET>INR last price converted at USDTINR, and INR
+ * itself at USDTINR. The result feeds the dashboard net-worth figure only
+ * and is flagged `estimated`; it never reaches the inventory snapshot that
+ * execution and capital decisions read.
+ */
+function buildDisplayPriceEstimator(
+  snapshot: ReturnType<
+    typeof normalizedInventorySnapshotService.getSnapshot
+  >,
+  usdtInr: number | null,
+): (asset: string) => number | null {
+  const prices =
+    new Map<string, number>();
+  const now =
+    Date.now();
+
+  for (
+    const exchange
+    of snapshot.exchanges
+  ) {
+    for (
+      const asset
+      of exchange.assets
+    ) {
+      const price =
+        asset.valuation.priceUsdt;
+
+      if (
+        price !== null &&
+        price > 0 &&
+        !prices.has(asset.asset)
+      ) {
+        prices.set(
+          asset.asset,
+          price,
+        );
+      }
+    }
+  }
+
+  const inrQuoted =
+    new Map<string, number>();
+
+  for (
+    const quote
+    of marketCache.getAll()
+  ) {
+    const lastPrice =
+      quote.lastPrice;
+
+    if (
+      lastPrice === null ||
+      !Number.isFinite(lastPrice) ||
+      lastPrice <= 0 ||
+      now - quote.timestamp >
+        DISPLAY_ESTIMATE_MAX_QUOTE_AGE_MS
+    ) {
+      continue;
+    }
+
+    const market =
+      quote.market
+        .toUpperCase()
+        .replace(
+          /[_\-/]/g,
+          "",
+        );
+
+    if (
+      market.endsWith("USDT") &&
+      market.length > 4 &&
+      !prices.has(market.slice(0, -4))
+    ) {
+      prices.set(
+        market.slice(0, -4),
+        lastPrice,
+      );
+    } else if (
+      market.endsWith("INR") &&
+      market.length > 3 &&
+      !inrQuoted.has(market.slice(0, -3))
+    ) {
+      inrQuoted.set(
+        market.slice(0, -3),
+        lastPrice,
+      );
+    }
+  }
+
+  return (asset) => {
+    const normalized =
+      asset.toUpperCase();
+
+    if (
+      normalized === "USDT"
+    ) {
+      return 1;
+    }
+
+    const direct =
+      prices.get(normalized);
+
+    if (
+      direct !== undefined
+    ) {
+      return direct;
+    }
+
+    if (
+      usdtInr === null
+    ) {
+      return null;
+    }
+
+    if (
+      normalized === "INR"
+    ) {
+      return 1 / usdtInr;
+    }
+
+    const inrPrice =
+      inrQuoted.get(normalized);
+
+    return inrPrice === undefined
+      ? null
+      : inrPrice / usdtInr;
+  };
+}
 
 function getCapitalManagerReport() {
   const rebalancing =
