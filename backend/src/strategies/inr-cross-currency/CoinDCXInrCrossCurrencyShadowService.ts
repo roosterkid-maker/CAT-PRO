@@ -15,143 +15,123 @@ import {
 } from "../../execution/live/evidence/StrategyOneTinyLiveCashCostService";
 
 /*
- * CoinDCX INR <-> USDT cross-currency arbitrage: SHADOW study only.
+ * INR route study: SHADOW only. Two route kinds are priced every second:
  *
- * Route: the same coin quoted in INR on CoinDCX and in USDT on a USDT venue
- * (Binance/Bybit), linked through CoinDCX's executable USDTINR book.
+ *   INR_USDT  X/INR on an INR venue (CoinDCX, UnoCoin) against X/USDT on a
+ *             USDT venue (Binance, Bybit), linked through CoinDCX's
+ *             executable USDTINR book. USDT proceeds are valued at the
+ *             USDTINR bid, USDT costs at the ask, and one USDTINR taker fee
+ *             is charged for the conversion that restores the start
+ *             currency.
+ *   INR_INR   X/INR on one INR venue against X/INR on the other - no
+ *             currency conversion at all.
  *
- *   BUY_INR_SELL_USDT  buy X/INR on CoinDCX, sell X/USDT on the venue;
- *                      the USDT proceeds are valued at the USDTINR bid.
- *   BUY_USDT_SELL_INR  buy X/USDT on the venue (USDT valued at the USDTINR
- *                      ask), sell X/INR on CoinDCX.
+ * Economic net = gross edge minus every taker fee on the route (with any
+ * GST surcharge from the cash-cost profiles). TDS is a tax-credit cash
+ * lock, reported separately and never netted into the edge; a venue whose
+ * withholding treatment is unverified is flagged rather than assumed zero.
  *
- * Economic net = gross edge minus both taker fees (with any GST surcharge)
- * minus one USDTINR taker fee for the conversion that restores the
- * starting currency. TDS is a tax-credit cash lock, not an economic cost,
- * so it is reported separately and never netted into the edge.
- *
- * CoinDCX INR tickers are non-executable, so they only nominate a route;
- * a route is CONFIRMED only when an executable INR book (opened on demand)
- * reproduces the edge. This service owns no order, balance or transfer
- * authority of any kind.
+ * INR tickers are non-executable, so they only nominate a route. A route
+ * is CONFIRMED only when every INR leg is an executable book with depth.
+ * CoinDCX INR books can be opened on demand for nominated markets; UnoCoin
+ * books cannot, so most UnoCoin legs stay ticker-level evidence. This
+ * service owns no order, balance or transfer authority of any kind.
  */
 
-export type InrCrossDirection =
-  | "BUY_INR_SELL_USDT"
-  | "BUY_USDT_SELL_INR";
+export type InrRouteKind = "INR_USDT" | "INR_INR";
 
-export interface InrCrossEvaluationInput {
-  readonly direction: InrCrossDirection;
-  /** X/INR price on CoinDCX (ask when buying INR, bid when selling INR). */
-  readonly inrPrice: number;
-  /** X/USDT price on the venue (bid when selling USDT, ask when buying). */
-  readonly usdtPrice: number;
-  /** USDTINR bid (for BUY_INR_SELL_USDT) or ask (for BUY_USDT_SELL_INR). */
-  readonly usdtInrRate: number;
-  readonly inrTakerFeePercent: number;
-  readonly usdtTakerFeePercent: number;
-  readonly conversionTakerFeePercent: number;
-  readonly inrWithholdingPercent: number;
-  readonly usdtWithholdingPercent: number;
+export interface InrRouteEvaluationInput {
+  /** Cost of one unit of the coin, in INR, on the BUY leg. */
+  readonly costInr: number;
+  /** Proceeds of one unit of the coin, in INR, on the SELL leg. */
+  readonly proceedsInr: number;
+  readonly feePercents: readonly number[];
+  readonly withholdingPercents: readonly number[];
 }
 
-export interface InrCrossEvaluation {
+export interface InrRouteEvaluation {
   readonly grossEdgePercent: number;
   readonly feesPercent: number;
   readonly netEdgePercent: number;
   readonly cashLockedPercent: number;
 }
 
-export function evaluateInrCrossRoute(
-  input: InrCrossEvaluationInput,
-): InrCrossEvaluation | null {
-  const values = [
-    input.inrPrice,
-    input.usdtPrice,
-    input.usdtInrRate,
-  ];
-
+export function evaluateInrRoute(
+  input: InrRouteEvaluationInput,
+): InrRouteEvaluation | null {
   if (
-    values.some(
-      (value) =>
-        !Number.isFinite(value) ||
-        value <= 0,
-    )
+    !Number.isFinite(input.costInr) ||
+    !Number.isFinite(input.proceedsInr) ||
+    input.costInr <= 0 ||
+    input.proceedsInr <= 0 ||
+    input.feePercents.some((fee) => !Number.isFinite(fee) || fee < 0)
   ) {
     return null;
   }
 
-  const usdtLegInInr =
-    input.usdtPrice *
-    input.usdtInrRate;
-  const costInr =
-    input.direction === "BUY_INR_SELL_USDT"
-      ? input.inrPrice
-      : usdtLegInInr;
-  const proceedsInr =
-    input.direction === "BUY_INR_SELL_USDT"
-      ? usdtLegInInr
-      : input.inrPrice;
-
   const grossEdgePercent =
-    ((proceedsInr - costInr) / costInr) * 100;
+    ((input.proceedsInr - input.costInr) / input.costInr) * 100;
   const feesPercent =
-    input.inrTakerFeePercent +
-    input.usdtTakerFeePercent +
-    input.conversionTakerFeePercent;
+    input.feePercents.reduce((sum, fee) => sum + fee, 0);
 
   return {
     grossEdgePercent,
     feesPercent,
-    netEdgePercent:
-      grossEdgePercent -
-      feesPercent,
+    netEdgePercent: grossEdgePercent - feesPercent,
     cashLockedPercent:
-      input.inrWithholdingPercent +
-      input.usdtWithholdingPercent,
+      input.withholdingPercents.reduce((sum, value) => sum + value, 0),
   };
 }
 
-export interface InrCrossRoute {
+export interface InrRoute {
   readonly routeKey: string;
+  readonly kind: InrRouteKind;
   readonly coin: string;
-  readonly inrMarket: string;
-  readonly usdtMarket: string;
-  readonly usdtVenue: string;
-  readonly direction: InrCrossDirection;
+  readonly buyVenue: string;
+  readonly buyMarket: string;
+  readonly sellVenue: string;
+  readonly sellMarket: string;
+  /** Effective per-unit INR cost/proceeds used for the edge. */
+  readonly buyPriceInr: number;
+  readonly sellPriceInr: number;
+  /** USDTINR rate applied on the USDT leg; null for INR_INR routes. */
+  readonly usdtInrRate: number | null;
   readonly confirmed: boolean;
-  readonly inrPrice: number;
-  readonly usdtPrice: number;
-  readonly usdtInrRate: number;
   readonly grossEdgePercent: number;
   readonly feesPercent: number;
   readonly netEdgePercent: number;
   readonly cashLockedPercent: number;
-  /** Smaller top-of-book side, in INR; null for ticker-only nominations. */
+  /** False when any leg's venue withholding treatment is unverified. */
+  readonly tdsVerified: boolean;
+  /** Smaller top-of-book side, in INR; null unless every leg has depth. */
   readonly topOfBookDepthInr: number | null;
   readonly observedAt: number;
 }
 
-export interface InrCrossShadowReport {
-  readonly schemaVersion: "1.0";
+export interface InrRouteShadowReport {
+  readonly schemaVersion: "2.0";
   readonly generatedAt: number;
   readonly running: boolean;
   readonly scans: number;
   readonly lastScanAt: number | null;
   readonly conversion: {
     readonly market: "USDTINR";
+    readonly venue: "coindcx";
     readonly bid: number | null;
     readonly ask: number | null;
     readonly executable: boolean;
   };
   readonly coverage: {
-    readonly inrMarkets: number;
-    readonly pairedWithUsdtVenue: number;
-    readonly executableInrBooks: number;
+    readonly venues: Readonly<Record<string, {
+      readonly inrMarkets: number;
+      readonly executableInrBooks: number;
+      readonly pairedWithUsdtVenue: number;
+    }>>;
+    readonly inrInrPairs: number;
   };
   readonly thresholds: {
     readonly nominationGrossEdgePercent: number;
-    readonly maximumQuoteAgeMs: number;
+    readonly maximumBookAgeMs: Readonly<Record<string, number>>;
   };
   readonly demandSubscriptions: {
     readonly requested: number;
@@ -159,9 +139,9 @@ export interface InrCrossShadowReport {
     readonly rejected: number;
   };
   /** Best current routes, confirmed first. */
-  readonly routes: readonly InrCrossRoute[];
+  readonly routes: readonly InrRoute[];
   /** Rolling log of confirmed routes with a positive net edge. */
-  readonly recentConfirmed: readonly InrCrossRoute[];
+  readonly recentConfirmed: readonly InrRoute[];
   readonly bestConfirmedNetEdgePercent: number | null;
   readonly safety: {
     readonly shadowOnly: true;
@@ -171,14 +151,14 @@ export interface InrCrossShadowReport {
   };
 }
 
-export interface InrCrossDemandSubscriber {
+export interface InrDemandSubscriber {
   requestTemporarySubscription(
     market: string,
     ttlMs?: number,
   ): boolean;
 }
 
-export interface InrCrossShadowDependencies {
+export interface InrRouteShadowDependencies {
   readonly getAllQuotes: () => readonly ExecutableQuote[];
   readonly getQuote: (exchange: string, market: string) => ExecutableQuote | undefined;
   readonly getTakerFeePercent: (exchange: string, market: string) => number | null;
@@ -186,7 +166,7 @@ export interface InrCrossShadowDependencies {
   readonly now: () => number;
 }
 
-const DEFAULT_DEPENDENCIES: InrCrossShadowDependencies = {
+const DEFAULT_DEPENDENCIES: InrRouteShadowDependencies = {
   getAllQuotes: () => marketCache.getAll(),
   getQuote: (exchange, market) => marketCache.get(exchange, market),
   getTakerFeePercent: (exchange, market) => getExchangeTakerFeePercent(exchange, market),
@@ -194,35 +174,54 @@ const DEFAULT_DEPENDENCIES: InrCrossShadowDependencies = {
   now: Date.now,
 };
 
+const INR_VENUES = ["coindcx", "unocoin"] as const;
 const USDT_VENUES = ["binance", "bybit"] as const;
+
+/*
+ * UnoCoin publishes its books by REST polling (~14s cadence here), so an
+ * executable UnoCoin book is necessarily older than a streamed one. It still
+ * counts as a book, with its own age ceiling, rather than being dropped.
+ */
+const MAXIMUM_BOOK_AGE_MS: Readonly<Record<string, number>> = {
+  coindcx: 5_000,
+  binance: 5_000,
+  bybit: 5_000,
+  unocoin: 20_000,
+};
+
+interface Leg {
+  readonly venue: string;
+  readonly market: string;
+  readonly quote: ExecutableQuote;
+  readonly book: boolean;
+}
 
 export class CoinDCXInrCrossCurrencyShadowService {
   private static readonly SCAN_INTERVAL_MS = 1_000;
   /** Ticker-level gross edge that earns an executable-book confirmation. */
   private static readonly NOMINATION_GROSS_EDGE_PERCENT = 0.8;
-  private static readonly MAXIMUM_QUOTE_AGE_MS = 5_000;
   private static readonly MAXIMUM_TICKER_AGE_MS = 60_000;
   private static readonly MAXIMUM_DEMAND_REQUESTS_PER_SCAN = 2;
   /** Stays under the adapter's shared 10-slot temporary budget. */
   private static readonly MAXIMUM_OPEN_DEMAND_MARKETS = 4;
   private static readonly DEMAND_TTL_MS = 45_000;
-  private static readonly MAXIMUM_REPORTED_ROUTES = 25;
+  private static readonly MAXIMUM_REPORTED_ROUTES = 30;
   private static readonly MAXIMUM_CONFIRMED_LOG = 60;
 
-  private readonly dependencies: InrCrossShadowDependencies;
+  private readonly dependencies: InrRouteShadowDependencies;
   private timer: ReturnType<typeof setInterval> | null = null;
   private scans = 0;
   private lastScanAt: number | null = null;
-  private routes: InrCrossRoute[] = [];
-  private recentConfirmed: InrCrossRoute[] = [];
-  private coverage = {inrMarkets: 0, pairedWithUsdtVenue: 0, executableInrBooks: 0};
-  private conversion: InrCrossShadowReport["conversion"] = {market: "USDTINR", bid: null, ask: null, executable: false};
+  private routes: InrRoute[] = [];
+  private recentConfirmed: InrRoute[] = [];
+  private coverage: InrRouteShadowReport["coverage"] = {venues: {}, inrInrPairs: 0};
+  private conversion: InrRouteShadowReport["conversion"] = {market: "USDTINR", venue: "coindcx", bid: null, ask: null, executable: false};
   private readonly demandExpiry = new Map<string, number>();
   private readonly demand = {requested: 0, accepted: 0, rejected: 0};
 
   constructor(
-    private readonly subscriber: InrCrossDemandSubscriber | null,
-    dependencies: Partial<InrCrossShadowDependencies> = {},
+    private readonly coinDCXSubscriber: InrDemandSubscriber | null,
+    dependencies: Partial<InrRouteShadowDependencies> = {},
   ) {
     this.dependencies = {...DEFAULT_DEPENDENCIES, ...dependencies};
   }
@@ -237,7 +236,7 @@ export class CoinDCXInrCrossCurrencyShadowService {
       }
     }, CoinDCXInrCrossCurrencyShadowService.SCAN_INTERVAL_MS);
     this.timer.unref?.();
-    console.log("[INR-Cross] CoinDCX INR cross-currency shadow study started.");
+    console.log("[INR-Cross] INR route shadow study started (CoinDCX, UnoCoin).");
   }
 
   stop(): void {
@@ -254,89 +253,76 @@ export class CoinDCXInrCrossCurrencyShadowService {
     const usdtInr = this.dependencies.getQuote("coindcx", "USDTINR");
     const conversionUsable =
       !!usdtInr &&
-      usdtInr.executable &&
-      usdtInr.bestBidPrice !== null &&
-      usdtInr.bestAskPrice !== null &&
-      now - usdtInr.timestamp <= CoinDCXInrCrossCurrencyShadowService.MAXIMUM_QUOTE_AGE_MS;
+      this.isBook(usdtInr, "coindcx", now);
     this.conversion = {
       market: "USDTINR",
+      venue: "coindcx",
       bid: usdtInr?.bestBidPrice ?? null,
       ask: usdtInr?.bestAskPrice ?? null,
       executable: conversionUsable,
     };
 
-    const quotes = this.dependencies.getAllQuotes();
-    const usdtBooks = new Map<string, ExecutableQuote[]>();
-    const inrQuotes: ExecutableQuote[] = [];
+    const inrLegs = new Map<string, Map<string, Leg>>();
+    const usdtBooks = new Map<string, Leg[]>();
+    const coverage: Record<string, {inrMarkets: number; executableInrBooks: number; pairedWithUsdtVenue: number}> = {};
+    for (const venue of INR_VENUES) coverage[venue] = {inrMarkets: 0, executableInrBooks: 0, pairedWithUsdtVenue: 0};
 
-    for (const quote of quotes) {
+    for (const quote of this.dependencies.getAllQuotes()) {
       const market = normalizeMarket(quote.market);
-      if (quote.exchange === "coindcx" && market.endsWith("INR") && market !== "USDTINR" && market.length > 3) {
-        inrQuotes.push(quote);
-      } else if (
-        (USDT_VENUES as readonly string[]).includes(quote.exchange) &&
-        market.endsWith("USDT") &&
-        quote.executable &&
-        now - quote.timestamp <= CoinDCXInrCrossCurrencyShadowService.MAXIMUM_QUOTE_AGE_MS
-      ) {
+      const venue = quote.exchange;
+
+      if ((INR_VENUES as readonly string[]).includes(venue) && market.endsWith("INR") && market.length > 3 && market !== "USDTINR" && market !== "USDCINR") {
+        const book = this.isBook(quote, venue, now);
+        const tickerUsable = quote.lastPrice !== null && now - quote.timestamp <= CoinDCXInrCrossCurrencyShadowService.MAXIMUM_TICKER_AGE_MS;
+        coverage[venue].inrMarkets += 1;
+        if (book) coverage[venue].executableInrBooks += 1;
+        if (!book && !tickerUsable) continue;
+        const coin = market.slice(0, -3);
+        const byVenue = inrLegs.get(coin) ?? new Map<string, Leg>();
+        byVenue.set(venue, {venue, market, quote, book});
+        inrLegs.set(coin, byVenue);
+      } else if ((USDT_VENUES as readonly string[]).includes(venue) && market.endsWith("USDT") && this.isBook(quote, venue, now)) {
         const list = usdtBooks.get(market) ?? [];
-        list.push(quote);
+        list.push({venue, market, quote, book: true});
         usdtBooks.set(market, list);
       }
     }
 
-    let paired = 0;
-    let executableInr = 0;
-    const found: InrCrossRoute[] = [];
-    const nominations: Array<{market: string; gross: number}> = [];
+    const found: InrRoute[] = [];
+    const nominations = new Map<string, number>();
+    let inrInrPairs = 0;
+    const consider = (route: InrRoute | null, coinDCXMarketToNominate: string | null) => {
+      if (!route) return;
+      found.push(route);
+      if (!route.confirmed && coinDCXMarketToNominate && route.grossEdgePercent >= CoinDCXInrCrossCurrencyShadowService.NOMINATION_GROSS_EDGE_PERCENT) {
+        nominations.set(coinDCXMarketToNominate, Math.max(nominations.get(coinDCXMarketToNominate) ?? 0, route.grossEdgePercent));
+      }
+    };
 
-    if (conversionUsable) {
-      for (const inrQuote of inrQuotes) {
-        const inrMarket = normalizeMarket(inrQuote.market);
-        const coin = inrMarket.slice(0, -3);
-        const usdtMarket = `${coin}USDT`;
-        const venueBooks = usdtBooks.get(usdtMarket);
-        if (!venueBooks?.length) continue;
-        paired += 1;
+    for (const [coin, byVenue] of inrLegs) {
+      const usdtLegs = conversionUsable ? usdtBooks.get(`${coin}USDT`) ?? [] : [];
 
-        const inrExecutable =
-          inrQuote.executable &&
-          inrQuote.bestBidPrice !== null &&
-          inrQuote.bestAskPrice !== null &&
-          now - inrQuote.timestamp <= CoinDCXInrCrossCurrencyShadowService.MAXIMUM_QUOTE_AGE_MS;
-        if (inrExecutable) executableInr += 1;
-        const tickerUsable =
-          inrQuote.lastPrice !== null &&
-          now - inrQuote.timestamp <= CoinDCXInrCrossCurrencyShadowService.MAXIMUM_TICKER_AGE_MS;
-        if (!inrExecutable && !tickerUsable) continue;
-
-        let bestTickerGross = Number.NEGATIVE_INFINITY;
-
-        for (const venueBook of venueBooks) {
-          for (const direction of ["BUY_INR_SELL_USDT", "BUY_USDT_SELL_INR"] as const) {
-            let route: InrCrossRoute | null = null;
-            try {
-              route = this.evaluate({
-                direction, coin, inrMarket, usdtMarket, inrQuote, venueBook,
-                usdtInr: usdtInr!, confirmed: inrExecutable, now,
-              });
-            } catch {
-              // A market the cost-profile resolver rejects is skipped, not fatal.
-            }
-            if (!route) continue;
-            if (!inrExecutable) bestTickerGross = Math.max(bestTickerGross, route.grossEdgePercent);
-            found.push(route);
-          }
+      for (const inrLeg of byVenue.values()) {
+        if (usdtLegs.length) coverage[inrLeg.venue].pairedWithUsdtVenue += 1;
+        const nominate = inrLeg.venue === "coindcx" && !inrLeg.book ? inrLeg.market : null;
+        for (const usdtLeg of usdtLegs) {
+          consider(this.safe(() => this.priceInrUsdt(coin, inrLeg, usdtLeg, usdtInr!, "BUY_INR", now)), nominate);
+          consider(this.safe(() => this.priceInrUsdt(coin, inrLeg, usdtLeg, usdtInr!, "SELL_INR", now)), nominate);
         }
+      }
 
-        if (!inrExecutable && bestTickerGross >= CoinDCXInrCrossCurrencyShadowService.NOMINATION_GROSS_EDGE_PERCENT) {
-          nominations.push({market: inrMarket, gross: bestTickerGross});
-        }
+      const coinDCX = byVenue.get("coindcx");
+      const unoCoin = byVenue.get("unocoin");
+      if (coinDCX && unoCoin) {
+        inrInrPairs += 1;
+        const nominate = coinDCX.book ? null : coinDCX.market;
+        consider(this.safe(() => this.priceInrInr(coin, coinDCX, unoCoin, now)), nominate);
+        consider(this.safe(() => this.priceInrInr(coin, unoCoin, coinDCX, now)), nominate);
       }
     }
 
-    this.coverage = {inrMarkets: inrQuotes.length, pairedWithUsdtVenue: paired, executableInrBooks: executableInr};
-    this.requestDemandBooks(nominations, now);
+    this.coverage = {venues: coverage, inrInrPairs};
+    this.requestDemandBooks([...nominations.entries()], now);
 
     found.sort((first, second) =>
       Number(second.confirmed) - Number(first.confirmed) || second.netEdgePercent - first.netEdgePercent);
@@ -353,21 +339,21 @@ export class CoinDCXInrCrossCurrencyShadowService {
     this.recentConfirmed = this.recentConfirmed.slice(0, CoinDCXInrCrossCurrencyShadowService.MAXIMUM_CONFIRMED_LOG);
   }
 
-  getReport(): InrCrossShadowReport {
+  getReport(): InrRouteShadowReport {
     const best = this.recentConfirmed.reduce<number | null>(
       (max, route) => (max === null || route.netEdgePercent > max ? route.netEdgePercent : max), null);
 
     return {
-      schemaVersion: "1.0",
+      schemaVersion: "2.0",
       generatedAt: this.dependencies.now(),
       running: this.timer !== null,
       scans: this.scans,
       lastScanAt: this.lastScanAt,
       conversion: {...this.conversion},
-      coverage: {...this.coverage},
+      coverage: structuredClone(this.coverage),
       thresholds: {
         nominationGrossEdgePercent: CoinDCXInrCrossCurrencyShadowService.NOMINATION_GROSS_EDGE_PERCENT,
-        maximumQuoteAgeMs: CoinDCXInrCrossCurrencyShadowService.MAXIMUM_QUOTE_AGE_MS,
+        maximumBookAgeMs: {...MAXIMUM_BOOK_AGE_MS},
       },
       demandSubscriptions: {...this.demand},
       routes: this.routes.map((route) => ({...route})),
@@ -382,91 +368,160 @@ export class CoinDCXInrCrossCurrencyShadowService {
     };
   }
 
-  private evaluate(input: {
-    direction: InrCrossDirection;
-    coin: string;
-    inrMarket: string;
-    usdtMarket: string;
-    inrQuote: ExecutableQuote;
-    venueBook: ExecutableQuote;
-    usdtInr: ExecutableQuote;
-    confirmed: boolean;
-    now: number;
-  }): InrCrossRoute | null {
-    const buyingInr = input.direction === "BUY_INR_SELL_USDT";
-    const inrPrice = input.confirmed
-      ? (buyingInr ? input.inrQuote.bestAskPrice : input.inrQuote.bestBidPrice)
-      : input.inrQuote.lastPrice;
-    const usdtPrice = buyingInr ? input.venueBook.bestBidPrice : input.venueBook.bestAskPrice;
-    const usdtInrRate = buyingInr ? input.usdtInr.bestBidPrice : input.usdtInr.bestAskPrice;
-    if (inrPrice === null || usdtPrice === null || usdtInrRate === null) return null;
+  private isBook(quote: ExecutableQuote, venue: string, now: number): boolean {
+    return quote.executable &&
+      quote.bestBidPrice !== null &&
+      quote.bestAskPrice !== null &&
+      quote.bestBidQty !== null &&
+      quote.bestAskQty !== null &&
+      now - quote.timestamp <= (MAXIMUM_BOOK_AGE_MS[venue] ?? 5_000);
+  }
 
-    const inrFee = this.dependencies.getTakerFeePercent("coindcx", input.inrMarket);
-    const venueFee = this.dependencies.getTakerFeePercent(input.venueBook.exchange, input.usdtMarket);
-    const conversionFee = this.dependencies.getTakerFeePercent("coindcx", "USDTINR");
-    if (inrFee === null || venueFee === null || conversionFee === null) return null;
+  private safe(price: () => InrRoute | null): InrRoute | null {
+    try {
+      return price();
+    } catch {
+      // A market the fee/cost resolvers reject is skipped, not fatal.
+      return null;
+    }
+  }
 
-    const inrProfile = this.dependencies.getCostProfile("coindcx", input.inrMarket, buyingInr ? "BUY" : "SELL");
-    const venueProfile = this.dependencies.getCostProfile(input.venueBook.exchange, input.usdtMarket, buyingInr ? "SELL" : "BUY");
+  /** Buy price (ask) or sell price (bid) of an INR leg; last price if not a book. */
+  private inrPrice(leg: Leg, side: "BUY" | "SELL"): number | null {
+    if (!leg.book) return leg.quote.lastPrice;
+    return side === "BUY" ? leg.quote.bestAskPrice : leg.quote.bestBidPrice;
+  }
 
-    const evaluation = evaluateInrCrossRoute({
-      direction: input.direction,
-      inrPrice,
-      usdtPrice,
-      usdtInrRate,
-      inrTakerFeePercent: inrFee * (1 + inrProfile.tradingFeeSurchargeMultiplier),
-      usdtTakerFeePercent: venueFee * (1 + venueProfile.tradingFeeSurchargeMultiplier),
-      conversionTakerFeePercent: conversionFee,
-      inrWithholdingPercent: inrProfile.withholdingPercent,
-      usdtWithholdingPercent: venueProfile.withholdingPercent,
-    });
-    if (!evaluation) return null;
-
-    const inrQty = buyingInr ? input.inrQuote.bestAskQty : input.inrQuote.bestBidQty;
-    const usdtQty = buyingInr ? input.venueBook.bestBidQty : input.venueBook.bestAskQty;
-    const topOfBookDepthInr =
-      input.confirmed && inrQty !== null && usdtQty !== null
-        ? Math.min(inrQty * inrPrice, usdtQty * usdtPrice * usdtInrRate)
-        : null;
-
+  private legCost(leg: Leg, side: "BUY" | "SELL") {
+    const fee = this.dependencies.getTakerFeePercent(leg.venue, leg.market);
+    if (fee === null) return null;
+    const profile = this.dependencies.getCostProfile(leg.venue, leg.market, side);
     return {
-      routeKey: `${input.inrMarket}|${input.venueBook.exchange}|${input.direction}`,
-      coin: input.coin,
-      inrMarket: input.inrMarket,
-      usdtMarket: input.usdtMarket,
-      usdtVenue: input.venueBook.exchange,
-      direction: input.direction,
-      confirmed: input.confirmed,
-      inrPrice,
-      usdtPrice,
-      usdtInrRate,
-      ...evaluation,
-      topOfBookDepthInr,
-      observedAt: input.now,
+      feePercent: fee * (1 + profile.tradingFeeSurchargeMultiplier),
+      withholdingPercent: profile.withholdingPercent,
+      verified: profile.withholdingEvidenceComplete,
     };
   }
 
-  private requestDemandBooks(nominations: Array<{market: string; gross: number}>, now: number): void {
+  private priceInrUsdt(
+    coin: string,
+    inrLeg: Leg,
+    usdtLeg: Leg,
+    usdtInr: ExecutableQuote,
+    mode: "BUY_INR" | "SELL_INR",
+    now: number,
+  ): InrRoute | null {
+    const buyingInr = mode === "BUY_INR";
+    const inrPrice = this.inrPrice(inrLeg, buyingInr ? "BUY" : "SELL");
+    const usdtPrice = buyingInr ? usdtLeg.quote.bestBidPrice : usdtLeg.quote.bestAskPrice;
+    const rate = buyingInr ? usdtInr.bestBidPrice : usdtInr.bestAskPrice;
+    if (inrPrice === null || usdtPrice === null || rate === null) return null;
+
+    const inrCost = this.legCost(inrLeg, buyingInr ? "BUY" : "SELL");
+    const usdtCost = this.legCost(usdtLeg, buyingInr ? "SELL" : "BUY");
+    const conversionFee = this.dependencies.getTakerFeePercent("coindcx", "USDTINR");
+    if (!inrCost || !usdtCost || conversionFee === null) return null;
+
+    const usdtLegInr = usdtPrice * rate;
+    const evaluation = evaluateInrRoute({
+      costInr: buyingInr ? inrPrice : usdtLegInr,
+      proceedsInr: buyingInr ? usdtLegInr : inrPrice,
+      feePercents: [inrCost.feePercent, usdtCost.feePercent, conversionFee],
+      withholdingPercents: [inrCost.withholdingPercent, usdtCost.withholdingPercent],
+    });
+    if (!evaluation) return null;
+
+    const inrQty = buyingInr ? inrLeg.quote.bestAskQty : inrLeg.quote.bestBidQty;
+    const usdtQty = buyingInr ? usdtLeg.quote.bestBidQty : usdtLeg.quote.bestAskQty;
+    const buy = buyingInr ? inrLeg : usdtLeg;
+    const sell = buyingInr ? usdtLeg : inrLeg;
+
+    return {
+      routeKey: `INR_USDT|${coin}|${buy.venue}>${sell.venue}`,
+      kind: "INR_USDT",
+      coin,
+      buyVenue: buy.venue,
+      buyMarket: buy.market,
+      sellVenue: sell.venue,
+      sellMarket: sell.market,
+      buyPriceInr: buyingInr ? inrPrice : usdtLegInr,
+      sellPriceInr: buyingInr ? usdtLegInr : inrPrice,
+      usdtInrRate: rate,
+      confirmed: inrLeg.book,
+      ...evaluation,
+      tdsVerified: inrCost.verified && usdtCost.verified,
+      topOfBookDepthInr:
+        inrLeg.book && inrQty !== null && usdtQty !== null
+          ? Math.min(inrQty * inrPrice, usdtQty * usdtLegInr)
+          : null,
+      observedAt: now,
+    };
+  }
+
+  private priceInrInr(coin: string, buy: Leg, sell: Leg, now: number): InrRoute | null {
+    const buyPrice = this.inrPrice(buy, "BUY");
+    const sellPrice = this.inrPrice(sell, "SELL");
+    if (buyPrice === null || sellPrice === null) return null;
+
+    const buyCost = this.legCost(buy, "BUY");
+    const sellCost = this.legCost(sell, "SELL");
+    if (!buyCost || !sellCost) return null;
+
+    const evaluation = evaluateInrRoute({
+      costInr: buyPrice,
+      proceedsInr: sellPrice,
+      feePercents: [buyCost.feePercent, sellCost.feePercent],
+      withholdingPercents: [buyCost.withholdingPercent, sellCost.withholdingPercent],
+    });
+    if (!evaluation) return null;
+
+    const confirmed = buy.book && sell.book;
+    const buyQty = buy.quote.bestAskQty;
+    const sellQty = sell.quote.bestBidQty;
+
+    return {
+      routeKey: `INR_INR|${coin}|${buy.venue}>${sell.venue}`,
+      kind: "INR_INR",
+      coin,
+      buyVenue: buy.venue,
+      buyMarket: buy.market,
+      sellVenue: sell.venue,
+      sellMarket: sell.market,
+      buyPriceInr: buyPrice,
+      sellPriceInr: sellPrice,
+      usdtInrRate: null,
+      confirmed,
+      ...evaluation,
+      tdsVerified: buyCost.verified && sellCost.verified,
+      topOfBookDepthInr:
+        confirmed && buyQty !== null && sellQty !== null
+          ? Math.min(buyQty * buyPrice, sellQty * sellPrice)
+          : null,
+      observedAt: now,
+    };
+  }
+
+  private requestDemandBooks(nominations: Array<[string, number]>, now: number): void {
     for (const [market, expiresAt] of this.demandExpiry) {
       if (expiresAt <= now) this.demandExpiry.delete(market);
     }
-    if (!this.subscriber) return;
+    if (!this.coinDCXSubscriber) return;
 
     let requested = 0;
-    for (const nomination of nominations.sort((first, second) => second.gross - first.gross)) {
+    for (const [market] of nominations.sort((first, second) => second[1] - first[1])) {
       if (requested >= CoinDCXInrCrossCurrencyShadowService.MAXIMUM_DEMAND_REQUESTS_PER_SCAN) break;
-      if (this.demandExpiry.has(nomination.market)) continue;
+      if (this.demandExpiry.has(market)) continue;
       if (this.demandExpiry.size >= CoinDCXInrCrossCurrencyShadowService.MAXIMUM_OPEN_DEMAND_MARKETS) break;
 
       requested += 1;
       this.demand.requested += 1;
-      const accepted = this.subscriber.requestTemporarySubscription(
-        nomination.market,
+      const accepted = this.coinDCXSubscriber.requestTemporarySubscription(
+        market,
         CoinDCXInrCrossCurrencyShadowService.DEMAND_TTL_MS,
       );
       if (accepted) {
         this.demand.accepted += 1;
-        this.demandExpiry.set(nomination.market, now + CoinDCXInrCrossCurrencyShadowService.DEMAND_TTL_MS);
+        this.demandExpiry.set(market, now + CoinDCXInrCrossCurrencyShadowService.DEMAND_TTL_MS);
       } else {
         this.demand.rejected += 1;
       }
@@ -487,6 +542,6 @@ export function registerCoinDCXInrCrossCurrencyShadowService(
   sharedInstance = service;
 }
 
-export function getCoinDCXInrCrossCurrencyShadowReport(): InrCrossShadowReport | null {
+export function getCoinDCXInrCrossCurrencyShadowReport(): InrRouteShadowReport | null {
   return sharedInstance?.getReport() ?? null;
 }

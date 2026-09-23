@@ -131,12 +131,12 @@ function InrShadowPanel() {
   return (
     <section className="panel min-w-0">
       <PanelHeader
-        title={<>INR routes <span className="ml-2 border border-cyan-300/40 px-1.5 py-0.5 text-[10px] text-cyan-300">SHADOW · no orders</span></>}
+        title={<>INR routes · CoinDCX + UnoCoin <span className="ml-2 border border-cyan-300/40 px-1.5 py-0.5 text-[10px] text-cyan-300">SHADOW · no orders</span></>}
         aside={report ? (
           <span>
             USDT/INR {report.conversion.bid ?? "—"}/{report.conversion.ask ?? "—"}
             <span className="mx-2 text-text-muted/50">·</span>
-            {report.coverage.pairedWithUsdtVenue} paired · {report.coverage.executableInrBooks} books
+            CDX {report.coverage.venues.coindcx?.pairedWithUsdtVenue ?? 0}↔USDT · UNO {report.coverage.venues.unocoin?.pairedWithUsdtVenue ?? 0}↔USDT · {report.coverage.inrInrPairs} INR↔INR
           </span>
         ) : null}
       />
@@ -170,8 +170,9 @@ function InrShadowPanel() {
             </p>
           </div>
           {!report.conversion.executable ? (
-            <p className="p-5 text-xs text-amber-300">USDT/INR book is not executable right now, so no INR route is evaluated.</p>
-          ) : rows.length === 0 ? (
+            <p className="border-b border-border-default px-5 py-2 text-[11px] text-amber-300">USDT/INR book is not executable right now; only INR↔INR routes are priced.</p>
+          ) : null}
+          {rows.length === 0 ? (
             <p className="p-5 text-xs text-text-muted">{view === "live" ? "No INR↔USDT route priced yet." : "No confirmed positive-net INR route yet. Confirmation needs a live CoinDCX INR book."}</p>
           ) : (
             <div className="max-h-[24rem] overflow-auto">
@@ -179,7 +180,7 @@ function InrShadowPanel() {
                 <thead>
                   <tr className="border-b border-border-default">
                     <th className="px-5 py-3 font-normal">Coin</th>
-                    <th className="px-3 py-3 font-normal">Direction</th>
+                    <th className="px-3 py-3 font-normal">Route</th>
                     <th className="px-3 py-3 font-normal">Evidence</th>
                     <th className="px-3 py-3 text-right font-normal">Gross</th>
                     <th className="px-3 py-3 text-right font-normal">Fees</th>
@@ -194,7 +195,8 @@ function InrShadowPanel() {
                     <tr key={`${route.routeKey}-${route.observedAt}`} className="border-b border-border-default/60">
                       <td className="px-5 py-2.5 font-mono text-text-primary">{route.coin}</td>
                       <td className="px-3 py-2.5 font-mono text-[11px] text-text-muted">
-                        {route.direction === "BUY_INR_SELL_USDT" ? `buy cdx INR → sell ${route.usdtVenue}` : `buy ${route.usdtVenue} → sell cdx INR`}
+                        <span className={`mr-1.5 px-1 text-[9px] ${route.kind === "INR_INR" ? "bg-violet-400/15 text-violet-300" : "bg-cyan-300/15 text-cyan-300"}`}>{route.kind === "INR_INR" ? "INR↔INR" : "INR↔USDT"}</span>
+                        buy {venueLabel(route.buyVenue, route.buyMarket)} → sell {venueLabel(route.sellVenue, route.sellMarket)}
                       </td>
                       <td className="px-3 py-2.5">
                         <span className={`px-1.5 py-0.5 font-mono text-[10px] ${route.confirmed ? "bg-emerald-400/15 text-emerald-300" : "bg-amber-400/15 text-amber-300"}`}>
@@ -206,7 +208,7 @@ function InrShadowPanel() {
                       <td className={`px-3 py-2.5 text-right font-mono tabular-nums ${route.netEdgePercent > 0 ? (route.confirmed ? "text-emerald-300" : "text-amber-300") : "text-text-muted"}`}>
                         {route.netEdgePercent.toFixed(2)}%
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.cashLockedPercent.toFixed(1)}%</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.cashLockedPercent.toFixed(1)}%{route.tdsVerified ? null : <span className="ml-0.5 text-amber-300" title="Venue TDS treatment unverified">?</span>}</td>
                       <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.topOfBookDepthInr === null ? "—" : `₹${Math.round(route.topOfBookDepthInr).toLocaleString("en-IN")}`}</td>
                       <td className="px-5 py-2.5 text-right font-mono text-text-muted">{formatAgo(route.observedAt)}</td>
                     </tr>
@@ -216,7 +218,7 @@ function InrShadowPanel() {
             </div>
           )}
           <p className="border-t border-border-default px-5 py-3 text-[11px] text-text-muted">
-            Net = gross − both taker fees − one USDT/INR conversion fee. TDS is a recoverable cash lock shown separately. TICKER rows are unconfirmed hints (≥{report.thresholds.nominationGrossEdgePercent}% gross opens a live CoinDCX book); only BOOK rows count. Shadow study: no order can be placed from here.
+            Net = gross − every taker fee on the route (INR↔USDT also pays one USDT/INR conversion fee). TDS is a recoverable cash lock shown separately; ? = venue TDS treatment unverified (UnoCoin). TICKER rows are unconfirmed hints (≥{report.thresholds.nominationGrossEdgePercent}% gross opens a live CoinDCX book; UnoCoin books are REST-polled, ≤20s old); only BOOK rows count. Shadow study: no order can be placed from here.
           </p>
         </>
       )}
@@ -652,6 +654,11 @@ function CoinsPanel({inventory}: {inventory: Inventory | undefined}) {
       )}
     </section>
   );
+}
+
+function venueLabel(venue: string, market: string): string {
+  const short = venue === "coindcx" ? "cdx" : venue === "unocoin" ? "uno" : venue;
+  return `${short} ${market.endsWith("INR") ? "INR" : "USDT"}`;
 }
 
 function PanelHeader({title, aside}: {title: React.ReactNode; aside: React.ReactNode}) {

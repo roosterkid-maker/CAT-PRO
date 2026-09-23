@@ -150,19 +150,21 @@ export interface LiveOnlyInventoryResponse {
 
 export interface InrCrossRoute {
   routeKey: string;
+  kind: "INR_USDT" | "INR_INR";
   coin: string;
-  inrMarket: string;
-  usdtMarket: string;
-  usdtVenue: string;
-  direction: "BUY_INR_SELL_USDT" | "BUY_USDT_SELL_INR";
+  buyVenue: string;
+  buyMarket: string;
+  sellVenue: string;
+  sellMarket: string;
+  buyPriceInr: number;
+  sellPriceInr: number;
+  usdtInrRate: number | null;
   confirmed: boolean;
-  inrPrice: number;
-  usdtPrice: number;
-  usdtInrRate: number;
   grossEdgePercent: number;
   feesPercent: number;
   netEdgePercent: number;
   cashLockedPercent: number;
+  tdsVerified: boolean;
   topOfBookDepthInr: number | null;
   observedAt: number;
 }
@@ -174,8 +176,11 @@ export interface InrCrossShadowResponse {
     scans: number;
     lastScanAt: number | null;
     conversion: {bid: number | null; ask: number | null; executable: boolean};
-    coverage: {inrMarkets: number; pairedWithUsdtVenue: number; executableInrBooks: number};
-    thresholds: {nominationGrossEdgePercent: number; maximumQuoteAgeMs: number};
+    coverage: {
+      venues: Record<string, {inrMarkets: number; executableInrBooks: number; pairedWithUsdtVenue: number}>;
+      inrInrPairs: number;
+    };
+    thresholds: {nominationGrossEdgePercent: number; maximumBookAgeMs: Record<string, number>};
     demandSubscriptions: {requested: number; accepted: number; rejected: number};
     routes: InrCrossRoute[];
     recentConfirmed: InrCrossRoute[];
