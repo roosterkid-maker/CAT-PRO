@@ -4,8 +4,13 @@ import type {
   ExecutableQuote,
 } from "../../core/models/ExecutableQuote";
 
+import type {
+  OrderBook,
+} from "../../orderbook/models/OrderBook";
+
 import {
   CoinDCXInrCrossCurrencyShadowService,
+  averageFillPrice,
   evaluateInrRoute,
 } from "../inr-cross-currency/CoinDCXInrCrossCurrencyShadowService";
 
@@ -43,7 +48,7 @@ function testMath(): void {
   assert.equal(evaluateInrRoute({costInr: 1, proceedsInr: 1, feePercents: [Number.NaN], withholdingPercents: []}), null);
 }
 
-function makeService(quotes: Map<string, ExecutableQuote>, requested: string[]) {
+function makeService(quotes: Map<string, ExecutableQuote>, requested: string[], books = new Map<string, OrderBook>()) {
   return new CoinDCXInrCrossCurrencyShadowService(
     {
       requestTemporarySubscription: (market) => {
@@ -56,9 +61,49 @@ function makeService(quotes: Map<string, ExecutableQuote>, requested: string[]) 
       getQuote: (exchange, market) => quotes.get(`${exchange}|${market}`),
       getTakerFeePercent: (exchange, market) =>
         exchange === "coindcx" && market.endsWith("INR") ? 0.59 : exchange === "unocoin" ? 0.4 : 0.1,
+      getBook: (exchange, market) => books.get(`${exchange}|${market}`) ?? null,
+      getTargetLegInr: () => 600,
       now: () => NOW,
     },
   );
+}
+
+function testAverageFillPrice(): void {
+  const levels = [{price: 10, quantity: 2}, {price: 11, quantity: 2}];
+  assert.equal(averageFillPrice(levels, 2), 10);
+  assert.equal(averageFillPrice(levels, 4), 10.5);
+  assert.equal(averageFillPrice(levels, 5), null, "insufficient depth");
+}
+
+function testSizedEdgeWalksDepth(): void {
+  const quotes = new Map<string, ExecutableQuote>();
+  const books = new Map<string, OrderBook>();
+  const put = (value: ExecutableQuote) => quotes.set(`${value.exchange}|${value.market}`, value);
+
+  // Top of book shows a 3% gap, but only 1 coin (Rs 200) sits at the best
+  // UnoCoin ask; a Rs 600 leg (3 coins) must walk up to 210.
+  put(quote({exchange: "unocoin", market: "NEAR_INR", bestBidPrice: 199, bestAskPrice: 200, bestBidQty: 1, bestAskQty: 1}));
+  put(quote({exchange: "coindcx", market: "NEARINR", bestBidPrice: 206, bestAskPrice: 207, bestBidQty: 50, bestAskQty: 50}));
+  books.set("unocoin|NEAR_INR", {exchange: "unocoin", market: "NEAR_INR", timestamp: NOW,
+    asks: [{price: 200, quantity: 1}, {price: 210, quantity: 5}], bids: [{price: 199, quantity: 5}]});
+  books.set("coindcx|NEARINR", {exchange: "coindcx", market: "NEARINR", timestamp: NOW,
+    asks: [{price: 207, quantity: 50}], bids: [{price: 206, quantity: 50}]});
+
+  const service = makeService(quotes, [], books);
+  service.scan();
+  const route = service.getReport().routes.find((item) => item.kind === "INR_INR" && item.buyVenue === "unocoin")!;
+  assert.ok(route.netEdgePercent > 0, "top-of-book edge looks positive");
+  assert.equal(route.targetLegInr, 600);
+  // 3 coins: 1@200 + 2@210 = avg 206.67 -> gross ~-0.32%, net negative.
+  assert.ok(route.sizedNetEdgePercent !== null && route.sizedNetEdgePercent < 0, `sized edge ${route.sizedNetEdgePercent}`);
+  assert.ok(route.fillableDepthInr !== null && Math.abs(route.fillableDepthInr - 1_200) < 1e-6, `fillable ${route.fillableDepthInr}`);
+
+  // Fillable = 6 coins on the thinner (UnoCoin ask) side x best buy Rs 200.
+  // A stale book is not trusted for sizing.
+  books.set("coindcx|NEARINR", {...books.get("coindcx|NEARINR")!, timestamp: NOW - 6_000});
+  service.scan();
+  const stale = service.getReport().routes.find((item) => item.kind === "INR_INR" && item.buyVenue === "unocoin")!;
+  assert.equal(stale.sizedNetEdgePercent, null);
 }
 
 function testInrUsdtNominatesThenConfirms(): void {
@@ -131,6 +176,8 @@ function testInrInrBetweenCoinDCXAndUnoCoin(): void {
 }
 
 testMath();
+testAverageFillPrice();
+testSizedEdgeWalksDepth();
 testInrUsdtNominatesThenConfirms();
 testInrInrBetweenCoinDCXAndUnoCoin();
 console.log("testCoinDCXInrCrossCurrencyShadow: PASS");

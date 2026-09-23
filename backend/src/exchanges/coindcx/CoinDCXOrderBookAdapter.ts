@@ -200,8 +200,13 @@ export class CoinDCXOrderBookAdapter {
   private static readonly DEFAULT_TEMPORARY_SUBSCRIPTION_TTL_MS =
     60_000;
 
+  /*
+   * Shared by the USDT demand scanner, opportunity recovery and the INR
+   * route study (which self-limits to 16). 120 base + 30 temporary stays
+   * well under ORDER_BOOK.ABSOLUTE_MAX_MARKETS (300).
+   */
   private static readonly MAXIMUM_TEMPORARY_SUBSCRIPTIONS =
-    10;
+    30;
 
   private static readonly MAXIMUM_CONCURRENT_SNAPSHOT_BOOTSTRAPS =
     6;

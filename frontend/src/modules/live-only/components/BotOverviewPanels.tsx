@@ -166,6 +166,11 @@ function InrShadowPanel() {
                 {report.bestConfirmedNetEdgePercent === null ? "—" : `${report.bestConfirmedNetEdgePercent.toFixed(3)}%`}
               </span>
               <span className="mx-2 text-text-muted/50">·</span>
+              at ₹{report.targetLegInr} leg{" "}
+              <span className={report.bestSizedNetEdgePercent !== null && report.bestSizedNetEdgePercent > 0 ? "text-emerald-300" : "text-text-primary"}>
+                {report.bestSizedNetEdgePercent === null ? "—" : `${report.bestSizedNetEdgePercent.toFixed(3)}%`}
+              </span>
+              <span className="mx-2 text-text-muted/50">·</span>
               demand books {report.demandSubscriptions.accepted}/{report.demandSubscriptions.requested}
             </p>
           </div>
@@ -176,7 +181,7 @@ function InrShadowPanel() {
             <p className="p-5 text-xs text-text-muted">{view === "live" ? "No INR↔USDT route priced yet." : "No confirmed positive-net INR route yet. Confirmation needs a live CoinDCX INR book."}</p>
           ) : (
             <div className="max-h-[24rem] overflow-auto">
-              <table className="w-full min-w-[46rem] text-left text-xs">
+              <table className="w-full min-w-[52rem] text-left text-xs">
                 <thead>
                   <tr className="border-b border-border-default">
                     <th className="px-5 py-3 font-normal">Coin</th>
@@ -186,7 +191,8 @@ function InrShadowPanel() {
                     <th className="px-3 py-3 text-right font-normal">Fees</th>
                     <th className="px-3 py-3 text-right font-normal">Net</th>
                     <th className="px-3 py-3 text-right font-normal">TDS lock</th>
-                    <th className="px-3 py-3 text-right font-normal">Depth</th>
+                    <th className="px-3 py-3 text-right font-normal">Net @ leg</th>
+                    <th className="px-3 py-3 text-right font-normal">Fillable</th>
                     <th className="px-5 py-3 text-right font-normal">Seen</th>
                   </tr>
                 </thead>
@@ -209,7 +215,10 @@ function InrShadowPanel() {
                         {route.netEdgePercent.toFixed(2)}%
                       </td>
                       <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.cashLockedPercent.toFixed(1)}%{route.tdsVerified ? null : <span className="ml-0.5 text-amber-300" title="Venue TDS treatment unverified">?</span>}</td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.topOfBookDepthInr === null ? "—" : `₹${Math.round(route.topOfBookDepthInr).toLocaleString("en-IN")}`}</td>
+                      <td className={`px-3 py-2.5 text-right font-mono tabular-nums ${route.sizedNetEdgePercent !== null && route.sizedNetEdgePercent > 0 ? "text-emerald-300" : "text-text-muted"}`} title={`Walked through both books for a ₹${route.targetLegInr} leg`}>
+                        {route.sizedNetEdgePercent === null ? (route.confirmed ? "thin" : "—") : `${route.sizedNetEdgePercent.toFixed(2)}%`}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.fillableDepthInr === null ? "—" : `₹${Math.round(route.fillableDepthInr).toLocaleString("en-IN")}`}</td>
                       <td className="px-5 py-2.5 text-right font-mono text-text-muted">{formatAgo(route.observedAt)}</td>
                     </tr>
                   ))}
@@ -218,7 +227,7 @@ function InrShadowPanel() {
             </div>
           )}
           <p className="border-t border-border-default px-5 py-3 text-[11px] text-text-muted">
-            Net = gross − every taker fee on the route (INR↔USDT also pays one USDT/INR conversion fee). TDS is a recoverable cash lock shown separately; ? = venue TDS treatment unverified (UnoCoin). TICKER rows are unconfirmed hints (≥{report.thresholds.nominationGrossEdgePercent}% gross opens a live CoinDCX book; UnoCoin books are REST-polled, ≤20s old); only BOOK rows count. Shadow study: no order can be placed from here.
+            Net = gross − every taker fee on the route (INR↔USDT also pays one USDT/INR conversion fee). TDS is a recoverable cash lock shown separately; ? = venue TDS treatment unverified (UnoCoin). TICKER rows are unconfirmed hints (≥{report.thresholds.nominationGrossEdgePercent}% gross opens a live CoinDCX book; UnoCoin books are REST-polled, ≤20s old); only BOOK rows count. Net @ leg walks every published level of both books for one full leg ("thin" = not enough depth for it); Fillable = INR both sides can absorb. Shadow study: no order can be placed from here.
           </p>
         </>
       )}

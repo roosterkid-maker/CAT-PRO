@@ -14,6 +14,22 @@ import {
   getStrategyOneTinyLiveCashCostProfile,
 } from "../../execution/live/evidence/StrategyOneTinyLiveCashCostService";
 
+import {
+  orderBookService,
+} from "../../orderbook/services/OrderBookService";
+
+import type {
+  OrderBook,
+} from "../../orderbook/models/OrderBook";
+
+import type {
+  OrderBookLevel,
+} from "../../orderbook/models/OrderBookLevel";
+
+import {
+  getLiveOnlyRuntimePolicy,
+} from "../../config/LiveOnlyRuntimePolicy";
+
 /*
  * INR route study: SHADOW only. Two route kinds are priced every second:
  *
@@ -105,7 +121,37 @@ export interface InrRoute {
   readonly tdsVerified: boolean;
   /** Smaller top-of-book side, in INR; null unless every leg has depth. */
   readonly topOfBookDepthInr: number | null;
+  /** INR both legs can fill across their full published depth. */
+  readonly fillableDepthInr: number | null;
+  /** Net edge at the full target leg size, walked through both books. */
+  readonly sizedNetEdgePercent: number | null;
+  readonly targetLegInr: number;
   readonly observedAt: number;
+}
+
+/**
+ * Average fill price for `quantity` walked through `levels` (best first),
+ * or null when the published depth cannot fill it.
+ */
+export function averageFillPrice(
+  levels: readonly OrderBookLevel[],
+  quantity: number,
+): number | null {
+  if (!(quantity > 0)) return null;
+  let remaining = quantity;
+  let notional = 0;
+  for (const level of levels) {
+    if (!(level.price > 0) || !(level.quantity > 0)) continue;
+    const take = Math.min(remaining, level.quantity);
+    notional += take * level.price;
+    remaining -= take;
+    if (remaining <= quantity * 1e-9) return notional / quantity;
+  }
+  return null;
+}
+
+function totalQuantity(levels: readonly OrderBookLevel[]): number {
+  return levels.reduce((sum, level) => sum + (level.quantity > 0 ? level.quantity : 0), 0);
 }
 
 export interface InrRouteShadowReport {
@@ -143,6 +189,9 @@ export interface InrRouteShadowReport {
   /** Rolling log of confirmed routes with a positive net edge. */
   readonly recentConfirmed: readonly InrRoute[];
   readonly bestConfirmedNetEdgePercent: number | null;
+  /** Best confirmed net edge that still holds at the full target leg size. */
+  readonly bestSizedNetEdgePercent: number | null;
+  readonly targetLegInr: number;
   readonly safety: {
     readonly shadowOnly: true;
     readonly orderSubmissionAllowed: false;
@@ -163,6 +212,8 @@ export interface InrRouteShadowDependencies {
   readonly getQuote: (exchange: string, market: string) => ExecutableQuote | undefined;
   readonly getTakerFeePercent: (exchange: string, market: string) => number | null;
   readonly getCostProfile: typeof getStrategyOneTinyLiveCashCostProfile;
+  readonly getBook: (exchange: string, market: string) => OrderBook | null;
+  readonly getTargetLegInr: () => number;
   readonly now: () => number;
 }
 
@@ -171,6 +222,8 @@ const DEFAULT_DEPENDENCIES: InrRouteShadowDependencies = {
   getQuote: (exchange, market) => marketCache.get(exchange, market),
   getTakerFeePercent: (exchange, market) => getExchangeTakerFeePercent(exchange, market),
   getCostProfile: getStrategyOneTinyLiveCashCostProfile,
+  getBook: (exchange, market) => orderBookService.get(exchange, market),
+  getTargetLegInr: () => getLiveOnlyRuntimePolicy().preferredCapitalPerLegInr,
   now: Date.now,
 };
 
@@ -201,9 +254,9 @@ export class CoinDCXInrCrossCurrencyShadowService {
   /** Ticker-level gross edge that earns an executable-book confirmation. */
   private static readonly NOMINATION_GROSS_EDGE_PERCENT = 0.8;
   private static readonly MAXIMUM_TICKER_AGE_MS = 60_000;
-  private static readonly MAXIMUM_DEMAND_REQUESTS_PER_SCAN = 2;
-  /** Stays under the adapter's shared 10-slot temporary budget. */
-  private static readonly MAXIMUM_OPEN_DEMAND_MARKETS = 4;
+  private static readonly MAXIMUM_DEMAND_REQUESTS_PER_SCAN = 4;
+  /** Leaves the rest of the adapter's shared 30-slot temporary budget to the USDT demand scanner. */
+  private static readonly MAXIMUM_OPEN_DEMAND_MARKETS = 16;
   private static readonly DEMAND_TTL_MS = 45_000;
   private static readonly MAXIMUM_REPORTED_ROUTES = 30;
   private static readonly MAXIMUM_CONFIRMED_LOG = 60;
@@ -359,6 +412,9 @@ export class CoinDCXInrCrossCurrencyShadowService {
       routes: this.routes.map((route) => ({...route})),
       recentConfirmed: this.recentConfirmed.map((route) => ({...route})),
       bestConfirmedNetEdgePercent: best,
+      bestSizedNetEdgePercent: this.recentConfirmed.reduce<number | null>(
+        (max, route) => route.sizedNetEdgePercent === null ? max : max === null || route.sizedNetEdgePercent > max ? route.sizedNetEdgePercent : max, null),
+      targetLegInr: this.dependencies.getTargetLegInr(),
       safety: {
         shadowOnly: true,
         orderSubmissionAllowed: false,
@@ -423,11 +479,13 @@ export class CoinDCXInrCrossCurrencyShadowService {
     if (!inrCost || !usdtCost || conversionFee === null) return null;
 
     const usdtLegInr = usdtPrice * rate;
+    const feePercents = [inrCost.feePercent, usdtCost.feePercent, conversionFee];
+    const withholdingPercents = [inrCost.withholdingPercent, usdtCost.withholdingPercent];
     const evaluation = evaluateInrRoute({
       costInr: buyingInr ? inrPrice : usdtLegInr,
       proceedsInr: buyingInr ? usdtLegInr : inrPrice,
-      feePercents: [inrCost.feePercent, usdtCost.feePercent, conversionFee],
-      withholdingPercents: [inrCost.withholdingPercent, usdtCost.withholdingPercent],
+      feePercents,
+      withholdingPercents,
     });
     if (!evaluation) return null;
 
@@ -454,6 +512,7 @@ export class CoinDCXInrCrossCurrencyShadowService {
         inrLeg.book && inrQty !== null && usdtQty !== null
           ? Math.min(inrQty * inrPrice, usdtQty * usdtLegInr)
           : null,
+      ...this.sizeRoute(buy, sell, buyingInr ? 1 : rate, buyingInr ? rate : 1, feePercents, withholdingPercents, now),
       observedAt: now,
     };
   }
@@ -467,11 +526,13 @@ export class CoinDCXInrCrossCurrencyShadowService {
     const sellCost = this.legCost(sell, "SELL");
     if (!buyCost || !sellCost) return null;
 
+    const feePercents = [buyCost.feePercent, sellCost.feePercent];
+    const withholdingPercents = [buyCost.withholdingPercent, sellCost.withholdingPercent];
     const evaluation = evaluateInrRoute({
       costInr: buyPrice,
       proceedsInr: sellPrice,
-      feePercents: [buyCost.feePercent, sellCost.feePercent],
-      withholdingPercents: [buyCost.withholdingPercent, sellCost.withholdingPercent],
+      feePercents,
+      withholdingPercents,
     });
     if (!evaluation) return null;
 
@@ -497,8 +558,60 @@ export class CoinDCXInrCrossCurrencyShadowService {
         confirmed && buyQty !== null && sellQty !== null
           ? Math.min(buyQty * buyPrice, sellQty * sellPrice)
           : null,
+      ...this.sizeRoute(buy, sell, 1, 1, feePercents, withholdingPercents, now),
       observedAt: now,
     };
+  }
+
+  /**
+   * Walks both published books for one full target leg (the runner's
+   * preferred per-leg INR capital). The coin quantity is sized off the best
+   * buy price, then filled level by level on each side; either side lacking
+   * depth leaves the sized edge null. Books older than the venue ceiling
+   * are ignored rather than trusted.
+   */
+  private sizeRoute(
+    buy: Leg,
+    sell: Leg,
+    buyToInr: number,
+    sellToInr: number,
+    feePercents: readonly number[],
+    withholdingPercents: readonly number[],
+    now: number,
+  ): Pick<InrRoute, "fillableDepthInr" | "sizedNetEdgePercent" | "targetLegInr"> {
+    const targetLegInr = this.dependencies.getTargetLegInr();
+    const none = {fillableDepthInr: null, sizedNetEdgePercent: null, targetLegInr};
+    if (!buy.book || !sell.book) return none;
+
+    const buyBook = this.freshBook(buy, now);
+    const sellBook = this.freshBook(sell, now);
+    if (!buyBook || !sellBook) return none;
+
+    const asks = [...buyBook.asks].sort((first, second) => first.price - second.price);
+    const bids = [...sellBook.bids].sort((first, second) => second.price - first.price);
+    if (!asks.length || !bids.length) return none;
+
+    const bestBuyInr = asks[0].price * buyToInr;
+    const quantity = targetLegInr / bestBuyInr;
+    const fillableDepthInr = Math.min(totalQuantity(asks), totalQuantity(bids)) * bestBuyInr;
+    const averageBuy = averageFillPrice(asks, quantity);
+    const averageSell = averageFillPrice(bids, quantity);
+    const sized =
+      averageBuy !== null && averageSell !== null
+        ? evaluateInrRoute({
+            costInr: averageBuy * buyToInr,
+            proceedsInr: averageSell * sellToInr,
+            feePercents,
+            withholdingPercents,
+          })
+        : null;
+
+    return {fillableDepthInr, sizedNetEdgePercent: sized?.netEdgePercent ?? null, targetLegInr};
+  }
+
+  private freshBook(leg: Leg, now: number): OrderBook | null {
+    const book = this.dependencies.getBook(leg.venue, leg.quote.market);
+    return book && now - book.timestamp <= (MAXIMUM_BOOK_AGE_MS[leg.venue] ?? 5_000) ? book : null;
   }
 
   private requestDemandBooks(nominations: Array<[string, number]>, now: number): void {

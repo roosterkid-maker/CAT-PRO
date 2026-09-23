@@ -166,6 +166,9 @@ export interface InrCrossRoute {
   cashLockedPercent: number;
   tdsVerified: boolean;
   topOfBookDepthInr: number | null;
+  fillableDepthInr: number | null;
+  sizedNetEdgePercent: number | null;
+  targetLegInr: number;
   observedAt: number;
 }
 
@@ -185,5 +188,7 @@ export interface InrCrossShadowResponse {
     routes: InrCrossRoute[];
     recentConfirmed: InrCrossRoute[];
     bestConfirmedNetEdgePercent: number | null;
+    bestSizedNetEdgePercent: number | null;
+    targetLegInr: number;
   };
 }
