@@ -113,7 +113,123 @@ export function BotOverviewPanels({runtime}: {runtime: Runtime}) {
           <CoinsPanel inventory={inventory} />
         </div>
       </div>
+
+      <MissingCoinsPanel runtime={runtime} />
     </div>
+  );
+}
+
+interface MissingCoin {
+  key: string;
+  asset: string;
+  exchange: string;
+  side: "SELL" | "BUY";
+  required: number;
+  available: number | null;
+  routes: string[];
+  bestNet: number;
+  passedGate: boolean;
+  lastSeenAt: number | null;
+}
+
+/**
+ * Every studied route whose own funding check fails, folded by the coin and
+ * venue it is missing. SELL-side gaps are base coins the account must
+ * already hold (never auto-bought); BUY-side gaps are quote balance the
+ * Capital Manager may top up. Ranked so the coin that would unlock the
+ * best recently-seen edge comes first.
+ */
+function collectMissingCoins(runtime: Runtime): MissingCoin[] {
+  const byKey = new Map<string, MissingCoin>();
+  const gate = runtime.policy.minimumCurrentNetProfitPercent;
+
+  for (const route of runtime.capitalStudy.routes) {
+    const funding = route.funding;
+    if (!funding) continue;
+    const net = route.latestNetProfitPercent ?? Number.NEGATIVE_INFINITY;
+    const gaps: Array<Omit<MissingCoin, "key" | "routes" | "bestNet" | "passedGate" | "lastSeenAt">> = [];
+
+    if (!funding.sellSufficient && funding.sellRequired !== null) {
+      gaps.push({asset: funding.sellAsset, exchange: funding.sellExchange, side: "SELL", required: funding.sellRequired, available: funding.sellAvailable});
+    }
+    if (!funding.buySufficient && funding.buyRequired !== null) {
+      gaps.push({asset: funding.buyAsset, exchange: funding.buyExchange, side: "BUY", required: funding.buyRequired, available: funding.buyAvailable});
+    }
+
+    for (const gap of gaps) {
+      const key = `${gap.exchange}|${gap.asset}`;
+      const existing = byKey.get(key);
+      const routeLabel = `${route.market.replace(/USDT$/, "")} ${route.buyExchange.slice(0, 3)}→${route.sellExchange.slice(0, 3)}`;
+      if (existing) {
+        existing.required = Math.max(existing.required, gap.required);
+        existing.routes.push(routeLabel);
+        existing.bestNet = Math.max(existing.bestNet, net);
+        existing.passedGate ||= net >= gate;
+        existing.lastSeenAt = Math.max(existing.lastSeenAt ?? 0, route.latestObservedAt ?? 0) || null;
+      } else {
+        byKey.set(key, {...gap, key, routes: [routeLabel], bestNet: net, passedGate: net >= gate, lastSeenAt: route.latestObservedAt ?? null});
+      }
+    }
+  }
+
+  return [...byKey.values()].sort((first, second) => second.bestNet - first.bestNet);
+}
+
+function MissingCoinsPanel({runtime}: {runtime: Runtime}) {
+  const missing = collectMissingCoins(runtime);
+  const legInr = runtime.policy.preferredCapitalPerLegInr;
+
+  return (
+    <section className="panel min-w-0">
+      <PanelHeader
+        title={<>Missing coins <span className="ml-2 text-text-primary">{missing.length}</span></>}
+        aside={<span>what blocks studied routes · one ₹{legInr} leg each</span>}
+      />
+      {missing.length === 0 ? (
+        <p className="p-5 text-xs text-text-muted">Every studied route is funded on both legs.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[40rem] text-left text-xs">
+            <thead>
+              <tr className="border-b border-border-default">
+                <th className="px-5 py-3 font-normal">Coin</th>
+                <th className="px-3 py-3 font-normal">Needed on</th>
+                <th className="px-3 py-3 text-right font-normal">Need</th>
+                <th className="px-3 py-3 text-right font-normal">Have</th>
+                <th className="px-3 py-3 font-normal">Unlocks</th>
+                <th className="px-3 py-3 text-right font-normal">Best net</th>
+                <th className="px-5 py-3 text-right font-normal">Seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {missing.map((coin) => (
+                <tr key={coin.key} className="border-b border-border-default/60">
+                  <td className="px-5 py-2.5 font-mono text-text-primary">
+                    {coin.asset}
+                    <span className={`ml-2 px-1.5 py-0.5 text-[10px] ${coin.side === "SELL" ? "bg-red-400/15 text-red-300" : "bg-cyan-300/15 text-cyan-300"}`}>{coin.side === "SELL" ? "SELL LEG" : "BUY LEG"}</span>
+                  </td>
+                  <td className="px-3 py-2.5 font-mono uppercase text-text-muted">{coin.exchange}</td>
+                  <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-primary">{formatQuantity(coin.required)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono tabular-nums text-amber-300">{coin.available === null ? "none" : formatQuantity(coin.available)}</td>
+                  <td className="px-3 py-2.5 font-mono text-[11px] text-text-muted">
+                    {coin.routes.slice(0, 2).join(", ")}
+                    {coin.routes.length > 2 ? ` +${coin.routes.length - 2}` : ""}
+                  </td>
+                  <td className={`px-3 py-2.5 text-right font-mono tabular-nums ${coin.passedGate ? "text-emerald-300" : "text-text-primary"}`}>
+                    {Number.isFinite(coin.bestNet) ? `${coin.bestNet.toFixed(3)}%` : "—"}
+                    {coin.passedGate ? <span className="ml-1" title="Cleared the net gate">✓</span> : null}
+                  </td>
+                  <td className="px-5 py-2.5 text-right font-mono text-text-muted">{coin.lastSeenAt ? formatAgo(coin.lastSeenAt) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="border-t border-border-default px-5 py-3 text-[11px] text-text-muted">
+            SELL-leg coins must already sit on that exchange; the Capital Manager never buys base coins. ✓ = the route's latest edge cleared the {runtime.policy.minimumCurrentNetProfitPercent.toFixed(2)}% gate.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }
 

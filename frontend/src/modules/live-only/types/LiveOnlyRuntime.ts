@@ -93,6 +93,20 @@ export interface LiveOnlyRuntimeResponse {
         effectiveMinimumCurrentNetProfitPercent: number;
         latestNetProfitPercent: number | null;
         latestEvidenceAgeMs: number | null;
+        latestObservedAt: number | null;
+        funding?: {
+          buyExchange: string;
+          buyAsset: string;
+          buyRequired: number | null;
+          buyAvailable: number | null;
+          buySufficient: boolean;
+          sellExchange: string;
+          sellAsset: string;
+          sellRequired: number | null;
+          sellAvailable: number | null;
+          sellShortfall: number | null;
+          sellSufficient: boolean;
+        };
         recommendation: string;
         recommendationDetail: string;
         safety: {
