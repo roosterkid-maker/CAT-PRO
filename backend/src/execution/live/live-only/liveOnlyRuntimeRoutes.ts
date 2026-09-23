@@ -43,6 +43,14 @@ import {
   readConfirmationPhrase,
 } from "../routes/executionSafetyMetadata";
 
+import {
+  normalizedInventorySnapshotService,
+} from "../../../rebalancing/services/NormalizedInventorySnapshotService";
+
+import {
+  marketCache,
+} from "../../../services/cache.service";
+
 const router =
   Router();
 
@@ -198,6 +206,93 @@ router.get(
                   ),
             now,
           }),
+    });
+  },
+);
+
+/*
+ * Read-only wallet summary for the operator dashboard: per-exchange valued
+ * totals and the held assets behind them, from the same normalized
+ * inventory truth the runner's pre-fundable check and the Capital Manager
+ * use. The CoinDCX USDTINR last price is included only so the dashboard can
+ * show an INR estimate; it is null when that quote is not cached. No
+ * exchange I/O happens here - it reads already-synchronized snapshots.
+ */
+router.get(
+  "/inventory",
+  (
+    _request,
+    response,
+  ) => {
+    const snapshot =
+      normalizedInventorySnapshotService
+        .getSnapshot();
+    const usdtInr =
+      marketCache.get(
+        "coindcx",
+        "USDTINR",
+      )?.lastPrice ??
+      null;
+
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    response.json({
+      success:
+        true,
+      data: {
+        generatedAt:
+          snapshot.generatedAt,
+        state:
+          snapshot.state,
+        usdtInr:
+          usdtInr !== null &&
+          Number.isFinite(usdtInr) &&
+          usdtInr > 0
+            ? usdtInr
+            : null,
+        knownTotalValueUsdt:
+          snapshot.totals.knownTotalValueUsdt,
+        unavailableValuations:
+          snapshot.totals.unavailableValuations,
+        exchanges:
+          snapshot.exchanges.map(
+            (exchange) => ({
+              exchange:
+                exchange.exchange,
+              displayName:
+                exchange.displayName,
+              balanceUsableForDecision:
+                exchange.balanceUsableForDecision,
+              lastSynchronizedAt:
+                exchange.lastSynchronizedAt,
+              knownTotalValueUsdt:
+                exchange.totals.knownTotalValueUsdt,
+              assets:
+                exchange.assets
+                  .filter(
+                    (asset) =>
+                      asset.totalBalance > 0,
+                  )
+                  .map(
+                    (asset) => ({
+                      asset:
+                        asset.asset,
+                      totalBalance:
+                        asset.totalBalance,
+                      availableAfterReservations:
+                        asset.availableAfterReservations,
+                      totalValueUsdt:
+                        asset.valuation.totalValueUsdt,
+                      priceUsdt:
+                        asset.valuation.priceUsdt,
+                    }),
+                  ),
+            }),
+          ),
+      },
     });
   },
 );

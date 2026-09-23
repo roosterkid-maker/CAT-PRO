@@ -91,6 +91,8 @@ export interface LiveOnlyRuntimeResponse {
         completedQualificationCycles: number;
         requiredQualificationCycles: number;
         effectiveMinimumCurrentNetProfitPercent: number;
+        latestNetProfitPercent: number | null;
+        latestEvidenceAgeMs: number | null;
         recommendation: string;
         recommendationDetail: string;
         safety: {
@@ -99,5 +101,32 @@ export interface LiveOnlyRuntimeResponse {
         };
       }>;
     };
+  };
+}
+
+export interface LiveOnlyInventoryAsset {
+  asset: string;
+  totalBalance: number;
+  availableAfterReservations: number;
+  totalValueUsdt: number | null;
+  priceUsdt: number | null;
+}
+
+export interface LiveOnlyInventoryResponse {
+  success: boolean;
+  data: {
+    generatedAt: number;
+    state: string;
+    usdtInr: number | null;
+    knownTotalValueUsdt: number;
+    unavailableValuations: number;
+    exchanges: Array<{
+      exchange: string;
+      displayName: string;
+      balanceUsableForDecision: boolean;
+      lastSynchronizedAt: number | null;
+      knownTotalValueUsdt: number;
+      assets: LiveOnlyInventoryAsset[];
+    }>;
   };
 }

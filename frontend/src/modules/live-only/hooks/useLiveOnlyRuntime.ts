@@ -3,6 +3,7 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  fetchLiveOnlyInventory,
   fetchLiveOnlyRuntime,
 } from "../services/liveOnlyRuntimeApi";
 
@@ -19,6 +20,24 @@ export function useLiveOnlyRuntime() {
       2_000,
     staleTime:
       1_000,
+    retry:
+      1,
+  });
+}
+
+export function useLiveOnlyInventory() {
+  return useQuery({
+    queryKey: [
+      "live-only-inventory",
+    ],
+    queryFn: ({signal}) =>
+      fetchLiveOnlyInventory(
+        signal,
+      ),
+    refetchInterval:
+      10_000,
+    staleTime:
+      5_000,
     retry:
       1,
   });

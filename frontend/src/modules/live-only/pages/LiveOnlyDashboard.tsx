@@ -19,6 +19,10 @@ import {
   CentralLiveTriangularSection,
 } from "../components/CentralLiveTriangularSection";
 
+import {
+  BotOverviewPanels,
+} from "../components/BotOverviewPanels";
+
 export default function LiveOnlyDashboard() {
   const runtimeQuery =
     useLiveOnlyRuntime();
@@ -60,7 +64,9 @@ export default function LiveOnlyDashboard() {
     runtime.capitalManager.runner.running;
 
   return (
-    <section className="space-y-6 p-6 xl:p-8">
+    <section className="space-y-4">
+      <BotOverviewPanels runtime={runtime} />
+
       <header className="rounded-2xl border border-emerald-300/25 bg-panel p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
