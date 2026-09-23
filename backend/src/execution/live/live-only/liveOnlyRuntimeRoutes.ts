@@ -51,6 +51,10 @@ import {
   marketCache,
 } from "../../../services/cache.service";
 
+import {
+  getCoinDCXInrCrossCurrencyShadowReport,
+} from "../../../strategies/inr-cross-currency/CoinDCXInrCrossCurrencyShadowService";
+
 const router =
   Router();
 
@@ -354,6 +358,46 @@ router.get(
           unpricedAssets,
         exchanges,
       },
+    });
+  },
+);
+
+/*
+ * Shadow-only CoinDCX INR <-> USDT cross-currency study. Read-only report;
+ * the study has no order, balance or transfer authority.
+ */
+router.get(
+  "/inr-shadow",
+  (
+    _request,
+    response,
+  ) => {
+    const report =
+      getCoinDCXInrCrossCurrencyShadowReport();
+
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+
+    if (
+      !report
+    ) {
+      response.status(503).json({
+        success:
+          false,
+        message:
+          "INR cross-currency shadow study has not started (CoinDCX market data not connected yet).",
+      });
+
+      return;
+    }
+
+    response.json({
+      success:
+        true,
+      data:
+        report,
     });
   },
 );

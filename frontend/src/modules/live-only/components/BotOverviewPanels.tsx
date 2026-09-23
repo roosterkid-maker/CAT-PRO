@@ -18,6 +18,7 @@ import {
 } from "@/modules/strategies/hooks/useStrategies";
 
 import {
+  useInrCrossShadow,
   useLiveOnlyInventory,
 } from "../hooks/useLiveOnlyRuntime";
 
@@ -115,7 +116,111 @@ export function BotOverviewPanels({runtime}: {runtime: Runtime}) {
       </div>
 
       <MissingCoinsPanel runtime={runtime} />
+
+      <InrShadowPanel />
     </div>
+  );
+}
+
+function InrShadowPanel() {
+  const query = useInrCrossShadow();
+  const report = query.data?.data;
+  const [view, setView] = useState<"live" | "log">("live");
+  const rows = view === "live" ? report?.routes ?? [] : report?.recentConfirmed ?? [];
+
+  return (
+    <section className="panel min-w-0">
+      <PanelHeader
+        title={<>INR routes <span className="ml-2 border border-cyan-300/40 px-1.5 py-0.5 text-[10px] text-cyan-300">SHADOW · no orders</span></>}
+        aside={report ? (
+          <span>
+            USDT/INR {report.conversion.bid ?? "—"}/{report.conversion.ask ?? "—"}
+            <span className="mx-2 text-text-muted/50">·</span>
+            {report.coverage.pairedWithUsdtVenue} paired · {report.coverage.executableInrBooks} books
+          </span>
+        ) : null}
+      />
+      {query.isPending ? (
+        <p className="p-5 text-xs text-text-muted">Loading INR study…</p>
+      ) : !report ? (
+        <p className="p-5 text-xs text-amber-300">INR study not running yet (waits for CoinDCX market data).</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-default px-5 py-3">
+            <div className="flex gap-4">
+              {(["live", "log"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setView(option)}
+                  data-active={view === option}
+                  className="border-b-2 border-transparent pb-1 font-mono text-[11px] tracking-[0.12em] text-text-muted data-[active=true]:border-emerald-400 data-[active=true]:text-emerald-300"
+                >
+                  {option === "live" ? "BEST NOW" : `CONFIRMED LOG (${report.recentConfirmed.length})`}
+                </button>
+              ))}
+            </div>
+            <p className="font-mono text-[11px] text-text-muted">
+              best confirmed net{" "}
+              <span className={report.bestConfirmedNetEdgePercent !== null && report.bestConfirmedNetEdgePercent > 0 ? "text-emerald-300" : "text-text-primary"}>
+                {report.bestConfirmedNetEdgePercent === null ? "—" : `${report.bestConfirmedNetEdgePercent.toFixed(3)}%`}
+              </span>
+              <span className="mx-2 text-text-muted/50">·</span>
+              demand books {report.demandSubscriptions.accepted}/{report.demandSubscriptions.requested}
+            </p>
+          </div>
+          {!report.conversion.executable ? (
+            <p className="p-5 text-xs text-amber-300">USDT/INR book is not executable right now, so no INR route is evaluated.</p>
+          ) : rows.length === 0 ? (
+            <p className="p-5 text-xs text-text-muted">{view === "live" ? "No INR↔USDT route priced yet." : "No confirmed positive-net INR route yet. Confirmation needs a live CoinDCX INR book."}</p>
+          ) : (
+            <div className="max-h-[24rem] overflow-auto">
+              <table className="w-full min-w-[46rem] text-left text-xs">
+                <thead>
+                  <tr className="border-b border-border-default">
+                    <th className="px-5 py-3 font-normal">Coin</th>
+                    <th className="px-3 py-3 font-normal">Direction</th>
+                    <th className="px-3 py-3 font-normal">Evidence</th>
+                    <th className="px-3 py-3 text-right font-normal">Gross</th>
+                    <th className="px-3 py-3 text-right font-normal">Fees</th>
+                    <th className="px-3 py-3 text-right font-normal">Net</th>
+                    <th className="px-3 py-3 text-right font-normal">TDS lock</th>
+                    <th className="px-3 py-3 text-right font-normal">Depth</th>
+                    <th className="px-5 py-3 text-right font-normal">Seen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((route) => (
+                    <tr key={`${route.routeKey}-${route.observedAt}`} className="border-b border-border-default/60">
+                      <td className="px-5 py-2.5 font-mono text-text-primary">{route.coin}</td>
+                      <td className="px-3 py-2.5 font-mono text-[11px] text-text-muted">
+                        {route.direction === "BUY_INR_SELL_USDT" ? `buy cdx INR → sell ${route.usdtVenue}` : `buy ${route.usdtVenue} → sell cdx INR`}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className={`px-1.5 py-0.5 font-mono text-[10px] ${route.confirmed ? "bg-emerald-400/15 text-emerald-300" : "bg-amber-400/15 text-amber-300"}`}>
+                          {route.confirmed ? "BOOK" : "TICKER"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-primary">{route.grossEdgePercent.toFixed(2)}%</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">−{route.feesPercent.toFixed(2)}%</td>
+                      <td className={`px-3 py-2.5 text-right font-mono tabular-nums ${route.netEdgePercent > 0 ? (route.confirmed ? "text-emerald-300" : "text-amber-300") : "text-text-muted"}`}>
+                        {route.netEdgePercent.toFixed(2)}%
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.cashLockedPercent.toFixed(1)}%</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-muted">{route.topOfBookDepthInr === null ? "—" : `₹${Math.round(route.topOfBookDepthInr).toLocaleString("en-IN")}`}</td>
+                      <td className="px-5 py-2.5 text-right font-mono text-text-muted">{formatAgo(route.observedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="border-t border-border-default px-5 py-3 text-[11px] text-text-muted">
+            Net = gross − both taker fees − one USDT/INR conversion fee. TDS is a recoverable cash lock shown separately. TICKER rows are unconfirmed hints (≥{report.thresholds.nominationGrossEdgePercent}% gross opens a live CoinDCX book); only BOOK rows count. Shadow study: no order can be placed from here.
+          </p>
+        </>
+      )}
+    </section>
   );
 }
 

@@ -147,3 +147,38 @@ export interface LiveOnlyInventoryResponse {
     }>;
   };
 }
+
+export interface InrCrossRoute {
+  routeKey: string;
+  coin: string;
+  inrMarket: string;
+  usdtMarket: string;
+  usdtVenue: string;
+  direction: "BUY_INR_SELL_USDT" | "BUY_USDT_SELL_INR";
+  confirmed: boolean;
+  inrPrice: number;
+  usdtPrice: number;
+  usdtInrRate: number;
+  grossEdgePercent: number;
+  feesPercent: number;
+  netEdgePercent: number;
+  cashLockedPercent: number;
+  topOfBookDepthInr: number | null;
+  observedAt: number;
+}
+
+export interface InrCrossShadowResponse {
+  success: boolean;
+  data: {
+    running: boolean;
+    scans: number;
+    lastScanAt: number | null;
+    conversion: {bid: number | null; ask: number | null; executable: boolean};
+    coverage: {inrMarkets: number; pairedWithUsdtVenue: number; executableInrBooks: number};
+    thresholds: {nominationGrossEdgePercent: number; maximumQuoteAgeMs: number};
+    demandSubscriptions: {requested: number; accepted: number; rejected: number};
+    routes: InrCrossRoute[];
+    recentConfirmed: InrCrossRoute[];
+    bestConfirmedNetEdgePercent: number | null;
+  };
+}

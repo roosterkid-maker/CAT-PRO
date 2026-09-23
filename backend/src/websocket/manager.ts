@@ -43,6 +43,11 @@ import {
 } from "../exchanges/coindcx/CoinDCXDemandSubscriptionService";
 
 import {
+  CoinDCXInrCrossCurrencyShadowService,
+  registerCoinDCXInrCrossCurrencyShadowService,
+} from "../strategies/inr-cross-currency/CoinDCXInrCrossCurrencyShadowService";
+
+import {
   coinDCXProtectedRestOrderBookService,
 } from "../exchanges/coindcx/CoinDCXProtectedRestOrderBookService";
 
@@ -291,6 +296,12 @@ class WebSocketManager {
       this.coinDCXOrderBook,
     );
 
+  /* Shadow-only INR<->USDT study; shares the adapter's demand-book budget. */
+  private readonly coinDCXInrCrossShadow =
+    new CoinDCXInrCrossCurrencyShadowService(
+      this.coinDCXOrderBook,
+    );
+
   /*
    * Version 12.5
    *
@@ -506,6 +517,13 @@ class WebSocketManager {
       this.coinDCXDemandSubscriptions
         .start();
 
+      registerCoinDCXInrCrossCurrencyShadowService(
+        this.coinDCXInrCrossShadow,
+      );
+
+      this.coinDCXInrCrossShadow
+        .start();
+
       /*
        * Version 12.5 recovery starts after
        * demand subscriptions are available.
@@ -606,6 +624,9 @@ class WebSocketManager {
        * the CoinDCX order-book adapter.
        */
       this.opportunityRecovery
+        .stop();
+
+      this.coinDCXInrCrossShadow
         .stop();
 
       this.coinDCXDemandSubscriptions

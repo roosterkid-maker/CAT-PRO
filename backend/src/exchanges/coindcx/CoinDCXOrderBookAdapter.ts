@@ -675,9 +675,14 @@ export class CoinDCXOrderBookAdapter {
       return false;
     }
 
+    // INR books are allowed so the INR cross-currency shadow study can
+    // confirm a ticker-level edge against an executable book. Anything
+    // else (BTC/ETH-quoted pairs) still has no consumer.
     if (
       metadata.quoteCurrency !==
-      "USDT"
+        "USDT" &&
+      metadata.quoteCurrency !==
+        "INR"
     ) {
       return false;
     }
