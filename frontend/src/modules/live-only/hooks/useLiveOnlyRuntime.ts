@@ -3,7 +3,7 @@ import {
 } from "@tanstack/react-query";
 
 import {
-  fetchInrCrossShadow,
+  fetchInrScanner,
   fetchLiveOnlyInventory,
   fetchLiveOnlyRuntime,
 } from "../services/liveOnlyRuntimeApi";
@@ -44,19 +44,19 @@ export function useLiveOnlyInventory() {
   });
 }
 
-export function useInrCrossShadow() {
+export function useInrScanner() {
   return useQuery({
     queryKey: [
-      "live-only-inr-shadow",
+      "live-only-inr-scanner",
     ],
     queryFn: ({signal}) =>
-      fetchInrCrossShadow(
+      fetchInrScanner(
         signal,
       ),
     refetchInterval:
-      3_000,
+      1_500,
     staleTime:
-      2_000,
+      1_000,
     retry:
       1,
   });

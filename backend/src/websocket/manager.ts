@@ -43,9 +43,9 @@ import {
 } from "../exchanges/coindcx/CoinDCXDemandSubscriptionService";
 
 import {
-  CoinDCXInrCrossCurrencyShadowService,
-  registerCoinDCXInrCrossCurrencyShadowService,
-} from "../strategies/inr-cross-currency/CoinDCXInrCrossCurrencyShadowService";
+  InrArbitrageScannerService,
+  registerInrArbitrageScanner,
+} from "../strategies/inr-arbitrage/InrArbitrageScannerService";
 
 import {
   coinDCXProtectedRestOrderBookService,
@@ -296,9 +296,9 @@ class WebSocketManager {
       this.coinDCXOrderBook,
     );
 
-  /* Shadow-only INR<->USDT study; shares the adapter's demand-book budget. */
-  private readonly coinDCXInrCrossShadow =
-    new CoinDCXInrCrossCurrencyShadowService(
+  /* Scan-only INR<->USDT / INR<->INR scanner; shares the CoinDCX demand-book budget. */
+  private readonly inrArbitrageScanner =
+    new InrArbitrageScannerService(
       this.coinDCXOrderBook,
     );
 
@@ -517,11 +517,11 @@ class WebSocketManager {
       this.coinDCXDemandSubscriptions
         .start();
 
-      registerCoinDCXInrCrossCurrencyShadowService(
-        this.coinDCXInrCrossShadow,
+      registerInrArbitrageScanner(
+        this.inrArbitrageScanner,
       );
 
-      this.coinDCXInrCrossShadow
+      this.inrArbitrageScanner
         .start();
 
       /*
@@ -626,7 +626,7 @@ class WebSocketManager {
       this.opportunityRecovery
         .stop();
 
-      this.coinDCXInrCrossShadow
+      this.inrArbitrageScanner
         .stop();
 
       this.coinDCXDemandSubscriptions
@@ -895,11 +895,18 @@ class WebSocketManager {
       ].join(",") || "NONE"} | rotating=${discoveryWindow.explorationMarkets.join(",") || "NONE"} | ranked=${this.unoCoinCoinDCXPriorityMarkets.length}`,
     );
 
+    // INR scanner nominations lead the bounded UnoCoin REST depth set.
     const sharedMarketCandidates =
-      this.buildExecutableCrossExchangeCandidates(
-        this.unoCoinMarketData
-          .name,
-      );
+      this.uniqueMarketsInOrder([
+        ...this.inrArbitrageScanner
+          .getDepthNominations(
+            "unocoin",
+          ),
+        ...this.buildExecutableCrossExchangeCandidates(
+          this.unoCoinMarketData
+            .name,
+        ),
+      ]);
 
     this.dynamicCoverageMetrics
       .lastUnoCoinCandidateCount =
@@ -986,9 +993,17 @@ class WebSocketManager {
       .lastCoinSwitchCandidateCount =
       sharedMarketCandidates.length;
 
+    // INR scanner nominations lead, so promising CoinSwitch INR markets get
+    // real depth inside the same bounded subscription window.
     const requestedMarkets =
       this.buildCoinSwitchAdaptiveWindow(
-        sharedMarketCandidates,
+        this.uniqueMarketsInOrder([
+          ...this.inrArbitrageScanner
+            .getDepthNominations(
+              "coinswitch",
+            ),
+          ...sharedMarketCandidates,
+        ]),
       );
 
     const signature =

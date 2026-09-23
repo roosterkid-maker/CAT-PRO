@@ -23,6 +23,10 @@ import {
   BotOverviewPanels,
 } from "../components/BotOverviewPanels";
 
+import {
+  InrScannerPanel,
+} from "../components/InrScannerPanel";
+
 export default function LiveOnlyDashboard() {
   const runtimeQuery =
     useLiveOnlyRuntime();
@@ -65,6 +69,8 @@ export default function LiveOnlyDashboard() {
 
   return (
     <section className="space-y-4">
+      <InrScannerPanel />
+
       <BotOverviewPanels runtime={runtime} />
 
       <header className="rounded-2xl border border-emerald-300/25 bg-panel p-6">

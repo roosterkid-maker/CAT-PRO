@@ -148,7 +148,9 @@ export interface LiveOnlyInventoryResponse {
   };
 }
 
-export interface InrCrossRoute {
+export type InrEvidenceTier = "BOOK" | "QUOTE" | "TICKER";
+
+export interface InrScannedRoute {
   routeKey: string;
   kind: "INR_USDT" | "INR_INR";
   coin: string;
@@ -156,39 +158,87 @@ export interface InrCrossRoute {
   buyMarket: string;
   sellVenue: string;
   sellMarket: string;
+  conversionVenue: string | null;
+  usdtInrRate: number | null;
+  evidence: InrEvidenceTier;
+  buyEvidence: InrEvidenceTier;
+  sellEvidence: InrEvidenceTier;
   buyPriceInr: number;
   sellPriceInr: number;
-  usdtInrRate: number | null;
-  confirmed: boolean;
   grossEdgePercent: number;
   feesPercent: number;
   netEdgePercent: number;
   cashLockedPercent: number;
   tdsVerified: boolean;
-  topOfBookDepthInr: number | null;
-  profitableDepthInr: number | null;
-  sizedNetEdgePercent: number | null;
-  targetLegInr: number;
+  depthAtThresholdInr: number | null;
+  averageNetAtDepthPercent: number | null;
+  minimumOrderInr: number | null;
+  suspect: boolean;
+  qualifies: boolean;
   observedAt: number;
 }
 
-export interface InrCrossShadowResponse {
+export interface InrOpportunityWindow {
+  id: string;
+  routeKey: string;
+  kind: "INR_USDT" | "INR_INR";
+  coin: string;
+  buyVenue: string;
+  buyMarket: string;
+  sellVenue: string;
+  sellMarket: string;
+  startedAt: number;
+  lastSeenAt: number;
+  endedAt: number | null;
+  durationMs: number;
+  scans: number;
+  peakNetPercent: number;
+  lastNetPercent: number;
+  peakDepthInr: number;
+  minimumOrderInr: number | null;
+  tdsVerified: boolean;
+  alertedAt: number | null;
+}
+
+export interface InrCoinPersistence {
+  coin: string;
+  windows: number;
+  activeWindows: number;
+  longestMs: number;
+  averageMs: number;
+  totalMs: number;
+  bestNetPercent: number;
+  lastSeenAt: number;
+  routes: string[];
+}
+
+export interface InrScannerResponse {
   success: boolean;
   data: {
     running: boolean;
     scans: number;
     lastScanAt: number | null;
-    conversion: {bid: number | null; ask: number | null; executable: boolean};
-    coverage: {
-      venues: Record<string, {inrMarkets: number; executableInrBooks: number; pairedWithUsdtVenue: number}>;
-      inrInrPairs: number;
+    lastScanDurationMs: number | null;
+    config: {
+      minimumNetPercent: number;
+      nearMissNetPercent: number;
+      suspectGrossPercent: number;
+      windowGraceMs: number;
+      alertAfterMs: number;
+      maximumTickerAgeMs: number;
+      maximumBookAgeMs: Record<string, number>;
+      scanIntervalMs: number;
     };
-    thresholds: {nominationGrossEdgePercent: number; maximumBookAgeMs: Record<string, number>};
-    demandSubscriptions: {requested: number; accepted: number; rejected: number};
-    routes: InrCrossRoute[];
-    recentConfirmed: InrCrossRoute[];
-    bestConfirmedNetEdgePercent: number | null;
-    bestSizedNetEdgePercent: number | null;
-    targetLegInr: number;
+    venues: Record<string, {inrMarkets: number; inrBooks: number; inrQuotes: number; usdtBooks: number}>;
+    conversion: Array<{venue: string; market: string; bid: number | null; ask: number | null; evidence: InrEvidenceTier | null}>;
+    routesEvaluated: number;
+    opportunities: InrScannedRoute[];
+    nearMisses: InrScannedRoute[];
+    activeWindows: InrOpportunityWindow[];
+    recentWindows: InrOpportunityWindow[];
+    coinPersistence: InrCoinPersistence[];
+    alerts: InrOpportunityWindow[];
+    depthNominations: Record<string, string[]>;
+    minimumOrderCoverage: {known: number; pending: number};
   };
 }

@@ -3,7 +3,7 @@ import {
 } from "@/api/client";
 
 import type {
-  InrCrossShadowResponse,
+  InrScannerResponse,
   LiveOnlyInventoryResponse,
   LiveOnlyRuntimeResponse,
 } from "../types/LiveOnlyRuntime";
@@ -36,12 +36,12 @@ export async function fetchLiveOnlyInventory(
   return response.data;
 }
 
-export async function fetchInrCrossShadow(
+export async function fetchInrScanner(
   signal?: AbortSignal,
-): Promise<InrCrossShadowResponse> {
+): Promise<InrScannerResponse> {
   const response =
-    await api.get<InrCrossShadowResponse>(
-      "/api/live-only/inr-shadow",
+    await api.get<InrScannerResponse>(
+      "/api/live-only/inr-scanner",
       {
         signal,
       },

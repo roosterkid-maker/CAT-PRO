@@ -52,8 +52,8 @@ import {
 } from "../../../services/cache.service";
 
 import {
-  getCoinDCXInrCrossCurrencyShadowReport,
-} from "../../../strategies/inr-cross-currency/CoinDCXInrCrossCurrencyShadowService";
+  getInrArbitrageScanner,
+} from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
 
 const router =
   Router();
@@ -363,17 +363,20 @@ router.get(
 );
 
 /*
- * Shadow-only CoinDCX INR <-> USDT cross-currency study. Read-only report;
- * the study has no order, balance or transfer authority.
+ * Scan-only INR arbitrage scanner (INR<->USDT, INR<->INR across CoinDCX,
+ * UnoCoin, CoinSwitch, Binance, Bybit). Read-only report; the scanner has
+ * no order, balance or transfer authority.
  */
 router.get(
-  "/inr-shadow",
+  "/inr-scanner",
   (
     _request,
     response,
   ) => {
     const report =
-      getCoinDCXInrCrossCurrencyShadowReport();
+      getInrArbitrageScanner()
+        ?.getReport() ??
+      null;
 
     response.setHeader(
       "Cache-Control",
@@ -387,7 +390,7 @@ router.get(
         success:
           false,
         message:
-          "INR cross-currency shadow study has not started (CoinDCX market data not connected yet).",
+          "INR arbitrage scanner has not started (exchange market data not connected yet).",
       });
 
       return;
