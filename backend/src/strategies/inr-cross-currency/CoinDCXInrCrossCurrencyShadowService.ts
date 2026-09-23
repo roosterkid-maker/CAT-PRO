@@ -121,8 +121,11 @@ export interface InrRoute {
   readonly tdsVerified: boolean;
   /** Smaller top-of-book side, in INR; null unless every leg has depth. */
   readonly topOfBookDepthInr: number | null;
-  /** INR both legs can fill across their full published depth. */
-  readonly fillableDepthInr: number | null;
+  /**
+   * INR (buy-side notional) that can be matched across both books while
+   * every marginal unit still clears the route's fees.
+   */
+  readonly profitableDepthInr: number | null;
   /** Net edge at the full target leg size, walked through both books. */
   readonly sizedNetEdgePercent: number | null;
   readonly targetLegInr: number;
@@ -150,8 +153,39 @@ export function averageFillPrice(
   return null;
 }
 
-function totalQuantity(levels: readonly OrderBookLevel[]): number {
-  return levels.reduce((sum, level) => sum + (level.quantity > 0 ? level.quantity : 0), 0);
+/**
+ * Walks best asks against best bids in lockstep and sums buy-side INR
+ * notional while the marginal unit's edge after `feesPercent` stays
+ * positive - the depth an arbitrage can actually use, as opposed to the
+ * total resting size (which counts levels no route would ever take).
+ */
+export function profitableDepthInr(
+  asks: readonly OrderBookLevel[],
+  bids: readonly OrderBookLevel[],
+  buyToInr: number,
+  sellToInr: number,
+  feesPercent: number,
+): number {
+  let askIndex = 0;
+  let bidIndex = 0;
+  let askLeft = asks[0]?.quantity ?? 0;
+  let bidLeft = bids[0]?.quantity ?? 0;
+  let notional = 0;
+
+  while (askIndex < asks.length && bidIndex < bids.length) {
+    const askInr = asks[askIndex].price * buyToInr;
+    const bidInr = bids[bidIndex].price * sellToInr;
+    if (!(askInr > 0) || ((bidInr - askInr) / askInr) * 100 - feesPercent <= 0) break;
+
+    const take = Math.min(askLeft, bidLeft);
+    notional += take * askInr;
+    askLeft -= take;
+    bidLeft -= take;
+    if (askLeft <= 0) askLeft = asks[++askIndex]?.quantity ?? 0;
+    if (bidLeft <= 0) bidLeft = bids[++bidIndex]?.quantity ?? 0;
+  }
+
+  return notional;
 }
 
 export interface InrRouteShadowReport {
@@ -578,9 +612,9 @@ export class CoinDCXInrCrossCurrencyShadowService {
     feePercents: readonly number[],
     withholdingPercents: readonly number[],
     now: number,
-  ): Pick<InrRoute, "fillableDepthInr" | "sizedNetEdgePercent" | "targetLegInr"> {
+  ): Pick<InrRoute, "profitableDepthInr" | "sizedNetEdgePercent" | "targetLegInr"> {
     const targetLegInr = this.dependencies.getTargetLegInr();
-    const none = {fillableDepthInr: null, sizedNetEdgePercent: null, targetLegInr};
+    const none = {profitableDepthInr: null, sizedNetEdgePercent: null, targetLegInr};
     if (!buy.book || !sell.book) return none;
 
     const buyBook = this.freshBook(buy, now);
@@ -593,7 +627,6 @@ export class CoinDCXInrCrossCurrencyShadowService {
 
     const bestBuyInr = asks[0].price * buyToInr;
     const quantity = targetLegInr / bestBuyInr;
-    const fillableDepthInr = Math.min(totalQuantity(asks), totalQuantity(bids)) * bestBuyInr;
     const averageBuy = averageFillPrice(asks, quantity);
     const averageSell = averageFillPrice(bids, quantity);
     const sized =
@@ -606,7 +639,11 @@ export class CoinDCXInrCrossCurrencyShadowService {
           })
         : null;
 
-    return {fillableDepthInr, sizedNetEdgePercent: sized?.netEdgePercent ?? null, targetLegInr};
+    return {
+      profitableDepthInr: profitableDepthInr(asks, bids, buyToInr, sellToInr, feePercents.reduce((sum, fee) => sum + fee, 0)),
+      sizedNetEdgePercent: sized?.netEdgePercent ?? null,
+      targetLegInr,
+    };
   }
 
   private freshBook(leg: Leg, now: number): OrderBook | null {

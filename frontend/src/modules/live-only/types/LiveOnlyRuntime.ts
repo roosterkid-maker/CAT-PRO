@@ -166,7 +166,7 @@ export interface InrCrossRoute {
   cashLockedPercent: number;
   tdsVerified: boolean;
   topOfBookDepthInr: number | null;
-  fillableDepthInr: number | null;
+  profitableDepthInr: number | null;
   sizedNetEdgePercent: number | null;
   targetLegInr: number;
   observedAt: number;

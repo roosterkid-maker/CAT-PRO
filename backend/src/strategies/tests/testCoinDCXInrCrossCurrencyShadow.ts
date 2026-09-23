@@ -12,6 +12,7 @@ import {
   CoinDCXInrCrossCurrencyShadowService,
   averageFillPrice,
   evaluateInrRoute,
+  profitableDepthInr,
 } from "../inr-cross-currency/CoinDCXInrCrossCurrencyShadowService";
 
 const NOW = 1_000_000;
@@ -73,6 +74,11 @@ function testAverageFillPrice(): void {
   assert.equal(averageFillPrice(levels, 2), 10);
   assert.equal(averageFillPrice(levels, 4), 10.5);
   assert.equal(averageFillPrice(levels, 5), null, "insufficient depth");
+
+  // 2@100 vs bids 2@103 then 5@100.5, 1% fees: first 2 units clear (3%-1%),
+  // then 100.5/100 = 0.5% < 1% stops the walk.
+  assert.equal(profitableDepthInr([{price: 100, quantity: 2}, {price: 101, quantity: 5}], [{price: 103, quantity: 2}, {price: 100.5, quantity: 5}], 1, 1, 1), 200);
+  assert.equal(profitableDepthInr([{price: 100, quantity: 2}], [{price: 100.5, quantity: 2}], 1, 1, 1), 0);
 }
 
 function testSizedEdgeWalksDepth(): void {
@@ -96,9 +102,9 @@ function testSizedEdgeWalksDepth(): void {
   assert.equal(route.targetLegInr, 600);
   // 3 coins: 1@200 + 2@210 = avg 206.67 -> gross ~-0.32%, net negative.
   assert.ok(route.sizedNetEdgePercent !== null && route.sizedNetEdgePercent < 0, `sized edge ${route.sizedNetEdgePercent}`);
-  assert.ok(route.fillableDepthInr !== null && Math.abs(route.fillableDepthInr - 1_200) < 1e-6, `fillable ${route.fillableDepthInr}`);
+  assert.ok(route.profitableDepthInr !== null && Math.abs(route.profitableDepthInr - 200) < 1e-6, `profitable depth ${route.profitableDepthInr}`);
 
-  // Fillable = 6 coins on the thinner (UnoCoin ask) side x best buy Rs 200.
+  // Only the 1 coin at 200 clears fees against the 206 bid; the 210 level does not.
   // A stale book is not trusted for sizing.
   books.set("coindcx|NEARINR", {...books.get("coindcx|NEARINR")!, timestamp: NOW - 6_000});
   service.scan();
