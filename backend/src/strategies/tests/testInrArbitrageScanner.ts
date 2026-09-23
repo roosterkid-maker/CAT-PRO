@@ -16,6 +16,10 @@ import {
   type OpportunityWindow,
 } from "../inr-arbitrage/InrArbitrageScannerService";
 
+import {
+  CoinSwitchInrDepthPoller,
+} from "../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
+
 const CONFIG: InrScannerConfig = {
   minimumNetPercent: 3,
   nearMissNetPercent: 1,
@@ -23,7 +27,7 @@ const CONFIG: InrScannerConfig = {
   windowGraceMs: 3_000,
   alertAfterMs: 2_000,
   maximumTickerAgeMs: 60_000,
-  maximumBookAgeMs: {coindcx: 5_000, binance: 5_000, bybit: 5_000, coinswitch: 5_000, unocoin: 20_000},
+  maximumBookAgeMs: {coindcx: 5_000, binance: 5_000, bybit: 5_000, coinswitch: 5_000, "coinswitch:INR": 12_000, unocoin: 20_000},
   scanIntervalMs: 1_000,
 };
 
@@ -179,7 +183,7 @@ function testGatesAndEvidence(): void {
   assert.equal(report.opportunities.length, 0);
   const hinted = report.nearMisses.find((route) => route.coin === "HNT" && route.sellVenue === "coinswitch")!;
   assert.equal(hinted.evidence, "QUOTE");
-  assert.deepEqual(hint.service.getDepthNominations("coinswitch"), ["HNTINR"]);
+  assert.deepEqual(hint.service.getDepthNominations("coinswitch"), ["HNT_INR"], "raw venue spelling");
 
   // UnoCoin copying last into bid == ask is not a two-sided quote.
   const flat = harness();
@@ -207,8 +211,70 @@ function testInrUsdtWithConversionFallback(): void {
   assert.equal(report.safety.orderSubmissionAllowed, false);
 }
 
+function testPolledBookUpgradesQuote(): void {
+  const h = harness();
+  // CoinSwitch INR ticker has prices but no quantities (QUOTE) ...
+  h.put(quote({exchange: "coinswitch", market: "LRC_INR", bestBidPrice: 1.093, bestAskPrice: 1.284, executable: false, source: "bookTicker"}));
+  h.put(quote({exchange: "coindcx", market: "LRCINR", bestBidPrice: 0.94, bestAskPrice: 0.95, bestBidQty: 50_000, bestAskQty: 50_000}));
+  h.book("coindcx", "LRCINR", [[0.95, 50_000]], [[0.94, 50_000]]);
+  h.service.scan();
+  let route = h.service.getReport().nearMisses.find((item) => item.coin === "LRC" && item.sellVenue === "coinswitch")!;
+  assert.equal(route.sellEvidence, "QUOTE");
+  assert.deepEqual(h.service.getDepthNominations("coinswitch"), ["LRC_INR"], "raw venue spelling is nominated");
+
+  // ... until the REST poller publishes a fresh book for it.
+  h.book("coinswitch", "LRC_INR", [[1.284, 14_573.5]], [[1.093, 15_000], [1.078, 23_161]]);
+  h.service.scan();
+  const report = h.service.getReport();
+  route = report.opportunities.find((item) => item.coin === "LRC")!;
+  assert.ok(route, "fresh polled book turns the hint into a real opportunity");
+  assert.equal(route.sellEvidence, "BOOK");
+  assert.ok(route.depthAtThresholdInr !== null && route.depthAtThresholdInr > 30_000);
+  assert.equal(report.venues.coinswitch.inrBooks, 1);
+
+  // A polled book older than the CoinSwitch INR limit (12s) is not trusted.
+  now += 13_000;
+  h.put(quote({exchange: "coinswitch", market: "LRC_INR", bestBidPrice: 1.093, bestAskPrice: 1.284, executable: false, source: "bookTicker"}));
+  h.put(quote({exchange: "coindcx", market: "LRCINR", bestBidPrice: 0.94, bestAskPrice: 0.95, bestBidQty: 50_000, bestAskQty: 50_000}));
+  h.book("coindcx", "LRCINR", [[0.95, 50_000]], [[0.94, 50_000]]);
+  h.service.scan();
+  assert.equal(h.service.getReport().opportunities.length, 0);
+}
+
+async function testCoinSwitchInrDepthPoller(): Promise<void> {
+  let clock = 0;
+  const published: string[] = [];
+  let fail = false;
+  const poller = new CoinSwitchInrDepthPoller(() => ["LRC_INR", "LINK_INR", "BTC_USDT"], {
+    getDepth: async (market) => {
+      if (fail) throw new Error("HTTP 429");
+      return {venue: "coinswitchx", market, bids: [{price: 1, quantity: 1}], asks: [{price: 2, quantity: 1}], timestamp: clock} as never;
+    },
+    publish: (snapshot) => published.push(snapshot.market),
+    now: () => clock,
+  });
+  await poller.tick();
+  await poller.tick();
+  await poller.tick();
+  assert.deepEqual(published, ["LRC_INR", "LINK_INR", "LRC_INR"], "rotates INR nominations only");
+
+  fail = true;
+  for (let i = 0; i < 5; i += 1) await poller.tick();
+  const paused = poller.getDiagnostics();
+  assert.ok(paused.pausedUntil !== null, "pauses after repeated failures");
+  assert.equal(paused.lastError, "HTTP 429");
+  await poller.tick();
+  assert.equal(poller.getDiagnostics().requests, paused.requests, "no requests while paused");
+  fail = false;
+  clock += 61_000;
+  await poller.tick();
+  assert.equal(poller.getDiagnostics().consecutiveFailures, 0);
+  assert.equal(published.length, 4);
+}
+
 testMath();
+testPolledBookUpgradesQuote();
 testRealOpportunityWindowAndAlert();
 testGatesAndEvidence();
 testInrUsdtWithConversionFallback();
-console.log("testInrArbitrageScanner: PASS");
+void testCoinSwitchInrDepthPoller().then(() => console.log("testInrArbitrageScanner: PASS"));

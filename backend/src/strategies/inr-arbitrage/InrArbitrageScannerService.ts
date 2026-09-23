@@ -112,6 +112,9 @@ export function loadInrScannerConfig(): InrScannerConfig {
       binance: 5_000,
       bybit: 5_000,
       coinswitch: 5_000,
+      // CoinSwitch's public socket never streams INR books; they come from
+      // the signed REST depth poller rotating through nominations.
+      "coinswitch:INR": 12_000,
       // UnoCoin books are REST-polled (~14s cadence).
       unocoin: 20_000,
     },
@@ -418,6 +421,8 @@ export class InrArbitrageScannerService {
   private minimumsKnown = 0;
   private minimumsPending = 0;
   private readonly demandExpiry = new Map<string, number>();
+  /** `venue|NORMALIZEDMARKET` -> the venue's own market spelling (e.g. LRC_INR). */
+  private readonly rawMarkets = new Map<string, string>();
   private minimumsCache = new Map<string, {minimumNotional: number | null; minimumQuantity: number | null} | null | undefined>();
 
   constructor(
@@ -511,12 +516,33 @@ export class InrArbitrageScannerService {
         const coin = market.slice(0, -3);
         if (STABLE_COINS.has(coin)) continue;
         venues[venue].inrMarkets += 1;
-        const tier = this.tier(quote, venue, now);
+        this.rawMarkets.set(`${venue}|${market}`, quote.market);
+        let legQuote = quote;
+        let tier = this.tier(quote, venue, now, true);
+        if (tier !== "BOOK") {
+          // A fresh polled book (CoinSwitch REST, UnoCoin REST) upgrades a
+          // quantity-less ticker quote to real BOOK evidence.
+          const book = this.dependencies.getBook(venue, quote.market);
+          const bestBid = book?.bids.reduce<OrderBookLevel | null>((best, level) => (!best || level.price > best.price ? level : best), null) ?? null;
+          const bestAsk = book?.asks.reduce<OrderBookLevel | null>((best, level) => (!best || level.price < best.price ? level : best), null) ?? null;
+          if (book && bestBid && bestAsk && bestAsk.price > bestBid.price && now - book.timestamp <= this.bookAgeLimit(venue, true)) {
+            legQuote = {
+              ...quote,
+              bestBidPrice: bestBid.price,
+              bestBidQty: bestBid.quantity,
+              bestAskPrice: bestAsk.price,
+              bestAskQty: bestAsk.quantity,
+              timestamp: book.timestamp,
+              executable: true,
+            };
+            tier = "BOOK";
+          }
+        }
         if (tier === null) continue;
         if (tier === "BOOK") venues[venue].inrBooks += 1;
         if (tier === "QUOTE") venues[venue].inrQuotes += 1;
         const byVenue = inrLegs.get(coin) ?? new Map<string, Leg>();
-        byVenue.set(venue, {venue, market, quote, tier});
+        byVenue.set(venue, {venue, market, quote: legQuote, tier});
         inrLegs.set(coin, byVenue);
       } else if ((USDT_VENUES as readonly string[]).includes(venue) && market.endsWith("USDT") && market.length > 4) {
         if (this.tier(quote, venue, now) !== "BOOK") continue;
@@ -565,7 +591,10 @@ export class InrArbitrageScannerService {
     this.opportunities = qualifying.slice(0, InrArbitrageScannerService.MAXIMUM_REPORTED_OPPORTUNITIES);
     this.nearMisses = routes
       .filter((route) => !route.qualifies && route.netEdgePercent >= this.config.nearMissNetPercent)
-      .sort((a, b) => TIER_RANK[b.evidence] - TIER_RANK[a.evidence] || b.netEdgePercent - a.netEdgePercent)
+      .sort((a, b) =>
+        Number(a.suspect) - Number(b.suspect) ||
+        TIER_RANK[b.evidence] - TIER_RANK[a.evidence] ||
+        b.netEdgePercent - a.netEdgePercent)
       .slice(0, InrArbitrageScannerService.MAXIMUM_NEAR_MISSES);
 
     this.trackWindows(qualifying, now);
@@ -611,7 +640,12 @@ export class InrArbitrageScannerService {
 
   /* ------------------------------------------------------------- pricing */
 
-  private tier(quote: ExecutableQuote, venue: string, now: number): EvidenceTier | null {
+  /** `venue:INR` overrides the venue default for REST-polled INR books. */
+  private bookAgeLimit(venue: string, inr: boolean): number {
+    return (inr ? this.config.maximumBookAgeMs[`${venue}:INR`] : undefined) ?? this.config.maximumBookAgeMs[venue] ?? 5_000;
+  }
+
+  private tier(quote: ExecutableQuote, venue: string, now: number, inr = false): EvidenceTier | null {
     const age = now - quote.timestamp;
     const bid = quote.bestBidPrice;
     const ask = quote.bestAskPrice;
@@ -621,7 +655,7 @@ export class InrArbitrageScannerService {
       twoSided &&
       quote.bestBidQty !== null && quote.bestBidQty > 0 &&
       quote.bestAskQty !== null && quote.bestAskQty > 0 &&
-      age <= (this.config.maximumBookAgeMs[venue] ?? 5_000)
+      age <= this.bookAgeLimit(venue, inr)
     ) {
       return "BOOK";
     }
@@ -798,7 +832,7 @@ export class InrArbitrageScannerService {
 
   private freshBook(leg: Leg, now: number): OrderBook | null {
     const book = this.dependencies.getBook(leg.venue, leg.quote.market);
-    return book && book.asks.length && book.bids.length && now - book.timestamp <= (this.config.maximumBookAgeMs[leg.venue] ?? 5_000) ? book : null;
+    return book && book.asks.length && book.bids.length && now - book.timestamp <= this.bookAgeLimit(leg.venue, leg.market.endsWith("INR")) ? book : null;
   }
 
   /** Largest venue minimum across both legs, converted to INR. */
@@ -945,12 +979,13 @@ export class InrArbitrageScannerService {
 
     const nominations: Record<string, string[]> = {};
     for (const [venue, byMarket] of scores) {
-      nominations[venue] = [...byMarket.entries()]
+      const ranked = [...byMarket.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, InrArbitrageScannerService.NOMINATIONS_PER_VENUE)
-        .map(([market]) => market)
-        // Stable order keeps the downstream subscription signature from churning.
-        .sort();
+        .map(([market]) => this.rawMarkets.get(`${venue}|${market}`) ?? market);
+      // CoinSwitch's REST poller wants best-first; UnoCoin's subscription
+      // set wants a stable order so its signature does not churn.
+      nominations[venue] = venue === "unocoin" ? ranked.sort() : ranked;
     }
     this.depthNominations = nominations;
 

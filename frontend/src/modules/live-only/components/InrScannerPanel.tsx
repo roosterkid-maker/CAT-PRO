@@ -125,6 +125,12 @@ function VenueStrip({report}: {report: Report}) {
                 </>
               ) : "—"}
             </p>
+            {venue === "coinswitch" && report.coinSwitchInrDepth ? (
+              <p className={`mt-0.5 font-mono text-[10px] ${report.coinSwitchInrDepth.pausedUntil ? "text-red-300" : "text-text-muted"}`} title={report.coinSwitchInrDepth.lastError ?? undefined}>
+                INR REST depth {report.coinSwitchInrDepth.activeMarkets.length} mkts · {report.coinSwitchInrDepth.successes}/{report.coinSwitchInrDepth.requests} ok
+                {report.coinSwitchInrDepth.pausedUntil ? " · paused" : ""}
+              </p>
+            ) : null}
           </div>
         );
       })}

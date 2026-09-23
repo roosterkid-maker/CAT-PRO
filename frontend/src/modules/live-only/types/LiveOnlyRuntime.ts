@@ -240,5 +240,17 @@ export interface InrScannerResponse {
     alerts: InrOpportunityWindow[];
     depthNominations: Record<string, string[]>;
     minimumOrderCoverage: {known: number; pending: number};
+    coinSwitchInrDepth: {
+      running: boolean;
+      requests: number;
+      successes: number;
+      failures: number;
+      consecutiveFailures: number;
+      pausedUntil: number | null;
+      lastMarket: string | null;
+      lastError: string | null;
+      lastSuccessAt: number | null;
+      activeMarkets: string[];
+    } | null;
   };
 }

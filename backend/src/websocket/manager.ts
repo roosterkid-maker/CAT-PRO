@@ -48,6 +48,11 @@ import {
 } from "../strategies/inr-arbitrage/InrArbitrageScannerService";
 
 import {
+  CoinSwitchInrDepthPoller,
+  registerCoinSwitchInrDepthPoller,
+} from "../exchanges/coinswitch/CoinSwitchInrDepthPoller";
+
+import {
   coinDCXProtectedRestOrderBookService,
 } from "../exchanges/coindcx/CoinDCXProtectedRestOrderBookService";
 
@@ -302,6 +307,16 @@ class WebSocketManager {
       this.coinDCXOrderBook,
     );
 
+  /* Signed read-only REST depth for the scanner's CoinSwitch INR nominations. */
+  private readonly coinSwitchInrDepthPoller =
+    new CoinSwitchInrDepthPoller(
+      () =>
+        this.inrArbitrageScanner
+          .getDepthNominations(
+            "coinswitch",
+          ),
+    );
+
   /*
    * Version 12.5
    *
@@ -524,6 +539,13 @@ class WebSocketManager {
       this.inrArbitrageScanner
         .start();
 
+      registerCoinSwitchInrDepthPoller(
+        this.coinSwitchInrDepthPoller,
+      );
+
+      this.coinSwitchInrDepthPoller
+        .start();
+
       /*
        * Version 12.5 recovery starts after
        * demand subscriptions are available.
@@ -624,6 +646,9 @@ class WebSocketManager {
        * the CoinDCX order-book adapter.
        */
       this.opportunityRecovery
+        .stop();
+
+      this.coinSwitchInrDepthPoller
         .stop();
 
       this.inrArbitrageScanner
@@ -993,17 +1018,11 @@ class WebSocketManager {
       .lastCoinSwitchCandidateCount =
       sharedMarketCandidates.length;
 
-    // INR scanner nominations lead, so promising CoinSwitch INR markets get
-    // real depth inside the same bounded subscription window.
+    // CoinSwitch INR depth is not streamed on this socket; INR scanner
+    // nominations are served by the REST depth poller instead.
     const requestedMarkets =
       this.buildCoinSwitchAdaptiveWindow(
-        this.uniqueMarketsInOrder([
-          ...this.inrArbitrageScanner
-            .getDepthNominations(
-              "coinswitch",
-            ),
-          ...sharedMarketCandidates,
-        ]),
+        sharedMarketCandidates,
       );
 
     const signature =

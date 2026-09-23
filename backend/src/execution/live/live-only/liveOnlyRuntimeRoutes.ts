@@ -55,6 +55,10 @@ import {
   getInrArbitrageScanner,
 } from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
 
+import {
+  getCoinSwitchInrDepthPollerDiagnostics,
+} from "../../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
+
 const router =
   Router();
 
@@ -399,8 +403,11 @@ router.get(
     response.json({
       success:
         true,
-      data:
-        report,
+      data: {
+        ...report,
+        coinSwitchInrDepth:
+          getCoinSwitchInrDepthPollerDiagnostics(),
+      },
     });
   },
 );
