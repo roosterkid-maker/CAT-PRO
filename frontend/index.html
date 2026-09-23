@@ -10,6 +10,13 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800;900&display=swap"
       rel="stylesheet"
     />
+    <script>
+      try {
+        if (localStorage.getItem("cat-pro-theme") === "light") {
+          document.documentElement.dataset.theme = "light";
+        }
+      } catch (_) {}
+    </script>
     <title>CAT PRO</title>
   </head>
   <body>

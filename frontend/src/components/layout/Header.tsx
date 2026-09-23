@@ -1,20 +1,70 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { Activity, Moon, Sun } from "lucide-react";
+
 import type { AppPage } from "@/app/AppRouter";
+import { preloadAppPage } from "@/app/routes";
 import { useSystemHealth } from "@/modules/system-health/hooks/useSystemHealth";
 
 import ExchangeFleetMenu from "./ExchangeFleetMenu";
 
 interface HeaderProps {
+  currentPage: AppPage;
   onPageChange: (page: AppPage) => void;
 }
 
-export default function Header({ onPageChange }: HeaderProps) {
+const NAV_TABS: ReadonlyArray<{ label: string; page: AppPage }> = [
+  { label: "Bot", page: "bot" },
+  { label: "Trade Intel", page: "trade-intelligence" },
+  { label: "Markets", page: "markets" },
+  { label: "Exchanges", page: "exchange-health" },
+  { label: "Arbitrage", page: "arbitrage" },
+  { label: "Execution", page: "execution-monitoring" },
+  { label: "Alerts", page: "alerts" },
+  { label: "System", page: "system-health" },
+  { label: "Recovery", page: "recovery" },
+];
+
+type ThemeMode = "dark" | "light";
+
+const THEME_STORAGE_KEY = "cat-pro-theme";
+
+function readStoredTheme(): ThemeMode {
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === "light"
+      ? "light"
+      : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function useThemeMode(): [ThemeMode, () => void] {
+  const [theme, setTheme] = useState<ThemeMode>(readStoredTheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Storage can be unavailable (private mode); the theme still applies.
+    }
+  }, [theme]);
+
+  return [
+    theme,
+    () => setTheme((current) => (current === "dark" ? "light" : "dark")),
+  ];
+}
+
+export default function Header({ currentPage, onPageChange }: HeaderProps) {
   const {
     data: healthResponse,
     isLoading,
     isError,
+    dataUpdatedAt,
   } = useSystemHealth();
+  const [theme, toggleTheme] = useThemeMode();
 
   const exchanges = useMemo(
     () => healthResponse?.data.exchanges ?? [],
@@ -40,43 +90,17 @@ export default function Header({ onPageChange }: HeaderProps) {
           : "degraded";
 
   return (
-    <header className="cat-pro-header min-h-20 border-b px-8 py-3">
-      <div className="cat-pro-header-brand shrink-0">
-        <h1 className="cat-pro-wordmark text-2xl font-bold">
-          CAT PRO
-        </h1>
+    <header className="term-header">
+      <div className="term-topbar">
+        <div className="term-brand">
+          <span aria-hidden="true" className="term-brand-mark">
+            <Activity size={16} strokeWidth={2.4} />
+          </span>
+          <span className="term-brand-name">CAT PRO</span>
+          <span className="term-brand-sub">/ Terminal</span>
+        </div>
 
-        <p className="cat-pro-kicker mt-1 text-sm">
-          Execution Intelligence Platform
-        </p>
-      </div>
-
-      <FuturisticBotIdentity />
-
-      <div className="cat-pro-header-controls flex flex-wrap items-center justify-end gap-3 justify-self-end">
-        <TerminalChip
-          className="cat-pro-market-chip"
-          color={
-            terminalState === "live"
-              ? "green"
-              : terminalState === "loading"
-                ? "blue"
-                : terminalState === "degraded"
-                  ? "yellow"
-                  : "red"
-          }
-          label={
-            terminalState === "live"
-              ? "MARKET DATA LIVE"
-              : terminalState === "loading"
-                ? "CONNECTING"
-                : terminalState === "degraded"
-                  ? "DEGRADED"
-                  : "OFFLINE"
-          }
-        />
-
-        <div className="cat-pro-exchange-menu">
+        <div className="term-exchange-slot">
           <ExchangeFleetMenu
             onOpenExchangeHealth={() => onPageChange("exchange-health")}
             connectedMarketDataCount={connectedCount}
@@ -86,34 +110,97 @@ export default function Header({ onPageChange }: HeaderProps) {
           />
         </div>
 
-        <TerminalChip className="cat-pro-version-chip" color="blue" label="V20.9" />
-        <LiveClock />
+        <div className="term-topbar-actions">
+          <LiveClock />
+          <button
+            type="button"
+            className="term-icon-button"
+            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            onClick={toggleTheme}
+          >
+            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
+        </div>
+      </div>
+
+      <nav aria-label="Primary navigation" className="term-tabs">
+        {NAV_TABS.map((tab) => (
+          <button
+            key={tab.page}
+            type="button"
+            className="term-tab"
+            aria-current={tab.page === currentPage ? "page" : undefined}
+            data-active={tab.page === currentPage}
+            onClick={() => onPageChange(tab.page)}
+            onFocus={() => preloadAppPage(tab.page)}
+            onPointerEnter={() => preloadAppPage(tab.page)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="term-strip">
+        <span className="term-strip-item" data-state={terminalState}>
+          <span aria-hidden="true" className="term-strip-dot" />
+          {terminalState === "live"
+            ? "Printing"
+            : terminalState === "loading"
+              ? "Connecting"
+              : terminalState === "degraded"
+                ? "Degraded"
+                : "Offline"}
+        </span>
+        <span className="term-strip-item">
+          <span className="term-strip-key">Feeds</span>
+          {connectedCount}/{totalExchanges || "—"}
+        </span>
+        <SessionUptime />
+        <span className="term-strip-item">
+          <span className="term-strip-key">Tick</span>
+          <TickAge updatedAt={dataUpdatedAt} />
+        </span>
+        <span className="term-strip-tag">v20.9 · live-only</span>
       </div>
     </header>
   );
 }
 
-function FuturisticBotIdentity() {
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs]);
+
+  return now;
+}
+
+const SESSION_STARTED_AT = Date.now();
+
+function SessionUptime() {
+  const now = useNow(1_000);
+  const totalSeconds = Math.floor((now - SESSION_STARTED_AT) / 1_000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+
   return (
-    <div
-      aria-label="HOPUN HFT BOT"
-      className="hft-header-identity"
-      role="img"
-    >
-      <span aria-hidden="true" className="hft-header-orbit hft-header-orbit-cyan" />
-      <span aria-hidden="true" className="hft-header-orbit hft-header-orbit-magenta" />
-      <span aria-hidden="true" className="hft-om-symbol">ॐ</span>
-      <span aria-hidden="true" className="hft-swastik-symbol">卐</span>
-
-      <span className="hft-header-title">
-        <span>HOPUN</span>
-        <span className="hft-header-title-accent">HFT</span>
-        <span>BOT</span>
-      </span>
-
-      <span aria-hidden="true" className="hft-header-scanline" />
-    </div>
+    <span className="term-strip-item">
+      <span className="term-strip-key">Up</span>
+      {pad(Math.floor(totalSeconds / 3_600))}:{pad(Math.floor((totalSeconds % 3_600) / 60))}:
+      {pad(totalSeconds % 60)}
+    </span>
   );
+}
+
+function TickAge({ updatedAt }: { updatedAt: number }) {
+  const now = useNow(1_000);
+
+  if (!updatedAt) {
+    return <>— ago</>;
+  }
+
+  return <>{Math.max(0, Math.round((now - updatedAt) / 1_000))}s ago</>;
 }
 
 function LiveClock() {
@@ -146,41 +233,9 @@ function LiveClock() {
   });
 
   return (
-    <div className="cat-pro-live-clock min-w-24 text-right">
-      <p className="text-xs uppercase tracking-wide text-text-muted">
-        Local Time
-      </p>
-
-      <p className="font-mono text-lg font-semibold tabular-nums text-text-primary">
-        {formattedTime}
-      </p>
-    </div>
-  );
-}
-
-interface TerminalChipProps {
-  label: string;
-  color: "green" | "red" | "yellow" | "blue";
-  className?: string;
-}
-
-function TerminalChip({ label, color, className = "" }: TerminalChipProps) {
-  const styles: Record<TerminalChipProps["color"], string> = {
-    green: "border-success/30 bg-success/10 text-success",
-    red: "border-danger/30 bg-danger/10 text-danger",
-    yellow: "border-warning/30 bg-warning/10 text-warning",
-    blue: "border-brand/30 bg-brand/10 text-brand",
-  };
-
-  return (
-    <div
-      className={`terminal-chip whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold ${styles[color]} ${className}`}
-    >
-      <span
-        aria-hidden="true"
-        className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current align-middle"
-      />
-      {label}
-    </div>
+    <span className="term-clock">
+      <span className="term-strip-key">Local</span>
+      {formattedTime}
+    </span>
   );
 }
