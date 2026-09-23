@@ -24,6 +24,7 @@ import type {
   StrategyOneAuthorizedFinalBookRefreshResult,
 } from "../tiny-live/StrategyOneActionTimeBookRefreshService";
 import {
+  LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION,
   StrategyOneLiveOnlyRunnerService,
   type StrategyOneLiveOnlyRunnerDependencies,
 } from "../live-only/StrategyOneLiveOnlyRunnerService";
@@ -89,6 +90,9 @@ async function main(): Promise<void> {
       directory,
     );
     await testUnrecognizedFailureStillHalts(
+      directory,
+    );
+    await testCleanFailureHaltReleaseRequiresConfirmationAndCleanEvidence(
       directory,
     );
   } finally {
@@ -255,6 +259,117 @@ async function testUnrecognizedFailureStillHalts(
   );
   assert.equal(diagnostics.excludedMarkets.length, 0);
   service.stop();
+}
+
+async function testCleanFailureHaltReleaseRequiresConfirmationAndCleanEvidence(
+  directory: string,
+): Promise<void> {
+  const filePath = join(directory, "clean-failure-halt.jsonl");
+  const candidate = opportunity("clean-failure", NOW);
+  const service = runner(
+    filePath,
+    {
+      execute: async () => unrecognizedFailedResult(candidate, NOW + 100),
+    },
+  );
+
+  service.start();
+  await service.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [candidate],
+  });
+  assert.equal(service.getDiagnostics(NOW + 100).halted, true);
+
+  assert.throws(
+    () => service.releaseCleanFailureHalt("not the phrase", NOW + 101),
+    /Exact confirmation phrase/u,
+    "the wrong phrase must never release a live halt",
+  );
+  assert.equal(service.getDiagnostics(NOW + 101).halted, true);
+  assert.throws(
+    () => service.releaseCleanFailureHalt(
+      LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION.toLowerCase(),
+      NOW + 101,
+    ),
+    /Exact confirmation phrase/u,
+    "the phrase check must be exact, not case-insensitive",
+  );
+
+  assert.equal(
+    service.releaseCleanFailureHalt(
+      LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION,
+      NOW + 102,
+    ),
+    true,
+  );
+  assert.equal(service.getDiagnostics(NOW + 102).halted, false);
+  service.stop();
+
+  const restored = runner(filePath, {});
+  assert.equal(
+    restored.getDiagnostics(NOW + 103).halted,
+    false,
+    "the released clean-failure halt must remain cleared after restart",
+  );
+
+  // A RECOVERY_REQUIRED halt must never be releasable through this path -
+  // it always stays locked to releaseAuthoritativelyResolvedRecoveryHalt().
+  const recoveryFilePath = join(directory, "clean-failure-vs-recovery.jsonl");
+  const recoveryCandidate = opportunity("recovery-not-clean-failure", NOW);
+  const recoveryService = runner(
+    recoveryFilePath,
+    {
+      execute: async () => recoveryRequiredResult(recoveryCandidate, NOW + 100),
+    },
+  );
+  recoveryService.start();
+  await recoveryService.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [recoveryCandidate],
+  });
+  assert.equal(recoveryService.getDiagnostics(NOW + 100).halted, true);
+  assert.throws(
+    () => recoveryService.releaseCleanFailureHalt(
+      LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION,
+      NOW + 101,
+    ),
+    /requires authoritative recovery resolution/u,
+    "a RECOVERY_REQUIRED halt must never be releasable as a clean failure, even with the exact phrase",
+  );
+  assert.equal(recoveryService.getDiagnostics(NOW + 101).halted, true);
+  recoveryService.stop();
+
+  // A FAILED-but-possible-exposure halt (dispatch-touching, exposure
+  // uncertain) must also stay locked - the release must re-check the
+  // triggering attempt's OWN evidence, not just trust the halt text.
+  const exposureFilePath = join(directory, "clean-failure-vs-exposure.jsonl");
+  const exposureCandidate = opportunity("failed-possible-exposure", NOW);
+  const exposureService = runner(
+    exposureFilePath,
+    {
+      execute: async () => ({
+        ...unrecognizedFailedResult(exposureCandidate, NOW + 100),
+        possibleExposure: true,
+        reasons: ["An exchange call may have partially succeeded; exposure cannot be ruled out."],
+      }),
+    },
+  );
+  exposureService.start();
+  await exposureService.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [exposureCandidate],
+  });
+  assert.equal(exposureService.getDiagnostics(NOW + 100).halted, true);
+  assert.throws(
+    () => exposureService.releaseCleanFailureHalt(
+      LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION,
+      NOW + 101,
+    ),
+    /triggering attempt's own recorded evidence does not show a clean/u,
+    "a FAILED attempt whose own evidence shows possible exposure must never be releasable through the clean-failure path",
+  );
+  assert.equal(exposureService.getDiagnostics(NOW + 101).halted, true);
+  exposureService.stop();
 }
 
 async function testCurrentRouteDecisionDoesNotWaitForPersistence(

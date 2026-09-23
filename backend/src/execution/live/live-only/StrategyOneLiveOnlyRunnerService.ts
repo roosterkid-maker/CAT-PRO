@@ -209,6 +209,22 @@ function marketExclusionKey(
 const SAFE_PRE_DISPATCH_REJECTION_MARKER =
   "Neither exchange leg crossed the dispatch boundary and no order submission was attempted.";
 
+/*
+ * A FAILED attempt that actually crossed the dispatch boundary (unlike the
+ * safe-pre-dispatch-rejection case above, which never reaches the exchange
+ * and self-heals automatically) always halts the runner, even when its own
+ * recorded evidence already shows recoveryRequired:false and
+ * possibleExposure:false - deliberately, since a real dispatch occasionally
+ * carries edge cases the automated classifier might miscategorize, so a
+ * human is meant to look before more live capital is put at risk. This is
+ * the exact phrase an operator must submit to release exactly that class of
+ * halt - never automatic, and only when the triggering attempt's own
+ * already-computed evidence (not anything invented here) shows it was
+ * genuinely clean.
+ */
+export const LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION =
+  "CONFIRM_LIVE_ONLY_CLEAN_FAILURE_RELEASE";
+
 function extractBaseAsset(
   market:
     string,
@@ -607,6 +623,71 @@ export class StrategyOneLiveOnlyRunnerService {
     if (!safeToRelease) {
       throw new Error(
         `LIVE-only recovery halt remains locked for ${sessionId}; the runner is not idle or authoritative recovery is not completely clean.`,
+      );
+    }
+
+    this.haltedReason = null;
+    this.persist(now);
+    return true;
+  }
+
+  /**
+   * Releases a halt caused by a FAILED attempt that actually reached the
+   * exchange (dispatch-touching), as opposed to a RECOVERY_REQUIRED halt
+   * (which has its own stricter, evidence-driven release path above) or a
+   * safe-pre-dispatch-rejection halt (which self-heals automatically and
+   * never needs this). Requires the exact operator confirmation phrase, and
+   * only succeeds when the LAST recorded attempt's own already-computed
+   * evidence - not anything invented here - already shows
+   * recoveryRequired:false and possibleExposure:false. This method can
+   * never release a halt for an attempt that actually shows possible
+   * exposure or requires recovery; that always stays locked to the
+   * recovery-specific path.
+   */
+  releaseCleanFailureHalt(
+    confirmationPhraseValue: string,
+    now = this.dependencies.now(),
+  ): boolean {
+    const confirmationPhrase =
+      confirmationPhraseValue.trim();
+
+    if (
+      confirmationPhrase !==
+        LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION
+    ) {
+      throw new Error(
+        `Exact confirmation phrase "${LIVE_ONLY_CLEAN_FAILURE_RELEASE_CONFIRMATION}" is required to release a clean-failure LIVE-only halt.`,
+      );
+    }
+
+    if (!this.dependencies.runtimeEnabled()) {
+      return false;
+    }
+
+    if (this.haltedReason === null) {
+      return true;
+    }
+
+    if (this.haltedReason.includes("RECOVERY_REQUIRED")) {
+      throw new Error(
+        "This halt requires authoritative recovery resolution, not a clean-failure release.",
+      );
+    }
+
+    const lastAttempt =
+      this.attempts.at(-1);
+
+    const safeToRelease =
+      this.unsubscribe !== null &&
+      !this.inFlight &&
+      lastAttempt !== undefined &&
+      lastAttempt.status === "FAILED" &&
+      lastAttempt.recoveryRequired === false &&
+      lastAttempt.possibleExposure === false;
+
+    if (!safeToRelease) {
+      throw new Error(
+        "LIVE-only clean-failure halt remains locked; the runner is not idle, or the triggering attempt's own recorded evidence does not show a clean (no-recovery, no-exposure) failure.",
       );
     }
 

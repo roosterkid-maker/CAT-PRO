@@ -39,6 +39,10 @@ import {
   opportunityCapitalStudyService,
 } from "../../../rebalancing/services/OpportunityCapitalStudyService";
 
+import {
+  readConfirmationPhrase,
+} from "../routes/executionSafetyMetadata";
+
 const router =
   Router();
 
@@ -75,6 +79,63 @@ router.get(
             .getReport(),
       },
     });
+  },
+);
+
+/*
+ * The ONLY endpoint that can release a halt caused by a FAILED attempt that
+ * actually reached the exchange (dispatch-touching) rather than a
+ * RECOVERY_REQUIRED or safe-pre-dispatch-rejection halt (which have their
+ * own, already-existing release paths). Requires the exact
+ * CONFIRM_LIVE_ONLY_CLEAN_FAILURE_RELEASE phrase, and the underlying
+ * service method itself re-checks that the triggering attempt's own
+ * already-computed evidence shows no recovery required and no possible
+ * exposure before it will release anything - this route performs no
+ * exchange I/O and grants no execution authority beyond letting the
+ * already-configured, already-running runner resume watching for its next
+ * opportunity.
+ */
+router.post(
+  "/release-clean-failure-halt",
+  (
+    request,
+    response,
+  ) => {
+    try {
+      const confirmation =
+        readConfirmationPhrase(
+          request.body,
+        );
+
+      const released =
+        strategyOneLiveOnlyRunnerService
+          .releaseCleanFailureHalt(
+            confirmation,
+          );
+
+      response.json({
+        success:
+          true,
+        data: {
+          released,
+          runner:
+            strategyOneLiveOnlyRunnerService
+              .getDiagnostics(),
+        },
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      response.status(409).json({
+        success:
+          false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "LIVE-only clean-failure halt release failed.",
+      });
+    }
   },
 );
 
