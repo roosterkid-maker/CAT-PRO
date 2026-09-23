@@ -1435,6 +1435,16 @@ export class ExecutionRecoveryEngine {
       existing.status !==
         "RESOLVED"
     ) {
+      // The scan re-evaluates every open incident once per second. Without
+      // this no-op check each tick appended a full snapshot differing only
+      // in updatedAt - two long-lived OPEN incidents grew this journal to
+      // ~1.9M records / 1.9GB, and replaying it in the constructor pushed
+      // the backend past its heap limit into an OOM crash-loop on restart.
+      const materialBefore =
+        ExecutionRecoveryEngine.materialFingerprint(
+          existing,
+        );
+
       // An operator who acknowledged this incident acknowledged it at its
       // PRIOR severity. If it has since escalated (e.g. WARNING ->
       // CRITICAL as the counter-leg grace window expires), that
@@ -1489,6 +1499,17 @@ export class ExecutionRecoveryEngine {
 
       existing.reason =
         input.reason;
+
+      if (
+        ExecutionRecoveryEngine.materialFingerprint(
+          existing,
+        ) ===
+        materialBefore
+      ) {
+        return structuredClone(
+          existing,
+        );
+      }
 
       existing.updatedAt =
         input.now;
@@ -1809,6 +1830,19 @@ export class ExecutionRecoveryEngine {
     }
 
     return incident;
+  }
+
+  private static materialFingerprint(
+    incident: ExecutionRecoveryIncident,
+  ): string {
+    const {
+      updatedAt: _updatedAt,
+      ...material
+    } = incident;
+
+    return JSON.stringify(
+      material,
+    );
   }
 
   private persist(
