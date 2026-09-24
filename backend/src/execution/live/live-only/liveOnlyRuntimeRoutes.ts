@@ -60,6 +60,15 @@ import {
 } from "../inr-routes/InrRouteLiveRunner";
 
 import {
+  buildLiveTradesReport,
+} from "../history/LiveTradesReport";
+
+import {
+  takerFeeWithSurcharge,
+  usdtInrMid,
+} from "./DailyLossGuard";
+
+import {
   getCoinSwitchInrDepthPollerDiagnostics,
 } from "../../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
 
@@ -442,6 +451,52 @@ router.get(
  * page polling a 404; the report itself only reads the current bounded
  * snapshot and never triggers a scan.
  */
+/*
+ * Real live arbitrage trades, both legs side by side: Strategy #1
+ * USDT<->USDT pairs and INR executor sessions (USDT<->INR, INR<->INR).
+ */
+router.get(
+  "/live-trades",
+  async (
+    request,
+    response,
+  ) => {
+    const rawLimit =
+      typeof request.query.limit === "string"
+        ? Number(request.query.limit)
+        : 60;
+    try {
+      const now = Date.now();
+      const history =
+        await executionHistoryService.getRecent(500);
+      const strategyOne =
+        buildArbitragePnLReport(history.executions, takerFeeWithSurcharge, 500, now).latest;
+      let rate: number | null = null;
+      try {
+        rate = usdtInrMid(getInrArbitrageScanner()?.getReport().conversion ?? []);
+      } catch {
+        rate = null;
+      }
+      response.setHeader("Cache-Control", "no-store");
+      response.json({
+        success: true,
+        data: buildLiveTradesReport({
+          strategyOne,
+          inrSessions: getInrRouteLiveRunner().listSessions(),
+          usdtInrRate: rate,
+          limit: Number.isSafeInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : 60,
+          now,
+        }),
+      });
+    } catch (error: unknown) {
+      response.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Live trades are unavailable.",
+      });
+    }
+  },
+);
+
 router.get(
   "/inr-executor",
   (

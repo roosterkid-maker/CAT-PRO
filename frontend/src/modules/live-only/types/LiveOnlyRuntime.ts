@@ -257,3 +257,48 @@ export interface InrScannerResponse {
     } | null;
   };
 }
+
+export type LiveTradeRoute = "USDT_USDT" | "INR_USDT" | "INR_INR";
+
+export type LiveTradeStatus =
+  | "COMPLETED"
+  | "DUST_RESIDUAL"
+  | "ONE_LEG_FILLED"
+  | "RECOVERY_REQUIRED"
+  | "POSSIBLE_EXPOSURE";
+
+export interface LiveTradeLeg {
+  venue: string;
+  market: string;
+  averagePrice: number | null;
+  quantity: number | null;
+}
+
+export interface LiveTrade {
+  id: string;
+  at: number;
+  route: LiveTradeRoute;
+  coin: string;
+  status: LiveTradeStatus;
+  buy: LiveTradeLeg;
+  sell: LiveTradeLeg;
+  matchedQuantity: number;
+  notionalInr: number | null;
+  netInr: number | null;
+  netPercent: number | null;
+  residualQuantity: number;
+}
+
+export interface LiveTradesResponse {
+  success: boolean;
+  data: {
+    generatedAt: number;
+    trades: LiveTrade[];
+    totals: {
+      trades: number;
+      completed: number;
+      needingAttention: number;
+      netInr: number;
+    };
+  };
+}

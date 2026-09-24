@@ -1,4 +1,8 @@
 import {
+  LiveTradesPanel,
+} from "@/modules/live-only/components/LiveTradesPanel";
+
+import {
   Activity,
   CircleDollarSign,
   Clock3,
@@ -284,6 +288,10 @@ export function ExecutionMonitoringDashboard() {
         <RecentExecutionErrors />
 
         <TradingPnLCard />
+      </section>
+
+      <section>
+        <LiveTradesPanel />
       </section>
 
       <section>

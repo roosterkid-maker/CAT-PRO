@@ -6,6 +6,7 @@ import {
   fetchInrScanner,
   fetchLiveOnlyInventory,
   fetchLiveOnlyRuntime,
+  fetchLiveTrades,
 } from "../services/liveOnlyRuntimeApi";
 
 export function useLiveOnlyRuntime() {
@@ -57,6 +58,24 @@ export function useInrScanner() {
       1_500,
     staleTime:
       1_000,
+    retry:
+      1,
+  });
+}
+
+export function useLiveTrades() {
+  return useQuery({
+    queryKey: [
+      "live-only-live-trades",
+    ],
+    queryFn: ({signal}) =>
+      fetchLiveTrades(
+        signal,
+      ),
+    refetchInterval:
+      3_000,
+    staleTime:
+      2_000,
     retry:
       1,
   });
