@@ -474,7 +474,7 @@ function roundPrice(price: number, step: number | null, side: "buy" | "sell"): n
 }
 
 /** ≤ 36 chars, [a-z0-9-] only: valid on Binance, Bybit and CoinDCX. */
-function clientOrderId(idempotencyKey: string): string {
+export function clientOrderId(idempotencyKey: string): string {
   return `ci-${createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 30)}`;
 }
 
@@ -492,4 +492,22 @@ function isSnapshot(value: unknown): value is Snapshot {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Exchange order IDs and client order IDs of every order these sessions
+ * sent, so order history can attribute them to the INR route executor
+ * (UnoCoin orders carry no client ID and match by order ID).
+ */
+export function inrSessionOrderIdentities(sessions: readonly InrRouteSession[]): Set<string> {
+  const identities = new Set<string>();
+  for (const session of sessions) {
+    for (const fill of [session.primary, ...session.hedges]) {
+      if (!fill) continue;
+      if (fill.orderId) identities.add(`${fill.venue}|order|${fill.orderId}`);
+      identities.add(`${fill.venue}|client|${clientOrderId(fill.idempotencyKey)}`);
+      identities.add(`${fill.venue}|client|${uuidClientOrderId(fill.idempotencyKey)}`);
+    }
+  }
+  return identities;
 }

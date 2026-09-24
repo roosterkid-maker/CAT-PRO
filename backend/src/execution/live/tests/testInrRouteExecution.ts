@@ -8,6 +8,7 @@ import {loadInrRouteExecutionPolicy, type InrRouteExecutionPolicy} from "../inr-
 import {commonStep, planInrRoute, type InrRoutePlanInput} from "../inr-routes/InrRoutePlanner";
 import {
   choosePrimarySide,
+  inrSessionOrderIdentities,
   uuidClientOrderId,
   InrRouteSessionExecutor,
   type InrRouteExecuteInput,
@@ -192,6 +193,9 @@ async function testExecutor(directory: string): Promise<void> {
   assert.equal(complete.sent[1].timeInForce, "IOC", "hedge is IOC on the liquid venue");
   assert.equal(complete.sent[1].price, 1.1982, "hedge limit = fresh bid less 0.15%, floored to the tick");
   assert.ok((done.realizedNetInr ?? 0) > 0);
+  const identities = inrSessionOrderIdentities([done]);
+  assert.ok(identities.has("bybit|order|order-hedge1"), "hedge order attributed by exchange order ID");
+  assert.ok(identities.has(`coindcx|client|${complete.sent[0].clientOrderId}`), "primary attributed by client order ID");
 
   // No primary fill: nothing else is sent.
   const none = new FakeGateway({primary: {kind: "fill", filled: 0, price: 0}});

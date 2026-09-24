@@ -37,6 +37,9 @@ export interface ExecutionHistoryItem {
     | string
     | null;
 
+  /** Set by the backend for INR route executor legs (USDT<->INR, INR<->INR). */
+  strategy?: "INR_ROUTE";
+
   status:
     ExecutionHistoryStatus;
 

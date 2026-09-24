@@ -238,6 +238,11 @@ function NetWorthPanel({inventory, loading}: {inventory: Inventory | undefined; 
   );
 }
 
+/* Arbitrage legs: Strategy #1 (arb-* client IDs) and the INR route executor. */
+function isArbitrageOrder(order: ExecutionHistoryItem): boolean {
+  return order.clientOrderId?.startsWith("arb-") === true || order.strategy === "INR_ROUTE";
+}
+
 function LiveOrdersPanel({orders, loading}: {orders: ExecutionHistoryItem[]; loading: boolean}) {
   return (
     <section className="panel min-w-0">
@@ -266,8 +271,8 @@ function LiveOrdersPanel({orders, loading}: {orders: ExecutionHistoryItem[]; loa
                     <span className="text-text-primary">{formatClock(order.timestamp)}</span>
                   </td>
                   <td className="px-3 py-2.5">
-                    <span className={`border px-1.5 py-0.5 font-mono text-[10px] ${order.clientOrderId?.startsWith("arb-") ? "border-amber-400/40 bg-amber-400/10 text-amber-300" : "border-cyan-300/40 bg-cyan-300/10 text-cyan-300"}`}>
-                      {order.clientOrderId?.startsWith("arb-") ? "ARB" : "REC"}
+                    <span className={`border px-1.5 py-0.5 font-mono text-[10px] ${isArbitrageOrder(order) ? "border-amber-400/40 bg-amber-400/10 text-amber-300" : "border-cyan-300/40 bg-cyan-300/10 text-cyan-300"}`}>
+                      {isArbitrageOrder(order) ? "ARB" : "REC"}
                     </span>
                   </td>
                   <td className="px-3 py-2.5 font-mono text-text-primary">
