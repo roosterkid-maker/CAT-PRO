@@ -23,7 +23,7 @@ export interface InventoryValuation {
   readonly usdtInr: number | null;
   /** Units of `asset` held on `venue`; null when that venue's balances are not usable. */
   quantity(venue: string, asset: string): number | null;
-  /** INR value of `asset` held on `venue`; null when unknown. */
+  /** INR value of the FREE `asset` balance on `venue` (not locked or reserved); null when unknown. */
   holdingInr(venue: string, asset: string): number | null;
   /** INR price of one unit of `asset`; null when no live quote exists. */
   priceInr(asset: string): number | null;
@@ -65,17 +65,22 @@ export function createInventoryValuation(now = Date.now()): InventoryValuation {
       const held = position(venue, asset);
       return held === undefined ? null : held === null ? 0 : held.availableAfterReservations;
     },
+    // Only what is free counts: a balance locked in an open order or reserved
+    // for an attempt can neither be sold by a route nor moved.
     holdingInr: (venue, asset) => {
       const held = position(venue, asset);
       if (held === undefined) return null;
       if (held === null) return 0;
+      const free = Math.max(0, held.availableAfterReservations);
       const upper = asset.toUpperCase();
-      if (upper === "INR") return held.totalBalance;
+      if (upper === "INR") return free;
       if (usdtInr === null) return null;
-      if (upper === "USDT") return held.totalBalance * usdtInr;
-      if (held.valuation.totalValueUsdt !== null) return held.valuation.totalValueUsdt * usdtInr;
+      if (upper === "USDT") return free * usdtInr;
+      if (held.valuation.totalValueUsdt !== null && held.totalBalance > 0) {
+        return held.valuation.totalValueUsdt * (free / held.totalBalance) * usdtInr;
+      }
       const price = priceInr(upper);
-      return price === null ? null : held.totalBalance * price;
+      return price === null ? null : free * price;
     },
     priceInr,
   };
