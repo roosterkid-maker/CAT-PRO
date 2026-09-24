@@ -61,7 +61,7 @@ function testAllocator(): void {
     poolCapacityInr: {"unocoin:INR": 10, USDT: 12_000},
     candidates: [
       candidate({coin: "SKY", weight: 0.6, cashVenue: "unocoin", cashAsset: "INR"}),
-      candidate({coin: "FET", weight: 0.25, coinVenue: "bybit", cashVenue: "coindcx", cashAsset: "USDT"}),
+      candidate({coin: "FET", weight: 0.25, coinVenue: "bybit", cashVenue: "binance", cashAsset: "USDT"}),
       candidate({coin: "GRAM", weight: 0.15, coinVenue: "coinswitch", coinVenueQuote: "INR", cashVenue: "binance", cashAsset: "USDT", coinHeldInr: 3_000}),
     ],
   });
@@ -74,9 +74,9 @@ function testAllocator(): void {
   const usdtUsed = pooled.coins.reduce((sum, coin) => sum + coin.cashNeedInr + coin.coinNeedInr, 0) - 3_000;
   assert.ok(usdtUsed <= 12_000, String(usdtUsed));
 
-  // Cash pools: USDT moves between Binance, Bybit and CoinDCX; INR stays put.
+  // Cash pools: USDT moves between Binance and Bybit; INR stays put.
   assert.equal(cashPool("bybit", "USDT"), cashPool("binance", "USDT"));
-  assert.equal(cashPool("coindcx", "USDT"), "USDT");
+  assert.notEqual(cashPool("coindcx", "USDT"), "USDT", "no API withdraws CoinDCX USDT");
   assert.notEqual(cashPool("coindcx", "INR"), cashPool("coinswitch", "INR"));
 }
 
@@ -221,6 +221,31 @@ async function testStockSells(directory: string): Promise<void> {
   await off.executeAuto(nullPort, now);
   assert.equal(offPort.sells.length, 0);
   sellEnabled = true;
+
+  // A coin with opportunity that is only waiting for capital (SKY needs
+  // UnoCoin INR, which only a deposit brings) keeps its stock: it is not idle.
+  const waitingPort = new FakeStockPort();
+  holdings = {"binance|SKY": 5_000, "coinswitch|INR": 1_200, "binance|USDT": 0};
+  const waiting = new RouteRefillService({
+    getTargets: () => [],
+    getAllocation: () => allocateCapital({
+      budgetInr: 20_000,
+      poolCapacityInr: {"unocoin:INR": 0, USDT: 0, "coinswitch:INR": 6_000},
+      candidates: [
+        candidate({coin: "SKY", weight: 0.7, coinVenue: "binance", cashVenue: "unocoin", cashAsset: "INR"}),
+        candidate({coin: "GRAM", weight: 0.3, coinVenue: "coinswitch", coinVenueQuote: "INR", cashVenue: "coinswitch", cashAsset: "INR", perTradeInr: 1_200, expectedDailyProfitInr: 500}),
+      ],
+    }),
+    getValuation: valuation,
+    getConfig: config,
+    getTradeSizeInr: () => 1_500,
+    getAutoBuyConfig: () => ({enabled: false, dailyCapInr: 10_000, cashFloorInr: 1_000}),
+    getAutoSellConfig: () => ({enabled: true, dailyCapInr: 5_000}),
+    getBuyPort: async () => waitingPort,
+  }, join(directory, "waiting.jsonl"));
+  assert.deepEqual(waiting.getPlan(now).allocation?.unfunded, ["SKY"]);
+  await waiting.executeAuto(nullPort, now);
+  assert.equal(waitingPort.sells.length, 0, "SKY stock waits for UnoCoin INR; it is never sold as idle");
 
   // Daily sell cap: after ₹5,000 of sells, nothing more today.
   const capPort = new FakeStockPort();

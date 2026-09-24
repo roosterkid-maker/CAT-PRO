@@ -645,6 +645,8 @@ export class RouteRefillService {
     if (demand.size === 0) return skip("Every allocated coin is funded; nothing needs freed cash.");
 
     const allocatedAt = new Map(allocation.coins.map((coin) => [coin.coin, coin]));
+    // A coin with opportunity that is only waiting for capital keeps its stock.
+    const waiting = new Set(allocation.unfunded);
     const candidates: {venue: string; coin: string; surplusInr: number; idle: boolean}[] = [];
     for (const venue of VENUES) {
       for (const asset of valuation.assets?.(venue) ?? []) {
@@ -652,6 +654,7 @@ export class RouteRefillService {
         const held = valuation.holdingInr(venue, asset) ?? 0;
         if (held < MINIMUM_SELL_INR) continue;
         const allocated = allocatedAt.get(asset);
+        if (waiting.has(asset)) continue;
         // Stock allocated to another venue is moved there, not sold.
         if (allocated && allocated.coinVenue !== venue) continue;
         const surplus = allocated ? held - allocated.coinNeedInr * SURPLUS_MARGIN : held;

@@ -9,8 +9,9 @@
  * rather than a sliver. As capital grows, the same rule hands out more
  * trades and funds more coins.
  *
- * Money only counts where it can reach: USDT moves between Binance, Bybit
- * and CoinDCX, but INR stays on the exchange it was deposited on, so each
+ * Money only counts where it can reach: USDT moves between Binance and
+ * Bybit, but INR (and CoinDCX's USDT, which no API withdraws) stays on the
+ * exchange it was deposited on, so each
  * trade draws on the cash pools its two sides live in. Stock of the coin
  * already on its sell venue covers the coin side first. Pure: no I/O.
  */
@@ -49,12 +50,12 @@ export interface CapitalAllocation {
 }
 
 /**
- * Where freed cash can be used: USDT moves between Binance, Bybit and
- * CoinDCX automatically, so those balances are one pool; INR never leaves
- * the exchange it sits on.
+ * Where cash can be used: the capital manager moves USDT between Binance
+ * and Bybit itself, so those balances are one pool; INR never leaves the
+ * exchange it sits on, and CoinDCX USDT has no automatic way out.
  */
 export function cashPool(venue: string, asset: "INR" | "USDT"): string {
-  if (asset === "USDT" && (venue === "binance" || venue === "bybit" || venue === "coindcx")) return "USDT";
+  if (asset === "USDT" && (venue === "binance" || venue === "bybit")) return "USDT";
   return `${venue}:${asset}`;
 }
 
