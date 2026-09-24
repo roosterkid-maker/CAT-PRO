@@ -44,10 +44,17 @@ import type {
 
 import {
   allocateCapital,
+  buildVenuePlan,
   cashPool,
   type AllocationCandidate,
   type CapitalAllocation,
 } from "./CapitalAllocator";
+
+import {
+  legSizeForBudget,
+  loadDynamicLegConfig,
+  publishDynamicLegSize,
+} from "../../execution/live/inr-routes/InrDynamicLegSize";
 
 /*
  * Capital manager step B: keeps the core coin basket's route inventory
@@ -139,7 +146,7 @@ export function loadAutoSellConfig(environment: NodeJS.ProcessEnv = process.env)
  * exists across them. Mostly live: 80% of a coin's weight is its share of
  * recent opportunity, 20% its share of the 7-day study.
  */
-export function buildCapitalAllocation(tradeSizeInr: number, valuation: InventoryValuation): CapitalAllocation {
+export function buildCapitalAllocation(tradeSizeInr: number, valuation: InventoryValuation, now = Date.now()): CapitalAllocation {
   const study = getCoinStudyService().getReport(tradeSizeInr, (venue, asset) => valuation.holdingInr(venue, asset));
   const live = getCoinStudyService().getLiveSignal(tradeSizeInr, LIVE_SIGNAL_HOURS);
   const studyScore = new Map(study.coins.map((coin) => [
@@ -151,7 +158,8 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
   const liveByCoin = new Map(live.map((coin) => [coin.coin, coin]));
   const coins = new Set([...live.filter((coin) => coin.score > 0).map((coin) => coin.coin), ...study.coreBasket]);
 
-  const candidates: AllocationCandidate[] = [];
+  // Routes first; the per-trade size depends on the budget, computed below.
+  const routes: (Omit<AllocationCandidate, "perTradeInr"> & {depthInr: number | null})[] = [];
   for (const coin of coins) {
     const signal = liveByCoin.get(coin);
     const entry = study.coins.find((item) => item.coin === coin);
@@ -159,20 +167,17 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
     const studyShare = studyTotal > 0 ? Math.max(0, studyScore.get(coin) ?? 0) / studyTotal : 0;
     const route = signal?.main ?? entry?.directions[0];
     if (!route) continue;
-    const depth = signal?.averageDepthInr ?? entry?.averageDepthInr ?? null;
-    const perTradeInr = Math.round(depth === null ? tradeSizeInr : Math.min(tradeSizeInr, depth));
-    if (perTradeInr < MINIMUM_PER_TRADE_INR) continue;
-    candidates.push({
+    routes.push({
       coin,
       weight: LIVE_WEIGHT * liveShare + (1 - LIVE_WEIGHT) * studyShare,
       coinVenue: route.sellVenue,
       coinVenueQuote: route.sellQuote,
       cashVenue: route.buyVenue,
       cashAsset: route.buyQuote,
-      perTradeInr,
       maximumTrades: MAXIMUM_TRADES_PER_COIN,
       expectedDailyProfitInr: signal?.expectedDailyProfitInr ?? 0,
       studyRank: entry?.rank ?? null,
+      depthInr: signal?.averageDepthInr ?? entry?.averageDepthInr ?? null,
     });
   }
 
@@ -182,7 +187,7 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
   // be moved and counts for neither.
   const pools: Record<string, number> = {};
   const held = new Map<string, number>();
-  const candidateVenue = new Map(candidates.map((candidate) => [candidate.coin, candidate.coinVenue]));
+  const candidateVenue = new Map(routes.map((route) => [route.coin, route.coinVenue]));
   for (const venue of VENUES) {
     for (const asset of valuation.assets?.(venue) ?? []) {
       const value = Math.max(0, valuation.holdingInr(venue, asset) ?? 0);
@@ -199,11 +204,26 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
     }
   }
   const budgetInr = Math.floor(Object.values(pools).reduce((sum, value) => sum + value, 0) + [...held.values()].reduce((sum, value) => sum + value, 0));
-  return allocateCapital({
-    budgetInr,
-    poolCapacityInr: pools,
-    candidates: candidates.map((candidate) => ({...candidate, coinHeldInr: held.get(candidate.coin) ?? 0})),
-  });
+
+  // The leg grows with the capital (the INR executor reads it back).
+  const dynamic = loadDynamicLegConfig();
+  const perLegInr = dynamic.enabled ? legSizeForBudget(budgetInr, tradeSizeInr, dynamic.maximumInr) : tradeSizeInr;
+  if (dynamic.enabled) publishDynamicLegSize({legInr: perLegInr, budgetInr, at: now});
+
+  const candidates: AllocationCandidate[] = routes
+    .map(({depthInr, ...route}) => ({
+      ...route,
+      perTradeInr: Math.round(depthInr === null ? perLegInr : Math.min(perLegInr, depthInr)),
+      coinHeldInr: held.get(route.coin) ?? 0,
+    }))
+    .filter((candidate) => candidate.perTradeInr >= MINIMUM_PER_TRADE_INR);
+
+  const ideal = allocateCapital({budgetInr, candidates: candidates.map(({coinHeldInr: _held, ...candidate}) => candidate)});
+  return {
+    ...allocateCapital({budgetInr, poolCapacityInr: pools, candidates}),
+    perLegInr,
+    ideal,
+  };
 }
 
 function targetsFromAllocation(allocation: CapitalAllocation): RefillTarget[] {
@@ -342,8 +362,10 @@ export class RouteRefillService {
         : [];
     const autoBuy = this.dependencies.getAutoBuyConfig();
     const autoBuyVenues = config.enabled && autoBuy.enabled ? [...BUY_VENUES] : [];
-    const tradeSizeInr = this.dependencies.getTradeSizeInr();
-    const allocation = this.dependencies.getAllocation(tradeSizeInr, valuation);
+    const configuredLegInr = this.dependencies.getTradeSizeInr();
+    const allocation = this.dependencies.getAllocation(configuredLegInr, valuation);
+    // One leg of the current plan: grows with capital when dynamic legs are on.
+    const tradeSizeInr = allocation?.perLegInr ?? configuredLegInr;
     const targets = allocation ? targetsFromAllocation(allocation) : this.dependencies.getTargets(tradeSizeInr, valuation);
     const autoSell = this.dependencies.getAutoSellConfig();
     const plan = planRouteRefills({
@@ -386,7 +408,17 @@ export class RouteRefillService {
           })),
           unfunded: allocation.unfunded,
           unfundedBy: allocation.unfundedBy ?? {},
+          perLegInr: tradeSizeInr,
+          configuredLegInr,
+          dynamicLeg: loadDynamicLegConfig(),
         }
+        : null,
+      venuePlan: allocation?.ideal
+        ? buildVenuePlan({
+          ideal: allocation.ideal,
+          holdingInr: (venue, asset) => valuation.holdingInr(venue, asset),
+          assets: (venue) => valuation.assets?.(venue) ?? [],
+        })
         : null,
       actions: plan.actions,
       covered: plan.covered,

@@ -47,6 +47,102 @@ export interface CapitalAllocation {
   readonly unfunded: readonly string[];
   /** For each unfunded coin, the cash pool that could not cover one trade (e.g. "unocoin:INR"). */
   readonly unfundedBy?: Readonly<Record<string, string>>;
+  /** Per-leg trade size the allocation was sized with. */
+  readonly perLegInr?: number;
+  /** The same capital split as if it could sit anywhere: where it SHOULD be. */
+  readonly ideal?: CapitalAllocation;
+}
+
+export interface VenuePlanRow {
+  readonly key: string;
+  readonly venues: readonly string[];
+  /** Cash the operator funds this row with. */
+  readonly fundWith: "INR" | "USDT";
+  /** INR the ideal split wants here: route cash plus coin stock. */
+  readonly targetInr: number;
+  readonly cashTargetInr: number;
+  readonly stockTargetInr: number;
+  /** What is here now that can serve it: cash plus coin stock (idle stock can be sold). */
+  readonly haveInr: number;
+  /** Positive: short by this much. Negative: holds more than its share. */
+  readonly gapInr: number;
+}
+
+export interface MisplacedStock {
+  readonly coin: string;
+  readonly venue: string;
+  readonly toVenue: string;
+  readonly valueInr: number;
+}
+
+/* Rows of the venue plan: the Binance + Bybit USDT pool, then each other exchange. */
+const PLAN_ROWS: readonly {key: string; venues: readonly string[]; fundWith: "INR" | "USDT"}[] = [
+  {key: "binance+bybit", venues: ["binance", "bybit"], fundWith: "USDT"},
+  {key: "coindcx", venues: ["coindcx"], fundWith: "INR"},
+  {key: "coinswitch", venues: ["coinswitch"], fundWith: "INR"},
+  {key: "unocoin", venues: ["unocoin"], fundWith: "INR"},
+];
+
+/**
+ * Venue-level capital plan: how much money each exchange should hold for
+ * the ideal split of the capital, whatever coins are core right now. The
+ * operator only funds exchanges; which coin stock that money becomes is the
+ * capital manager's call. Coin names appear only for stock sitting on the
+ * wrong exchange, which has to be moved by hand. Pure.
+ */
+export function buildVenuePlan(input: {
+  readonly ideal: CapitalAllocation;
+  readonly holdingInr: (venue: string, asset: string) => number | null;
+  readonly assets: (venue: string) => readonly string[];
+}): {rows: VenuePlanRow[]; misplaced: MisplacedStock[]} {
+  const coinVenue = new Map(input.ideal.coins.map((coin) => [coin.coin, coin.coinVenue]));
+  const rowOf = (venue: string) => PLAN_ROWS.find((row) => row.venues.includes(venue));
+  const rows = PLAN_ROWS.map((row) => ({...row, cashTargetInr: 0, stockTargetInr: 0, haveInr: 0, cashAssets: new Map<string, number>()}));
+  const find = (venue: string) => rows.find((row) => row.key === rowOf(venue)?.key);
+
+  for (const coin of input.ideal.coins) {
+    const stockRow = find(coin.coinVenue);
+    if (stockRow) stockRow.stockTargetInr += coin.coinNeedInr;
+    const cashRow = find(coin.cashVenue);
+    if (cashRow) {
+      cashRow.cashTargetInr += coin.cashNeedInr;
+      cashRow.cashAssets.set(coin.cashAsset, (cashRow.cashAssets.get(coin.cashAsset) ?? 0) + coin.cashNeedInr);
+    }
+  }
+
+  const misplaced: MisplacedStock[] = [];
+  for (const row of rows) {
+    for (const venue of row.venues) {
+      for (const asset of input.assets(venue)) {
+        const value = Math.max(0, input.holdingInr(venue, asset) ?? 0);
+        if (!(value > 0)) continue;
+        const home = coinVenue.get(asset);
+        if (asset !== "INR" && asset !== "USDT" && home !== undefined && rowOf(home)?.key !== row.key) {
+          misplaced.push({coin: asset, venue, toVenue: home, valueInr: value});
+          continue;
+        }
+        row.haveInr += value;
+      }
+    }
+  }
+
+  return {
+    rows: rows.map((row) => {
+      const targetInr = Math.round(row.cashTargetInr + row.stockTargetInr);
+      const fundWith = row.key === "coindcx" && (row.cashAssets.get("USDT") ?? 0) > (row.cashAssets.get("INR") ?? 0) ? "USDT" : row.fundWith;
+      return {
+        key: row.key,
+        venues: row.venues,
+        fundWith,
+        targetInr,
+        cashTargetInr: Math.round(row.cashTargetInr),
+        stockTargetInr: Math.round(row.stockTargetInr),
+        haveInr: Math.round(row.haveInr),
+        gapInr: Math.round(targetInr - row.haveInr),
+      };
+    }),
+    misplaced: misplaced.filter((item) => item.valueInr >= 300).sort((a, b) => b.valueInr - a.valueInr),
+  };
 }
 
 /**

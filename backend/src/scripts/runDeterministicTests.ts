@@ -258,6 +258,7 @@ const DETERMINISTIC_TESTS = [
   "rebalancing/tests/testInventoryRebalancingScoreService.js",
   "rebalancing/tests/testRouteRefill.js",
   "rebalancing/tests/testCapitalAllocator.js",
+  "rebalancing/tests/testVenuePlan.js",
   "exchanges/binance/tests/testBinanceTravelRuleWithdraw.js",
   "rebalancing/tests/testRebalancingDecisionEngine.js",
   "rebalancing/tests/testRebalancingExecutionService.js",

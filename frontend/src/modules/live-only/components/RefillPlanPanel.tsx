@@ -4,6 +4,7 @@ import {
 
 import type {
   RefillAction,
+  RefillPlanResponse,
 } from "../types/LiveOnlyRuntime";
 
 /*
@@ -75,6 +76,34 @@ export function RefillPlanPanel() {
               Auto top-up to {VENUE[venue] ?? venue} paused until {new Date(block.until).toLocaleString("en-GB", {hour12: false})}: {block.reason}
             </p>
           ))}
+        </div>
+      ) : null}
+
+      {plan?.venuePlan ? (
+        <div className="border-b border-border-default px-5 py-3">
+          <p className="mb-2 font-mono text-[11px] text-text-muted">
+            Capital plan by exchange · where your capital should sit for every current opportunity (coins change; this adapts)
+            {plan.allocation ? (
+              <>
+                {" "}· per leg ₹{plan.allocation.perLegInr.toLocaleString("en-IN")}
+                {plan.allocation.dynamicLeg.enabled
+                  ? ` (auto: grows with capital, ₹${plan.allocation.configuredLegInr.toLocaleString("en-IN")}–₹${plan.allocation.dynamicLeg.maximumInr.toLocaleString("en-IN")})`
+                  : ""}
+              </>
+            ) : null}
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {plan.venuePlan.rows.map((row) => (
+              <VenueCard key={row.key} row={row} usdtInr={plan.usdtInr} />
+            ))}
+          </div>
+          {plan.venuePlan.misplaced.length > 0 ? (
+            <p className="mt-2 font-mono text-[11px] text-amber-300">
+              Stock on the wrong exchange (move by hand):{" "}
+              {plan.venuePlan.misplaced.slice(0, 6).map((item) =>
+                `${item.coin} ₹${Math.round(item.valueInr).toLocaleString("en-IN")} ${VENUE[item.venue] ?? item.venue} → ${VENUE[item.toVenue] ?? item.toVenue}`).join(" · ")}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -198,6 +227,40 @@ export function RefillPlanPanel() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+type VenueRow = NonNullable<RefillPlanResponse["data"]["venuePlan"]>["rows"][number];
+
+const ROW_NAME: Record<string, string> = {
+  "binance+bybit": "Binance + Bybit",
+  coindcx: "CoinDCX",
+  coinswitch: "CoinSwitch",
+  unocoin: "UnoCoin",
+};
+
+function VenueCard({row, usdtInr}: {row: VenueRow; usdtInr: number | null}) {
+  const short = row.gapInr >= 300;
+  const surplus = row.gapInr <= -300;
+  const inUsdt = (inr: number) => (usdtInr ? `≈$${Math.round(inr / usdtInr).toLocaleString("en-IN")}` : "");
+  return (
+    <div className="border border-border-default/70 px-3 py-2 font-mono text-[11px]">
+      <p className="text-text-primary">{ROW_NAME[row.key] ?? row.key} <span className="text-text-muted">· {row.fundWith}</span></p>
+      <p className="mt-1 tabular-nums">
+        <span className={short ? "text-amber-300" : "text-emerald-300"}>₹{row.haveInr.toLocaleString("en-IN")}</span>
+        <span className="text-text-muted"> / ₹{row.targetInr.toLocaleString("en-IN")} target</span>
+      </p>
+      <p className="text-[10px] text-text-muted">cash ₹{row.cashTargetInr.toLocaleString("en-IN")} · stock ₹{row.stockTargetInr.toLocaleString("en-IN")}</p>
+      <p className={`mt-1 ${short ? "text-amber-300" : surplus ? "text-sky-300" : "text-emerald-300"}`}>
+        {short
+          ? row.fundWith === "USDT"
+            ? `Add ₹${row.gapInr.toLocaleString("en-IN")} ${inUsdt(row.gapInr)} USDT`
+            : `Deposit ₹${row.gapInr.toLocaleString("en-IN")} INR`
+          : surplus
+            ? `₹${(-row.gapInr).toLocaleString("en-IN")} above its share`
+            : "Balanced"}
+      </p>
+    </div>
   );
 }
 

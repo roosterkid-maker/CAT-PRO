@@ -344,6 +344,22 @@ export interface RefillPlanResponse {
       }>;
       unfunded: string[];
       unfundedBy: Record<string, string>;
+      perLegInr: number;
+      configuredLegInr: number;
+      dynamicLeg: {enabled: boolean; maximumInr: number};
+    } | null;
+    venuePlan: {
+      rows: Array<{
+        key: string;
+        venues: string[];
+        fundWith: "INR" | "USDT";
+        targetInr: number;
+        cashTargetInr: number;
+        stockTargetInr: number;
+        haveInr: number;
+        gapInr: number;
+      }>;
+      misplaced: Array<{coin: string; venue: string; toVenue: string; valueInr: number}>;
     } | null;
     actions: RefillAction[];
     covered: Array<{venue: string; asset: string; haveInr: number | null; targetInr: number}>;

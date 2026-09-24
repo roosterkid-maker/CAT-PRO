@@ -3,6 +3,11 @@ import {
   isLiveOnlyRuntimeEnabled,
 } from "../../../config/LiveOnlyRuntimePolicy";
 
+import {
+  getDynamicLegSize,
+  loadDynamicLegConfig,
+} from "./InrDynamicLegSize";
+
 /*
  * Policy for executing the scanner's INR routes (USDT<->INR, INR<->INR).
  *
@@ -99,14 +104,21 @@ export function loadInrRouteExecutionPolicy(
   }
 
   const livePolicy = getLiveOnlyRuntimePolicy(environment);
+  // The leg grows with the capital the capital manager can deploy (never
+  // below the configured leg, never above the dynamic hard cap).
+  const dynamicLeg = loadDynamicLegConfig(environment);
+  const published = dynamicLeg.enabled ? getDynamicLegSize() : null;
+  const targetCapitalPerLegInr = published
+    ? Math.max(livePolicy.preferredCapitalPerLegInr, Math.min(dynamicLeg.maximumInr, published.legInr))
+    : livePolicy.preferredCapitalPerLegInr;
 
   return Object.freeze({
     mode,
     inrVenues: Object.freeze([...new Set(inrVenues)]),
     hedgeVenues: INR_ROUTE_HEDGE_VENUES,
     minimumCapitalPerLegInr: livePolicy.minimumCapitalPerLegInr,
-    targetCapitalPerLegInr: livePolicy.preferredCapitalPerLegInr,
-    maximumCapitalPerLegInr: livePolicy.maximumCapitalPerLegInr,
+    targetCapitalPerLegInr,
+    maximumCapitalPerLegInr: Math.max(livePolicy.maximumCapitalPerLegInr, targetCapitalPerLegInr),
     minimumNetPercent: number(environment, "CAT_PRO_INR_LIVE_MIN_NET_PERCENT", 1, 0.5, 20),
     routeCooldownMs: number(environment, "CAT_PRO_INR_LIVE_ROUTE_COOLDOWN_MS", 60_000, 5_000, 3_600_000),
     maximumBookAgeMs: 3_000,
