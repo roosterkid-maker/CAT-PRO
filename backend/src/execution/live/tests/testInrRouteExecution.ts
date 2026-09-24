@@ -7,6 +7,7 @@ import {LiveTradingInterlock} from "../LiveTradingInterlock";
 import {loadInrRouteExecutionPolicy, type InrRouteExecutionPolicy} from "../inr-routes/InrRouteExecutionPolicy";
 import {commonStep, planInrRoute, type InrRoutePlanInput} from "../inr-routes/InrRoutePlanner";
 import {
+  choosePrimarySide,
   uuidClientOrderId,
   InrRouteSessionExecutor,
   type InrRouteExecuteInput,
@@ -168,7 +169,7 @@ function executeInput(overrides: Partial<InrRouteExecuteInput> = {}): InrRouteEx
     hedgeBufferPercents: [0.15, 0.5, 1],
     dustToleranceInr: 150,
     hedgeRules: {quantityStep: 0.01, minimumQuantity: null, minimumNotional: 1, priceStep: 0.0001},
-    getHedgeLevels: () => [{price: 1.2, quantity: 100}],
+    getHedgeLevels: async () => [{price: 1.2, quantity: 100}],
     ...overrides,
   };
 }
@@ -266,6 +267,27 @@ async function testExecutor(directory: string): Promise<void> {
   assert.equal("timeInForce" in unocoin.sent[0], false);
   assert.equal(unocoin.sent[0].timeoutMs, 4_000);
   assert.equal(unocoin.sent[0].pollingIntervalMs, 1_000);
+
+  // INR<->INR: the less reliable INR venue (CoinSwitch) fills first, the
+  // streamed one (CoinDCX) hedges with its bounded GTC contract.
+  assert.equal(choosePrimarySide({buyVenue: "unocoin", buyMarket: "XINR", sellVenue: "coindcx", sellMarket: "XINR"}), "buy");
+  assert.equal(choosePrimarySide({buyVenue: "coindcx", buyMarket: "XINR", sellVenue: "coinswitch", sellMarket: "XINR"}), "sell");
+  assert.equal(choosePrimarySide({buyVenue: "bybit", buyMarket: "XUSDT", sellVenue: "coinswitch", sellMarket: "XINR"}), "sell");
+  assert.equal(choosePrimarySide({buyVenue: "coindcx", buyMarket: "XINR", sellVenue: "coindcx", sellMarket: "XUSDT"}), "buy");
+  const inrInr = new FakeGateway({primary: {kind: "fill", filled: 10, price: 108}, hedge1: {kind: "fill", filled: 10, price: 100.6}});
+  const inrInrSession = await executor(inrInr).execute(executeInput({
+    route: {...ROUTE, routeKey: "inr-inr", kind: "INR_INR", sellVenue: "coinswitch", sellMarket: "XINR", sellVenueMarket: "X_INR", buyToInr: 1, sellToInr: 1},
+    plan: {...executeInput().plan, sellLimitPrice: 108},
+    getHedgeLevels: async () => [{price: 100.5, quantity: 50}],
+  }));
+  assert.equal(inrInrSession.state, "COMPLETED");
+  assert.equal(inrInr.sent[0].exchange, "coinswitch");
+  assert.equal(inrInr.sent[0].side, "sell");
+  assert.equal(inrInr.sent[1].exchange, "coindcx");
+  assert.equal(inrInr.sent[1].side, "buy");
+  assert.equal(inrInr.sent[1].timeInForce, "GTC", "a CoinDCX hedge uses its bounded GTC contract, not IOC");
+  assert.equal(inrInr.sent[1].cancelOnTimeout, true);
+  assert.ok((inrInrSession.realizedNetInr ?? 0) > 0);
 
   // A venue with no order contract never gets an order.
   const unknownVenue = new FakeGateway({});
@@ -412,6 +434,36 @@ async function testRunner(directory: string): Promise<void> {
   assert.ok(refreshed.includes("coinswitch:X_INR"), JSON.stringify(refreshed));
   const csAttempt = cs.runner.getDiagnostics().recentAttempts[0];
   assert.equal(csAttempt?.status, "SHADOW", JSON.stringify(csAttempt));
+
+  // INR<->INR runs only when both INR venues are enabled.
+  const inrInrRoute = scannedRoute({
+    routeKey: "INR_INR|X|coindcx:XINR>coinswitch:XINR",
+    kind: "INR_INR",
+    sellVenue: "coinswitch", sellMarket: "XINR", sellVenueMarket: "X_INR",
+    usdtInrRate: null,
+  });
+  const inrInrBooks = (venue: string, market: string) =>
+    venue === "coinswitch"
+      ? {exchange: venue, market, bids: [{price: 108, quantity: 10}], asks: [{price: 109, quantity: 10}], timestamp: NOW - 100}
+      : {exchange: venue, market, bids: [{price: 99, quantity: 10}], asks: [{price: 100, quantity: 5}, {price: 101, quantity: 5}], timestamp: NOW - 100};
+  const onlyDcx = runnerFixture(directory, "inr-inr-off", {getQualifiedRoutes: () => [inrInrRoute], getBook: inrInrBooks});
+  await onlyDcx.runner.tick();
+  assert.equal(onlyDcx.runner.getDiagnostics().recentAttempts.length, 0, "CoinSwitch not enabled: INR<->INR route ignored");
+  const hedgeRefreshes: string[] = [];
+  const both = runnerFixture(directory, "inr-inr-live", {
+    getPolicy: () => ({...policy("live"), inrVenues: ["coindcx", "coinswitch"]}),
+    getQualifiedRoutes: () => [inrInrRoute],
+    getBook: inrInrBooks,
+    refreshBook: async (venue, market) => { hedgeRefreshes.push(`${venue}:${market}`); },
+    getBalance: (_venue, asset) => ({available: asset === "INR" ? 5_000 : 20, synchronizedAt: NOW - 1_000}),
+    gateway: new FakeGateway({primary: {kind: "fill", filled: 10, price: 108}, hedge1: {kind: "fill", filled: 10, price: 100.5}}),
+  });
+  await both.runner.tick();
+  const inrInrAttempt = both.runner.getDiagnostics().recentAttempts[0];
+  assert.equal(inrInrAttempt?.status, "COMPLETED", JSON.stringify(inrInrAttempt));
+  assert.equal(both.gateway.sent[0].exchange, "coinswitch", "CoinSwitch leg first");
+  assert.equal(both.gateway.sent[1].exchange, "coindcx", "CoinDCX hedges");
+  assert.ok(hedgeRefreshes.filter((entry) => entry === "coindcx:XINR").length >= 2, "hedge venue book re-read before the hedge");
 
   // Off: nothing at all.
   const off = runnerFixture(directory, "off", {getPolicy: () => policy("off")});

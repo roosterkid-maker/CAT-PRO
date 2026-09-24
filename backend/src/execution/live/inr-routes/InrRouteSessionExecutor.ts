@@ -130,8 +130,8 @@ export interface InrRouteExecuteInput {
   readonly hedgeBufferPercents: readonly number[];
   readonly dustToleranceInr: number;
   readonly hedgeRules: InrRouteHedgeVenueRules;
-  /** Fresh hedge-side levels (bids to sell into, asks to buy from). */
-  readonly getHedgeLevels: () => readonly OrderBookLevel[] | null;
+  /** Fresh hedge-side levels (bids to sell into, asks to buy from); refreshed per attempt on polled venues. */
+  readonly getHedgeLevels: () => Promise<readonly OrderBookLevel[] | null>;
 }
 
 interface Snapshot {
@@ -195,6 +195,32 @@ function orderRequest(
   };
 }
 
+/*
+ * The primary leg goes first on the least reliable fill, so the hedge lands
+ * on the most reliable one: UnoCoin (REST books, no client ID) before
+ * CoinSwitch (polled INR books) before CoinDCX (streamed books) before the
+ * liquid USDT venues. On one venue (CoinDCX INR vs CoinDCX USDT) the INR
+ * leg is primary.
+ */
+const PRIMARY_PRIORITY: Readonly<Record<string, number>> = {
+  unocoin: 4,
+  coinswitch: 3,
+  coindcx: 2,
+  binance: 1,
+  bybit: 1,
+};
+
+export function choosePrimarySide(route: {
+  readonly buyVenue: string;
+  readonly buyMarket: string;
+  readonly sellVenue: string;
+  readonly sellMarket: string;
+}): "buy" | "sell" {
+  const score = (venue: string, market: string) =>
+    (PRIMARY_PRIORITY[venue] ?? 0) + (market.toUpperCase().endsWith("INR") ? 0.5 : 0);
+  return score(route.buyVenue, route.buyMarket) >= score(route.sellVenue, route.sellMarket) ? "buy" : "sell";
+}
+
 const DEFAULT_FILE = resolve(process.cwd(), "logs", "live", "inr-route-sessions.jsonl");
 const MAXIMUM_SESSIONS = 300;
 const TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED", "FAILED"]);
@@ -225,7 +251,7 @@ export class InrRouteSessionExecutor {
   async execute(input: InrRouteExecuteInput): Promise<InrRouteSession> {
     const startedAt = this.now();
     const sessionId = `inr-${createHash("sha256").update(`${input.route.routeKey}|${startedAt}|${Math.random()}`).digest("hex").slice(0, 16)}`;
-    const primarySide: "buy" | "sell" = input.route.buyMarket.endsWith("INR") ? "buy" : "sell";
+    const primarySide = choosePrimarySide(input.route);
     const primaryVenue = primarySide === "buy" ? input.route.buyVenue : input.route.sellVenue;
     const primaryMarket = primarySide === "buy" ? input.route.buyVenueMarket : input.route.sellVenueMarket;
     const primaryLimit = primarySide === "buy" ? input.plan.buyLimitPrice : input.plan.sellLimitPrice;
@@ -297,7 +323,7 @@ export class InrRouteSessionExecutor {
     for (const [attempt, bufferPercent] of input.hedgeBufferPercents.entries()) {
       const remaining = floorToStep(filled - hedged, input.hedgeRules.quantityStep);
       if (remaining <= 0) break;
-      const levels = input.getHedgeLevels();
+      const levels = await input.getHedgeLevels();
       const touch = levels ? worstPrice(levels, remaining) : null;
       if (touch === null) {
         session = this.save({...session, reasons: [...session.reasons, `HEDGE ${attempt + 1}: fresh ${hedgeVenue} book does not cover ${remaining}.`]});

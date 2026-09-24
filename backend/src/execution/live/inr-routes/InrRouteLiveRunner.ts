@@ -82,6 +82,7 @@ import {
 } from "./InrRoutePlanner";
 
 import {
+  choosePrimarySide,
   InrRouteSessionExecutor,
   type InrRouteSession,
   type InrRouteSessionRoute,
@@ -380,8 +381,6 @@ export class InrRouteLiveRunner {
         : (policy.hedgeVenues as readonly string[]).includes(venue);
       if (!allowed) return false;
     }
-    // Two INR legs need a hedge venue with an IOC-grade contract; not yet.
-    if (route.kind === "INR_INR") return false;
     return true;
   }
 
@@ -497,7 +496,9 @@ export class InrRouteLiveRunner {
       sellToInr,
       feesPercent: route.feesPercent,
     };
-    const hedgeIsSell = route.buyMarket.endsWith("INR");
+    const hedgeIsSell = choosePrimarySide(route) === "buy";
+    const hedgeVenue = hedgeIsSell ? route.sellVenue : route.buyVenue;
+    const hedgeVenueMarket = hedgeIsSell ? route.sellVenueMarket : route.buyVenueMarket;
     const hedgeCapability = hedgeIsSell ? sellCapability : buyCapability;
     const hedgeStep = quantityStepOf(hedgeCapability);
     if (!(hedgeStep !== null && hedgeStep > 0)) return block("RULES_MISSING: hedge lot step unknown.");
@@ -514,10 +515,10 @@ export class InrRouteLiveRunner {
         minimumNotional: hedgeCapability.notional.minimumNotional,
         priceStep: priceStepOf(hedgeCapability),
       },
-      getHedgeLevels: () => {
-        const book = hedgeIsSell
-          ? this.dependencies.getBook(route.sellVenue, route.sellVenueMarket)
-          : this.dependencies.getBook(route.buyVenue, route.buyVenueMarket);
+      getHedgeLevels: async () => {
+        // Polled INR venues (CoinSwitch, UnoCoin) are re-read before each hedge.
+        await this.dependencies.refreshBook(hedgeVenue, hedgeVenueMarket);
+        const book = this.dependencies.getBook(hedgeVenue, hedgeVenueMarket);
         if (!book || this.dependencies.now() - book.timestamp > policy.maximumBookAgeMs) return null;
         return hedgeIsSell
           ? [...book.bids].sort((a, b) => b.price - a.price)
