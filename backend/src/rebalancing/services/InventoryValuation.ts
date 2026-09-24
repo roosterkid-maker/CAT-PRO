@@ -39,6 +39,16 @@ export function createInventoryValuation(now = Date.now()): InventoryValuation {
     usdtInr = null;
   }
   const snapshot = normalizedInventorySnapshotService.getSnapshot(now);
+  // A venue that cannot value an asset (e.g. FLR on CoinSwitch) borrows the
+  // price another venue in the same snapshot values it at.
+  const snapshotPriceUsdt = new Map<string, number>();
+  for (const exchange of snapshot.exchanges) {
+    for (const asset of exchange.assets) {
+      const price = asset.valuation.priceUsdt;
+      const upper = asset.asset.toUpperCase();
+      if (price !== null && price > 0 && !snapshotPriceUsdt.has(upper)) snapshotPriceUsdt.set(upper, price);
+    }
+  }
 
   const priceInr = (assetValue: string): number | null => {
     const asset = assetValue.toUpperCase();
@@ -52,7 +62,9 @@ export function createInventoryValuation(now = Date.now()): InventoryValuation {
     const usdtQuote = ["binance", "bybit", "coindcx"]
       .map((venue) => marketCache.get(venue, `${asset}USDT`))
       .find((quote) => quote && quote.bestBidPrice !== null && quote.bestBidPrice > 0);
-    return usdtQuote?.bestBidPrice ? usdtQuote.bestBidPrice * usdtInr : null;
+    if (usdtQuote?.bestBidPrice) return usdtQuote.bestBidPrice * usdtInr;
+    const fromSnapshot = snapshotPriceUsdt.get(asset);
+    return fromSnapshot !== undefined ? fromSnapshot * usdtInr : null;
   };
 
   const position = (venue: string, asset: string) => {
