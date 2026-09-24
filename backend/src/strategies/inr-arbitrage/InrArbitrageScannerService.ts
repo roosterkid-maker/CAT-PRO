@@ -764,7 +764,10 @@ export class InrArbitrageScannerService {
       feePercents,
       withholdingPercents: [inrCost.withholdingPercent, usdtCost.withholdingPercent],
       tdsVerified: inrCost.verified && usdtCost.verified,
-      evidence: minTier(inrLeg.tier, usdtLeg.tier, conversion.tier),
+      // The USDT/INR conversion is never traded (inventory model): it only
+      // values USDT in rupees, so a fresh two-sided price quote is enough
+      // and does not downgrade two executable legs.
+      evidence: minTier(inrLeg.tier, usdtLeg.tier),
       conversionVenue: conversion.venue,
       usdtInrRate: rate,
       now,

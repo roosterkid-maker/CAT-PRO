@@ -216,17 +216,16 @@ function testGatesAndEvidence(): void {
 
 function testInrUsdtWithConversionFallback(): void {
   const h = harness();
-  // Only a CoinSwitch USDT/INR quote (no quantities) exists: QUOTE evidence.
+  // Only a CoinSwitch USDT/INR quote (no quantities) exists as the conversion.
   h.put(quote({exchange: "coinswitch", market: "USDT_INR", bestBidPrice: 99.7, bestAskPrice: 99.9, executable: false, source: "bookTicker"}));
   h.put(quote({exchange: "coindcx", market: "XYZINR", bestBidPrice: 95, bestAskPrice: 95.5, bestBidQty: 100, bestAskQty: 100}));
   h.put(quote({exchange: "binance", market: "XYZUSDT", bestBidPrice: 1.0, bestAskPrice: 1.001, bestBidQty: 1_000, bestAskQty: 1_000}));
   h.service.scan();
   const report = h.service.getReport();
   const route = h.service.getAllRoutes().find((item) => item.kind === "INR_USDT" && item.buyVenue === "coindcx")!;
-  assert.equal(report.opportunities.length + report.nearMisses.length, 0, "quote-level conversion routes are not shown");
   assert.ok(route, "INR_USDT priced with the fallback conversion quote");
   assert.equal(route.conversionVenue, "coinswitch");
-  assert.equal(route.evidence, "QUOTE", "weakest leg (conversion quote) sets the evidence");
+  assert.equal(route.evidence, "BOOK", "the untraded conversion quote only values USDT; two executable legs stay BOOK");
   assert.equal(route.usdtInrRate, 99.7);
   assert.equal(report.conversion[0].evidence, "QUOTE");
   assert.deepEqual(h.demand.includes("XYZINR"), false, "a BOOK INR leg is not re-requested");
