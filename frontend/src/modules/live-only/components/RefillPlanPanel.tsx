@@ -52,6 +52,11 @@ export function RefillPlanPanel() {
                 {" "}· ≤ ${plan.automation.maximumPerTransferUsdt}/transfer, ${plan.automation.maximumPerDayUsdt}/day
               </>
             ) : null}
+            {plan.automation.autoBuy?.enabled ? (
+              <>
+                {" "}· auto-buy ₹{Math.round(plan.automation.autoBuy.spentTodayInr).toLocaleString("en-IN")} / ₹{plan.automation.autoBuy.dailyCapInr.toLocaleString("en-IN")} today · keeps ₹{plan.automation.autoBuy.cashFloorInr.toLocaleString("en-IN")} cash
+              </>
+            ) : null}
             {" "}· {autoCount} auto · {actions.length - autoCount} manual
           </p>
         ) : null}
@@ -117,13 +122,20 @@ export function RefillPlanPanel() {
 
       {plan && plan.recentExecutions.length > 0 ? (
         <div className="border-t border-border-default px-5 py-3 font-mono text-[11px]">
-          <p className="mb-1 text-text-muted">Recent automatic transfers</p>
-          {plan.recentExecutions.slice(0, 5).map((execution) => (
-            <p key={`${execution.at}-${execution.actionId}`} className={execution.status === "EXECUTED" ? "text-emerald-300" : "text-amber-300"}>
-              {new Date(execution.at).toLocaleString("en-GB", {hour12: false})} · {execution.amountUsdt} USDT → {VENUE[execution.toVenue] ?? execution.toVenue} · {execution.status}
-              {execution.status !== "EXECUTED" ? <span className="text-text-muted"> · {execution.detail}</span> : null}
-            </p>
-          ))}
+          <p className="mb-1 text-text-muted">Recent automatic actions</p>
+          {plan.recentExecutions.slice(0, 6).map((execution) => {
+            const ok = execution.status === "EXECUTED" || execution.status === "BUY_FILLED" || execution.status === "BUY_PARTIAL";
+            return (
+              <p key={`${execution.at}-${execution.actionId}`} className={ok ? "text-emerald-300" : "text-amber-300"}>
+                {new Date(execution.at).toLocaleString("en-GB", {hour12: false})} ·{" "}
+                {execution.kind === "STOCK_BUY"
+                  ? `buy ${execution.coin} on ${VENUE[execution.toVenue] ?? execution.toVenue} · ₹${Math.round(execution.spentInr ?? 0).toLocaleString("en-IN")}`
+                  : `${execution.amountUsdt} USDT → ${VENUE[execution.toVenue] ?? execution.toVenue}`}
+                {" "}· {execution.status}
+                {!ok ? <span className="text-text-muted"> · {execution.detail}</span> : null}
+              </p>
+            );
+          })}
         </div>
       ) : null}
     </section>

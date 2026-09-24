@@ -664,7 +664,7 @@ export class InrRouteLiveRunner {
  * same numbers. The shared capability, when present, still owns the
  * trading/maintenance status.
  */
-function coinSwitchCapability(market: string): ExchangeMarketCapability | null {
+export function coinSwitchCapability(market: string): ExchangeMarketCapability | null {
   const rules = getCoinSwitchMarketRuleEvidence(market);
   if (!rules) return null;
   const shared = exchangeCapabilityService.getCachedCapability("coinswitch", market, "spot");
@@ -688,13 +688,13 @@ function coinSwitchCapability(market: string): ExchangeMarketCapability | null {
 }
 
 /** Venues that publish decimal precision instead of a step (UnoCoin) get 10^-precision. */
-function quantityStepOf(capability: ExchangeMarketCapability): number | null {
+export function quantityStepOf(capability: ExchangeMarketCapability): number | null {
   const {quantityStep, quantityPrecision} = capability.quantity;
   if (quantityStep !== null && quantityStep > 0) return quantityStep;
   return quantityPrecision !== null && quantityPrecision >= 0 ? Number((10 ** -quantityPrecision).toFixed(quantityPrecision)) : null;
 }
 
-function priceStepOf(capability: ExchangeMarketCapability): number | null {
+export function priceStepOf(capability: ExchangeMarketCapability): number | null {
   const {priceStep, pricePrecision} = capability.price;
   if (priceStep !== null && priceStep > 0) return priceStep;
   return pricePrecision !== null && pricePrecision >= 0 ? Number((10 ** -pricePrecision).toFixed(pricePrecision)) : null;

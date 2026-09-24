@@ -334,6 +334,13 @@ export interface RefillPlanResponse {
       destinationCooldownMinutes: number;
       lastTopUpAt: Record<string, number>;
       blocked: Record<string, {until: number; reason: string}>;
+      autoBuy: {
+        enabled: boolean;
+        dailyCapInr: number;
+        spentTodayInr: number;
+        cashFloorInr: number;
+        paused: Record<string, {until: number; reason: string}>;
+      };
     };
     recentExecutions: Array<{
       at: number;
@@ -341,6 +348,9 @@ export interface RefillPlanResponse {
       toVenue: string;
       amountUsdt: number;
       status: string;
+      kind?: "USDT_TOPUP" | "STOCK_BUY";
+      coin?: string;
+      spentInr?: number;
       detail: string;
       referenceId: string | null;
     }>;

@@ -16,6 +16,12 @@ services:
       CAT_PRO_INR_LIVE_MODE: ${CAT_PRO_INR_LIVE_MODE:-live}
       CAT_PRO_INR_LIVE_VENUES: ${CAT_PRO_INR_LIVE_VENUES:-coindcx,coinswitch,unocoin}
       CAT_PRO_INR_LIVE_CONFIRMATION: ${CAT_PRO_INR_LIVE_CONFIRMATION:-ENABLE_CAT_PRO_INR_ROUTE_LIVE}
+      # Capital manager buys core-basket stock on its sell venue (operator
+      # limits 2026-09-24): core coins only, up to target, <= INR 5,000/day,
+      # keeping INR 1,000 of cash on the venue, never at a > 1% premium.
+      CAT_PRO_REFILL_AUTO_BUY_ENABLED: ${CAT_PRO_REFILL_AUTO_BUY_ENABLED:-true}
+      CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR: ${CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR:-5000}
+      CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR: ${CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR:-1000}
 
       # Retired runtime controls cannot accidentally grant authority.
       AUTOMATED_PAPER_TRADING_CONFIRMATION: ""

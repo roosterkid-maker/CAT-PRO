@@ -5,6 +5,7 @@ import {join} from "node:path";
 
 import {planRouteRefills, type RefillTarget} from "../services/RouteInventoryRefillPlanner";
 import {RouteRefillService} from "../services/RouteRefillService";
+import type {StockBuyPort, StockBuyRequest, StockBuyResult} from "../services/StockBuyExecutor";
 import type {RebalancingExecutionConfig} from "../execution/RebalancingExecutionConfig";
 import type {RebalancingMoveOutcome} from "../execution/RebalancingExecutionService";
 import type {RebalancingDecisionPlan} from "../services/RebalancingDecisionEngine";
@@ -186,11 +187,97 @@ async function testAutoExecution(directory: string): Promise<void> {
   assert.equal(tinyPort.moves.length, 0);
 }
 
+/* Capital manager buys core stock itself: daily cap, cash floor, backoffs. */
+async function testAutoStockBuy(directory: string): Promise<void> {
+  const now = 1_790_000_000_000;
+  const targets: RefillTarget[] = [
+    {coin: "LINK", rank: 1, coinVenue: "binance", coinNeedInr: 7_500, cashVenue: "unocoin", cashAsset: "INR", cashNeedInr: 0, coinVenueQuote: "USDT"},
+    {coin: "GRAM", rank: 2, coinVenue: "coinswitch", coinNeedInr: 2_400, cashVenue: "bybit", cashAsset: "USDT", cashNeedInr: 0, coinVenueQuote: "INR"},
+  ];
+  const holdings: Record<string, number> = {"binance|USDT": 6_000, "coinswitch|INR": 1_500};
+
+  // Planner: with auto-buy on, BUY_COIN is AUTO and carries its quote.
+  const planned = planRouteRefills({
+    targets,
+    venues: VENUES,
+    holdingInr: (venue, asset) => holdings[`${venue}|${asset}`] ?? 0,
+    priceInr: () => null,
+    autoUsdtDestinations: [],
+    autoBuyVenues: ["binance", "coinswitch"],
+    refillBelowShare: 0.5,
+    sourceFloorInr: 500,
+    minimumActionInr: 300,
+  });
+  const link = planned.actions.find((action) => action.id === "BUY_COIN|LINK|binance");
+  assert.equal(link?.mode, "AUTO");
+  assert.equal(link?.buyQuote, "USDT");
+
+  class FakeBuy implements StockBuyPort {
+    readonly requests: StockBuyRequest[] = [];
+    constructor(private readonly outcome: (request: StockBuyRequest) => StockBuyResult) {}
+    async buy(request: StockBuyRequest): Promise<StockBuyResult> {
+      this.requests.push(request);
+      return this.outcome(request);
+    }
+  }
+  const valuation = {usdtInr: 100, quantity: () => 0, holdingInr: (venue: string, asset: string) => holdings[`${venue}|${asset}`] ?? 0, priceInr: () => null};
+  const service = (name: string, port: StockBuyPort, enabled = true) => new RouteRefillService({
+    getTargets: () => targets,
+    getValuation: () => valuation,
+    getConfig: () => config(),
+    getTradeSizeInr: () => 1_500,
+    getAutoBuyConfig: () => ({enabled, dailyCapInr: 5_000, cashFloorInr: 1_000}),
+    getBuyPort: async () => port,
+  }, join(directory, `${name}.jsonl`));
+
+  const filled = new FakeBuy((request) => ({status: "FILLED", spentInr: request.amountInr, filledQuantity: 1, averagePrice: 1, orderId: "o", detail: "ok"}));
+  const buyer = service("buy", filled);
+  const first = await buyer.executeAuto(new FakePort(), now);
+  const buys = first.filter((item) => item.kind === "STOCK_BUY");
+  // LINK: min(7,500 target, 5,000 cap, 6,000 - 1,000 floor) = 5,000; GRAM: cap exhausted.
+  assert.deepEqual(filled.requests.map((request) => [request.coin, request.venue, request.quote, request.amountInr]), [["LINK", "binance", "USDT", 5_000]]);
+  assert.equal(buys[0]?.status, "BUY_FILLED");
+  assert.equal(buyer.getPlan(now).automation.autoBuy.spentTodayInr, 5_000);
+  await buyer.executeAuto(new FakePort(), now + 60_000);
+  assert.equal(filled.requests.length, 1, "daily cap reached: no more buys today");
+
+  // Cash floor: CoinSwitch has 1,500 INR, keeps 1,000 -> at most 500.
+  const floorPort = new FakeBuy((request) => ({status: "FILLED", spentInr: request.amountInr, filledQuantity: 1, averagePrice: 1, orderId: "o", detail: "ok"}));
+  const floored = service("floor", floorPort);
+  holdings["binance|USDT"] = 900;
+  await floored.executeAuto(new FakePort(), now);
+  assert.deepEqual(floorPort.requests.map((request) => [request.coin, request.amountInr]), [["GRAM", 500]], "LINK skipped (Binance below floor); GRAM limited by the floor");
+  holdings["binance|USDT"] = 6_000;
+
+  // Unknown outcome: counts in full against the cap and pauses that coin for hours.
+  const unknownPort = new FakeBuy((request) => ({status: "UNKNOWN", spentInr: request.amountInr, filledQuantity: 0, averagePrice: null, orderId: null, detail: "lost"}));
+  const unsure = service("unknown", unknownPort);
+  await unsure.executeAuto(new FakePort(), now);
+  assert.equal(unsure.getPlan(now).automation.autoBuy.spentTodayInr, 5_000);
+  assert.ok(unsure.getPlan(now).automation.autoBuy.paused["binance|LINK"]);
+
+  // No fill: short pause, nothing spent.
+  const emptyPort = new FakeBuy(() => ({status: "NO_FILL", spentInr: 0, filledQuantity: 0, averagePrice: null, orderId: "o", detail: "no fill"}));
+  const empty = service("empty", emptyPort);
+  await empty.executeAuto(new FakePort(), now);
+  await empty.executeAuto(new FakePort(), now + 5 * 60_000);
+  assert.equal(emptyPort.requests.filter((request) => request.coin === "LINK").length, 1, "paused after a no-fill");
+  assert.equal(empty.getPlan(now).automation.autoBuy.spentTodayInr, 0);
+
+  // Switched off: nothing is bought and BUY_COIN stays manual.
+  const offPort = new FakeBuy(() => { throw new Error("must not buy"); });
+  const off = service("off", offPort, false);
+  await off.executeAuto(new FakePort(), now);
+  assert.equal(offPort.requests.length, 0);
+  assert.equal(off.getPlan(now).actions.find((action) => action.kind === "BUY_COIN")?.mode, "MANUAL");
+}
+
 async function main(): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "cat-pro-route-refill-"));
   try {
     testPlanner();
     await testAutoExecution(directory);
+    await testAutoStockBuy(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }

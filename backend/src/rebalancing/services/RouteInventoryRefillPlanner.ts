@@ -12,9 +12,10 @@
  *   BUY_COIN    the coin is nowhere to move from: buy it on the sell venue
  *   DEPOSIT_INR INR below target on an INR buy venue (bank deposit)
  *
- * An action is AUTO only when the capital manager can do it itself today:
- * USDT withdrawn from Binance to a whitelisted exchange. Everything else is
- * a MANUAL instruction for the operator. Pure: no I/O.
+ * An action is AUTO only when the capital manager can do it itself: USDT
+ * withdrawn from Binance to a whitelisted exchange, or (when enabled) buying
+ * a core coin on its sell venue with that venue's cash. Everything else is a
+ * MANUAL instruction for the operator. Pure: no I/O.
  */
 export type RefillActionKind = "MOVE_USDT" | "MOVE_COIN" | "BUY_COIN" | "DEPOSIT_INR";
 
@@ -30,6 +31,8 @@ export interface RefillAction {
   /** Units of `asset` for coin moves; null for cash. */
   readonly quantity: number | null;
   readonly mode: "AUTO" | "MANUAL";
+  /** BUY_COIN only: the quote the coin is bought with on its sell venue. */
+  readonly buyQuote?: "INR" | "USDT";
   readonly reason: string;
   readonly howTo: string;
 }
@@ -42,6 +45,8 @@ export interface RefillTarget {
   readonly cashVenue: string;
   readonly cashAsset: "INR" | "USDT";
   readonly cashNeedInr: number;
+  /** Quote of the market the coin is SOLD on at its coin venue. */
+  readonly coinVenueQuote?: "INR" | "USDT";
 }
 
 export interface RefillPlanInput {
@@ -51,6 +56,8 @@ export interface RefillPlanInput {
   readonly priceInr: (asset: string) => number | null;
   /** Venues Binance may auto-send USDT to (whitelisted, capital manager enabled). */
   readonly autoUsdtDestinations: readonly string[];
+  /** Venues where the capital manager may buy core-basket stock itself. */
+  readonly autoBuyVenues?: readonly string[];
   /** Refill once holdings fall below this share of target. */
   readonly refillBelowShare: number;
   /** INR kept untouched at a USDT source beyond its own targets. */
@@ -79,18 +86,18 @@ function name(venue: string): string {
 export function planRouteRefills(input: RefillPlanInput): RefillPlan {
   // Aggregate targets per (venue, asset): cash targets add up across coins
   // sharing a buy venue; each coin has one sell venue.
-  const targets = new Map<string, {venue: string; asset: string; targetInr: number; coins: string[]; rank: number}>();
-  const add = (venue: string, asset: string, amount: number, coin: string, rank: number) => {
+  const targets = new Map<string, {venue: string; asset: string; targetInr: number; coins: string[]; rank: number; quote?: "INR" | "USDT"}>();
+  const add = (venue: string, asset: string, amount: number, coin: string, rank: number, quote?: "INR" | "USDT") => {
     if (!(amount > 0)) return;
     const key = `${venue}|${asset}`;
-    const entry = targets.get(key) ?? {venue, asset, targetInr: 0, coins: [], rank};
+    const entry = targets.get(key) ?? {venue, asset, targetInr: 0, coins: [], rank, quote};
     entry.targetInr += amount;
     if (!entry.coins.includes(coin)) entry.coins.push(coin);
     entry.rank = Math.min(entry.rank, rank);
     targets.set(key, entry);
   };
   for (const target of input.targets) {
-    add(target.coinVenue, target.coin, target.coinNeedInr, target.coin, target.rank);
+    add(target.coinVenue, target.coin, target.coinNeedInr, target.coin, target.rank, target.coinVenueQuote);
     add(target.cashVenue, target.cashAsset, target.cashNeedInr, target.coin, target.rank);
   }
 
@@ -203,6 +210,7 @@ export function planRouteRefills(input: RefillPlanInput): RefillPlan {
         howTo: `Withdraw ${price ? `≈${formatQuantity(amount / price)} ` : ""}${target.asset} from ${name(best.venue)} to your ${name(target.venue)} ${target.asset} deposit address (check the network both sides support).`,
       });
     } else {
+      const autoBuy = target.quote !== undefined && (input.autoBuyVenues ?? []).includes(target.venue);
       actions.push({
         id: `BUY_COIN|${target.asset}|${target.venue}`,
         priority: target.rank,
@@ -213,9 +221,12 @@ export function planRouteRefills(input: RefillPlanInput): RefillPlan {
         toVenue: target.venue,
         amountInr: deficit,
         quantity: price ? deficit / price : null,
-        mode: "MANUAL",
+        mode: autoBuy ? "AUTO" : "MANUAL",
+        ...(target.quote ? {buyQuote: target.quote} : {}),
         reason: `${target.asset} sells on ${name(target.venue)}: holds ₹${Math.round(have)} of ₹${Math.round(target.targetInr)} and no other exchange holds it.`,
-        howTo: `Buy ${price ? `≈${formatQuantity(deficit / price)} ` : ""}${target.asset} (≈₹${Math.round(deficit)}) on ${name(target.venue)}, or deposit it there.`,
+        howTo: autoBuy
+          ? `Capital manager buys ${target.asset} on ${name(target.venue)} with its ${target.quote} (daily buy cap, cash floor and no-premium check apply).`
+          : `Buy ${price ? `≈${formatQuantity(deficit / price)} ` : ""}${target.asset} (≈₹${Math.round(deficit)}) on ${name(target.venue)}, or deposit it there.`,
       });
     }
   }

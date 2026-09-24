@@ -168,7 +168,7 @@ const VENUE_ORDER_CONTRACTS: Readonly<Record<string, VenueOrderContract>> = {
   bybit: {timeInForce: "IOC", boundedWait: false, pollingMs: 250, clientIdFormat: "compact"},
 };
 
-function orderRequest(
+export function orderRequest(
   venue: string,
   market: string,
   side: "buy" | "sell",

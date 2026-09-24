@@ -38,6 +38,10 @@ import {
   type RefillTarget,
 } from "./RouteInventoryRefillPlanner";
 
+import type {
+  StockBuyPort,
+} from "./StockBuyExecutor";
+
 /*
  * Capital manager step B: keeps the core coin basket's route inventory
  * stocked. Builds the refill plan from the coin study's placement targets
@@ -60,13 +64,52 @@ const FAILURE_BACKOFF_MS = 30 * 60_000;
  * the operator can fix that in the Binance app, so wait much longer. */
 const TRAVEL_RULE_BACKOFF_MS = 6 * 3_600_000;
 const MAXIMUM_HISTORY = 50;
+/* Stock buying (operator-approved limits): core coins only, up to target. */
+const BUY_VENUES = ["binance", "bybit", "coindcx", "coinswitch", "unocoin"] as const;
+const MINIMUM_BUY_INR = 300;
+const BUY_NO_FILL_BACKOFF_MS = 30 * 60_000;
+const BUY_UNKNOWN_BACKOFF_MS = 6 * 3_600_000;
+
+export interface AutoBuyConfig {
+  readonly enabled: boolean;
+  readonly dailyCapInr: number;
+  readonly cashFloorInr: number;
+}
+
+export function loadAutoBuyConfig(environment: NodeJS.ProcessEnv = process.env): AutoBuyConfig {
+  const number = (name: string, fallback: number) => {
+    const value = Number(environment[name]?.trim() || fallback);
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  };
+  return {
+    enabled: environment.CAT_PRO_REFILL_AUTO_BUY_ENABLED?.trim().toLowerCase() === "true",
+    dailyCapInr: Math.min(number("CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR", 5_000), 50_000),
+    cashFloorInr: number("CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR", 1_000),
+  };
+}
+
+function istDay(timestamp: number): string {
+  return new Date(timestamp + 330 * 60_000).toISOString().slice(0, 10);
+}
 
 export interface RouteRefillExecution {
   readonly at: number;
   readonly actionId: string;
   readonly toVenue: string;
   readonly amountUsdt: number;
-  readonly status: RebalancingMoveOutcome["status"] | "SKIPPED_COOLDOWN" | "SKIPPED_TOO_SMALL" | "SKIPPED_BACKOFF";
+  readonly status:
+    | RebalancingMoveOutcome["status"]
+    | "SKIPPED_COOLDOWN"
+    | "SKIPPED_TOO_SMALL"
+    | "SKIPPED_BACKOFF"
+    | "BUY_FILLED"
+    | "BUY_PARTIAL"
+    | "BUY_NO_FILL"
+    | "BUY_SKIPPED"
+    | "BUY_UNKNOWN";
+  readonly kind?: "USDT_TOPUP" | "STOCK_BUY";
+  readonly coin?: string;
+  readonly spentInr?: number;
   readonly detail: string;
   readonly referenceId: string | null;
 }
@@ -76,6 +119,10 @@ interface RefillState {
   lastTopUpAt: Record<string, number>;
   /** Destination -> when automatic top-ups may be tried again after a refusal, and why. */
   blockedUntil?: Record<string, {until: number; reason: string}>;
+  /** IST day -> INR spent on stock buys (the daily cap). */
+  buySpentInr?: Record<string, number>;
+  /** "venue|coin" -> when stock buying may be tried again, and why. */
+  buyBlockedUntil?: Record<string, {until: number; reason: string}>;
   history: RouteRefillExecution[];
 }
 
@@ -88,6 +135,8 @@ export interface RouteRefillDependencies {
   readonly getValuation: (now: number) => InventoryValuation;
   readonly getConfig: () => RebalancingExecutionConfig;
   readonly getTradeSizeInr: () => number;
+  readonly getAutoBuyConfig: () => AutoBuyConfig;
+  readonly getBuyPort: () => Promise<StockBuyPort>;
 }
 
 const DEFAULT_DEPENDENCIES: RouteRefillDependencies = {
@@ -104,10 +153,13 @@ const DEFAULT_DEPENDENCIES: RouteRefillDependencies = {
         cashVenue: coin.placement.cash.venue,
         cashAsset: coin.placement.cash.asset,
         cashNeedInr: coin.placement.cash.needInr,
+        coinVenueQuote: coin.directions[0]?.sellQuote,
       })),
   getValuation: (now) => createInventoryValuation(now),
   getConfig: () => loadRebalancingExecutionConfig(),
   getTradeSizeInr: () => getLiveOnlyRuntimePolicy().preferredCapitalPerLegInr,
+  getAutoBuyConfig: () => loadAutoBuyConfig(),
+  getBuyPort: async () => new (await import("./StockBuyExecutor")).DefaultStockBuyExecutor(),
 };
 
 function isState(value: unknown): value is RefillState {
@@ -137,6 +189,8 @@ export class RouteRefillService {
       config.enabled && config.crossExchangeEnabled
         ? [...new Set(config.withdrawalWhitelist.filter((entry) => entry.asset === "USDT").map((entry) => entry.exchange))]
         : [];
+    const autoBuy = this.dependencies.getAutoBuyConfig();
+    const autoBuyVenues = config.enabled && autoBuy.enabled ? [...BUY_VENUES] : [];
     const targets = this.dependencies.getTargets(this.dependencies.getTradeSizeInr(), valuation);
     const plan = planRouteRefills({
       targets,
@@ -144,6 +198,7 @@ export class RouteRefillService {
       holdingInr: (venue, asset) => valuation.holdingInr(venue, asset),
       priceInr: (asset) => valuation.priceInr(asset),
       autoUsdtDestinations,
+      autoBuyVenues,
       refillBelowShare: REFILL_BELOW_SHARE,
       sourceFloorInr: SOURCE_FLOOR_INR,
       minimumActionInr: MINIMUM_ACTION_INR,
@@ -165,6 +220,15 @@ export class RouteRefillService {
         blocked: Object.fromEntries(
           Object.entries(this.state.blockedUntil ?? {}).filter(([, block]) => block.until > now),
         ),
+        autoBuy: {
+          enabled: autoBuyVenues.length > 0,
+          dailyCapInr: autoBuy.dailyCapInr,
+          spentTodayInr: this.state.buySpentInr?.[istDay(now)] ?? 0,
+          cashFloorInr: autoBuy.cashFloorInr,
+          paused: Object.fromEntries(
+            Object.entries(this.state.buyBlockedUntil ?? {}).filter(([, block]) => block.until > now),
+          ),
+        },
       },
       recentExecutions: [...this.state.history].reverse().slice(0, 20),
     };
@@ -242,7 +306,67 @@ export class RouteRefillService {
       results.push(this.record({at: now, actionId: action.id, toVenue: action.toVenue, amountUsdt, status: outcome.status,
         detail: outcome.detail, referenceId: outcome.referenceId}, true));
     }
+    results.push(...(await this.executeStockBuys(plan, now)));
     this.persist();
+    return results;
+  }
+
+  /** AUTO BUY_COIN actions within the daily cap and each venue's cash floor. */
+  private async executeStockBuys(
+    plan: ReturnType<RouteRefillService["getPlan"]>,
+    now: number,
+  ): Promise<RouteRefillExecution[]> {
+    const usdtInr = plan.usdtInr;
+    const actions = plan.actions.filter((item: RefillAction) => item.mode === "AUTO" && item.kind === "BUY_COIN" && item.buyQuote);
+    if (!plan.automation.autoBuy.enabled || usdtInr === null || actions.length === 0) return [];
+
+    const valuation = this.dependencies.getValuation(now);
+    const day = istDay(now);
+    const results: RouteRefillExecution[] = [];
+    let port: StockBuyPort | null = null;
+
+    for (const action of actions) {
+      const quote = action.buyQuote as "INR" | "USDT";
+      const key = `${action.toVenue}|${action.asset}`;
+      const block = this.state.buyBlockedUntil?.[key];
+      if (block && block.until > now) continue;
+
+      const spent = this.state.buySpentInr?.[day] ?? 0;
+      const remaining = plan.automation.autoBuy.dailyCapInr - spent;
+      const cash = valuation.holdingInr(action.toVenue, quote) ?? 0;
+      const allowedByCash = cash - plan.automation.autoBuy.cashFloorInr;
+      const amountInr = Math.floor(Math.min(action.amountInr, remaining, allowedByCash));
+      if (amountInr < MINIMUM_BUY_INR) continue;
+
+      port ??= await this.dependencies.getBuyPort();
+      const outcome = await port.buy({venue: action.toVenue, coin: action.asset, quote, amountInr, usdtInr, now});
+      const status = `BUY_${outcome.status}` as RouteRefillExecution["status"];
+      if (outcome.status !== "SKIPPED") {
+        // Unknown outcomes count in full against the cap: never assume less was spent.
+        this.state.buySpentInr = {[day]: spent + outcome.spentInr};
+      }
+      if (outcome.status === "UNKNOWN" || outcome.status === "NO_FILL") {
+        this.state.buyBlockedUntil = {
+          ...(this.state.buyBlockedUntil ?? {}),
+          [key]: {
+            until: now + (outcome.status === "UNKNOWN" ? BUY_UNKNOWN_BACKOFF_MS : BUY_NO_FILL_BACKOFF_MS),
+            reason: outcome.detail,
+          },
+        };
+      }
+      results.push(this.record({
+        at: now,
+        actionId: action.id,
+        toVenue: action.toVenue,
+        amountUsdt: 0,
+        status,
+        kind: "STOCK_BUY",
+        coin: action.asset,
+        spentInr: outcome.spentInr,
+        detail: outcome.detail,
+        referenceId: outcome.orderId,
+      }, outcome.status !== "SKIPPED"));
+    }
     return results;
   }
 
