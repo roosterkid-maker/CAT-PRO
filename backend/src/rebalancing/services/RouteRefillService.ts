@@ -176,11 +176,34 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
     });
   }
 
-  let totalInr = 0;
+  // What each cash pool can supply: its cash, plus idle coins on that
+  // exchange (they can be sold into its quote). A candidate coin already on
+  // its sell venue covers its own coin side; one sitting elsewhere has to
+  // be moved and counts for neither.
+  const pools: Record<string, number> = {};
+  const held = new Map<string, number>();
+  const candidateVenue = new Map(candidates.map((candidate) => [candidate.coin, candidate.coinVenue]));
   for (const venue of VENUES) {
-    for (const asset of valuation.assets?.(venue) ?? []) totalInr += Math.max(0, valuation.holdingInr(venue, asset) ?? 0);
+    for (const asset of valuation.assets?.(venue) ?? []) {
+      const value = Math.max(0, valuation.holdingInr(venue, asset) ?? 0);
+      if (!(value > 0)) continue;
+      if (asset === "INR" || asset === "USDT") {
+        const pool = cashPool(venue, asset);
+        pools[pool] = (pools[pool] ?? 0) + value * (1 - BUDGET_RESERVE_SHARE);
+      } else if (candidateVenue.get(asset) === venue) {
+        held.set(asset, (held.get(asset) ?? 0) + value);
+      } else if (!candidateVenue.has(asset)) {
+        const pool = cashPool(venue, SELL_VENUE_QUOTES[venue]?.includes("USDT") ? "USDT" : "INR");
+        pools[pool] = (pools[pool] ?? 0) + value * (1 - BUDGET_RESERVE_SHARE);
+      }
+    }
   }
-  return allocateCapital({budgetInr: Math.floor(totalInr * (1 - BUDGET_RESERVE_SHARE)), candidates});
+  const budgetInr = Math.floor(Object.values(pools).reduce((sum, value) => sum + value, 0) + [...held.values()].reduce((sum, value) => sum + value, 0));
+  return allocateCapital({
+    budgetInr,
+    poolCapacityInr: pools,
+    candidates: candidates.map((candidate) => ({...candidate, coinHeldInr: held.get(candidate.coin) ?? 0})),
+  });
 }
 
 function targetsFromAllocation(allocation: CapitalAllocation): RefillTarget[] {
@@ -361,6 +384,7 @@ export class RouteRefillService {
             expectedDailyProfitInr: coin.expectedDailyProfitInr,
           })),
           unfunded: allocation.unfunded,
+          unfundedBy: allocation.unfundedBy ?? {},
         }
         : null,
       actions: plan.actions,

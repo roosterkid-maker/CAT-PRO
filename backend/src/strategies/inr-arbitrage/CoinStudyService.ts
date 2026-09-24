@@ -364,7 +364,11 @@ export interface LiveCoinSignal {
   readonly edgeMinutes: number;
   readonly averageNetPercent: number;
   readonly averageDepthInr: number | null;
-  /** Rough INR/day if every window in the period were traded once at one trade size. */
+  /**
+   * Rough INR/day: windows are counted as trades only as fast as a live
+   * session can repeat (one per window, at most one per 5 minutes of edge),
+   * capped at 10 trades a day per coin.
+   */
   readonly expectedDailyProfitInr: number;
   /** The route that carried the most edge time in the window. */
   readonly main: {
@@ -425,6 +429,8 @@ export function buildLiveSignal(state: StudyState, input: {
   }
 
   const scale = 24 / Math.min(24, Math.max(1, input.hours));
+  const MINUTES_PER_REPEAT = 5;
+  const MAXIMUM_TRADES_PER_DAY = 10;
   return [...byCoin.entries()].map(([coin, list]) => {
     const sorted = [...list].sort((a, b) => b.edgeMs - a.edgeMs);
     const edgeMs = sorted.reduce((sum, entry) => sum + entry.edgeMs, 0);
@@ -434,10 +440,15 @@ export function buildLiveSignal(state: StudyState, input: {
     const averageNetPercent = edgeMs > 0 ? netMs / edgeMs : 0;
     const averageDepthInr = depthSamples > 0 ? depthSum / depthSamples : null;
     const perTradeInr = averageDepthInr === null ? input.tradeSizeInr : Math.min(input.tradeSizeInr, averageDepthInr);
-    const expectedDailyProfitInr = sorted.reduce((sum, entry) => {
-      const net = entry.edgeMs > 0 ? entry.netMs / entry.edgeMs : 0;
-      return sum + entry.windows * (net / 100) * perTradeInr;
-    }, 0) * scale;
+    // Flickering books open many windows a minute; only repeatable trades count.
+    const expectedDailyProfitInr = Math.min(
+      sorted.reduce((sum, entry) => {
+        const net = entry.edgeMs > 0 ? entry.netMs / entry.edgeMs : 0;
+        const trades = Math.min(entry.windows, 1 + entry.edgeMs / 60_000 / MINUTES_PER_REPEAT);
+        return sum + trades * (net / 100) * perTradeInr;
+      }, 0) * scale,
+      MAXIMUM_TRADES_PER_DAY * (averageNetPercent / 100) * perTradeInr,
+    );
     const main = sorted[0]!.aggregate;
     return {
       coin,

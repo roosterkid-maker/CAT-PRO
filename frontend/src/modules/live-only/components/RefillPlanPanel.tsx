@@ -83,7 +83,9 @@ export function RefillPlanPanel() {
           <p className="px-5 pt-3 font-mono text-[11px] text-text-muted">
             Allocation · budget ₹{Math.round(plan.allocation.budgetInr).toLocaleString("en-IN")} · allocated ₹{Math.round(plan.allocation.allocatedInr).toLocaleString("en-IN")}
             {" "}· weighted by the last {plan.allocation.liveSignalHours} h of opportunity
-            {plan.allocation.unfunded.length > 0 ? ` · waiting for capital: ${plan.allocation.unfunded.join(", ")}` : ""}
+            {plan.allocation.unfunded.length > 0
+              ? ` · waiting for capital: ${plan.allocation.unfunded.slice(0, 8).map((coin) => `${coin} (${poolLabel(plan.allocation?.unfundedBy?.[coin])})`).join(", ")}`
+              : ""}
           </p>
           {plan.allocation.coins.length === 0 ? (
             <p className="px-5 pb-3 pt-1 text-xs text-text-muted">No coin has produced executable opportunity recently; nothing allocated.</p>
@@ -197,6 +199,13 @@ export function RefillPlanPanel() {
       ) : null}
     </section>
   );
+}
+
+function poolLabel(pool: string | undefined): string {
+  if (!pool || pool === "budget") return "more capital";
+  if (pool === "USDT") return "USDT";
+  const [venue, asset] = pool.split(":");
+  return `${asset} on ${VENUE[venue ?? ""] ?? venue}`;
 }
 
 function Side({have, need, label}: {have: number | null; need: number; label: string}) {

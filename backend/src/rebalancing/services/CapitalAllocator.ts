@@ -7,7 +7,12 @@
  * buy venue), the coin with the most opportunity per extra trade gets the
  * next one, and a coin that cannot get even one full trade gets nothing
  * rather than a sliver. As capital grows, the same rule hands out more
- * trades and funds more coins. Pure: no I/O.
+ * trades and funds more coins.
+ *
+ * Money only counts where it can reach: USDT moves between Binance, Bybit
+ * and CoinDCX, but INR stays on the exchange it was deposited on, so each
+ * trade draws on the cash pools its two sides live in. Stock of the coin
+ * already on its sell venue covers the coin side first. Pure: no I/O.
  */
 export interface AllocationCandidate {
   readonly coin: string;
@@ -23,6 +28,8 @@ export interface AllocationCandidate {
   readonly expectedDailyProfitInr: number;
   /** 7-day study rank, kept for display and tie-breaks. */
   readonly studyRank: number | null;
+  /** INR of this coin already held on its sell venue: covers the coin side first. */
+  readonly coinHeldInr?: number;
 }
 
 export interface CoinAllocation extends AllocationCandidate {
@@ -37,28 +44,72 @@ export interface CapitalAllocation {
   readonly coins: readonly CoinAllocation[];
   /** Candidates that got no trade: not enough capital left for one full trade. */
   readonly unfunded: readonly string[];
+  /** For each unfunded coin, the cash pool that could not cover one trade (e.g. "unocoin:INR"). */
+  readonly unfundedBy?: Readonly<Record<string, string>>;
+}
+
+/**
+ * Where freed cash can be used: USDT moves between Binance, Bybit and
+ * CoinDCX automatically, so those balances are one pool; INR never leaves
+ * the exchange it sits on.
+ */
+export function cashPool(venue: string, asset: "INR" | "USDT"): string {
+  if (asset === "USDT" && (venue === "binance" || venue === "bybit" || venue === "coindcx")) return "USDT";
+  return `${venue}:${asset}`;
 }
 
 export function allocateCapital(input: {
   readonly budgetInr: number;
   readonly candidates: readonly AllocationCandidate[];
+  /** INR each cash pool can supply; omitted, the whole budget is one pool. */
+  readonly poolCapacityInr?: Readonly<Record<string, number>>;
 }): CapitalAllocation {
   const candidates = input.candidates.filter((candidate) =>
     candidate.weight > 0 && candidate.perTradeInr > 0 && candidate.maximumTrades > 0);
   const trades = new Map<string, number>(candidates.map((candidate) => [candidate.coin, 0]));
+  const held = new Map<string, number>(candidates.map((candidate) => [candidate.coin, Math.max(0, candidate.coinHeldInr ?? 0)]));
+  const pools = new Map<string, number>(Object.entries(input.poolCapacityInr ?? {}));
+  const usePools = input.poolCapacityInr !== undefined;
   let remaining = Math.max(0, input.budgetInr);
+
+  const cost = (candidate: AllocationCandidate) => {
+    const coinCost = Math.max(0, candidate.perTradeInr - (held.get(candidate.coin) ?? 0));
+    const coinPool = cashPool(candidate.coinVenue, candidate.coinVenueQuote);
+    const cashPoolKey = cashPool(candidate.cashVenue, candidate.cashAsset);
+    return {coinCost, cashCost: candidate.perTradeInr, coinPool, cashPool: cashPoolKey};
+  };
+
+  /** The pool that blocks one more trade, or null when it fits. */
+  const blocker = (candidate: AllocationCandidate): string | null => {
+    const next = cost(candidate);
+    if (next.coinCost + next.cashCost > remaining) return "budget";
+    if (!usePools) return null;
+    const capacity = (pool: string) => pools.get(pool) ?? 0;
+    if (next.coinPool === next.cashPool) {
+      return next.coinCost + next.cashCost <= capacity(next.cashPool) ? null : next.cashPool;
+    }
+    if (next.cashCost > capacity(next.cashPool)) return next.cashPool;
+    if (next.coinCost > capacity(next.coinPool)) return next.coinPool;
+    return null;
+  };
 
   for (;;) {
     // Diminishing returns: the next trade goes to the highest weight per trade held.
-    const next = candidates
-      .filter((candidate) => (trades.get(candidate.coin) ?? 0) < candidate.maximumTrades && 2 * candidate.perTradeInr <= remaining)
+    const choice = candidates
+      .filter((candidate) => (trades.get(candidate.coin) ?? 0) < candidate.maximumTrades && blocker(candidate) === null)
       .sort((a, b) =>
         b.weight / ((trades.get(b.coin) ?? 0) + 1) - a.weight / ((trades.get(a.coin) ?? 0) + 1) ||
         (a.studyRank ?? 1_000) - (b.studyRank ?? 1_000) ||
         a.coin.localeCompare(b.coin))[0];
-    if (!next) break;
-    trades.set(next.coin, (trades.get(next.coin) ?? 0) + 1);
-    remaining -= 2 * next.perTradeInr;
+    if (!choice) break;
+    const next = cost(choice);
+    trades.set(choice.coin, (trades.get(choice.coin) ?? 0) + 1);
+    held.set(choice.coin, Math.max(0, (held.get(choice.coin) ?? 0) - choice.perTradeInr));
+    if (usePools) {
+      pools.set(next.coinPool, (pools.get(next.coinPool) ?? 0) - next.coinCost);
+      pools.set(next.cashPool, (pools.get(next.cashPool) ?? 0) - next.cashCost);
+    }
+    remaining -= next.coinCost + next.cashCost;
   }
 
   const coins = candidates
@@ -70,20 +121,12 @@ export function allocateCapital(input: {
     })
     .sort((a, b) => b.weight - a.weight);
 
+  const unfunded = candidates.filter((candidate) => (trades.get(candidate.coin) ?? 0) === 0);
   return {
     budgetInr: input.budgetInr,
     allocatedInr: coins.reduce((sum, coin) => sum + coin.coinNeedInr + coin.cashNeedInr, 0),
     coins,
-    unfunded: candidates.filter((candidate) => (trades.get(candidate.coin) ?? 0) === 0).map((candidate) => candidate.coin),
+    unfunded: unfunded.map((candidate) => candidate.coin),
+    unfundedBy: Object.fromEntries(unfunded.map((candidate) => [candidate.coin, blocker(candidate) ?? "budget"])),
   };
-}
-
-/**
- * Where freed cash can be used: USDT moves between Binance, Bybit and
- * CoinDCX automatically, so those balances are one pool; INR never leaves
- * the exchange it sits on.
- */
-export function cashPool(venue: string, asset: "INR" | "USDT"): string {
-  if (asset === "USDT" && (venue === "binance" || venue === "bybit" || venue === "coindcx")) return "USDT";
-  return `${venue}:${asset}`;
 }

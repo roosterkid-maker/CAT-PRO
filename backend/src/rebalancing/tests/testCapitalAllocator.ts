@@ -54,6 +54,26 @@ function testAllocator(): void {
   // Budget below one full trade: nothing is allocated.
   assert.equal(allocateCapital({budgetInr: 2_999, candidates: coins}).coins.length, 0);
 
+  // Money only counts where it can reach: SKY needs UnoCoin INR (empty), so
+  // the USDT pool goes to FET and GRAM even though SKY is the strongest.
+  const pooled = allocateCapital({
+    budgetInr: 20_000,
+    poolCapacityInr: {"unocoin:INR": 10, USDT: 12_000},
+    candidates: [
+      candidate({coin: "SKY", weight: 0.6, cashVenue: "unocoin", cashAsset: "INR"}),
+      candidate({coin: "FET", weight: 0.25, coinVenue: "bybit", cashVenue: "coindcx", cashAsset: "USDT"}),
+      candidate({coin: "GRAM", weight: 0.15, coinVenue: "coinswitch", coinVenueQuote: "INR", cashVenue: "binance", cashAsset: "USDT", coinHeldInr: 3_000}),
+    ],
+  });
+  assert.deepEqual(pooled.unfunded, ["SKY"]);
+  assert.equal(pooled.unfundedBy?.SKY, "unocoin:INR");
+  // GRAM's ₹3,000 of stock already covers its first two coin sides, so
+  // those trades draw only cash; nothing spends more USDT than the pool has.
+  const pooledTrades = Object.fromEntries(pooled.coins.map((coin) => [coin.coin, coin.trades]));
+  assert.ok(pooledTrades.FET >= 1 && pooledTrades.GRAM >= 2, JSON.stringify(pooledTrades));
+  const usdtUsed = pooled.coins.reduce((sum, coin) => sum + coin.cashNeedInr + coin.coinNeedInr, 0) - 3_000;
+  assert.ok(usdtUsed <= 12_000, String(usdtUsed));
+
   // Cash pools: USDT moves between Binance, Bybit and CoinDCX; INR stays put.
   assert.equal(cashPool("bybit", "USDT"), cashPool("binance", "USDT"));
   assert.equal(cashPool("coindcx", "USDT"), "USDT");
@@ -87,8 +107,15 @@ function testLiveSignal(): void {
   assert.equal(gram.main.sellVenue, "coinswitch");
   assert.equal(gram.main.buyQuote, "USDT");
   assert.ok(Math.abs(gram.edgeMinutes - 2) < 1e-9);
-  // Two windows in 6 h at 2% on ₹1,500 -> ₹60 in 6 h -> ₹240/day.
-  assert.ok(Math.abs(gram.expectedDailyProfitInr - 240) < 1e-6, String(gram.expectedDailyProfitInr));
+  // Two 1-minute windows in 6 h repeat as 1.4 trades at 2% on ₹1,500 ->
+  // ₹42 in 6 h -> ₹168/day (under the 10-trade daily cap of ₹300).
+  assert.ok(Math.abs(gram.expectedDailyProfitInr - 168) < 1e-6, String(gram.expectedDailyProfitInr));
+
+  // A flickering book (hundreds of windows in minutes) is not hundreds of trades.
+  const flicker = {schemaVersion: "1.0" as const, firstWindowAt: null, lastIngestedEndedAt: 0, boundaryIds: [] as string[], days: {}};
+  ingestWindows(flicker, Array.from({length: 500}, (_, index) => window({coin: "SKY", startedAt: now - 3_600_000 + index * 1_000, durationMs: 1_000})));
+  const sky = buildLiveSignal(flicker, {now, hours: 6, tradeSizeInr: 1_500})[0]!;
+  assert.ok(sky.expectedDailyProfitInr <= 10 * 0.02 * 1_500 + 1e-9, String(sky.expectedDailyProfitInr));
 }
 
 function config(): RebalancingExecutionConfig {

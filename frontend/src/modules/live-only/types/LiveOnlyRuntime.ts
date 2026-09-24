@@ -343,6 +343,7 @@ export interface RefillPlanResponse {
         expectedDailyProfitInr: number;
       }>;
       unfunded: string[];
+      unfundedBy: Record<string, string>;
     } | null;
     actions: RefillAction[];
     covered: Array<{venue: string; asset: string; haveInr: number | null; targetInr: number}>;
