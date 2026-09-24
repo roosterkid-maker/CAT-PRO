@@ -55,7 +55,11 @@ export interface BybitClockDiagnostics {
 export type BybitSignedPostBody =
   Record<
     string,
-    string | number | boolean
+    | string
+    | number
+    | boolean
+    /* Nested objects, e.g. a withdrawal's Travel Rule beneficiary. */
+    | Readonly<Record<string, string | number>>
   >;
 
 export class BybitPrivateHttpClient {

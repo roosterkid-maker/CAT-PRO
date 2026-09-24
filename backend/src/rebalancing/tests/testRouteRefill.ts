@@ -187,6 +187,92 @@ async function testAutoExecution(directory: string): Promise<void> {
   assert.equal(tinyPort.moves.length, 0);
 }
 
+/* Bybit as a USDT source (to Binance) and the Funding -> Unified sweep. */
+async function testBybitSource(directory: string): Promise<void> {
+  const targets: RefillTarget[] = [
+    {coin: "LINK", rank: 1, coinVenue: "bybit", coinNeedInr: 0, cashVenue: "binance", cashAsset: "USDT", cashNeedInr: 2_500},
+  ];
+  const holdings: Record<string, number> = {"binance|USDT": 1_000, "bybit|USDT": 4_400};
+  const valuation = {
+    usdtInr: 100,
+    quantity: () => 0,
+    holdingInr: (venue: string, asset: string) => holdings[`${venue}|${asset}`] ?? 0,
+    priceInr: () => null,
+  };
+  const whitelist = [
+    {exchange: "bybit" as const, asset: "USDT", network: "BSC", address: "0xabc", addressTag: null},
+    {exchange: "binance" as const, asset: "USDT", network: "BSC", address: "0xdef", addressTag: null},
+  ];
+  const withBybit = config({withdrawalWhitelist: whitelist, bybitWithdrawEnabled: true, bybitFundingSweepEnabled: true, bybitTravelRuleBeneficiaryName: "Holder"});
+  const service = (name: string, configValue: RebalancingExecutionConfig) => new RouteRefillService({
+    getTargets: () => targets,
+    getValuation: () => valuation,
+    getConfig: () => configValue,
+    getTradeSizeInr: () => 1_500,
+  }, join(directory, `${name}.jsonl`));
+  const now = 1_790_000_000_000;
+
+  // Planner: the move from Bybit is AUTO only when Bybit withdrawals are on.
+  const moveFor = (configValue: RebalancingExecutionConfig) =>
+    service(`plan-${Math.random()}`, configValue).getPlan(now).actions.find((action) => action.kind === "MOVE_USDT");
+  assert.equal(moveFor(withBybit)?.fromVenue, "bybit");
+  assert.equal(moveFor(withBybit)?.mode, "AUTO");
+  assert.equal(moveFor(config({withdrawalWhitelist: whitelist}))?.mode, "MANUAL");
+  assert.equal(moveFor({...withBybit, bybitTravelRuleBeneficiaryName: null})?.mode, "MANUAL", "no KYC name: manual");
+
+  const calls: {destination: string; amount: number}[] = [];
+  let sweeps = 0;
+  const port = {
+    executeCrossExchangeMoves: async () => {
+      throw new Error("the Binance path must not be used for a Bybit-sourced move");
+    },
+    executeBybitWithdrawal: async (destination: string, amountUsdt: number): Promise<RebalancingMoveOutcome> => {
+      calls.push({destination, amount: amountUsdt});
+      return {kind: "CROSS_EXCHANGE", exchange: "bybit", destinationExchange: "binance", amountUsdt, status: "EXECUTED", detail: "ok", referenceId: "bybit:w-1"};
+    },
+    sweepBybitFundingToUnified: async (): Promise<readonly RebalancingMoveOutcome[]> => {
+      sweeps += 1;
+      return sweeps === 1
+        ? [{kind: "SAME_EXCHANGE", exchange: "bybit", destinationExchange: null, amountUsdt: 23.39, status: "EXECUTED", detail: "Moved 23.39 USDT", referenceId: "t-1"}]
+        : [];
+    },
+  };
+  const refill = service("bybit-auto", withBybit);
+  const results = await refill.executeAuto(port, now);
+  // Bybit surplus: 4,400 - 500 floor = ₹3,900; deficit ₹1,500 -> 15 USDT.
+  assert.deepEqual(calls, [{destination: "binance", amount: 15}]);
+  assert.equal(results.find((item) => item.kind === "FUNDING_SWEEP")?.status, "EXECUTED");
+  assert.equal(results.find((item) => item.actionId.startsWith("MOVE_USDT|bybit>binance"))?.status, "EXECUTED");
+  assert.equal((await refill.executeAuto(port, now + 60_000)).find((item) => item.toVenue === "binance")?.status, "SKIPPED_COOLDOWN");
+  assert.equal(calls.length, 1);
+
+  // A Travel Rule refusal from Bybit pauses that destination for hours.
+  const refusing = {
+    ...port,
+    executeBybitWithdrawal: async (_destination: string, amountUsdt: number): Promise<RebalancingMoveOutcome> =>
+      ({kind: "CROSS_EXCHANGE", exchange: "bybit", destinationExchange: "binance", amountUsdt, status: "FAILED", detail: "retCode=131002 beneficiary required", referenceId: null}),
+  };
+  const refused = service("bybit-refused", withBybit);
+  await refused.executeAuto(refusing, now);
+  const block = refused.getPlan(now).automation.blocked.binance;
+  assert.ok(block && block.until === now + 6 * 3_600_000);
+  assert.match(block.reason, /Bybit refused/u);
+
+  // A failing sweep backs off instead of retrying every cycle.
+  let failingSweeps = 0;
+  const failingSweep = {
+    ...port,
+    sweepBybitFundingToUnified: async (): Promise<readonly RebalancingMoveOutcome[]> => {
+      failingSweeps += 1;
+      throw new Error("network");
+    },
+  };
+  const sweeper = service("sweep-fail", withBybit);
+  await sweeper.executeAuto(failingSweep, now);
+  await sweeper.executeAuto(failingSweep, now + 3 * 60_000);
+  assert.equal(failingSweeps, 1);
+}
+
 /* Capital manager buys core stock itself: daily cap, cash floor, backoffs. */
 async function testAutoStockBuy(directory: string): Promise<void> {
   const now = 1_790_000_000_000;
@@ -278,10 +364,11 @@ async function main(): Promise<void> {
     testPlanner();
     await testAutoExecution(directory);
     await testAutoStockBuy(directory);
+    await testBybitSource(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
-  console.log("Route refill passed: targets aggregate per venue/asset, coin moves back from where it piled up, INR deposits and coin buys stay manual, Binance USDT to whitelisted venues is automatic within caps, cooldown and minimum size.");
+  console.log("Route refill passed: targets aggregate per venue/asset, coin moves back from where it piled up, INR deposits and coin buys stay manual, Binance and Bybit USDT to whitelisted venues is automatic within caps, cooldown and minimum size; Bybit Funding is swept to Unified.");
 }
 
 void main().catch((error: unknown) => {

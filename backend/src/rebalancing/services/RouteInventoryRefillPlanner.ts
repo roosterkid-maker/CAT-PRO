@@ -13,7 +13,7 @@
  *   DEPOSIT_INR INR below target on an INR buy venue (bank deposit)
  *
  * An action is AUTO only when the capital manager can do it itself: USDT
- * withdrawn from Binance to a whitelisted exchange, or (when enabled) buying
+ * withdrawn from Binance or Bybit to a whitelisted exchange, or (when enabled) buying
  * a core coin on its sell venue with that venue's cash. Everything else is a
  * MANUAL instruction for the operator. Pure: no I/O.
  */
@@ -56,6 +56,8 @@ export interface RefillPlanInput {
   readonly priceInr: (asset: string) => number | null;
   /** Venues Binance may auto-send USDT to (whitelisted, capital manager enabled). */
   readonly autoUsdtDestinations: readonly string[];
+  /** Venues Bybit may auto-send USDT to (whitelisted, Bybit withdrawals enabled). */
+  readonly bybitAutoUsdtDestinations?: readonly string[];
   /** Venues where the capital manager may buy core-basket stock itself. */
   readonly autoBuyVenues?: readonly string[];
   /** Refill once holdings fall below this share of target. */
@@ -129,7 +131,9 @@ export function planRouteRefills(input: RefillPlanInput): RefillPlan {
       if (source) {
         const amount = Math.min(deficit, source.surplus);
         usdtSpent.set(source.venue, (usdtSpent.get(source.venue) ?? 0) + amount);
-        const auto = source.venue === "binance" && input.autoUsdtDestinations.includes(target.venue);
+        const auto =
+          (source.venue === "binance" && input.autoUsdtDestinations.includes(target.venue)) ||
+          (source.venue === "bybit" && (input.bybitAutoUsdtDestinations ?? []).includes(target.venue));
         actions.push({
           id: `MOVE_USDT|${source.venue}>${target.venue}`,
           priority: target.rank,
@@ -143,7 +147,7 @@ export function planRouteRefills(input: RefillPlanInput): RefillPlan {
           mode: auto ? "AUTO" : "MANUAL",
           reason: `${name(target.venue)} USDT buys ${forCoins}: holds ₹${Math.round(have)} of ₹${Math.round(target.targetInr)} target.`,
           howTo: auto
-            ? `Capital manager withdraws USDT from Binance to the whitelisted ${name(target.venue)} address (per-transfer and daily caps apply).`
+            ? `Capital manager withdraws USDT from ${name(source.venue)} to the whitelisted ${name(target.venue)} address (per-transfer and daily caps apply).`
             : `Withdraw ≈₹${Math.round(amount)} of USDT from ${name(source.venue)} to your ${name(target.venue)} USDT deposit address.`,
         });
       } else {

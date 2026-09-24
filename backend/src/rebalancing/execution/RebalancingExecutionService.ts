@@ -71,7 +71,20 @@ import type {
   CapitalManagerSafetyContext,
 } from "../services/CapitalManagerSafetyContextService";
 
+import {
+  bybitCapitalApi,
+} from "../../exchanges/bybit/api/BybitCapitalApi";
+
 const REBALANCE_ASSET = "USDT";
+
+/* Receiving exchange as named in Bybit's Travel Rule VASP list (India accounts). */
+const BYBIT_TRAVEL_RULE_VASP_NAMES: Readonly<Record<string, string>> = {
+  binance: "Binance India",
+  coindcx: "CoinDCX",
+};
+
+/* Dust below this stays in Bybit Funding (not worth a transfer call). */
+const MINIMUM_SWEEP_UNITS = 1e-8;
 
 /* Receiving exchange as named in Binance's Travel Rule VASP list. */
 const TRAVEL_RULE_VASP_NAMES: Readonly<Record<string, string>> = {
@@ -202,6 +215,23 @@ class DefaultBinanceRebalancingExchangeClient implements RebalancingExchangeClie
   }
 }
 
+/** The Bybit side of the capital manager: funding sweeps and USDT withdrawals. */
+export interface BybitRebalancingClient {
+  getFundBalances(): Promise<readonly {coin: string; transferable: number}[]>;
+  transferFundToUnified(coin: string, amount: string): Promise<{transferId: string; status: string}>;
+  findVaspEntityId(vaspName: string): Promise<string | null>;
+  withdraw(request: {
+    coin: string;
+    chain: string;
+    address: string;
+    tag: string | null;
+    amount: number;
+    requestId: string;
+    vaspEntityId: string | null;
+    beneficiaryName: string;
+  }): Promise<{id: string}>;
+}
+
 export type RebalancingMoveOutcomeStatus =
   | "EXECUTED"
   | "SKIPPED_DISABLED"
@@ -266,8 +296,96 @@ export class RebalancingExecutionService {
     capTrackers: CapTrackerPair = buildCapTrackers(config),
     private readonly sameExchangePolicy: SameExchangeMarginTopUpPolicy = DEFAULT_SAME_EXCHANGE_POLICY,
     private readonly binanceClient: RebalancingExchangeClient = new DefaultBinanceRebalancingExchangeClient(),
+    private readonly bybitClient: BybitRebalancingClient = bybitCapitalApi,
   ) {
     this.capTrackers = capTrackers;
+  }
+
+  /**
+   * Deposits land in Bybit's Funding account, but the bot trades (and reads
+   * balances) from the Unified account. Moves every transferable Funding
+   * balance across; an internal transfer, so no cap applies.
+   */
+  async sweepBybitFundingToUnified(): Promise<readonly RebalancingMoveOutcome[]> {
+    if (!this.config.enabled || !this.config.bybitFundingSweepEnabled) return [];
+    const balances = await this.bybitClient.getFundBalances();
+    const outcomes: RebalancingMoveOutcome[] = [];
+    for (const balance of balances) {
+      if (!(balance.transferable >= MINIMUM_SWEEP_UNITS)) continue;
+      // Exact decimal string: never round up past what is transferable.
+      const amount = floorDecimal(balance.transferable, 8);
+      if (amount === "0") continue;
+      try {
+        const result = await this.bybitClient.transferFundToUnified(balance.coin, amount);
+        const done = result.status === "SUCCESS" || result.status === "PENDING";
+        outcomes.push(this.outcome("SAME_EXCHANGE", "bybit", null, balance.coin === REBALANCE_ASSET ? Number(amount) : 0,
+          done ? "EXECUTED" : "FAILED",
+          `${done ? "Moved" : "Could not move"} ${amount} ${balance.coin} Bybit Funding -> Unified (${result.status}).`,
+          result.transferId));
+      } catch (error: unknown) {
+        outcomes.push(this.outcome("SAME_EXCHANGE", "bybit", null, 0, "FAILED",
+          `Bybit Funding -> Unified for ${balance.coin} failed: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
+    return outcomes;
+  }
+
+  /**
+   * Bybit as a USDT source: withdraw to the operator's own whitelisted
+   * account on another exchange, under the same master switch, phase flag,
+   * per-transfer and daily cross-exchange caps as the Binance path.
+   */
+  async executeBybitWithdrawal(
+    destination: string,
+    amountUsdt: number,
+    requestId: string,
+  ): Promise<RebalancingMoveOutcome> {
+    const destinationExchange = this.asKnownExchange(destination);
+    const skip = (status: RebalancingMoveOutcomeStatus, detail: string) =>
+      this.outcome("CROSS_EXCHANGE", "bybit", destinationExchange, amountUsdt, status, detail);
+
+    if (!this.config.enabled || !this.config.crossExchangeEnabled || !this.config.bybitWithdrawEnabled) {
+      return skip("SKIPPED_DISABLED", "Bybit withdrawals are disabled (CAT_PRO_REBALANCER_BYBIT_WITHDRAW_ENABLED).");
+    }
+    if (destinationExchange === null || destinationExchange === "bybit") {
+      return skip("SKIPPED_UNSUPPORTED_EXCHANGE", `Bybit cannot withdraw to "${destination}".`);
+    }
+    const beneficiaryName = this.config.bybitTravelRuleBeneficiaryName ?? null;
+    if (!beneficiaryName) {
+      return skip("SKIPPED_DISABLED", "Bybit Travel Rule needs the account holder's KYC name: set CAT_PRO_BYBIT_TRAVEL_RULE_BENEFICIARY_NAME.");
+    }
+    const whitelisted = this.findAnyWhitelistedAddress(destinationExchange, REBALANCE_ASSET);
+    if (!whitelisted) {
+      return skip("SKIPPED_NOT_WHITELISTED",
+        `No whitelisted ${REBALANCE_ASSET} deposit address configured for "${destinationExchange}" - refusing to withdraw anywhere the operator hasn't explicitly approved.`);
+    }
+    const capCheck = this.capTrackers.crossExchange.check(amountUsdt);
+    if (!capCheck.allowed) {
+      return skip("SKIPPED_CAP_REJECTED",
+        `Cross-exchange cap rejected ${amountUsdt} USDT: ${capCheck.reason} (remaining today: ${capCheck.remainingDailyBudgetUsdt} USDT, per-transfer max: ${capCheck.maximumPerTransferUsdt} USDT).`);
+    }
+
+    try {
+      const vaspName = BYBIT_TRAVEL_RULE_VASP_NAMES[destinationExchange] ?? destinationExchange;
+      const vaspEntityId = await this.bybitClient.findVaspEntityId(vaspName);
+      // Reserve BEFORE calling Bybit, like the Binance path.
+      this.capTrackers.crossExchange.reserve(amountUsdt);
+      const result = await this.bybitClient.withdraw({
+        coin: REBALANCE_ASSET,
+        chain: whitelisted.network,
+        address: whitelisted.address,
+        tag: whitelisted.addressTag,
+        amount: amountUsdt,
+        requestId,
+        vaspEntityId,
+        beneficiaryName,
+      });
+      return this.outcome("CROSS_EXCHANGE", "bybit", destinationExchange, amountUsdt, "EXECUTED",
+        `Withdrew ${amountUsdt} ${REBALANCE_ASSET} from Bybit to whitelisted ${destinationExchange} address over ${whitelisted.network}.`,
+        `bybit:${result.id}`);
+    } catch (error: unknown) {
+      return skip("FAILED", error instanceof Error ? error.message : "Bybit withdrawal failed.");
+    }
   }
 
   /**
@@ -513,6 +631,13 @@ export class RebalancingExecutionService {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function floorDecimal(value: number, decimals: number): string {
+  const factor = 10 ** decimals;
+  // At worst leaves one smallest unit of dust behind; never exceeds `value`.
+  const floored = Math.floor(value * factor) / factor;
+  return floored.toFixed(decimals).replace(/\.?0+$/u, "") || "0";
 }
 
 export const rebalancingExecutionService = new RebalancingExecutionService();

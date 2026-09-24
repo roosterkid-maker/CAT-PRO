@@ -15,6 +15,7 @@ import {
 
 import {
   RebalancingExecutionService,
+  type BybitRebalancingClient,
   type RebalancingExchangeClient,
 } from "../execution/RebalancingExecutionService";
 
@@ -107,9 +108,36 @@ class FakeExchangeClient implements RebalancingExchangeClient {
   }
 }
 
+class FakeBybitClient implements BybitRebalancingClient {
+  fund: {coin: string; transferable: number}[] = [];
+  transfers: {coin: string; amount: string}[] = [];
+  withdrawals: Parameters<BybitRebalancingClient["withdraw"]>[0][] = [];
+  failWithdraw: string | null = null;
+
+  async getFundBalances() {
+    return this.fund;
+  }
+
+  async transferFundToUnified(coin: string, amount: string) {
+    this.transfers.push({coin, amount});
+    return {transferId: `t-${this.transfers.length}`, status: "SUCCESS"};
+  }
+
+  async findVaspEntityId(vaspName: string) {
+    return vaspName === "Binance India" ? "bit_binance_india" : null;
+  }
+
+  async withdraw(request: Parameters<BybitRebalancingClient["withdraw"]>[0]) {
+    if (this.failWithdraw) throw new Error(this.failWithdraw);
+    this.withdrawals.push(request);
+    return {id: `w-${this.withdrawals.length}`};
+  }
+}
+
 function buildService(
   config: RebalancingExecutionConfig,
   client: RebalancingExchangeClient,
+  bybit: BybitRebalancingClient = new FakeBybitClient(),
 ): RebalancingExecutionService {
   return new RebalancingExecutionService(
     config,
@@ -125,7 +153,65 @@ function buildService(
     },
     {futuresMarginFloorUsdt: 20, spotReserveFloorUsdt: 20},
     client,
+    bybit,
   );
+}
+
+async function testBybitCapitalMoves(): Promise<void> {
+  const whitelist = [
+    {exchange: "bybit" as const, asset: "USDT", network: "BSC", address: "0xBYBIT", addressTag: null},
+    {exchange: "binance" as const, asset: "USDT", network: "BSC", address: "0xBINANCE", addressTag: null},
+  ];
+  const enabled = baseConfig({
+    withdrawalWhitelist: whitelist,
+    bybitWithdrawEnabled: true,
+    bybitFundingSweepEnabled: true,
+    bybitTravelRuleBeneficiaryName: "Test Holder",
+  });
+
+  // Off by default: nothing is called.
+  const offBybit = new FakeBybitClient();
+  offBybit.fund = [{coin: "USDT", transferable: 5}];
+  const off = buildService(baseConfig({withdrawalWhitelist: whitelist}), new FakeExchangeClient(), offBybit);
+  assert.deepEqual(await off.sweepBybitFundingToUnified(), []);
+  assert.equal((await off.executeBybitWithdrawal("binance", 8, "r1")).status, "SKIPPED_DISABLED");
+  assert.equal(offBybit.transfers.length + offBybit.withdrawals.length, 0);
+
+  // Sweep moves every Funding balance, floored to 8 decimals.
+  const sweepBybit = new FakeBybitClient();
+  sweepBybit.fund = [{coin: "USDT", transferable: 23.39}, {coin: "DASH", transferable: 0.123456789}];
+  const sweep = await buildService(enabled, new FakeExchangeClient(), sweepBybit).sweepBybitFundingToUnified();
+  assert.deepEqual(sweepBybit.transfers, [{coin: "USDT", amount: "23.39"}, {coin: "DASH", amount: "0.12345678"}]);
+  assert.ok(sweep.every((outcome) => outcome.status === "EXECUTED" && outcome.exchange === "bybit"));
+
+  // No KYC name: refuse (Bybit India requires the Travel Rule beneficiary).
+  const noName = new FakeBybitClient();
+  const noNameOutcome = await buildService({...enabled, bybitTravelRuleBeneficiaryName: null}, new FakeExchangeClient(), noName)
+    .executeBybitWithdrawal("binance", 8, "r1");
+  assert.equal(noNameOutcome.status, "SKIPPED_DISABLED");
+  assert.equal(noName.withdrawals.length, 0);
+
+  // Not whitelisted, and never to itself.
+  const other = new FakeBybitClient();
+  const service = buildService(enabled, new FakeExchangeClient(), other);
+  assert.equal((await service.executeBybitWithdrawal("coindcx", 8, "r1")).status, "SKIPPED_NOT_WHITELISTED");
+  assert.equal((await service.executeBybitWithdrawal("bybit", 8, "r1")).status, "SKIPPED_UNSUPPORTED_EXCHANGE");
+  assert.equal((await service.executeBybitWithdrawal("binance", 11, "r1")).status, "SKIPPED_CAP_REJECTED");
+
+  // Executes to the whitelisted address with the Binance India VASP and the holder's name.
+  const executed = await service.executeBybitWithdrawal("binance", 8, "r2");
+  assert.equal(executed.status, "EXECUTED");
+  assert.equal(executed.referenceId, "bybit:w-1");
+  assert.deepEqual(other.withdrawals[0], {
+    coin: "USDT", chain: "BSC", address: "0xBINANCE", tag: null, amount: 8, requestId: "r2",
+    vaspEntityId: "bit_binance_india", beneficiaryName: "Test Holder",
+  });
+
+  // A refusal is FAILED and still counts against the daily cap (reserved first).
+  other.failWithdraw = "Bybit API failed: retCode=131002, retMsg=beneficiary info required";
+  const failed = await service.executeBybitWithdrawal("binance", 8, "r3");
+  assert.equal(failed.status, "FAILED");
+  assert.match(failed.detail, /beneficiary/u);
 }
 
 async function main() {
@@ -302,6 +388,8 @@ async function main() {
     assert.equal(missingContextOutcome.status, "SKIPPED_SAFETY_BLOCKED");
     assert.equal(missingContextClient.transferCalls.length, 0);
   }
+
+  await testBybitCapitalMoves();
 
   console.log("Automated Capital Rebalancer execution-layer tests passed.");
 }

@@ -348,7 +348,7 @@ export interface RefillPlanResponse {
       toVenue: string;
       amountUsdt: number;
       status: string;
-      kind?: "USDT_TOPUP" | "STOCK_BUY";
+      kind?: "USDT_TOPUP" | "STOCK_BUY" | "FUNDING_SWEEP";
       coin?: string;
       spentInr?: number;
       detail: string;

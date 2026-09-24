@@ -130,7 +130,9 @@ export function RefillPlanPanel() {
                 {new Date(execution.at).toLocaleString("en-GB", {hour12: false})} ·{" "}
                 {execution.kind === "STOCK_BUY"
                   ? `buy ${execution.coin} on ${VENUE[execution.toVenue] ?? execution.toVenue} · ₹${Math.round(execution.spentInr ?? 0).toLocaleString("en-IN")}`
-                  : `${execution.amountUsdt} USDT → ${VENUE[execution.toVenue] ?? execution.toVenue}`}
+                  : execution.kind === "FUNDING_SWEEP"
+                    ? execution.detail
+                    : `${execution.amountUsdt} USDT ${execution.actionId.includes("|bybit>") ? "Bybit" : "Binance"} → ${VENUE[execution.toVenue] ?? execution.toVenue}`}
                 {" "}· {execution.status}
                 {!ok ? <span className="text-text-muted"> · {execution.detail}</span> : null}
               </p>

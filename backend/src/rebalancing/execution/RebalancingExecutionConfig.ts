@@ -35,6 +35,12 @@ export interface RebalancingExecutionConfig {
   readonly maximumPerDaySameExchangeUsdt: number;
   readonly maximumPerDayCrossExchangeUsdt: number;
   readonly withdrawalWhitelist: readonly RebalancingWithdrawalWhitelistEntry[];
+  /** Bybit as a USDT source: withdraw to a whitelisted exchange (off unless set). */
+  readonly bybitWithdrawEnabled?: boolean;
+  /** Sweep Bybit Funding-account deposits into the Unified trading account. */
+  readonly bybitFundingSweepEnabled?: boolean;
+  /** Account holder's KYC name, the Travel Rule beneficiary Bybit requires for India. */
+  readonly bybitTravelRuleBeneficiaryName?: string | null;
 }
 
 const DEFAULT_MAXIMUM_PER_TRANSFER_USDT = 10;
@@ -64,6 +70,10 @@ export function loadRebalancingExecutionConfig(
     ),
 
     withdrawalWhitelist: parseWhitelist(environment.CAT_PRO_REBALANCER_WITHDRAWAL_WHITELIST_JSON),
+
+    bybitWithdrawEnabled: parseBoolean(environment.CAT_PRO_REBALANCER_BYBIT_WITHDRAW_ENABLED),
+    bybitFundingSweepEnabled: parseBoolean(environment.CAT_PRO_REBALANCER_BYBIT_FUNDING_SWEEP_ENABLED),
+    bybitTravelRuleBeneficiaryName: environment.CAT_PRO_BYBIT_TRAVEL_RULE_BENEFICIARY_NAME?.trim() || null,
   };
 }
 

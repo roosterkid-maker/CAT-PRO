@@ -107,7 +107,7 @@ export interface RouteRefillExecution {
     | "BUY_NO_FILL"
     | "BUY_SKIPPED"
     | "BUY_UNKNOWN";
-  readonly kind?: "USDT_TOPUP" | "STOCK_BUY";
+  readonly kind?: "USDT_TOPUP" | "STOCK_BUY" | "FUNDING_SWEEP";
   readonly coin?: string;
   readonly spentInr?: number;
   readonly detail: string;
@@ -128,7 +128,12 @@ interface RefillState {
 
 export interface RouteRefillPort {
   executeCrossExchangeMoves(plan: RebalancingDecisionPlan): Promise<readonly RebalancingMoveOutcome[]>;
+  executeBybitWithdrawal?(destination: string, amountUsdt: number, requestId: string): Promise<RebalancingMoveOutcome>;
+  sweepBybitFundingToUnified?(): Promise<readonly RebalancingMoveOutcome[]>;
 }
+
+/* blockedUntil key for the Bybit Funding -> Unified sweep. */
+const SWEEP_BLOCK_KEY = "bybit-funding-sweep";
 
 export interface RouteRefillDependencies {
   readonly getTargets: (tradeSizeInr: number, valuation: InventoryValuation) => readonly RefillTarget[];
@@ -189,6 +194,12 @@ export class RouteRefillService {
       config.enabled && config.crossExchangeEnabled
         ? [...new Set(config.withdrawalWhitelist.filter((entry) => entry.asset === "USDT").map((entry) => entry.exchange))]
         : [];
+    const bybitAutoUsdtDestinations =
+      config.enabled && config.crossExchangeEnabled && config.bybitWithdrawEnabled && config.bybitTravelRuleBeneficiaryName
+        ? [...new Set(config.withdrawalWhitelist
+          .filter((entry) => entry.asset === "USDT" && entry.exchange !== "bybit")
+          .map((entry) => entry.exchange))]
+        : [];
     const autoBuy = this.dependencies.getAutoBuyConfig();
     const autoBuyVenues = config.enabled && autoBuy.enabled ? [...BUY_VENUES] : [];
     const targets = this.dependencies.getTargets(this.dependencies.getTradeSizeInr(), valuation);
@@ -198,6 +209,7 @@ export class RouteRefillService {
       holdingInr: (venue, asset) => valuation.holdingInr(venue, asset),
       priceInr: (asset) => valuation.priceInr(asset),
       autoUsdtDestinations,
+      bybitAutoUsdtDestinations,
       autoBuyVenues,
       refillBelowShare: REFILL_BELOW_SHARE,
       sourceFloorInr: SOURCE_FLOOR_INR,
@@ -213,6 +225,8 @@ export class RouteRefillService {
       automation: {
         enabled: config.enabled && config.crossExchangeEnabled,
         autoUsdtDestinations,
+        bybitAutoUsdtDestinations,
+        bybitFundingSweep: config.enabled && config.bybitFundingSweepEnabled === true,
         maximumPerTransferUsdt: config.maximumPerTransferUsdt,
         maximumPerDayUsdt: config.maximumPerDayCrossExchangeUsdt,
         destinationCooldownMinutes: DESTINATION_COOLDOWN_MS / 60_000,
@@ -249,6 +263,7 @@ export class RouteRefillService {
     if (!plan.automation.enabled || usdtInr === null) return [];
 
     const results: RouteRefillExecution[] = [];
+    results.push(...(await this.sweepBybitFunding(port, now)));
     for (const action of plan.actions.filter((item: RefillAction) => item.mode === "AUTO" && item.kind === "MOVE_USDT")) {
       const block = this.state.blockedUntil?.[action.toVenue];
       if (block && block.until > now) {
@@ -268,7 +283,11 @@ export class RouteRefillService {
           detail: `${amountUsdt} USDT is below the ${MINIMUM_AUTO_USDT} USDT minimum worth a withdrawal fee.`, referenceId: null}, false));
         continue;
       }
-      const [outcome] = await port.executeCrossExchangeMoves({
+      const fromBybit = action.fromVenue === "bybit";
+      if (fromBybit && !port.executeBybitWithdrawal) continue;
+      const [outcome] = fromBybit
+        ? [await port.executeBybitWithdrawal!(action.toVenue, amountUsdt, `catpro${now.toString(36)}${action.toVenue.slice(0, 3)}`)]
+        : await port.executeCrossExchangeMoves({
         desiredMoves: [{
           sequence: 1,
           sourceExchange: "binance",
@@ -292,13 +311,15 @@ export class RouteRefillService {
         this.state.lastTopUpAt[action.toVenue] = now;
         if (this.state.blockedUntil) delete this.state.blockedUntil[action.toVenue];
       } else if (outcome.status === "FAILED") {
-        const travelRule = /-4104|travel rule/iu.test(outcome.detail);
+        const travelRule = /-4104|travel rule|beneficiary|vasp/iu.test(outcome.detail);
         this.state.blockedUntil = {
           ...(this.state.blockedUntil ?? {}),
           [action.toVenue]: {
             until: now + (travelRule ? TRAVEL_RULE_BACKOFF_MS : FAILURE_BACKOFF_MS),
             reason: travelRule
-              ? "Binance refused the withdrawal under Travel Rule (-4104): complete the Travel Rule details for this destination in the Binance app."
+              ? fromBybit
+                ? `Bybit refused the withdrawal under Travel Rule: ${outcome.detail}`
+                : "Binance refused the withdrawal under Travel Rule (-4104): complete the Travel Rule details for this destination in the Binance app."
               : outcome.detail,
           },
         };
@@ -309,6 +330,34 @@ export class RouteRefillService {
     results.push(...(await this.executeStockBuys(plan, now)));
     this.persist();
     return results;
+  }
+
+  /** Bybit deposits land in Funding; the bot trades from Unified. */
+  private async sweepBybitFunding(port: RouteRefillPort, now: number): Promise<RouteRefillExecution[]> {
+    if (!port.sweepBybitFundingToUnified) return [];
+    const block = this.state.blockedUntil?.[SWEEP_BLOCK_KEY];
+    if (block && block.until > now) return [];
+    let outcomes: readonly RebalancingMoveOutcome[];
+    try {
+      outcomes = await port.sweepBybitFundingToUnified();
+    } catch (error: unknown) {
+      outcomes = [{kind: "SAME_EXCHANGE", exchange: "bybit", destinationExchange: null, amountUsdt: 0, status: "FAILED",
+        detail: `Bybit Funding balance read failed: ${error instanceof Error ? error.message : String(error)}`, referenceId: null}];
+    }
+    const failed = outcomes.find((outcome) => outcome.status === "FAILED");
+    if (failed) {
+      this.state.blockedUntil = {...(this.state.blockedUntil ?? {}), [SWEEP_BLOCK_KEY]: {until: now + FAILURE_BACKOFF_MS, reason: failed.detail}};
+    }
+    return outcomes.map((outcome) => this.record({
+      at: now,
+      actionId: "FUNDING_SWEEP|bybit",
+      toVenue: "bybit",
+      amountUsdt: outcome.amountUsdt,
+      status: outcome.status,
+      kind: "FUNDING_SWEEP",
+      detail: outcome.detail,
+      referenceId: outcome.referenceId,
+    }, true));
   }
 
   /** AUTO BUY_COIN actions within the daily cap and each venue's cash floor. */
