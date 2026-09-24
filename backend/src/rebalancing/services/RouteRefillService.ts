@@ -170,6 +170,14 @@ export class RouteRefillService {
     };
   }
 
+  /** Operator action: lift a destination's failure pause (e.g. after fixing its cause). */
+  clearPause(venue: string): boolean {
+    if (!this.state.blockedUntil?.[venue]) return false;
+    delete this.state.blockedUntil[venue];
+    this.persist();
+    return true;
+  }
+
   /** Runs the AUTO actions once; called from the capital manager's cycle. */
   async executeAuto(port: RouteRefillPort, now = Date.now()): Promise<readonly RouteRefillExecution[]> {
     const plan = this.getPlan(now);

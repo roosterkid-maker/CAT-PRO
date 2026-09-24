@@ -73,6 +73,12 @@ import type {
 
 const REBALANCE_ASSET = "USDT";
 
+/* Receiving exchange as named in Binance's Travel Rule VASP list. */
+const TRAVEL_RULE_VASP_NAMES: Readonly<Record<string, string>> = {
+  bybit: "Bybit",
+  coindcx: "CoinDCX",
+};
+
 /**
  * Everything RebalancingExecutionService needs from a live exchange,
  * narrowed to exactly these four operations. Injectable so tests can supply
@@ -86,6 +92,8 @@ export interface RebalancingExchangeClient {
     address: string,
     network: string,
     addressTag: string | null,
+    /** Lets a Travel Rule account name the receiving exchange in its questionnaire. */
+    destinationExchange?: RebalancingExecutionExchange,
   ): Promise<{referenceId: string}>;
   universalTransferSpotToFutures(asset: string, amount: number): Promise<{referenceId: string}>;
   getSpotAvailableBalance(asset: string): Promise<number>;
@@ -93,18 +101,51 @@ export interface RebalancingExchangeClient {
 }
 
 class DefaultBinanceRebalancingExchangeClient implements RebalancingExchangeClient {
+  private travelRuleCountry: {value: string | null; checkedAt: number} | null = null;
+  private travelRuleVasps: readonly {vaspName: string; identifier: string}[] | null = null;
+
   async withdraw(
     asset: string,
     amount: number,
     address: string,
     network: string,
     addressTag: string | null,
+    destinationExchange?: RebalancingExecutionExchange,
   ): Promise<{referenceId: string}> {
-    const result = await binanceCapitalTransferApi.withdraw(
-      {coin: asset, address, amount, network, addressTag: addressTag ?? undefined},
-      binanceRebalancerCredentialsProvider.getCredentials(),
+    const credentials = binanceRebalancerCredentialsProvider.getCredentials();
+
+    // Travel Rule accounts (e.g. Binance India) must use the local-entity
+    // endpoint with a questionnaire; the plain endpoint answers -4104.
+    const now = Date.now();
+    if (!this.travelRuleCountry || now - this.travelRuleCountry.checkedAt > 6 * 3_600_000) {
+      this.travelRuleCountry = {value: await binanceCapitalTransferApi.getTravelRuleCountry(credentials), checkedAt: now};
+    }
+
+    if (this.travelRuleCountry.value === null) {
+      const result = await binanceCapitalTransferApi.withdraw(
+        {coin: asset, address, amount, network, addressTag: addressTag ?? undefined},
+        credentials,
+      );
+      return {referenceId: result.withdrawId};
+    }
+
+    const destinationName = TRAVEL_RULE_VASP_NAMES[destinationExchange ?? ""] ?? destinationExchange ?? "others";
+    this.travelRuleVasps ??= await binanceCapitalTransferApi.getTravelRuleVasps(credentials);
+    const vasp = this.travelRuleVasps.find((entry) =>
+      entry.vaspName.trim().toLowerCase().replace(/[^a-z0-9]/gu, "")
+        .includes(destinationName.toLowerCase().replace(/[^a-z0-9]/gu, "")));
+
+    // The rebalancer only withdraws to the operator's own whitelisted
+    // account on another exchange: self-owned address, sent to a VASP.
+    const questionnaire: Record<string, string | number> = vasp
+      ? {isAddressOwner: 1, sendTo: 2, vasp: vasp.identifier}
+      : {isAddressOwner: 1, sendTo: 2, vasp: "others", vaspName: destinationName};
+
+    const result = await binanceCapitalTransferApi.withdrawLocalEntity(
+      {coin: asset, address, amount, network, addressTag: addressTag ?? undefined, questionnaire},
+      credentials,
     );
-    return {referenceId: result.withdrawId};
+    return {referenceId: `travel-rule:${result.travelRuleId}`};
   }
 
   async universalTransferSpotToFutures(asset: string, amount: number): Promise<{referenceId: string}> {
@@ -305,6 +346,7 @@ export class RebalancingExecutionService {
         whitelisted.address,
         whitelisted.network,
         whitelisted.addressTag,
+        destinationExchange,
       );
 
       return this.outcome(

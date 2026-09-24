@@ -194,6 +194,28 @@ export interface BinanceSignedCapitalClient {
   getSigned<T>(path: string, parameters?: BinanceRequestParameters, credentials?: BinanceCredentials): Promise<T>;
 }
 
+/*
+ * Travel Rule (local entities, e.g. Binance India). Such accounts cannot use
+ * /sapi/v1/capital/withdraw/apply (Binance answers -4104); withdrawals go to
+ * /sapi/v1/localentity/withdraw/apply with the entity's questionnaire.
+ */
+export interface BinanceTravelRuleVasp {
+  readonly vaspName: string;
+  readonly vaspCode: string;
+  readonly identifier: string;
+}
+
+export interface BinanceLocalEntityWithdrawRequest extends BinanceWithdrawRequest {
+  /** Questionnaire answers as a JSON object; serialized (and URL-encoded) here. */
+  readonly questionnaire: Readonly<Record<string, string | number>>;
+}
+
+export interface BinanceLocalEntityWithdrawResult {
+  readonly travelRuleId: string;
+  readonly accepted: boolean;
+  readonly info: string;
+}
+
 export class BinanceCapitalTransferApi {
   constructor(
     private readonly client: BinanceSignedCapitalClient = binanceHttpClient,
@@ -263,6 +285,84 @@ export class BinanceCapitalTransferApi {
     }
 
     return {withdrawId};
+  }
+
+  /**
+   * Local entity whose Travel Rule questionnaire applies to this account
+   * (e.g. "IN"), or null when none is required.
+   */
+  async getTravelRuleCountry(
+    credentials?: BinanceCredentials,
+  ): Promise<string | null> {
+    await this.client.synchronizeServerTime();
+    const response = await this.client.getSigned<{questionnaireCountryCode?: unknown}>(
+      "/sapi/v1/localentity/questionnaire-requirements",
+      {},
+      credentials,
+    );
+    const code = typeof response?.questionnaireCountryCode === "string"
+      ? response.questionnaireCountryCode.trim().toUpperCase()
+      : "";
+    return code && code !== "NIL" ? code : null;
+  }
+
+  /** VASPs (exchanges) the local entity can name as a Travel Rule counterparty. */
+  async getTravelRuleVasps(
+    credentials?: BinanceCredentials,
+  ): Promise<readonly BinanceTravelRuleVasp[]> {
+    await this.client.synchronizeServerTime();
+    const response = await this.client.getSigned<unknown>(
+      "/sapi/v1/localentity/vasp",
+      {},
+      credentials,
+    );
+    if (!Array.isArray(response)) {
+      throw new Error("Invalid Binance Travel Rule VASP list response.");
+    }
+    return response
+      .map((entry) => entry as {vaspName?: unknown; vaspCode?: unknown; identifier?: unknown})
+      .filter((entry) => typeof entry.vaspName === "string" && typeof entry.identifier === "string")
+      .map((entry) => ({
+        vaspName: String(entry.vaspName),
+        vaspCode: typeof entry.vaspCode === "string" ? entry.vaspCode : "",
+        identifier: String(entry.identifier),
+      }));
+  }
+
+  /** Travel Rule withdrawal for local-entity accounts (e.g. Binance India). */
+  async withdrawLocalEntity(
+    request: BinanceLocalEntityWithdrawRequest,
+    credentials?: BinanceCredentials,
+  ): Promise<BinanceLocalEntityWithdrawResult> {
+    const coin = this.requireAsset(request.coin);
+    const address = this.requireAddress(request.address);
+    this.requirePositiveAmount(request.amount);
+
+    await this.client.synchronizeServerTime();
+
+    const parameters: Record<string, string | number> = {
+      coin,
+      address,
+      amount: formatAmount(request.amount),
+      questionnaire: JSON.stringify(request.questionnaire),
+    };
+    if (request.network) parameters.network = request.network.trim().toUpperCase();
+    if (request.addressTag) parameters.addressTag = request.addressTag.trim();
+    if (request.withdrawOrderId) parameters.withdrawOrderId = request.withdrawOrderId.trim();
+
+    const response = await this.client.postSigned<{trId?: unknown; accepted?: unknown; info?: unknown}>(
+      "/sapi/v1/localentity/withdraw/apply",
+      parameters,
+      credentials,
+    );
+
+    const travelRuleId = this.toIdentifierString(response?.trId);
+    const accepted = response?.accepted === true;
+    const info = typeof response?.info === "string" ? response.info : "";
+    if (!travelRuleId || !accepted) {
+      throw new Error(`Binance Travel Rule withdrawal was not accepted: ${info || this.safeStringify(response)}`);
+    }
+    return {travelRuleId, accepted, info};
   }
 
   async getWithdrawHistory(

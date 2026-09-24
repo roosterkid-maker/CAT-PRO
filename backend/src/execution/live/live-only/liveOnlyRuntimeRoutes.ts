@@ -511,6 +511,31 @@ router.get(
   },
 );
 
+/* Operator-only: lift a refill destination's failure pause after fixing its cause. */
+router.post(
+  "/refill-plan/clear-pause",
+  (
+    request,
+    response,
+  ) => {
+    const venue =
+      typeof request.body?.venue === "string"
+        ? request.body.venue.trim().toLowerCase()
+        : "";
+    if (!venue) {
+      response.status(400).json({success: false, message: "venue is required."});
+      return;
+    }
+    response.json({
+      success: true,
+      data: {
+        cleared: getRouteRefillService().clearPause(venue),
+        plan: getRouteRefillService().getPlan(),
+      },
+    });
+  },
+);
+
 router.get(
   "/inr-executor",
   (
