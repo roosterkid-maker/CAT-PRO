@@ -779,6 +779,25 @@ async function testPreDispatchValidationAndLostCreateRecovery(): Promise<void> {
     assertCondition(rejected, "UnoCoin pre-dispatch validation must reject client IDs, time-in-force and off-precision quantities.");
   }
 
+  // UnoCoin publishes min_volume "0" (no quantity minimum): accepted. A
+  // minimum that was never published stays fail-closed.
+  const zeroMinimum = {...capability, quantity: {...capability.quantity, minimumQuantity: 0}};
+  const unknownMinimum = {...capability, quantity: {...capability.quantity, minimumQuantity: null}};
+  const withCapability = (cached: ExchangeMarketCapability) => new UnoCoinExecutionAdapter({
+    credentialsSource: {getCredentials: () => ({apiToken: FIXTURE_TOKEN}), isConfigured: () => true},
+    getMarketCapability: async () => cached,
+    getCachedMarketCapability: () => cached,
+    sleep: async () => {},
+  });
+  withCapability(zeroMinimum).validateNewSubmission(request);
+  let unknownRejected = false;
+  try {
+    withCapability(unknownMinimum).validateNewSubmission(request);
+  } catch {
+    unknownRejected = true;
+  }
+  assertCondition(unknownRejected, "An unpublished UnoCoin minimum volume must still block dispatch.");
+
   // One new matching row: the lost create is recovered and monitored.
   listCalls = 0;
   afterCreate = () => [{orderId: "200", side: "buy", price: 5_000_000, quantity: 0.0001}, ...baselineRows];

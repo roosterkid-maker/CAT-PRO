@@ -1058,10 +1058,12 @@ export class UnoCoinExecutionAdapter
       capability.quantity
         .minimumQuantity;
 
+    // null = the minimum was never published (fail closed); 0 = published
+    // "no quantity minimum" (the notional minimum below still applies).
     if (
       minimumQuantity ===
         null ||
-      minimumQuantity <=
+      minimumQuantity <
         0 ||
       quantity <
         minimumQuantity

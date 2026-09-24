@@ -101,8 +101,11 @@ export function normalizeUnoCoinFeeRules(
 
     maximumNotional,
 
+    // UnoCoin publishes min_volume "0" for pairs with no quantity minimum
+    // (the amount minimum still applies). Keep that as 0 - a published
+    // "no minimum" - instead of collapsing it into "not published".
     minimumVolume:
-      parsePositiveFinite(
+      parseNonNegativeFinite(
         setting.min_volume,
       ),
   };
