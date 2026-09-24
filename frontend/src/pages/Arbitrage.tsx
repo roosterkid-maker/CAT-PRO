@@ -28,6 +28,10 @@ import {
   useOpportunityNearMissAnalytics,
 } from "@/modules/opportunity-diagnostics/hooks/useOpportunityEconomicsDiagnostics";
 
+import {
+  InrScannerPanel,
+} from "@/modules/live-only/components/InrScannerPanel";
+
 import DecisionBadge from "@/shared/components/DecisionBadge";
 
 import {
@@ -212,6 +216,12 @@ export default function Arbitrage() {
 
   return (
     <section className="space-y-6">
+      {/* The arbitrage scanner is the system of record for opportunities
+       * (USDT<->USDT, INR<->INR, USDT<->INR at 1% net, valid + executable
+       * only). The board below is the Strategy #1 engine that feeds the USDT
+       * live runner, kept for its execution decisions. */}
+      <InrScannerPanel />
+
       <section className="rounded-xl border border-border-default bg-panel p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -219,14 +229,12 @@ export default function Arbitrage() {
               <ShieldCheck className="size-4" />
 
               <p className="text-xs font-semibold uppercase tracking-[0.18em]">
-                Arbitrage
-                Intelligence
+                Strategy #1 engine · USDT live runner
               </p>
             </div>
 
             <h1 className="mt-2 text-3xl font-bold text-text-primary">
-              Professional
-              Opportunity Board
+              Runner Decision Board
             </h1>
 
             <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">

@@ -63,6 +63,22 @@ import {
   opportunityNearMissAnalyticsService,
 } from "../../../arbitrage/services/OpportunityNearMissAnalyticsService";
 
+import {
+  executionHistoryService,
+} from "../history/ExecutionHistoryService";
+
+import {
+  buildArbitragePnLReport,
+} from "../history/ArbitragePnLReport";
+
+import {
+  getExchangeTakerFeePercent,
+} from "../../../arbitrage/config/fees";
+
+import {
+  getStrategyOneTinyLiveCashCostProfile,
+} from "../evidence/StrategyOneTinyLiveCashCostService";
+
 const router =
   Router();
 
@@ -461,6 +477,89 @@ router.get(
           error instanceof Error
             ? error.message
             : "Opportunity near-miss analytics failed.",
+      });
+    }
+  },
+);
+
+/*
+ * Realized arbitrage P&L from the live order history (paired arb-buy /
+ * arb-sell legs) for the Execution tab. Fees are estimated at each venue's
+ * taker rate plus GST because venue fee lines are in mixed assets.
+ */
+router.get(
+  "/pnl",
+  async (
+    request,
+    response,
+  ) => {
+    const rawLimit =
+      typeof request.query.limit ===
+        "string"
+        ? Number(
+            request.query.limit,
+          )
+        : 20;
+
+    try {
+      const history =
+        await executionHistoryService
+          .getRecent(
+            500,
+          );
+
+      response.setHeader(
+        "Cache-Control",
+        "no-store",
+      );
+
+      response.json(
+        buildArbitragePnLReport(
+          history.executions,
+          (exchange, market, side) => {
+            const fee =
+              getExchangeTakerFeePercent(
+                exchange,
+                market,
+              );
+
+            if (
+              fee === null
+            ) {
+              return null;
+            }
+
+            try {
+              return fee *
+                (1 +
+                  getStrategyOneTinyLiveCashCostProfile(
+                    exchange,
+                    market,
+                    side,
+                  ).tradingFeeSurchargeMultiplier);
+            } catch {
+              return fee;
+            }
+          },
+          Number.isSafeInteger(
+            rawLimit,
+          )
+            ? rawLimit
+            : 20,
+          Date.now(),
+        ),
+      );
+    } catch (
+      error:
+        unknown
+    ) {
+      response.status(500).json({
+        success:
+          false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Arbitrage P&L report failed.",
       });
     }
   },

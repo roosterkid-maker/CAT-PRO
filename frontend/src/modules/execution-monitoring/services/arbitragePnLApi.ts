@@ -67,7 +67,7 @@ export async function fetchArbitragePnL(
 ): Promise<ArbitragePnLReport> {
   const response =
     await fetch(
-      `${API_BASE_URL}/api/arbitrage/pnl?limit=${limit}`,
+      `${API_BASE_URL}/api/live-only/pnl?limit=${limit}`,
       {
         signal,
       },

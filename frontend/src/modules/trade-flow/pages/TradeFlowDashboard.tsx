@@ -84,6 +84,9 @@ export default function TradeFlowDashboard() {
             <h1 className="mt-3 text-2xl font-black tracking-tight text-white sm:text-3xl">
               LIVE Execution Intelligence
             </h1>
+            <p className="mt-1 font-mono text-[11px] tracking-[0.12em] text-cyan-300">
+              Strategy #1 USDT live runner · all USDT↔USDT / INR↔INR / USDT↔INR routes are on the BOT and ARBITRAGE scanner
+            </p>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">
               Har opportunity ke liye exact BUY/SELL venue, coin quantity, required balance,
               available balance, shortage, thresholds aur execution blocker ek jagah. Yeh page

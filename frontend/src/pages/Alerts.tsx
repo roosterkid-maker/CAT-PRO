@@ -10,6 +10,10 @@ import {
   NotificationSettingsCard,
 } from "@/modules/notifications/components/NotificationSettingsCard";
 
+import {
+  ScannerAlertsPanel,
+} from "@/modules/live-only/components/ScannerAlertsPanel";
+
 import ProductionAlertCenter from "@/modules/production-alerts/components/ProductionAlertCenter";
 
 export default function Alerts() {
@@ -40,6 +44,8 @@ export default function Alerts() {
           </div>
         </div>
       </header>
+
+      <ScannerAlertsPanel />
 
       <ProductionAlertCenter />
 
