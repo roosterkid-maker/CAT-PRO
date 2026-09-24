@@ -30,6 +30,8 @@ export interface CoinSwitchInrDepthPollerDiagnostics {
   readonly lastError: string | null;
   readonly lastSuccessAt: number | null;
   readonly activeMarkets: readonly string[];
+  readonly skippedMarkets: readonly string[];
+  readonly invalidMarketSkips: number;
 }
 
 export interface CoinSwitchInrDepthPollerDependencies {
@@ -60,6 +62,10 @@ export class CoinSwitchInrDepthPoller {
   static readonly MAXIMUM_ACTIVE_MARKETS = 12;
   private static readonly FAILURES_BEFORE_PAUSE = 5;
   private static readonly PAUSE_MS = 60_000;
+  private static readonly BAD_MARKET_SKIP_MS = 10 * 60_000;
+
+  private readonly skippedMarkets = new Map<string, number>();
+  private invalidMarketSkips = 0;
 
   private readonly dependencies: CoinSwitchInrDepthPollerDependencies;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -104,8 +110,9 @@ export class CoinSwitchInrDepthPoller {
       this.consecutiveFailures = 0;
     }
 
+    for (const [market, until] of this.skippedMarkets) if (until <= now) this.skippedMarkets.delete(market);
     this.activeMarkets = this.getNominations()
-      .filter((market) => /INR$/iu.test(market.replace(/[^A-Za-z0-9]/gu, "")))
+      .filter((market) => /INR$/iu.test(market.replace(/[^A-Za-z0-9]/gu, "")) && !this.skippedMarkets.has(market))
       .slice(0, CoinSwitchInrDepthPoller.MAXIMUM_ACTIVE_MARKETS);
     if (this.activeMarkets.length === 0) return;
 
@@ -123,8 +130,16 @@ export class CoinSwitchInrDepthPoller {
       this.lastSuccessAt = this.dependencies.now();
     } catch (error: unknown) {
       this.failures += 1;
-      this.consecutiveFailures += 1;
       this.lastError = error instanceof Error ? error.message : String(error);
+      // A malformed book is one market's problem (CoinSwitch returns some
+      // unsorted/duplicate levels), not an API outage: skip that market for
+      // a while instead of pausing every other market's refresh.
+      if (/invalid or unsorted levels|failed market, clock, or book integrity|does not support/iu.test(this.lastError)) {
+        this.skippedMarkets.set(market, this.dependencies.now() + CoinSwitchInrDepthPoller.BAD_MARKET_SKIP_MS);
+        this.invalidMarketSkips += 1;
+        return;
+      }
+      this.consecutiveFailures += 1;
       if (this.consecutiveFailures >= CoinSwitchInrDepthPoller.FAILURES_BEFORE_PAUSE) {
         this.pausedUntil = this.dependencies.now() + CoinSwitchInrDepthPoller.PAUSE_MS;
         console.warn(`[CoinSwitch INR Depth] ${this.consecutiveFailures} consecutive failures; pausing 60s. Last: ${this.lastError}`);
@@ -146,6 +161,8 @@ export class CoinSwitchInrDepthPoller {
       lastError: this.lastError,
       lastSuccessAt: this.lastSuccessAt,
       activeMarkets: [...this.activeMarkets],
+      skippedMarkets: [...this.skippedMarkets.keys()],
+      invalidMarketSkips: this.invalidMarketSkips,
     };
   }
 }

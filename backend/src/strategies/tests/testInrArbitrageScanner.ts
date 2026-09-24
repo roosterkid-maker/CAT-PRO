@@ -185,6 +185,14 @@ function testGatesAndEvidence(): void {
   assert.equal(hinted.evidence, "QUOTE");
   assert.deepEqual(hint.service.getDepthNominations("coinswitch"), ["HNT_INR"], "raw venue spelling");
 
+  // A leg is not nominated when the other leg is only a ticker: depth
+  // could not complete that route anyway.
+  const incomplete = harness();
+  incomplete.put(quote({exchange: "coinswitch", market: "INC_INR", bestBidPrice: 104, bestAskPrice: 104.2, executable: false, source: "bookTicker"}));
+  incomplete.put(quote({exchange: "unocoin", market: "INC_INR", lastPrice: 100, executable: false, source: "ticker"}));
+  incomplete.service.scan();
+  assert.deepEqual(incomplete.service.getDepthNominations("coinswitch"), []);
+
   // UnoCoin copying last into bid == ask is not a two-sided quote.
   const flat = harness();
   flat.put(quote({exchange: "unocoin", market: "FLT_INR", lastPrice: 10, bestBidPrice: 10, bestAskPrice: 10, executable: false, source: "bookTicker"}));
@@ -231,6 +239,7 @@ function testPolledBookUpgradesQuote(): void {
   assert.equal(route.sellEvidence, "BOOK");
   assert.ok(route.depthAtThresholdInr !== null && route.depthAtThresholdInr > 30_000);
   assert.equal(report.venues.coinswitch.inrBooks, 1);
+  assert.deepEqual(h.service.getDepthNominations("coinswitch"), ["LRC_INR"], "a live polled book keeps being refreshed");
 
   // A polled book older than the CoinSwitch INR limit (12s) is not trusted.
   now += 13_000;
@@ -265,6 +274,21 @@ async function testCoinSwitchInrDepthPoller(): Promise<void> {
   assert.equal(paused.lastError, "HTTP 429");
   await poller.tick();
   assert.equal(poller.getDiagnostics().requests, paused.requests, "no requests while paused");
+  // A malformed book skips that market without pausing the rest.
+  const skipping = new CoinSwitchInrDepthPoller(() => ["BAD_INR", "OK_INR"], {
+    getDepth: async (market) => {
+      if (market === "BAD_INR") throw new Error("CoinSwitch depth response contains invalid or unsorted levels.");
+      return {venue: "coinswitchx", market, bids: [{price: 1, quantity: 1}], asks: [{price: 2, quantity: 1}], timestamp: clock} as never;
+    },
+    publish: () => undefined,
+    now: () => clock,
+  });
+  for (let i = 0; i < 6; i += 1) await skipping.tick();
+  const skipped = skipping.getDiagnostics();
+  assert.equal(skipped.pausedUntil, null, "bad market does not pause the poller");
+  assert.deepEqual(skipped.skippedMarkets, ["BAD_INR"]);
+  assert.equal(skipped.failures, 1, "the bad market is tried once, then skipped");
+
   fail = false;
   clock += 61_000;
   await poller.tick();

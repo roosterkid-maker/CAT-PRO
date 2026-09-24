@@ -966,11 +966,19 @@ export class InrArbitrageScannerService {
   private nominateDepth(routes: readonly ScannedRoute[], now: number): void {
     const scores = new Map<string, Map<string, number>>();
     for (const route of routes) {
-      if (route.suspect || route.evidence === "BOOK" || route.netEdgePercent < this.config.nearMissNetPercent) continue;
-      for (const [venue, market, tier] of [[route.buyVenue, route.buyMarket, route.buyEvidence], [route.sellVenue, route.sellMarket, route.sellEvidence]] as const) {
-        // Only INR legs that still lack a book need depth; a route can be
-        // weak because of its other leg or its USDT/INR conversion.
-        if (!market.endsWith("INR") || tier === "BOOK") continue;
+      if (route.suspect || route.netEdgePercent < this.config.nearMissNetPercent) continue;
+      for (const [venue, market, tier, otherTier] of [
+        [route.buyVenue, route.buyMarket, route.buyEvidence, route.sellEvidence],
+        [route.sellVenue, route.sellMarket, route.sellEvidence, route.buyEvidence],
+      ] as const) {
+        if (!market.endsWith("INR")) continue;
+        // Depth for this leg only helps when it is the one missing piece:
+        // a route whose other leg is still a ticker cannot be completed.
+        if (otherTier !== "BOOK") continue;
+        // CoinDCX books stream once opened. Polled venues (CoinSwitch REST,
+        // UnoCoin REST) must keep being refreshed while the route is live,
+        // or the book goes stale and the window flaps closed and open.
+        if (venue === "coindcx" && tier === "BOOK") continue;
         const byVenue = scores.get(venue) ?? new Map<string, number>();
         byVenue.set(market, Math.max(byVenue.get(market) ?? Number.NEGATIVE_INFINITY, route.netEdgePercent));
         scores.set(venue, byVenue);
