@@ -225,6 +225,8 @@ export interface InrScannerResponse {
       suspectGrossPercent: number;
       windowGraceMs: number;
       alertAfterMs: number;
+      exitHysteresisPercent: number;
+      alertCooldownMs: number;
       maximumTickerAgeMs: number;
       maximumBookAgeMs: Record<string, number>;
       scanIntervalMs: number;

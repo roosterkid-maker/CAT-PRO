@@ -87,6 +87,10 @@ export interface InrScannerConfig {
   readonly suspectGrossPercent: number;
   readonly windowGraceMs: number;
   readonly alertAfterMs: number;
+  /** An open window stays open until net falls below minimumNet minus this. */
+  readonly exitHysteresisPercent: number;
+  /** A route that alerted is not alerted again within this. */
+  readonly alertCooldownMs: number;
   readonly maximumTickerAgeMs: number;
   readonly maximumBookAgeMs: Readonly<Record<string, number>>;
   readonly scanIntervalMs: number;
@@ -104,8 +108,10 @@ export function loadInrScannerConfig(): InrScannerConfig {
     minimumNetPercent: readNumberEnv("CAT_PRO_INR_SCAN_MIN_NET_PERCENT", 3, 0.1, 50),
     nearMissNetPercent: readNumberEnv("CAT_PRO_INR_SCAN_NEAR_MISS_NET_PERCENT", 1, 0, 50),
     suspectGrossPercent: readNumberEnv("CAT_PRO_INR_SCAN_SUSPECT_GROSS_PERCENT", 25, 5, 500),
-    windowGraceMs: readNumberEnv("CAT_PRO_INR_SCAN_WINDOW_GRACE_MS", 3_000, 0, 60_000),
+    windowGraceMs: readNumberEnv("CAT_PRO_INR_SCAN_WINDOW_GRACE_MS", 5_000, 0, 60_000),
     alertAfterMs: readNumberEnv("CAT_PRO_INR_SCAN_ALERT_AFTER_MS", 2_000, 0, 60_000),
+    exitHysteresisPercent: readNumberEnv("CAT_PRO_INR_SCAN_EXIT_HYSTERESIS_PERCENT", 0.5, 0, 10),
+    alertCooldownMs: readNumberEnv("CAT_PRO_INR_SCAN_ALERT_COOLDOWN_MS", 5 * 60_000, 0, 24 * 3_600_000),
     maximumTickerAgeMs: 60_000,
     maximumBookAgeMs: {
       coindcx: 5_000,
@@ -423,6 +429,7 @@ export class InrArbitrageScannerService {
   private readonly demandExpiry = new Map<string, number>();
   /** `venue|NORMALIZEDMARKET` -> the venue's own market spelling (e.g. LRC_INR). */
   private readonly rawMarkets = new Map<string, string>();
+  private readonly lastAlertAtByRoute = new Map<string, number>();
   private minimumsCache = new Map<string, {minimumNotional: number | null; minimumQuantity: number | null} | null | undefined>();
 
   constructor(
@@ -597,7 +604,7 @@ export class InrArbitrageScannerService {
         b.netEdgePercent - a.netEdgePercent)
       .slice(0, InrArbitrageScannerService.MAXIMUM_NEAR_MISSES);
 
-    this.trackWindows(qualifying, now);
+    this.trackWindows(qualifying, routes, now);
     this.nominateDepth(routes, now);
     const shown = routes.filter((route) => route.netEdgePercent >= this.config.nearMissNetPercent);
     this.minimumsKnown = shown.filter((route) => route.minimumOrderInr !== null).length;
@@ -858,9 +865,25 @@ export class InrArbitrageScannerService {
 
   /* ------------------------------------------------------------- windows */
 
-  private trackWindows(qualifying: readonly ScannedRoute[], now: number): void {
+  /**
+   * Opens a window when a route qualifies; keeps it open (hysteresis) while
+   * the route stays a non-suspect BOOK route above `minimumNet - exit
+   * hysteresis`, so an edge hovering around the threshold is one window,
+   * not dozens. A route that already alerted within the cooldown opens new
+   * windows silently.
+   */
+  private trackWindows(qualifying: readonly ScannedRoute[], routes: readonly ScannedRoute[], now: number): void {
+    const exitNet = this.config.minimumNetPercent - this.config.exitHysteresisPercent;
+    const continuing = routes.filter((route) =>
+      this.active.has(route.routeKey) &&
+      !route.qualifies &&
+      route.evidence === "BOOK" &&
+      !route.suspect &&
+      route.netEdgePercent >= exitNet);
+
     const seen = new Set<string>();
-    for (const route of qualifying) {
+    for (const route of [...qualifying, ...continuing]) {
+      if (seen.has(route.routeKey)) continue;
       seen.add(route.routeKey);
       const existing = this.active.get(route.routeKey);
       if (existing) {
@@ -871,11 +894,20 @@ export class InrArbitrageScannerService {
         existing.peakDepthInr = Math.max(existing.peakDepthInr, route.depthAtThresholdInr ?? 0);
         existing.minimumOrderInr = route.minimumOrderInr ?? existing.minimumOrderInr;
         existing.durationMs = now - existing.startedAt;
-        if (existing.alertedAt === null && existing.durationMs >= this.config.alertAfterMs) {
+        const lastAlertAt = this.lastAlertAtByRoute.get(route.routeKey) ?? Number.NEGATIVE_INFINITY;
+        if (
+          existing.alertedAt === null &&
+          existing.durationMs >= this.config.alertAfterMs &&
+          now - lastAlertAt >= this.config.alertCooldownMs
+        ) {
           existing.alertedAt = now;
+          this.lastAlertAtByRoute.set(route.routeKey, now);
           console.log(`[INR-Scanner] ALERT ${route.coin} ${route.kind} ${route.buyVenue}>${route.sellVenue} net=${route.netEdgePercent.toFixed(2)}% depth=Rs${Math.round(route.depthAtThresholdInr ?? 0)} lasted=${existing.durationMs}ms`);
         }
-      } else {
+      } else if (route.qualifies) {
+        const cooledDown = now - (this.lastAlertAtByRoute.get(route.routeKey) ?? Number.NEGATIVE_INFINITY) >= this.config.alertCooldownMs;
+        const alertNow = this.config.alertAfterMs === 0 && cooledDown;
+        if (alertNow) this.lastAlertAtByRoute.set(route.routeKey, now);
         this.active.set(route.routeKey, {
           id: `${route.routeKey}@${now}`,
           routeKey: route.routeKey,
@@ -895,7 +927,7 @@ export class InrArbitrageScannerService {
           peakDepthInr: route.depthAtThresholdInr ?? 0,
           minimumOrderInr: route.minimumOrderInr,
           tdsVerified: route.tdsVerified,
-          alertedAt: this.config.alertAfterMs === 0 ? now : null,
+          alertedAt: alertNow ? now : null,
         });
       }
     }

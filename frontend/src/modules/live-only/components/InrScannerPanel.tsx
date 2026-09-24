@@ -93,8 +93,8 @@ export function InrScannerPanel() {
 function ParameterChips({report}: {report: Report}) {
   const config = report.config;
   const chips = [
-    `min net ${config.minimumNetPercent}%`,
-    `alert after ${config.alertAfterMs / 1_000}s`,
+    `open ≥ ${config.minimumNetPercent}% net · stay open ≥ ${config.minimumNetPercent - config.exitHysteresisPercent}%`,
+    `alert after ${config.alertAfterMs / 1_000}s · cooldown ${Math.round(config.alertCooldownMs / 60_000)}m/route`,
     `grace ${config.windowGraceMs / 1_000}s`,
     `suspect > ${config.suspectGrossPercent}% gross`,
     `book age ≤ ${(config.maximumBookAgeMs.coindcx ?? 5_000) / 1_000}s (UnoCoin ${(config.maximumBookAgeMs.unocoin ?? 20_000) / 1_000}s)`,

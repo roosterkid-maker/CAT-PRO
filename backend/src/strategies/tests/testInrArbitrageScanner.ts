@@ -26,6 +26,8 @@ const CONFIG: InrScannerConfig = {
   suspectGrossPercent: 25,
   windowGraceMs: 3_000,
   alertAfterMs: 2_000,
+  exitHysteresisPercent: 0.5,
+  alertCooldownMs: 300_000,
   maximumTickerAgeMs: 60_000,
   maximumBookAgeMs: {coindcx: 5_000, binance: 5_000, bybit: 5_000, coinswitch: 5_000, "coinswitch:INR": 12_000, unocoin: 20_000},
   scanIntervalMs: 1_000,
@@ -296,7 +298,50 @@ async function testCoinSwitchInrDepthPoller(): Promise<void> {
   assert.equal(published.length, 4);
 }
 
+function testHysteresisAndCooldown(): void {
+  const h = harness();
+  const setBid = (bid: number) => {
+    h.put(quote({exchange: "unocoin", market: "HYS_INR", bestBidPrice: 99, bestAskPrice: 100, bestBidQty: 50, bestAskQty: 50}));
+    h.put(quote({exchange: "coindcx", market: "HYSINR", bestBidPrice: bid, bestAskPrice: bid + 1, bestBidQty: 50, bestAskQty: 50}));
+    h.book("unocoin", "HYS_INR", [[100, 50]], [[99, 50]]);
+    h.book("coindcx", "HYSINR", [[bid + 1, 50]], [[bid, 50]]);
+  };
+  // 4.2% gross - 0.99% fees = 3.21% net: opens.
+  setBid(104.2);
+  h.service.scan();
+  assert.equal(h.service.getReport().activeWindows.length, 1);
+  // Dips to 2.81% net (below 3%, above the 2.5% exit line): same window stays open.
+  for (let i = 0; i < 8; i += 1) {
+    now += 1_000;
+    setBid(i % 2 === 0 ? 103.8 : 104.2);
+    h.service.scan();
+  }
+  let report = h.service.getReport();
+  assert.equal(report.activeWindows.length, 1, "hovering around 3% is one window");
+  assert.equal(report.recentWindows.length, 0);
+  assert.equal(report.alerts.length, 1, "alerted once");
+
+  // Falls below the exit line long enough to close, then re-qualifies:
+  // a new window, but no second alert inside the cooldown.
+  setBid(102);
+  for (let i = 0; i < 7; i += 1) {
+    now += 1_000;
+    h.service.scan();
+  }
+  assert.equal(h.service.getReport().activeWindows.length, 0);
+  setBid(104.2);
+  for (let i = 0; i < 4; i += 1) {
+    now += 1_000;
+    h.service.scan();
+  }
+  report = h.service.getReport();
+  assert.equal(report.activeWindows.length, 1);
+  assert.equal(report.activeWindows[0].alertedAt, null, "cooldown suppresses a repeat alert");
+  assert.equal(report.alerts.length, 1);
+}
+
 testMath();
+testHysteresisAndCooldown();
 testPolledBookUpgradesQuote();
 testRealOpportunityWindowAndAlert();
 testGatesAndEvidence();
