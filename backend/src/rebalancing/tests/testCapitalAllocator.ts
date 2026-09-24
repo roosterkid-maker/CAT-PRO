@@ -173,7 +173,8 @@ async function testStockSells(directory: string): Promise<void> {
   }, join(directory, `${name}.jsonl`));
 
   // Idle FLR (no longer allocated) is sold for CoinSwitch INR, which GRAM's
-  // stock needs: only the ₹2,400 GRAM is short, not the whole ₹8,000.
+  // stock needs: GRAM is ₹2,400 short and CoinSwitch already holds ₹1,200,
+  // so only ₹1,200 is sold, not the whole ₹8,000.
   const port = new FakeStockPort();
   const refill = service("sell", port);
   const plan = refill.getPlan(now);
@@ -182,13 +183,13 @@ async function testStockSells(directory: string): Promise<void> {
   const results = await refill.executeAuto(nullPort, now);
   assert.equal(port.sells.length, 1);
   assert.deepEqual({venue: port.sells[0]!.venue, coin: port.sells[0]!.coin, quote: port.sells[0]!.quote, amountInr: port.sells[0]!.amountInr},
-    {venue: "coinswitch", coin: "FLR", quote: "INR", amountInr: 2_400});
+    {venue: "coinswitch", coin: "FLR", quote: "INR", amountInr: 1_200});
   assert.equal(results.find((item) => item.kind === "STOCK_SELL")?.status, "SELL_FILLED");
-  assert.equal(refill.getPlan(now).automation.autoSell.spentTodayInr, 2_400);
+  assert.equal(refill.getPlan(now).automation.autoSell.spentTodayInr, 1_200);
 
-  // The switch must earn 2x its cost in a day: ₹2,400 costs ≈₹29, so a coin
-  // earning ₹40/day does not justify it.
-  gramProfit = 40;
+  // The switch must earn 2x its cost in a day: ₹1,200 costs ≈₹14, so a coin
+  // earning ₹20/day does not justify it.
+  gramProfit = 20;
   const weakPort = new FakeStockPort();
   const weak = service("weak", weakPort);
   await weak.executeAuto(nullPort, now);

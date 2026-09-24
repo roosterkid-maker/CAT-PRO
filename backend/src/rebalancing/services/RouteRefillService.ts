@@ -375,6 +375,7 @@ export class RouteRefillService {
             trades: coin.trades,
             perTradeInr: coin.perTradeInr,
             coinVenue: coin.coinVenue,
+            coinVenueQuote: coin.coinVenueQuote,
             coinNeedInr: coin.coinNeedInr,
             coinHaveInr: valuation.holdingInr(coin.coinVenue, coin.coin),
             cashVenue: coin.cashVenue,
@@ -624,25 +625,38 @@ export class RouteRefillService {
     };
     if (remainingCap < MINIMUM_SELL_INR) return skip("Daily stock-sell cap reached.");
 
-    // Unmet demand per cash pool, and the daily profit of the coins waiting on it.
-    const demand = new Map<string, {inr: number; profitInr: number; coins: Set<string>}>();
-    const addDemand = (pool: string, inr: number, coin: string, profitInr: number) => {
+    // Unmet demand per cash pool, net of the cash already in it, and the
+    // daily profit of the coins waiting on it. Buying a coin's stock draws on
+    // its sell venue's pool; its cash side draws on its buy venue's pool.
+    const required = new Map<string, {inr: number; profitInr: number; coins: Set<string>}>();
+    const addRequired = (pool: string, inr: number, coin: string, profitInr: number) => {
       if (!(inr > 0)) return;
-      const entry = demand.get(pool) ?? {inr: 0, profitInr: 0, coins: new Set<string>()};
+      const entry = required.get(pool) ?? {inr: 0, profitInr: 0, coins: new Set<string>()};
       entry.inr += inr;
       if (!entry.coins.has(coin)) {
         entry.coins.add(coin);
         entry.profitInr += profitInr;
       }
-      demand.set(pool, entry);
+      required.set(pool, entry);
     };
     for (const coin of allocation.coins) {
       const coinShort = coin.coinNeedInr - (valuation.holdingInr(coin.coinVenue, coin.coin) ?? 0);
-      const cashShort = coin.cashNeedInr - (valuation.holdingInr(coin.cashVenue, coin.cashAsset) ?? 0);
-      addDemand(cashPool(coin.coinVenue, (plan.targets.find((target) => target.coin === coin.coin)?.coinVenueQuote ?? "USDT")), coinShort, coin.coin, coin.expectedDailyProfitInr);
-      addDemand(cashPool(coin.cashVenue, coin.cashAsset), cashShort, coin.coin, coin.expectedDailyProfitInr);
+      addRequired(cashPool(coin.coinVenue, coin.coinVenueQuote), coinShort, coin.coin, coin.expectedDailyProfitInr);
+      addRequired(cashPool(coin.cashVenue, coin.cashAsset), coin.cashNeedInr, coin.coin, coin.expectedDailyProfitInr);
     }
-    if (demand.size === 0) return skip("Every allocated coin is funded; nothing needs freed cash.");
+    const poolCash = new Map<string, number>();
+    for (const venue of VENUES) {
+      for (const asset of ["INR", "USDT"] as const) {
+        const pool = cashPool(venue, asset);
+        poolCash.set(pool, (poolCash.get(pool) ?? 0) + Math.max(0, valuation.holdingInr(venue, asset) ?? 0));
+      }
+    }
+    const demand = new Map<string, {inr: number; profitInr: number; coins: Set<string>}>();
+    for (const [pool, entry] of required) {
+      const unmet = entry.inr - (poolCash.get(pool) ?? 0);
+      if (unmet > 0) demand.set(pool, {...entry, inr: unmet});
+    }
+    if (demand.size === 0) return skip("The cash already on each exchange covers every allocated coin; nothing needs freed cash.");
 
     const allocatedAt = new Map(allocation.coins.map((coin) => [coin.coin, coin]));
     // A coin with opportunity that is only waiting for capital keeps its stock.
