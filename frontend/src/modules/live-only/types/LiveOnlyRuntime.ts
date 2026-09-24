@@ -333,6 +333,7 @@ export interface RefillPlanResponse {
       maximumPerDayUsdt: number;
       destinationCooldownMinutes: number;
       lastTopUpAt: Record<string, number>;
+      blocked: Record<string, {until: number; reason: string}>;
     };
     recentExecutions: Array<{
       at: number;

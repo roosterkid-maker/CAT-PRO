@@ -57,6 +57,16 @@ export function RefillPlanPanel() {
         ) : null}
       </div>
 
+      {plan && Object.keys(plan.automation.blocked ?? {}).length > 0 ? (
+        <div className="border-b border-border-default bg-amber-400/5 px-5 py-3 font-mono text-[11px] text-amber-300">
+          {Object.entries(plan.automation.blocked).map(([venue, block]) => (
+            <p key={venue}>
+              Auto top-up to {VENUE[venue] ?? venue} paused until {new Date(block.until).toLocaleString("en-GB", {hour12: false})}: {block.reason}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
       {query.isPending ? (
         <p className="p-5 text-xs text-text-muted">Loading refill plan…</p>
       ) : query.isError ? (
