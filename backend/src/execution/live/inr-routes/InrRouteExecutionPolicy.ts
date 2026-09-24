@@ -21,10 +21,14 @@ export type InrRouteExecutionMode = "off" | "shadow" | "live";
 /** How an INR venue's primary order is placed and reconciled. */
 export type InrVenueOrderStyle =
   /* Limit GTC with a bounded wait then cancel; reconciled by client order ID. */
-  | "GTC_BOUNDED_CANCEL";
+  | "GTC_BOUNDED_CANCEL"
+  /* Plain limit (no time-in-force on the venue), bounded wait then cancel;
+   * reconciled by UUID client order ID. Emulates IOC. */
+  | "LIMIT_BOUNDED_CANCEL";
 
 export const INR_ROUTE_SUPPORTED_INR_VENUES: Readonly<Record<string, InrVenueOrderStyle>> = {
   coindcx: "GTC_BOUNDED_CANCEL",
+  coinswitch: "LIMIT_BOUNDED_CANCEL",
 };
 
 export const INR_ROUTE_HEDGE_VENUES = ["binance", "bybit", "coindcx"] as const;
@@ -47,7 +51,6 @@ export interface InrRouteExecutionPolicy {
   readonly maximumBalanceAgeMs: number;
   /** Primary (INR venue) order: bounded wait before cancel. */
   readonly primaryTimeoutMs: number;
-  readonly primaryPollingMs: number;
   /** Successive hedge limit buffers beyond the fresh book, percent. */
   readonly hedgeBufferPercents: readonly number[];
   /** Unhedged remainder below this INR value is recorded as dust, not a halt. */
@@ -104,7 +107,6 @@ export function loadInrRouteExecutionPolicy(
     maximumBookAgeMs: 3_000,
     maximumBalanceAgeMs: 15_000,
     primaryTimeoutMs: 2_500,
-    primaryPollingMs: 250,
     hedgeBufferPercents: Object.freeze([0.15, 0.5, 1]),
     dustToleranceInr: 150,
   });

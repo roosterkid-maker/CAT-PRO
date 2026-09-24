@@ -270,6 +270,20 @@ export class CoinSwitchExecutionAdapter
       Date.now;
   }
 
+  /**
+   * Synchronous, cached-only validation (market rules, steps, notional,
+   * UUID client ID, no time-in-force) so a pair owner can reject an order
+   * shape before either leg is dispatched.
+   */
+  validateNewSubmission(
+    request:
+      LiveExecutionRequest,
+  ): void {
+    this.validateRequest(
+      request,
+    );
+  }
+
   async execute(
     request:
       LiveExecutionRequest,
@@ -426,9 +440,23 @@ export class CoinSwitchExecutionAdapter
           );
 
           return reconciledFinalResult;
-        } catch {
-          // No order exists under this client order ID either - the
-          // original creation genuinely failed. Fall through below.
+        } catch (
+          lookupError: unknown
+        ) {
+          // Only a definite "no such order" proves the creation failed.
+          // A rate limit, 5xx or network error on the lookup leaves the
+          // order's existence unknown: surface that as an exception so the
+          // gateway records an uncertain submission instead of a clean
+          // zero fill.
+          if (
+            !CoinSwitchExecutionAdapter.isDefinitelyAbsent(
+              lookupError,
+            )
+          ) {
+            throw new Error(
+              `CoinSwitch order creation failed and client-order reconciliation was inconclusive: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
+            );
+          }
         }
       }
 
@@ -951,6 +979,18 @@ export class CoinSwitchExecutionAdapter
     }
 
     return orderId;
+  }
+
+  private static isDefinitelyAbsent(
+    error: unknown,
+  ): boolean {
+    const text =
+      error instanceof Error
+        ? error.message
+        : String(error);
+    return /status=(400|404)|not found|no order|does not exist/iu.test(
+      text,
+    );
   }
 
   private isUuid(

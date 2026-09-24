@@ -31,6 +31,18 @@ import {
 } from "../central/CentralLiveOrderExecutionGateway";
 
 import {
+  liveExecutionService,
+} from "../LiveExecutionService";
+
+import {
+  getCoinSwitchMarketRuleEvidence,
+} from "../../../exchanges/coinswitch/CoinSwitchMarketRuleEvidence";
+
+import {
+  getCoinSwitchInrDepthPoller,
+} from "../../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
+
+import {
   getInrArbitrageScanner,
   type ScannedRoute,
 } from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
@@ -126,11 +138,15 @@ export interface InrRouteRunnerDependencies {
   /** Every priced route (diagnostics only: readiness probe). */
   readonly getAllRoutes: () => readonly ScannedRoute[];
   readonly getBook: (venue: string, market: string) => OrderBook | null;
+  /** Pull a fresh book for venues whose books are polled, not streamed (CoinSwitch INR). */
+  readonly refreshBook: (venue: string, market: string) => Promise<void>;
   readonly getCapability: (venue: string, market: string) => ExchangeMarketCapability | null;
   readonly getBalance: (venue: string, asset: string) => {readonly available: number; readonly synchronizedAt: number} | null;
   readonly getTakerFeePercent: (venue: string, market: string, side: "BUY" | "SELL") => number | null;
   readonly getDailyRealizedNetInr: (now: number) => Promise<number>;
   readonly getDailyLossLimitInr: () => number;
+  /** What the central gateway checks before it will send an order to a venue. */
+  readonly getVenueOrderReadiness: (venue: string) => {readonly ready: boolean; readonly detail: string};
   readonly interlock: LiveTradingInterlock;
   readonly now: () => number;
 }
@@ -140,7 +156,19 @@ const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
   getQualifiedRoutes: () => getInrArbitrageScanner()?.getQualifiedRoutes() ?? [],
   getAllRoutes: () => getInrArbitrageScanner()?.getAllRoutes() ?? [],
   getBook: (venue, market) => orderBookService.get(venue, market),
-  getCapability: (venue, market) => exchangeCapabilityService.getCachedCapability(venue, market, "spot"),
+  refreshBook: async (venue, market) => {
+    if (venue !== "coinswitch" || !market.toUpperCase().endsWith("INR")) return;
+    const poller = getCoinSwitchInrDepthPoller();
+    if (!poller) return;
+    // Hold background rotation for the attempt so the order's own status
+    // polls get CoinSwitch's rate budget.
+    poller.hold(10_000);
+    await poller.refreshNow(market);
+  },
+  getCapability: (venue, market) =>
+    venue === "coinswitch"
+      ? coinSwitchCapability(market)
+      : exchangeCapabilityService.getCachedCapability(venue, market, "spot"),
   getBalance: (venue, asset) => {
     const balance = tradingAccountService.getExchangeBalance(venue, asset);
     return balance ? {available: balance.availableBalance, synchronizedAt: balance.synchronizedAt} : null;
@@ -148,6 +176,18 @@ const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
   getTakerFeePercent: takerFeeWithSurcharge,
   getDailyRealizedNetInr: computeDailyRealizedNetInr,
   getDailyLossLimitInr: () => loadDailyLossLimitInr(),
+  getVenueOrderReadiness: (venue) => {
+    try {
+      const status = liveExecutionService.getExchangeStatus(venue);
+      const ready = status.adapterRegistered && status.authenticationVerified && status.exchangeApiReachable && status.readOnlyVerificationFresh;
+      return {
+        ready,
+        detail: `registered=${status.adapterRegistered} authenticated=${status.authenticationVerified} reachable=${status.exchangeApiReachable} fresh=${status.readOnlyVerificationFresh}`,
+      };
+    } catch (error: unknown) {
+      return {ready: false, detail: message(error)};
+    }
+  },
   interlock: liveTradingInterlock,
   now: Date.now,
 };
@@ -238,6 +278,9 @@ export class InrRouteLiveRunner {
       realizedNetInrToday: this.realizedNetInrToday(now),
       interlock: this.dependencies.interlock.getDiagnostics(),
       readiness: policy ? this.probeReadiness(policy, now) : [],
+      orderVenues: policy
+        ? [...policy.inrVenues, ...policy.hedgeVenues].map((venue) => ({venue, ...this.dependencies.getVenueOrderReadiness(venue)}))
+        : [],
       recentAttempts: this.attempts.slice(-40).reverse(),
       recentSessions: this.executor.listSessions().slice(-20).reverse(),
       counts: countBy(this.attempts.map((attempt) => attempt.status)),
@@ -313,16 +356,27 @@ export class InrRouteLiveRunner {
       return;
     }
 
+    /* ---- both venues accept orders (gateway readiness) ---- */
+    for (const venue of [route.buyVenue, route.sellVenue]) {
+      const readiness = this.dependencies.getVenueOrderReadiness(venue);
+      if (!readiness.ready) return block(`VENUE_NOT_ORDER_READY: ${venue} ${readiness.detail}`);
+    }
+
     /* ---- fresh books ---- */
-    const buyBook = this.dependencies.getBook(route.buyVenue, route.buyMarket);
-    const sellBook = this.dependencies.getBook(route.sellVenue, route.sellMarket);
+    await Promise.all([
+      this.dependencies.refreshBook(route.buyVenue, route.buyVenueMarket),
+      this.dependencies.refreshBook(route.sellVenue, route.sellVenueMarket),
+    ]);
+    const bookNow = this.dependencies.now();
+    const buyBook = this.dependencies.getBook(route.buyVenue, route.buyVenueMarket);
+    const sellBook = this.dependencies.getBook(route.sellVenue, route.sellVenueMarket);
     if (!buyBook || !sellBook) return block("BOOK_MISSING: a leg has no live book.");
-    const oldest = Math.max(now - buyBook.timestamp, now - sellBook.timestamp);
+    const oldest = Math.max(bookNow - buyBook.timestamp, bookNow - sellBook.timestamp);
     if (oldest > policy.maximumBookAgeMs) return block(`BOOK_STALE: a leg's book is ${oldest} ms old (limit ${policy.maximumBookAgeMs}).`);
 
     /* ---- venue rules ---- */
-    const buyCapability = this.dependencies.getCapability(route.buyVenue, route.buyMarket);
-    const sellCapability = this.dependencies.getCapability(route.sellVenue, route.sellMarket);
+    const buyCapability = this.dependencies.getCapability(route.buyVenue, route.buyVenueMarket);
+    const sellCapability = this.dependencies.getCapability(route.sellVenue, route.sellVenueMarket);
     if (!buyCapability || !sellCapability) return block("RULES_MISSING: market rules are not loaded for a leg.");
     if (!buyCapability.tradingEnabled || buyCapability.maintenanceMode || !sellCapability.tradingEnabled || sellCapability.maintenanceMode) {
       return block("MARKET_CLOSED: a leg's market is not trading.");
@@ -383,6 +437,8 @@ export class InrRouteLiveRunner {
       buyMarket: route.buyMarket,
       sellVenue: route.sellVenue,
       sellMarket: route.sellMarket,
+      buyVenueMarket: route.buyVenueMarket,
+      sellVenueMarket: route.sellVenueMarket,
       buyToInr,
       sellToInr,
       feesPercent: route.feesPercent,
@@ -396,7 +452,6 @@ export class InrRouteLiveRunner {
       route: sessionRoute,
       plan: planned.plan,
       primaryTimeoutMs: policy.primaryTimeoutMs,
-      primaryPollingMs: policy.primaryPollingMs,
       hedgeBufferPercents: policy.hedgeBufferPercents,
       dustToleranceInr: policy.dustToleranceInr,
       hedgeRules: {
@@ -407,8 +462,8 @@ export class InrRouteLiveRunner {
       },
       getHedgeLevels: () => {
         const book = hedgeIsSell
-          ? this.dependencies.getBook(route.sellVenue, route.sellMarket)
-          : this.dependencies.getBook(route.buyVenue, route.buyMarket);
+          ? this.dependencies.getBook(route.sellVenue, route.sellVenueMarket)
+          : this.dependencies.getBook(route.buyVenue, route.buyVenueMarket);
         if (!book || this.dependencies.now() - book.timestamp > policy.maximumBookAgeMs) return null;
         return hedgeIsSell
           ? [...book.bids].sort((a, b) => b.price - a.price)
@@ -445,8 +500,8 @@ export class InrRouteLiveRunner {
     return policy.inrVenues.map((venue) => {
       const markets: string[] = [];
       for (const route of routes) {
-        for (const [legVenue, market] of [[route.buyVenue, route.buyMarket], [route.sellVenue, route.sellMarket]] as const) {
-          if (legVenue === venue && market.endsWith("INR") && !markets.includes(market)) markets.push(market);
+        for (const [legVenue, market] of [[route.buyVenue, route.buyVenueMarket], [route.sellVenue, route.sellVenueMarket]] as const) {
+          if (legVenue === venue && market.toUpperCase().endsWith("INR") && !markets.includes(market)) markets.push(market);
         }
         if (markets.length >= 5) break;
       }
@@ -538,6 +593,35 @@ export class InrRouteLiveRunner {
       return null;
     }
   }
+}
+
+/*
+ * CoinSwitch's execution adapter validates against its own signed account
+ * rule evidence (not the shared capability cache), so the planner uses the
+ * same numbers. The shared capability, when present, still owns the
+ * trading/maintenance status.
+ */
+function coinSwitchCapability(market: string): ExchangeMarketCapability | null {
+  const rules = getCoinSwitchMarketRuleEvidence(market);
+  if (!rules) return null;
+  const shared = exchangeCapabilityService.getCachedCapability("coinswitch", market, "spot");
+  const [baseAsset, quoteAssetName] = rules.market.split("_");
+  return {
+    exchange: "coinswitch",
+    market,
+    baseAsset: baseAsset ?? "",
+    quoteAsset: quoteAssetName ?? "",
+    product: "spot",
+    tradingEnabled: shared ? shared.tradingEnabled : true,
+    maintenanceMode: shared ? shared.maintenanceMode : false,
+    order: shared?.order ?? ({} as ExchangeMarketCapability["order"]),
+    price: {minimumPrice: null, maximumPrice: null, priceStep: rules.priceStep, pricePrecision: rules.pricePrecision},
+    quantity: {minimumQuantity: null, maximumQuantity: null, quantityStep: rules.quantityStep, quantityPrecision: rules.quantityPrecision},
+    notional: {minimumNotional: rules.minimumNotional, maximumNotional: rules.maximumNotional},
+    fees: shared?.fees ?? {makerFeeRate: null, takerFeeRate: null, feeAsset: null},
+    sourceUpdatedAt: rules.synchronizedAt,
+    synchronizedAt: rules.synchronizedAt,
+  };
 }
 
 function legRules(capability: ExchangeMarketCapability): InrRouteLegRules {

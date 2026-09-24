@@ -128,6 +128,9 @@ async function main():
   await testExecutionLifecycle(
     credentials,
   );
+  await testCreationFailureReconciliation(
+    credentials,
+  );
 
   console.log(
     "COINSWITCH V22.21 SPOT EXECUTION ADAPTER TEST PASSED.",
@@ -740,6 +743,81 @@ async function testExecutionLifecycle(
         1,
     "Unsupported market orders and unquantized quantities must fail before CoinSwitch order submission.",
   );
+}
+
+/*
+ * Pre-dispatch validation is synchronous and cached-only; a create failure
+ * whose client-ID lookup is inconclusive (rate limit, 5xx) must surface as an
+ * exception (uncertain submission), never as a clean zero-fill FAILED.
+ */
+async function testCreationFailureReconciliation(
+  credentials: CoinSwitchCredentials,
+): Promise<void> {
+  let lookupError = "CoinSwitch signed GET /trade/api/v2/order failed: status=429";
+  let createCalls = 0;
+  const rules: CoinSwitchMarketRuleEvidence = {
+    exchange: "coinswitch", venue: "coinswitchx", market: "BTC_INR",
+    priceStep: 0.01, pricePrecision: 2, quantityStep: 0.000001, quantityPrecision: 6,
+    minimumNotional: 100, maximumNotional: 1_000_000, source: "ACCOUNT_API",
+    synchronizedAt: 1, expiresAt: Number.MAX_SAFE_INTEGER,
+  };
+  const adapter = new CoinSwitchExecutionAdapter({
+    orderApi: {
+      async createSpotOrder(): Promise<CoinSwitchSpotOrder> {
+        createCalls += 1;
+        throw new Error("socket hang up");
+      },
+      async getSpotOrder(): Promise<CoinSwitchSpotOrder> {
+        throw new Error("not expected");
+      },
+      async getSpotOrderByClientOrderId(): Promise<CoinSwitchSpotOrder> {
+        throw new Error(lookupError);
+      },
+      async cancelSpotOrder(): Promise<CoinSwitchSpotOrder> {
+        throw new Error("not expected");
+      },
+    },
+    credentialsSource: {getCredentials: () => credentials, isConfigured: () => true},
+    getMarketRules: () => rules,
+    audit: {async executionStarted() {}, async orderCreated() {}, async executionFailed() {}},
+    metrics: {record() {}},
+    sleep: async () => {},
+  });
+  const request: LiveExecutionRequest = {
+    exchange: "coinswitch", market: "BTC_INR", side: "buy", orderType: "limit",
+    quantity: 0.0001, price: 5_000_000, clientOrderId: CLIENT_ORDER_ID,
+    timeoutMs: 2_000, pollingIntervalMs: 500, cancelOnTimeout: true,
+  };
+
+  adapter.validateNewSubmission(request);
+  let gtcRejected = false;
+  try {
+    adapter.validateNewSubmission({...request, timeInForce: "GTC"});
+  } catch {
+    gtcRejected = true;
+  }
+  let idRejected = false;
+  try {
+    adapter.validateNewSubmission({...request, clientOrderId: "ci-not-a-uuid"});
+  } catch {
+    idRejected = true;
+  }
+  assertCondition(gtcRejected && idRejected && createCalls === 0,
+    "CoinSwitch pre-dispatch validation must reject time-in-force and non-UUID IDs without any order call.");
+
+  let inconclusiveThrew = false;
+  try {
+    await adapter.execute(request);
+  } catch {
+    inconclusiveThrew = true;
+  }
+  assertCondition(inconclusiveThrew,
+    "An inconclusive client-ID lookup after a create failure must not be reported as a clean FAILED order.");
+
+  lookupError = "CoinSwitch signed GET /trade/api/v2/order failed: status=404, order not found";
+  const absent = await adapter.execute(request);
+  assertCondition(absent.status === "FAILED" && absent.filledQuantity === 0 && absent.orderId === null,
+    "A definite no-such-order lookup proves the create failed cleanly.");
 }
 
 function orderEnvelope(

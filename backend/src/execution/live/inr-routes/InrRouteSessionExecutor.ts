@@ -78,6 +78,9 @@ export interface InrRouteSessionRoute {
   readonly buyMarket: string;
   readonly sellVenue: string;
   readonly sellMarket: string;
+  /** Venue spellings used on the wire (CoinSwitch: FLR_INR). */
+  readonly buyVenueMarket: string;
+  readonly sellVenueMarket: string;
   readonly buyToInr: number;
   readonly sellToInr: number;
   readonly feesPercent: number;
@@ -124,7 +127,6 @@ export interface InrRouteExecuteInput {
   readonly route: InrRouteSessionRoute;
   readonly plan: InrRoutePlan;
   readonly primaryTimeoutMs: number;
-  readonly primaryPollingMs: number;
   readonly hedgeBufferPercents: readonly number[];
   readonly dustToleranceInr: number;
   readonly hedgeRules: InrRouteHedgeVenueRules;
@@ -136,6 +138,54 @@ interface Snapshot {
   readonly schemaVersion: "1.0";
   readonly savedAt: number;
   readonly sessions: readonly InrRouteSession[];
+}
+
+/*
+ * Per-venue order contract, matching each audited adapter:
+ *   coindcx     GTC limit, bounded wait then cancel (adapter: <=10 s, <=1 s polls)
+ *   coinswitch  plain limit (the adapter rejects any time-in-force), bounded
+ *               wait then cancel, UUID client ID; slower polls for its rate limit
+ *   binance/bybit  IOC limit
+ */
+interface VenueOrderContract {
+  readonly timeInForce: "GTC" | "IOC" | undefined;
+  readonly boundedWait: boolean;
+  readonly pollingMs: number;
+  readonly clientIdFormat: "compact" | "uuid";
+}
+
+const VENUE_ORDER_CONTRACTS: Readonly<Record<string, VenueOrderContract>> = {
+  coindcx: {timeInForce: "GTC", boundedWait: true, pollingMs: 250, clientIdFormat: "compact"},
+  coinswitch: {timeInForce: undefined, boundedWait: true, pollingMs: 500, clientIdFormat: "uuid"},
+  binance: {timeInForce: "IOC", boundedWait: false, pollingMs: 250, clientIdFormat: "compact"},
+  bybit: {timeInForce: "IOC", boundedWait: false, pollingMs: 250, clientIdFormat: "compact"},
+};
+
+function orderRequest(
+  venue: string,
+  market: string,
+  side: "buy" | "sell",
+  quantity: number,
+  price: number,
+  idempotencyKey: string,
+  boundedWaitMs: number,
+): LiveExecutionRequest {
+  const contract = VENUE_ORDER_CONTRACTS[venue];
+  if (!contract) throw new Error(`No INR-route order contract for ${venue}.`);
+  return {
+    exchange: venue,
+    product: "SPOT",
+    market,
+    side,
+    orderType: "limit",
+    ...(contract.timeInForce !== undefined ? {timeInForce: contract.timeInForce} : {}),
+    quantity,
+    price,
+    clientOrderId: contract.clientIdFormat === "uuid" ? uuidClientOrderId(idempotencyKey) : clientOrderId(idempotencyKey),
+    timeoutMs: contract.boundedWait ? boundedWaitMs : 5_000,
+    pollingIntervalMs: contract.pollingMs,
+    cancelOnTimeout: true,
+  };
 }
 
 const DEFAULT_FILE = resolve(process.cwd(), "logs", "live", "inr-route-sessions.jsonl");
@@ -170,24 +220,11 @@ export class InrRouteSessionExecutor {
     const sessionId = `inr-${createHash("sha256").update(`${input.route.routeKey}|${startedAt}|${Math.random()}`).digest("hex").slice(0, 16)}`;
     const primarySide: "buy" | "sell" = input.route.buyMarket.endsWith("INR") ? "buy" : "sell";
     const primaryVenue = primarySide === "buy" ? input.route.buyVenue : input.route.sellVenue;
-    const primaryMarket = primarySide === "buy" ? input.route.buyMarket : input.route.sellMarket;
+    const primaryMarket = primarySide === "buy" ? input.route.buyVenueMarket : input.route.sellVenueMarket;
     const primaryLimit = primarySide === "buy" ? input.plan.buyLimitPrice : input.plan.sellLimitPrice;
 
     const primaryKey = `${sessionId}:primary`;
-    const primaryRequest: LiveExecutionRequest = {
-      exchange: primaryVenue,
-      product: "SPOT",
-      market: primaryMarket,
-      side: primarySide,
-      orderType: "limit",
-      timeInForce: "GTC",
-      quantity: input.plan.quantity,
-      price: primaryLimit,
-      clientOrderId: clientOrderId(primaryKey),
-      timeoutMs: input.primaryTimeoutMs,
-      pollingIntervalMs: input.primaryPollingMs,
-      cancelOnTimeout: true,
-    };
+    let primaryRequest: LiveExecutionRequest | null = null;
 
     let session: InrRouteSession = {
       schemaVersion: "1.0",
@@ -209,23 +246,10 @@ export class InrRouteSessionExecutor {
 
     const hedgeSide: "buy" | "sell" = primarySide === "buy" ? "sell" : "buy";
     const hedgeVenue = hedgeSide === "buy" ? input.route.buyVenue : input.route.sellVenue;
-    const hedgeMarket = hedgeSide === "buy" ? input.route.buyMarket : input.route.sellMarket;
+    const hedgeMarket = hedgeSide === "buy" ? input.route.buyVenueMarket : input.route.sellVenueMarket;
     const hedgeToInr = hedgeSide === "buy" ? input.route.buyToInr : input.route.sellToInr;
-    const hedgeUsesBoundedGtc = hedgeVenue === "coindcx";
-    const hedgeRequest = (key: string, quantity: number, price: number): LiveExecutionRequest => ({
-      exchange: hedgeVenue,
-      product: "SPOT",
-      market: hedgeMarket,
-      side: hedgeSide,
-      orderType: "limit",
-      timeInForce: hedgeUsesBoundedGtc ? "GTC" : "IOC",
-      quantity,
-      price,
-      clientOrderId: clientOrderId(key),
-      timeoutMs: hedgeUsesBoundedGtc ? input.primaryTimeoutMs : 5_000,
-      pollingIntervalMs: hedgeUsesBoundedGtc ? input.primaryPollingMs : 250,
-      cancelOnTimeout: true,
-    });
+    const hedgeRequest = (key: string, quantity: number, price: number): LiveExecutionRequest =>
+      orderRequest(hedgeVenue, hedgeMarket, hedgeSide, quantity, price, key, input.primaryTimeoutMs);
     const plannedHedgePrice = roundPrice(
       hedgeSide === "sell" ? input.plan.sellLimitPrice : input.plan.buyLimitPrice,
       input.hedgeRules.priceStep,
@@ -234,12 +258,19 @@ export class InrRouteSessionExecutor {
 
     // Both legs' order shapes must pass venue validation before anything is sent.
     try {
+      if (!VENUE_ORDER_CONTRACTS[primaryVenue] || !VENUE_ORDER_CONTRACTS[hedgeVenue]) {
+        throw new Error(`No INR-route order contract for ${VENUE_ORDER_CONTRACTS[primaryVenue] ? hedgeVenue : primaryVenue}.`);
+      }
+      primaryRequest = orderRequest(primaryVenue, primaryMarket, primarySide, input.plan.quantity, primaryLimit, primaryKey, input.primaryTimeoutMs);
       this.gateway.validateNewSubmission(primaryRequest);
       this.gateway.validateNewSubmission(hedgeRequest(`${sessionId}:hedge-check`, input.plan.quantity, plannedHedgePrice));
     } catch (error: unknown) {
       return this.save({...session, state: "NO_FILL", updatedAt: this.now(), reasons: [`PRE_DISPATCH_REJECTED: ${message(error)}`]});
     }
 
+    if (primaryRequest === null) {
+      return this.save({...session, state: "NO_FILL", updatedAt: this.now(), reasons: ["PRE_DISPATCH_REJECTED: primary order could not be built."]});
+    }
     session = this.save({...session, state: "PRIMARY_DISPATCHED", updatedAt: this.now()});
     const primary = await this.settle(primaryRequest, primaryKey, null);
     session = this.save({...session, primary: primary.fill, updatedAt: this.now()});
@@ -412,6 +443,13 @@ function roundPrice(price: number, step: number | null, side: "buy" | "sell"): n
 /** ≤ 36 chars, [a-z0-9-] only: valid on Binance, Bybit and CoinDCX. */
 function clientOrderId(idempotencyKey: string): string {
   return `ci-${createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 30)}`;
+}
+
+/** Deterministic RFC 4122 v4-shaped UUID from the idempotency key (CoinSwitch requires UUIDs). */
+export function uuidClientOrderId(idempotencyKey: string): string {
+  const hex = createHash("sha256").update(idempotencyKey).digest("hex");
+  const variant = "89ab"[parseInt(hex[16], 16) % 4];
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 function isSnapshot(value: unknown): value is Snapshot {

@@ -7,6 +7,7 @@ import {LiveTradingInterlock} from "../LiveTradingInterlock";
 import {loadInrRouteExecutionPolicy, type InrRouteExecutionPolicy} from "../inr-routes/InrRouteExecutionPolicy";
 import {commonStep, planInrRoute, type InrRoutePlanInput} from "../inr-routes/InrRoutePlanner";
 import {
+  uuidClientOrderId,
   InrRouteSessionExecutor,
   type InrRouteExecuteInput,
   type InrRouteGatewayPort,
@@ -143,6 +144,8 @@ const ROUTE = {
   buyMarket: "XINR",
   sellVenue: "bybit",
   sellMarket: "XUSDT",
+  buyVenueMarket: "XINR",
+  sellVenueMarket: "XUSDT",
   buyToInr: 1,
   sellToInr: 90,
   feesPercent: 0.5,
@@ -162,7 +165,6 @@ function executeInput(overrides: Partial<InrRouteExecuteInput> = {}): InrRouteEx
       expectedNetInr: 70,
     },
     primaryTimeoutMs: 2_500,
-    primaryPollingMs: 250,
     hedgeBufferPercents: [0.15, 0.5, 1],
     dustToleranceInr: 150,
     hedgeRules: {quantityStep: 0.01, minimumQuantity: null, minimumNotional: 1, priceStep: 0.0001},
@@ -232,6 +234,33 @@ async function testExecutor(directory: string): Promise<void> {
   assert.equal(dusty.state, "DUST_RESIDUAL");
   assert.ok(dusty.residualInr < 150);
 
+  // CoinSwitch INR primary: plain limit (no time-in-force), UUID client ID,
+  // venue spelling, slower polls; then an IOC hedge on Bybit.
+  const coinswitch = new FakeGateway({primary: {kind: "fill", filled: 10, price: 108.5}, hedge1: {kind: "fill", filled: 10, price: 1.19}});
+  const csSession = await executor(coinswitch).execute(executeInput({
+    route: {...ROUTE, routeKey: "cs", buyVenue: "bybit", buyMarket: "XUSDT", buyVenueMarket: "XUSDT", sellVenue: "coinswitch", sellMarket: "XINR", sellVenueMarket: "X_INR", buyToInr: 90, sellToInr: 1},
+    plan: {...executeInput().plan, buyLimitPrice: 1.19, sellLimitPrice: 108.5},
+  }));
+  assert.equal(csSession.state, "COMPLETED");
+  assert.equal(coinswitch.sent[0].exchange, "coinswitch", "the INR leg goes first");
+  assert.equal(coinswitch.sent[0].side, "sell");
+  assert.equal(coinswitch.sent[0].market, "X_INR");
+  assert.equal("timeInForce" in coinswitch.sent[0], false, "CoinSwitch rejects any time-in-force");
+  assert.match(coinswitch.sent[0].clientOrderId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
+  assert.equal(coinswitch.sent[0].pollingIntervalMs, 500);
+  assert.equal(coinswitch.sent[0].cancelOnTimeout, true);
+  assert.equal(coinswitch.sent[1].exchange, "bybit");
+  assert.equal(coinswitch.sent[1].side, "buy");
+  assert.equal(coinswitch.sent[1].timeInForce, "IOC");
+  assert.equal(uuidClientOrderId("a:primary"), uuidClientOrderId("a:primary"), "stable per idempotency key");
+  assert.notEqual(uuidClientOrderId("a:primary"), uuidClientOrderId("a:hedge1"));
+
+  // A venue with no order contract never gets an order.
+  const unknownVenue = new FakeGateway({});
+  const noContract = await executor(unknownVenue).execute(executeInput({route: {...ROUTE, buyVenue: "unocoin"}}));
+  assert.equal(noContract.state, "NO_FILL");
+  assert.equal(unknownVenue.sent.length, 0);
+
   // Either leg's shape rejected locally: nothing is sent.
   const rejects = new FakeGateway({});
   rejects.rejectValidation = "bybit";
@@ -252,6 +281,8 @@ function scannedRoute(overrides: Partial<ScannedRoute> = {}): ScannedRoute {
     buyMarket: "XINR",
     sellVenue: "bybit",
     sellMarket: "XUSDT",
+    buyVenueMarket: "XINR",
+    sellVenueMarket: "XUSDT",
     conversionVenue: "coindcx",
     usdtInrRate: 90,
     evidence: "BOOK",
@@ -308,6 +339,7 @@ function runnerFixture(directory: string, name: string, overrides: Partial<InrRo
     getPolicy: () => policy("shadow"),
     getQualifiedRoutes: () => [scannedRoute()],
     getAllRoutes: () => [scannedRoute()],
+    refreshBook: async () => undefined,
     getBook: (venue: string) =>
       venue === "coindcx"
         ? {exchange: venue, market: "XINR", bids: [{price: 99, quantity: 10}], asks: [{price: 100, quantity: 5}, {price: 101, quantity: 5}], timestamp: clock - 200}
@@ -317,6 +349,7 @@ function runnerFixture(directory: string, name: string, overrides: Partial<InrRo
     getTakerFeePercent: () => 0.2,
     getDailyRealizedNetInr: async () => 0,
     getDailyLossLimitInr: () => 500,
+    getVenueOrderReadiness: () => ({ready: true, detail: "fixture"}),
     now: () => clock,
     ...overrides,
     interlock,
@@ -340,6 +373,33 @@ async function testRunner(directory: string): Promise<void> {
   assert.equal(shadowAttempt?.status, "SHADOW", JSON.stringify(shadowAttempt));
   assert.equal(shadowAttempt?.plan?.quantity, 10);
   assert.equal(shadow.gateway.sent.length, 0);
+
+  // CoinSwitch INR route: the polled book is refreshed at action time with
+  // the venue's own spelling before planning.
+  const refreshed: string[] = [];
+  let csBookAt = NOW - 10_000;
+  const cs = runnerFixture(directory, "coinswitch", {
+    getPolicy: () => ({...policy("shadow"), inrVenues: ["coindcx", "coinswitch"]}),
+    getQualifiedRoutes: () => [scannedRoute({
+      routeKey: "INR_USDT|X|bybit:XUSDT>coinswitch:XINR",
+      buyVenue: "bybit", buyMarket: "XUSDT", buyVenueMarket: "XUSDT",
+      sellVenue: "coinswitch", sellMarket: "XINR", sellVenueMarket: "X_INR",
+    })],
+    refreshBook: async (venue, market) => {
+      refreshed.push(`${venue}:${market}`);
+      if (venue === "coinswitch") csBookAt = NOW - 100;
+    },
+    getBook: (venue, market) =>
+      venue === "coinswitch"
+        ? {exchange: venue, market, bids: [{price: 110, quantity: 10}], asks: [{price: 111, quantity: 10}], timestamp: csBookAt}
+        : {exchange: venue, market, bids: [{price: 1.19, quantity: 100}], asks: [{price: 1.2, quantity: 100}], timestamp: NOW - 100},
+    getCapability: (venue, market) => capability(market, venue === "coinswitch" ? 0.1 : 0.01, venue === "coinswitch" ? 100 : 1),
+    getBalance: (venue, asset) => ({available: venue === "bybit" ? (asset === "USDT" ? 50 : 0) : 20, synchronizedAt: NOW - 1_000}),
+  });
+  await cs.runner.tick();
+  assert.ok(refreshed.includes("coinswitch:X_INR"), JSON.stringify(refreshed));
+  const csAttempt = cs.runner.getDiagnostics().recentAttempts[0];
+  assert.equal(csAttempt?.status, "SHADOW", JSON.stringify(csAttempt));
 
   // Off: nothing at all.
   const off = runnerFixture(directory, "off", {getPolicy: () => policy("off")});

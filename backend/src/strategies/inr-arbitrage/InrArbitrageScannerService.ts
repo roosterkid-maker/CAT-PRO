@@ -218,6 +218,9 @@ export interface ScannedRoute {
   readonly buyMarket: string;
   readonly sellVenue: string;
   readonly sellMarket: string;
+  /** The venue's own spelling of each market (e.g. CoinSwitch FLR_INR), for books, rules and orders. */
+  readonly buyVenueMarket: string;
+  readonly sellVenueMarket: string;
   readonly conversionVenue: string | null;
   readonly usdtInrRate: number | null;
   readonly evidence: EvidenceTier;
@@ -906,6 +909,8 @@ export class InrArbitrageScannerService {
       buyMarket: input.buy.market,
       sellVenue: input.sell.venue,
       sellMarket: input.sell.market,
+      buyVenueMarket: input.buy.quote.market,
+      sellVenueMarket: input.sell.quote.market,
       conversionVenue: input.conversionVenue,
       usdtInrRate: input.usdtInrRate,
       evidence: input.evidence,

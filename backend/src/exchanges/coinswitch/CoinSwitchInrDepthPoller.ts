@@ -32,6 +32,7 @@ export interface CoinSwitchInrDepthPollerDiagnostics {
   readonly activeMarkets: readonly string[];
   readonly skippedMarkets: readonly string[];
   readonly invalidMarketSkips: number;
+  readonly onDemandRefreshes: number;
 }
 
 export interface CoinSwitchInrDepthPollerDependencies {
@@ -80,6 +81,9 @@ export class CoinSwitchInrDepthPoller {
   private lastError: string | null = null;
   private lastSuccessAt: number | null = null;
   private activeMarkets: string[] = [];
+  /** Rotation is held while the INR executor works a CoinSwitch order (shared rate budget). */
+  private heldUntil = 0;
+  private onDemandRefreshes = 0;
 
   constructor(
     private readonly getNominations: () => readonly string[],
@@ -103,7 +107,7 @@ export class CoinSwitchInrDepthPoller {
 
   async tick(): Promise<void> {
     const now = this.dependencies.now();
-    if (this.inFlight) return;
+    if (this.inFlight || now < this.heldUntil) return;
     if (this.pausedUntil !== null) {
       if (now < this.pausedUntil) return;
       this.pausedUntil = null;
@@ -149,6 +153,33 @@ export class CoinSwitchInrDepthPoller {
     }
   }
 
+  /** Pause background rotation for `ms` (e.g. while an order is placed and polled). */
+  hold(ms: number): void {
+    this.heldUntil = Math.max(this.heldUntil, this.dependencies.now() + ms);
+  }
+
+  /**
+   * Action-time read of one market's depth, published like a rotation read.
+   * Returns false (never throws) when the read fails or the API is paused.
+   */
+  async refreshNow(market: string): Promise<boolean> {
+    const now = this.dependencies.now();
+    if (this.pausedUntil !== null && now < this.pausedUntil) return false;
+    this.onDemandRefreshes += 1;
+    this.requests += 1;
+    try {
+      const snapshot = await this.dependencies.getDepth(market);
+      this.dependencies.publish(snapshot);
+      this.successes += 1;
+      this.lastSuccessAt = this.dependencies.now();
+      return true;
+    } catch (error: unknown) {
+      this.failures += 1;
+      this.lastError = error instanceof Error ? error.message : String(error);
+      return false;
+    }
+  }
+
   getDiagnostics(): CoinSwitchInrDepthPollerDiagnostics {
     return {
       running: this.timer !== null,
@@ -163,6 +194,7 @@ export class CoinSwitchInrDepthPoller {
       activeMarkets: [...this.activeMarkets],
       skippedMarkets: [...this.skippedMarkets.keys()],
       invalidMarketSkips: this.invalidMarketSkips,
+      onDemandRefreshes: this.onDemandRefreshes,
     };
   }
 }
@@ -172,6 +204,10 @@ let sharedPoller: CoinSwitchInrDepthPoller | null = null;
 /** Created by the websocket manager next to the INR arbitrage scanner. */
 export function registerCoinSwitchInrDepthPoller(poller: CoinSwitchInrDepthPoller): void {
   sharedPoller = poller;
+}
+
+export function getCoinSwitchInrDepthPoller(): CoinSwitchInrDepthPoller | null {
+  return sharedPoller;
 }
 
 export function getCoinSwitchInrDepthPollerDiagnostics(): CoinSwitchInrDepthPollerDiagnostics | null {
