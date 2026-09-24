@@ -419,7 +419,10 @@ export class InrRouteLiveRunner {
     const bookNow = this.dependencies.now();
     const buyBook = this.dependencies.getBook(route.buyVenue, route.buyVenueMarket);
     const sellBook = this.dependencies.getBook(route.sellVenue, route.sellVenueMarket);
-    if (!buyBook || !sellBook) return block("BOOK_MISSING: a leg has no live book.");
+    if (!buyBook || !sellBook) {
+      const missing = [!buyBook ? `${route.buyVenue}:${route.buyVenueMarket}` : null, !sellBook ? `${route.sellVenue}:${route.sellVenueMarket}` : null].filter(Boolean).join(", ");
+      return block(`BOOK_MISSING: no live book for ${missing}.`);
+    }
     const oldest = Math.max(bookNow - buyBook.timestamp, bookNow - sellBook.timestamp);
     if (oldest > policy.maximumBookAgeMs) return block(`BOOK_STALE: a leg's book is ${oldest} ms old (limit ${policy.maximumBookAgeMs}).`);
 
