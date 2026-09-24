@@ -39,7 +39,7 @@ const policy:
   preferredCapitalPerLegInr:
     600,
   maximumCapitalPerLegInr:
-    1_000,
+    1_500,
   minimumCurrentNetProfitPercent:
     0.2,
   minimumPostStressNetProfitPercent:

@@ -17,7 +17,7 @@ export interface LiveOnlyRuntimePolicy {
   readonly enabled: boolean;
   readonly minimumCapitalPerLegInr: 600;
   readonly preferredCapitalPerLegInr: number;
-  readonly maximumCapitalPerLegInr: 1_000;
+  readonly maximumCapitalPerLegInr: 1_500;
   readonly minimumCurrentNetProfitPercent: number;
   readonly minimumPostStressNetProfitPercent: 0.07;
   readonly maximumStatutoryCashWithholdingPercentPerAttempt: 2.1;
@@ -142,10 +142,10 @@ export function getLiveOnlyRuntimePolicy(
 
   if (
     preferredCapitalPerLegInr < 600 ||
-    preferredCapitalPerLegInr > 1_000
+    preferredCapitalPerLegInr > 1_500
   ) {
     throw new Error(
-      "CAT_PRO_LIVE_TRADE_CAPITAL_INR must remain between ₹600 and ₹1,000.",
+      "CAT_PRO_LIVE_TRADE_CAPITAL_INR must remain between ₹600 and ₹1,500.",
     );
   }
 
@@ -163,7 +163,7 @@ export function getLiveOnlyRuntimePolicy(
       600 as const,
     preferredCapitalPerLegInr,
     maximumCapitalPerLegInr:
-      1_000 as const,
+      1_500 as const,
     minimumCurrentNetProfitPercent:
       LIVE_ONLY_MINIMUM_CURRENT_NET_PROFIT_PERCENT,
     minimumPostStressNetProfitPercent:

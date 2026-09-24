@@ -28,6 +28,28 @@ import {
 } from "../../../core/persistence/JsonlSnapshotStore";
 
 import {
+  dailyLossHaltDay,
+  dailyLossHaltReason,
+  istDayKey,
+  loadDailyLossLimitInr,
+  realizedNetInrForIstDay,
+  takerFeeWithSurcharge,
+  usdtInrMid,
+} from "./DailyLossGuard";
+
+import {
+  buildArbitragePnLReport,
+} from "../history/ArbitragePnLReport";
+
+import {
+  executionHistoryService,
+} from "../history/ExecutionHistoryService";
+
+import {
+  getInrArbitrageScanner,
+} from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
+
+import {
   getLiveOnlyRuntimePolicy,
   isLiveOnlyRuntimeEnabled,
 } from "../../../config/LiveOnlyRuntimePolicy";
@@ -98,6 +120,9 @@ export interface StrategyOneLiveOnlyRunnerDependencies {
     };
   };
   now(): number;
+  /* Today's (IST) realized net in rupees across completed live cycles. */
+  getDailyRealizedNetInr(now: number): Promise<number>;
+  getDailyLossLimitInr(): number;
 }
 
 export interface StrategyOneLiveOnlyAttempt {
@@ -293,6 +318,38 @@ function isBaseAssetHeldOnPoolVenue(
 
 const DEFAULT_DEPENDENCIES:
   StrategyOneLiveOnlyRunnerDependencies = {
+  getDailyRealizedNetInr: async (
+    now,
+  ) => {
+    const history =
+      await executionHistoryService
+        .getRecent(
+          500,
+        );
+    const report =
+      buildArbitragePnLReport(
+        history.executions,
+        takerFeeWithSurcharge,
+        500,
+        now,
+      );
+    let rate: number | null = null;
+    try {
+      rate =
+        usdtInrMid(
+          getInrArbitrageScanner()?.getReport().conversion ?? [],
+        );
+    } catch {
+      rate = null;
+    }
+    return realizedNetInrForIstDay(
+      report.latest,
+      now,
+      rate,
+    );
+  },
+  getDailyLossLimitInr: () =>
+    loadDailyLossLimitInr(),
   runtimeEnabled:
     isLiveOnlyRuntimeEnabled,
   getPolicy:
@@ -788,6 +845,27 @@ export class StrategyOneLiveOnlyRunnerService {
     this.snapshotsObserved +=
       1;
 
+    const haltDay =
+      dailyLossHaltDay(
+        this.haltedReason,
+      );
+
+    if (
+      haltDay !== null &&
+      haltDay !==
+        istDayKey(
+          this.dependencies
+            .now(),
+        )
+    ) {
+      this.haltedReason =
+        null;
+      this.persist(
+        this.dependencies
+          .now(),
+      );
+    }
+
     if (
       this.inFlight ||
       this.haltedReason ||
@@ -840,6 +918,62 @@ export class StrategyOneLiveOnlyRunnerService {
       );
     this.inFlight =
       true;
+
+    let lossStopTripped =
+      false;
+
+    try {
+      const limitInr =
+        this.dependencies
+          .getDailyLossLimitInr();
+      const realizedNetInr =
+        await this.dependencies
+          .getDailyRealizedNetInr(
+            now,
+          );
+
+      if (
+        realizedNetInr <=
+        -limitInr
+      ) {
+        this.haltedReason =
+          dailyLossHaltReason(
+            istDayKey(
+              now,
+            ),
+            realizedNetInr,
+            limitInr,
+          );
+        lossStopTripped =
+          true;
+      }
+    } catch (
+      error:
+        unknown
+    ) {
+      // Unknown P&L is not proof of safety: skip this snapshot, retry on the next.
+      console.error(
+        "[LIVE-only Runner] Daily loss check unavailable:",
+        message(error),
+      );
+      this.inFlight =
+        false;
+      return;
+    }
+
+    if (lossStopTripped) {
+      this.inFlight =
+        false;
+      this.persist(
+        now,
+      );
+      console.error(
+        "[LIVE-only Runner] Halted:",
+        this.haltedReason,
+      );
+      return;
+    }
+
     this.attemptedOpportunityIds.add(
       candidate.id,
     );

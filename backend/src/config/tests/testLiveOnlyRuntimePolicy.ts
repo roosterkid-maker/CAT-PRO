@@ -55,7 +55,7 @@ assert.equal(
 );
 assert.equal(
   policy.maximumCapitalPerLegInr,
-  1_000,
+  1_500,
 );
 assert.equal(
   policy.maximumConcurrentTrades,
@@ -95,7 +95,7 @@ for (
   const invalidCapital
   of [
     "599",
-    "1001",
+    "1501",
     "600.5",
     "not-a-number",
   ]

@@ -44,7 +44,7 @@ const POLICY:
   preferredCapitalPerLegInr:
     600,
   maximumCapitalPerLegInr:
-    1_000,
+    1_500,
   minimumCurrentNetProfitPercent:
     0.2,
   minimumPostStressNetProfitPercent:
@@ -95,6 +95,9 @@ async function main(): Promise<void> {
     await testCleanFailureHaltReleaseRequiresConfirmationAndCleanEvidence(
       directory,
     );
+    await testDailyLossStopHaltsUntilNextIstDay(
+      directory,
+    );
   } finally {
     rmSync(
       directory,
@@ -110,6 +113,59 @@ async function main(): Promise<void> {
   console.log(
     "LIVE-only runner action-time refresh passed: exact public books are rebuilt before authority, refreshed again after authority, and every refresh failure remains order-I/O free.",
   );
+}
+
+async function testDailyLossStopHaltsUntilNextIstDay(
+  directory: string,
+): Promise<void> {
+  const filePath = join(directory, "daily-loss.jsonl");
+  let clock = NOW + 100;
+  let realizedNetInr = -499.99;
+  let executions = 0;
+  const service = runner(
+    filePath,
+    {
+      now: () => clock,
+      getDailyRealizedNetInr: async () => realizedNetInr,
+      execute: async (candidate) => {
+        executions += 1;
+        return completedResult(candidate, clock);
+      },
+    },
+  );
+
+  service.start();
+  await service.observeSnapshot({
+    generatedAt: NOW,
+    opportunities: [opportunity("loss-under-limit", NOW)],
+  });
+  assert.equal(executions, 1, "a loss short of the limit keeps trading");
+  assert.equal(service.getDiagnostics(clock).halted, false);
+
+  realizedNetInr = -500;
+  clock += 10_000;
+  await service.observeSnapshot({
+    generatedAt: clock - 100,
+    opportunities: [opportunity("loss-at-limit", clock - 100)],
+  });
+  assert.equal(executions, 1, "reaching the daily loss limit must stop before any order");
+  const halted = service.getDiagnostics(clock);
+  assert.equal(halted.halted, true);
+  assert.match(halted.haltedReason ?? "", /^DAILY_LOSS_LIMIT\[/u);
+  assert.equal(halted.attempts, 1, "the blocked candidate is not recorded as an attempt");
+
+  const restored = runner(filePath, {now: () => clock});
+  assert.equal(restored.getDiagnostics(clock).halted, true, "the daily loss halt survives a restart");
+
+  realizedNetInr = 0;
+  clock += 24 * 60 * 60 * 1_000;
+  await service.observeSnapshot({
+    generatedAt: clock - 100,
+    opportunities: [opportunity("next-day", clock - 100)],
+  });
+  assert.equal(service.getDiagnostics(clock).halted, false, "the stop lifts at the next IST day");
+  assert.equal(executions, 2);
+  service.stop();
 }
 
 async function testRecoveryHaltReleaseRequiresCleanAuthoritativeEvidence(
@@ -750,6 +806,8 @@ function runner(
       } as OpportunityCapitalStudyDecision),
       getRecoveryClearance: () => cleanRecoveryClearance(),
       isBaseAssetPreFundable: () => true,
+      getDailyRealizedNetInr: async () => 0,
+      getDailyLossLimitInr: () => 500,
       now: () =>
         NOW +
         100,
