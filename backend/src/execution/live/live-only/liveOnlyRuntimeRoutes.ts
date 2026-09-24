@@ -477,7 +477,18 @@ router.get(
         if (asset.toUpperCase() === "INR") return position.totalBalance;
         if (rate === null) return null;
         if (asset.toUpperCase() === "USDT") return position.totalBalance * rate;
-        return position.valuation.totalValueUsdt === null ? null : position.valuation.totalValueUsdt * rate;
+        if (position.valuation.totalValueUsdt !== null) return position.valuation.totalValueUsdt * rate;
+        // The venue itself may have no valuation for the coin (e.g. FLR on
+        // CoinSwitch): price it from any venue's live quote instead.
+        const coin = asset.toUpperCase();
+        const inrQuote = ["coinswitch", "coindcx", "unocoin"]
+          .map((source) => marketCache.get(source, `${coin}INR`) ?? marketCache.get(source, `${coin}_INR`))
+          .find((quote) => quote && quote.bestBidPrice !== null && quote.bestBidPrice > 0);
+        if (inrQuote?.bestBidPrice) return position.totalBalance * inrQuote.bestBidPrice;
+        const usdtQuote = ["binance", "bybit", "coindcx"]
+          .map((source) => marketCache.get(source, `${coin}USDT`))
+          .find((quote) => quote && quote.bestBidPrice !== null && quote.bestBidPrice > 0);
+        return usdtQuote?.bestBidPrice ? position.totalBalance * usdtQuote.bestBidPrice * rate : null;
       };
       response.setHeader("Cache-Control", "no-store");
       response.json({

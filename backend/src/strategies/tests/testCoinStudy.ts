@@ -7,6 +7,7 @@ import {
   buildCoinStudyReport,
   CoinStudyService,
   ingestWindows,
+  isExecutableAggregate,
   istHour,
 } from "../inr-arbitrage/CoinStudyService";
 import type {OpportunityWindow} from "../inr-arbitrage/InrArbitrageScannerService";
@@ -54,10 +55,12 @@ function testAggregationAndRanking(): void {
     // SKY: two-way between unocoin and binance.
     window({coin: "SKY", buyVenue: "unocoin", buyMarket: "SKY_INR", sellVenue: "binance", sellMarket: "SKYUSDT", durationMs: 300_000, peakNetPercent: 2, peakDepthInr: 2_000}),
     window({coin: "SKY", buyVenue: "binance", buyMarket: "SKYUSDT", sellVenue: "unocoin", sellMarket: "SKY_INR", durationMs: 120_000, peakNetPercent: 1.5, peakDepthInr: 2_000}),
+    // CoinSwitch USDT is not traded by any executor: not ranked, only totalled.
+    window({coin: "ONDO", kind: "USDT_USDT", buyVenue: "coinswitch", buyMarket: "ONDO_USDT", sellVenue: "binance", sellMarket: "ONDOUSDT", durationMs: 600_000}),
     // A one-scan fluke still counts one scan interval but never makes the core.
     window({coin: "FLUKE", durationMs: 0, peakNetPercent: 9, peakDepthInr: 100}),
   ];
-  assert.equal(ingestWindows(state, windows), 13);
+  assert.equal(ingestWindows(state, windows), 14);
   assert.equal(ingestWindows(state, windows), 0, "re-feeding the same windows adds nothing");
   const later = window({coin: "FLR", startedAt: NOW - 60_000, durationMs: 30_000});
   assert.equal(ingestWindows(state, [...windows, later]), 1, "only the newly closed window is added");
@@ -69,7 +72,11 @@ function testAggregationAndRanking(): void {
     holding: (venue, asset) => holdings[`${venue}|${asset}`] ?? 0,
   });
 
-  assert.equal(report.totals.coins, 3);
+  assert.equal(report.totals.coins, 3, "the non-executable ONDO route is not ranked");
+  assert.ok(Math.abs(report.totals.nonExecutableEdgeMinutes - 10) < 1e-9);
+  assert.equal(isExecutableAggregate({kind: "USDT_USDT", buyVenue: "bybit", buyQuote: "USDT", sellVenue: "coindcx", sellQuote: "USDT"}), true);
+  assert.equal(isExecutableAggregate({kind: "INR_USDT", buyVenue: "unocoin", buyQuote: "INR", sellVenue: "binance", sellQuote: "USDT"}), true);
+  assert.equal(isExecutableAggregate({kind: "INR_USDT", buyVenue: "coinswitch", buyQuote: "USDT", sellVenue: "coindcx", sellQuote: "INR"}), false);
   assert.equal(report.coins[0].coin, "FLR", "most edge-minutes x net x depth ranks first");
   assert.ok(Math.abs(report.coins[0].edgeMinutes - 10.5) < 1e-9);
   assert.equal(report.coins[0].directions[0].sellVenue, "coinswitch");

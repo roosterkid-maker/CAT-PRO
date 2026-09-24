@@ -298,7 +298,7 @@ export interface CoinStudyResponse {
     dataSpanHours: number;
     dataSufficient: boolean;
     tradeSizeInr: number;
-    totals: {windows: number; edgeMinutes: number; coins: number};
+    totals: {windows: number; edgeMinutes: number; coins: number; nonExecutableEdgeMinutes: number};
     coreBasket: string[];
     coins: CoinStudyEntry[];
   };

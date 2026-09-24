@@ -7,6 +7,15 @@ import {
 } from "../../core/persistence/JsonlSnapshotStore";
 
 import {
+  INR_ROUTE_HEDGE_VENUES,
+  INR_ROUTE_SUPPORTED_INR_VENUES,
+} from "../../execution/live/inr-routes/InrRouteExecutionPolicy";
+
+import {
+  STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY,
+} from "../../arbitrage/execution/StrategyOneTinyLiveBasketPolicy";
+
+import {
   getInrArbitrageScanner,
   type InrRouteKind,
   type OpportunityWindow,
@@ -109,7 +118,13 @@ export interface CoinStudyReport {
   readonly dataSpanHours: number;
   readonly dataSufficient: boolean;
   readonly tradeSizeInr: number;
-  readonly totals: {readonly windows: number; readonly edgeMinutes: number; readonly coins: number};
+  readonly totals: {
+    readonly windows: number;
+    readonly edgeMinutes: number;
+    readonly coins: number;
+    /** Edge time on routes no live executor can trade (not ranked). */
+    readonly nonExecutableEdgeMinutes: number;
+  };
   readonly coreBasket: readonly string[];
   readonly coins: readonly CoinStudyEntry[];
 }
@@ -120,6 +135,28 @@ export function istDay(timestamp: number): string {
 
 export function istHour(timestamp: number): number {
   return new Date(timestamp + IST_OFFSET_MS).getUTCHours();
+}
+
+/*
+ * Only routes a live executor can actually trade feed the ranking:
+ * USDT<->USDT on Strategy #1's venues; INR legs on an INR venue with an
+ * order contract, USDT legs on a hedge venue. Everything else (e.g. a
+ * CoinSwitch USDT market) is reported as non-executable edge time only.
+ */
+export function isExecutableAggregate(route: {
+  readonly kind: InrRouteKind;
+  readonly buyVenue: string;
+  readonly buyQuote: "INR" | "USDT";
+  readonly sellVenue: string;
+  readonly sellQuote: "INR" | "USDT";
+}): boolean {
+  const usdtUsdtVenues = STRATEGY_ONE_TINY_LIVE_ROUTE_POOL_POLICY.venues as readonly string[];
+  const hedgeVenues = INR_ROUTE_HEDGE_VENUES as readonly string[];
+  if (route.kind === "USDT_USDT") {
+    return usdtUsdtVenues.includes(route.buyVenue) && usdtUsdtVenues.includes(route.sellVenue);
+  }
+  return [[route.buyVenue, route.buyQuote], [route.sellVenue, route.sellQuote]].every(([venue, quote]) =>
+    quote === "INR" ? INR_ROUTE_SUPPORTED_INR_VENUES[venue] !== undefined : hedgeVenues.includes(venue));
 }
 
 function quoteOf(market: string): "INR" | "USDT" {
@@ -196,9 +233,14 @@ export function buildCoinStudyReport(state: StudyState, input: {
 }): CoinStudyReport {
   const since = istDay(input.now - (STUDY_DAYS - 1) * 86_400_000);
   const byCoin = new Map<string, {routes: Map<string, RouteAggregate>; days: Set<string>}>();
+  let nonExecutableEdgeMs = 0;
   for (const [day, routes] of Object.entries(state.days)) {
     if (day < since) continue;
     for (const [key, aggregate] of Object.entries(routes)) {
+      if (!isExecutableAggregate(aggregate)) {
+        nonExecutableEdgeMs += aggregate.edgeMs;
+        continue;
+      }
       const entry = byCoin.get(aggregate.coin) ?? {routes: new Map<string, RouteAggregate>(), days: new Set<string>()};
       entry.days.add(day);
       const merged = entry.routes.get(key);
@@ -304,7 +346,12 @@ export function buildCoinStudyReport(state: StudyState, input: {
     dataSpanHours: spanHours,
     dataSufficient: spanHours >= SUFFICIENT_SPAN_HOURS,
     tradeSizeInr: input.tradeSizeInr,
-    totals: {windows: totalWindows, edgeMinutes: totalEdgeMs / 60_000, coins: byCoin.size},
+    totals: {
+      windows: totalWindows,
+      edgeMinutes: totalEdgeMs / 60_000,
+      coins: byCoin.size,
+      nonExecutableEdgeMinutes: nonExecutableEdgeMs / 60_000,
+    },
     coreBasket,
     coins,
   };

@@ -35,7 +35,12 @@ export function CoinStudyPanel() {
         </h2>
         {report ? (
           <p className="font-mono text-[11px] text-text-muted">
-            {report.totals.coins} coins · {Math.round(report.totals.edgeMinutes)} edge-min · {report.totals.windows} windows ·{" "}
+            {report.totals.coins} tradable coins · {Math.round(report.totals.edgeMinutes)} edge-min · {report.totals.windows} windows ·{" "}
+            {report.totals.nonExecutableEdgeMinutes > 0 ? (
+              <span title="Edge time on routes no live executor trades, e.g. CoinSwitch USDT markets">
+                {Math.round(report.totals.nonExecutableEdgeMinutes)} min not tradable ·{" "}
+              </span>
+            ) : null}
             <span className={report.dataSufficient ? "text-emerald-300" : "text-amber-300"}>
               {formatSpan(report.dataSpanHours)} of data{report.dataSufficient ? "" : " — collect 24h+ before trusting"}
             </span>
