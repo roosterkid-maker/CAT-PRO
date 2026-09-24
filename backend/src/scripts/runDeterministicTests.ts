@@ -110,6 +110,7 @@ const DETERMINISTIC_TESTS = [
   "recovery/tests/testSharedRecoveryResolutionAndHalt.js",
   "execution/live/tests/testExecutionRecoveryIncidentNoOpPersistence.js",
   "strategies/tests/testInrArbitrageScanner.js",
+  "strategies/tests/testCoinStudy.js",
   "execution/live/tests/testInrRouteExecution.js",
   "execution/live/tests/testArbitragePnLReport.js",
   "execution/live/tests/testTwoSidedPassiveMakerLiveLifecycleHandler.js",

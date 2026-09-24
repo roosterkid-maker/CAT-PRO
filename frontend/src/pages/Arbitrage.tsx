@@ -2,6 +2,10 @@ import {
   InrScannerPanel,
 } from "@/modules/live-only/components/InrScannerPanel";
 
+import {
+  CoinStudyPanel,
+} from "@/modules/live-only/components/CoinStudyPanel";
+
 /*
  * The arbitrage scanner is the only opportunity view: USDT<->USDT,
  * INR<->INR and USDT<->INR across CoinDCX, UnoCoin, CoinSwitch, Binance and
@@ -12,6 +16,7 @@ export default function Arbitrage() {
   return (
     <section className="space-y-6">
       <InrScannerPanel />
+      <CoinStudyPanel />
     </section>
   );
 }

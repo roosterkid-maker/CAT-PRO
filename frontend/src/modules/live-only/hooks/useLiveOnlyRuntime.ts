@@ -3,6 +3,7 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  fetchCoinStudy,
   fetchInrScanner,
   fetchLiveOnlyInventory,
   fetchLiveOnlyRuntime,
@@ -57,6 +58,24 @@ export function useInrScanner() {
       1_500,
     staleTime:
       1_000,
+    retry:
+      1,
+  });
+}
+
+export function useCoinStudy() {
+  return useQuery({
+    queryKey: [
+      "live-only-coin-study",
+    ],
+    queryFn: ({signal}) =>
+      fetchCoinStudy(
+        signal,
+      ),
+    refetchInterval:
+      30_000,
+    staleTime:
+      15_000,
     retry:
       1,
   });

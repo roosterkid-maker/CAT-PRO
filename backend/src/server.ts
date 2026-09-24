@@ -224,6 +224,10 @@ import {
   getInrRouteLiveRunner,
 } from "./execution/live/inr-routes/InrRouteLiveRunner";
 
+import {
+  getCoinStudyService,
+} from "./strategies/inr-arbitrage/CoinStudyService";
+
 import centralLiveTriangularRoutes
   from "./execution/live/routes/centralLiveTriangularRoutes";
 
@@ -887,6 +891,10 @@ server.listen(
       // INR route executor (USDT<->INR). Its own mode gate (off/shadow/live)
       // decides whether it plans or submits; it shares the live interlock.
       getInrRouteLiveRunner()
+        .start();
+
+      // Durable per-coin opportunity study (read-only).
+      getCoinStudyService()
         .start();
 
       /*

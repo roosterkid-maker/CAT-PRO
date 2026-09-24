@@ -60,6 +60,14 @@ import {
 } from "../inr-routes/InrRouteLiveRunner";
 
 import {
+  getCoinStudyService,
+} from "../../../strategies/inr-arbitrage/CoinStudyService";
+
+import {
+  usdtInrMid,
+} from "./DailyLossGuard";
+
+import {
   getCoinSwitchInrDepthPollerDiagnostics,
 } from "../../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
 
@@ -442,6 +450,52 @@ router.get(
  * page polling a 404; the report itself only reads the current bounded
  * snapshot and never triggers a scan.
  */
+/*
+ * Coin study: which coins keep producing valid edges (7 days), direction,
+ * hours, and where/how much inventory to hold, against current holdings.
+ */
+router.get(
+  "/coin-study",
+  (
+    _request,
+    response,
+  ) => {
+    try {
+      let rate: number | null = null;
+      try {
+        rate = usdtInrMid(getInrArbitrageScanner()?.getReport().conversion ?? []);
+      } catch {
+        rate = null;
+      }
+      const snapshot =
+        normalizedInventorySnapshotService.getSnapshot();
+      const holding = (venue: string, asset: string): number | null => {
+        const exchange = snapshot.exchanges.find((item) => item.exchange === venue);
+        if (!exchange || !exchange.balanceUsableForDecision) return null;
+        const position = exchange.assets.find((item) => item.asset.toUpperCase() === asset.toUpperCase());
+        if (!position) return 0;
+        if (asset.toUpperCase() === "INR") return position.totalBalance;
+        if (rate === null) return null;
+        if (asset.toUpperCase() === "USDT") return position.totalBalance * rate;
+        return position.valuation.totalValueUsdt === null ? null : position.valuation.totalValueUsdt * rate;
+      };
+      response.setHeader("Cache-Control", "no-store");
+      response.json({
+        success: true,
+        data: getCoinStudyService().getReport(
+          getLiveOnlyRuntimePolicy().preferredCapitalPerLegInr,
+          holding,
+        ),
+      });
+    } catch (error: unknown) {
+      response.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Coin study is unavailable.",
+      });
+    }
+  },
+);
+
 router.get(
   "/inr-executor",
   (

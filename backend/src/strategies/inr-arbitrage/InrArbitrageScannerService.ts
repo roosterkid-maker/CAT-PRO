@@ -481,6 +481,11 @@ export class InrArbitrageScannerService {
     this.checkpoint(true);
   }
 
+  /** Closed windows that ended at or after `endedAtOrAfter`, oldest first (bounded to the retained history). */
+  getClosedWindowsSince(endedAtOrAfter: number): readonly OpportunityWindow[] {
+    return this.closed.filter((window) => (window.endedAt ?? 0) >= endedAtOrAfter).map((window) => ({...window}));
+  }
+
   /** Currently qualifying REAL routes from the last scan, best net first. */
   getQualifiedRoutes(): readonly ScannedRoute[] {
     return this.opportunities;

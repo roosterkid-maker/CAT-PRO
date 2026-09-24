@@ -257,3 +257,49 @@ export interface InrScannerResponse {
     } | null;
   };
 }
+
+export interface CoinStudyDirection {
+  kind: "INR_USDT" | "INR_INR" | "USDT_USDT";
+  buyVenue: string;
+  buyQuote: "INR" | "USDT";
+  sellVenue: string;
+  sellQuote: "INR" | "USDT";
+  edgeMinutes: number;
+  sharePercent: number;
+}
+
+export interface CoinStudyEntry {
+  coin: string;
+  rank: number;
+  core: boolean;
+  windows: number;
+  edgeMinutes: number;
+  sharePercent: number;
+  activeDays: number;
+  averageNetPercent: number;
+  bestNetPercent: number;
+  averageDepthInr: number | null;
+  peakHoursIst: number[];
+  hourlyEdgeMinutes: number[];
+  directions: CoinStudyDirection[];
+  twoWay: boolean;
+  placement: {
+    trades: number;
+    coin: {venue: string; needInr: number; haveInr: number | null};
+    cash: {venue: string; asset: "INR" | "USDT"; needInr: number; haveInr: number | null};
+  };
+}
+
+export interface CoinStudyResponse {
+  success: boolean;
+  data: {
+    generatedAt: number;
+    studyDays: number;
+    dataSpanHours: number;
+    dataSufficient: boolean;
+    tradeSizeInr: number;
+    totals: {windows: number; edgeMinutes: number; coins: number};
+    coreBasket: string[];
+    coins: CoinStudyEntry[];
+  };
+}

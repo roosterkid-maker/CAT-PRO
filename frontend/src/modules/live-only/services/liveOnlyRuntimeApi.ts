@@ -3,6 +3,7 @@ import {
 } from "@/api/client";
 
 import type {
+  CoinStudyResponse,
   InrScannerResponse,
   LiveOnlyInventoryResponse,
   LiveOnlyRuntimeResponse,
@@ -42,6 +43,20 @@ export async function fetchInrScanner(
   const response =
     await api.get<InrScannerResponse>(
       "/api/live-only/inr-scanner",
+      {
+        signal,
+      },
+    );
+
+  return response.data;
+}
+
+export async function fetchCoinStudy(
+  signal?: AbortSignal,
+): Promise<CoinStudyResponse> {
+  const response =
+    await api.get<CoinStudyResponse>(
+      "/api/live-only/coin-study",
       {
         signal,
       },
