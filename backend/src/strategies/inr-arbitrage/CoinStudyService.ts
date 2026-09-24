@@ -357,6 +357,100 @@ export function buildCoinStudyReport(state: StudyState, input: {
   };
 }
 
+export interface LiveCoinSignal {
+  readonly coin: string;
+  /** Edge minutes in the window x average net % x depth coverage. */
+  readonly score: number;
+  readonly edgeMinutes: number;
+  readonly averageNetPercent: number;
+  readonly averageDepthInr: number | null;
+  /** Rough INR/day if every window in the period were traded once at one trade size. */
+  readonly expectedDailyProfitInr: number;
+  /** The route that carried the most edge time in the window. */
+  readonly main: {
+    readonly buyVenue: string;
+    readonly buyQuote: "INR" | "USDT";
+    readonly sellVenue: string;
+    readonly sellQuote: "INR" | "USDT";
+  };
+}
+
+interface LiveRoute {
+  readonly aggregate: RouteAggregate;
+  edgeMs: number;
+  netMs: number;
+  windows: number;
+  depthSum: number;
+  depthSamples: number;
+}
+
+/**
+ * Pure: which coins produced executable edge in the last `hours` hours.
+ * Built from the durable per-hour edge time (so it survives restarts); a
+ * route's net and depth are its day averages. Smoothed over hours, not
+ * seconds, so capital does not chase windows that flicker for a scan.
+ */
+export function buildLiveSignal(state: StudyState, input: {
+  readonly now: number;
+  readonly hours: number;
+  readonly tradeSizeInr: number;
+}): readonly LiveCoinSignal[] {
+  const routes = new Map<string, LiveRoute>();
+  for (let offset = 0; offset < Math.min(24, Math.max(1, input.hours)); offset += 1) {
+    const at = input.now - offset * 3_600_000;
+    const day = state.days[istDay(at)];
+    if (!day) continue;
+    const hour = istHour(at);
+    for (const [key, aggregate] of Object.entries(day)) {
+      const edgeMs = aggregate.hourMs[hour] ?? 0;
+      if (!(edgeMs > 0) || !isExecutableAggregate(aggregate)) continue;
+      const entry = routes.get(key) ?? {aggregate, edgeMs: 0, netMs: 0, windows: 0, depthSum: 0, depthSamples: 0};
+      const averageNet = aggregate.edgeMs > 0 ? aggregate.netMs / aggregate.edgeMs : 0;
+      entry.edgeMs += edgeMs;
+      entry.netMs += averageNet * edgeMs;
+      entry.windows += aggregate.edgeMs > 0 ? aggregate.windows * (edgeMs / aggregate.edgeMs) : 0;
+      if (aggregate.depthSamples > 0) {
+        entry.depthSum += aggregate.depthSumInr / aggregate.depthSamples;
+        entry.depthSamples += 1;
+      }
+      routes.set(key, entry);
+    }
+  }
+
+  const byCoin = new Map<string, LiveRoute[]>();
+  for (const entry of routes.values()) {
+    const list = byCoin.get(entry.aggregate.coin) ?? [];
+    list.push(entry);
+    byCoin.set(entry.aggregate.coin, list);
+  }
+
+  const scale = 24 / Math.min(24, Math.max(1, input.hours));
+  return [...byCoin.entries()].map(([coin, list]) => {
+    const sorted = [...list].sort((a, b) => b.edgeMs - a.edgeMs);
+    const edgeMs = sorted.reduce((sum, entry) => sum + entry.edgeMs, 0);
+    const netMs = sorted.reduce((sum, entry) => sum + entry.netMs, 0);
+    const depthSum = sorted.reduce((sum, entry) => sum + entry.depthSum, 0);
+    const depthSamples = sorted.reduce((sum, entry) => sum + entry.depthSamples, 0);
+    const averageNetPercent = edgeMs > 0 ? netMs / edgeMs : 0;
+    const averageDepthInr = depthSamples > 0 ? depthSum / depthSamples : null;
+    const perTradeInr = averageDepthInr === null ? input.tradeSizeInr : Math.min(input.tradeSizeInr, averageDepthInr);
+    const expectedDailyProfitInr = sorted.reduce((sum, entry) => {
+      const net = entry.edgeMs > 0 ? entry.netMs / entry.edgeMs : 0;
+      return sum + entry.windows * (net / 100) * perTradeInr;
+    }, 0) * scale;
+    const main = sorted[0]!.aggregate;
+    return {
+      coin,
+      score: (edgeMs / 60_000) * averageNetPercent * (averageDepthInr === null ? 0.5 : Math.min(1, averageDepthInr / input.tradeSizeInr)),
+      edgeMinutes: edgeMs / 60_000,
+      averageNetPercent,
+      averageDepthInr,
+      expectedDailyProfitInr,
+      main: {buyVenue: main.buyVenue, buyQuote: main.buyQuote, sellVenue: main.sellVenue, sellQuote: main.sellQuote},
+    };
+  }).sort((a, b) => b.score - a.score);
+}
+
 function isState(value: unknown): value is StudyState {
   const state = value as Partial<StudyState> | null;
   return !!state && state.schemaVersion === "1.0" && typeof state.days === "object" && state.days !== null;
@@ -405,6 +499,11 @@ export class CoinStudyService {
     } catch (error: unknown) {
       console.warn("[Coin-Study] Sync failed:", error instanceof Error ? error.message : error);
     }
+  }
+
+  getLiveSignal(tradeSizeInr: number, hours = 6): readonly LiveCoinSignal[] {
+    this.sync();
+    return buildLiveSignal(this.state, {now: this.now(), hours, tradeSizeInr});
   }
 
   getReport(tradeSizeInr: number, holding: HoldingLookup): CoinStudyReport {

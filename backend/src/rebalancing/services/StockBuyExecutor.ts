@@ -35,11 +35,12 @@ import {
 
 /*
  * Capital manager: buys core-basket stock (a coin on the exchange where its
- * route SELLS) with that exchange's own cash, through the same audited
- * per-venue order contracts and central gateway as the arbitrage legs. It
- * holds the shared live-trading slot while it works, never buys at more than
- * 1% above the cheapest other venue, and reports an unresolved order as
- * UNKNOWN instead of guessing.
+ * route SELLS) with that exchange's own cash, and sells idle or surplus
+ * stock back into cash, through the same audited per-venue order contracts
+ * and central gateway as the arbitrage legs. It holds the shared
+ * live-trading slot while it works, never buys at more than 1% above the
+ * cheapest other venue or sells at more than 0.5% below the best other
+ * venue, and reports an unresolved order as UNKNOWN instead of guessing.
  */
 export interface StockBuyRequest {
   readonly venue: string;
@@ -50,8 +51,14 @@ export interface StockBuyRequest {
   readonly now: number;
 }
 
+export interface StockSellRequest extends StockBuyRequest {
+  /** Free units of the coin on the venue: never sell more than this. */
+  readonly maximumQuantity: number;
+}
+
 export interface StockBuyResult {
   readonly status: "FILLED" | "PARTIAL" | "NO_FILL" | "SKIPPED" | "UNKNOWN";
+  /** INR paid (buy) or received (sell). */
   readonly spentInr: number;
   readonly filledQuantity: number;
   readonly averagePrice: number | null;
@@ -61,11 +68,14 @@ export interface StockBuyResult {
 
 export interface StockBuyPort {
   buy(request: StockBuyRequest): Promise<StockBuyResult>;
+  sell?(request: StockSellRequest): Promise<StockBuyResult>;
 }
 
 const QUOTE_MAX_AGE_MS = 10_000;
 const PRICE_BUFFER = 1.003;
 const MAXIMUM_PREMIUM = 1.01;
+/* A stock sale may clear at most 0.5% below the best bid on any other venue. */
+const MAXIMUM_SELL_DISCOUNT = 0.995;
 const BOUNDED_WAIT_MS = 2_500;
 const LATE_READS = 6;
 const LATE_READ_INTERVAL_MS = 2_500;
@@ -77,26 +87,36 @@ export function venueMarket(venue: string, coin: string, quote: "INR" | "USDT"):
   return venue === "coinswitch" || venue === "unocoin" ? `${coin}_${quote}` : `${coin}${quote}`;
 }
 
-function freshAsk(venue: string, market: string, now: number): number | null {
+function freshQuote(venue: string, market: string, now: number) {
   const quote = marketCache.get(venue, market) ?? marketCache.get(venue, market.replace(/_/gu, ""));
-  if (!quote || quote.bestAskPrice === null || !(quote.bestAskPrice > 0) || now - quote.timestamp > QUOTE_MAX_AGE_MS) return null;
-  return quote.bestAskPrice;
+  if (!quote || now - quote.timestamp > QUOTE_MAX_AGE_MS) return null;
+  return quote;
 }
 
-/** Cheapest fresh ask for the coin in INR on any other venue. */
-function cheapestElsewhereInr(coin: string, venue: string, usdtInr: number, now: number): number | null {
+function freshAsk(venue: string, market: string, now: number): number | null {
+  const quote = freshQuote(venue, market, now);
+  return quote && quote.bestAskPrice !== null && quote.bestAskPrice > 0 ? quote.bestAskPrice : null;
+}
+
+function freshBid(venue: string, market: string, now: number): {price: number; quantity: number | null} | null {
+  const quote = freshQuote(venue, market, now);
+  if (!quote || quote.bestBidPrice === null || !(quote.bestBidPrice > 0)) return null;
+  const quantity = Number(quote.bestBidQty);
+  return {price: quote.bestBidPrice, quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : null};
+}
+
+/** Best fresh price for the coin in INR on any other venue: lowest ask (buy) or highest bid (sell). */
+function bestElsewhereInr(coin: string, venue: string, usdtInr: number, now: number, side: "buy" | "sell"): number | null {
   const prices: number[] = [];
-  for (const other of INR_VENUES) {
-    if (other === venue) continue;
-    const ask = freshAsk(other, venueMarket(other, coin, "INR"), now);
-    if (ask !== null) prices.push(ask);
-  }
-  for (const other of USDT_VENUES) {
-    if (other === venue) continue;
-    const ask = freshAsk(other, venueMarket(other, coin, "USDT"), now);
-    if (ask !== null) prices.push(ask * usdtInr);
-  }
-  return prices.length > 0 ? Math.min(...prices) : null;
+  const read = (other: string, quote: "INR" | "USDT") => {
+    const market = venueMarket(other, coin, quote);
+    const price = side === "buy" ? freshAsk(other, market, now) : freshBid(other, market, now)?.price ?? null;
+    if (price !== null) prices.push(quote === "USDT" ? price * usdtInr : price);
+  };
+  for (const other of INR_VENUES) if (other !== venue) read(other, "INR");
+  for (const other of USDT_VENUES) if (other !== venue) read(other, "USDT");
+  if (prices.length === 0) return null;
+  return side === "buy" ? Math.min(...prices) : Math.max(...prices);
 }
 
 async function rulesFor(venue: string, market: string): Promise<ExchangeMarketCapability | null> {
@@ -105,46 +125,90 @@ async function rulesFor(venue: string, market: string): Promise<ExchangeMarketCa
     (await exchangeCapabilityService.getCapability({exchange: venue, market, product: "spot"}).catch(() => null));
 }
 
-function roundUp(price: number, step: number | null): number {
+function roundToStep(price: number, step: number | null, direction: "up" | "down"): number {
   if (!(step !== null && step > 0)) return price;
   const decimals = Math.max(0, Math.min(12, Math.ceil(-Math.log10(step)) + 2));
-  return Number((Math.ceil(price / step - 1e-9) * step).toFixed(decimals));
+  const units = direction === "up" ? Math.ceil(price / step - 1e-9) : Math.floor(price / step + 1e-9);
+  return Number((units * step).toFixed(decimals));
 }
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+function skipped(detail: string): StockBuyResult {
+  return {status: "SKIPPED", spentInr: 0, filledQuantity: 0, averagePrice: null, orderId: null, detail};
+}
+
 export class DefaultStockBuyExecutor implements StockBuyPort {
   async buy(request: StockBuyRequest): Promise<StockBuyResult> {
-    const skip = (detail: string): StockBuyResult => ({status: "SKIPPED", spentInr: 0, filledQuantity: 0, averagePrice: null, orderId: null, detail});
     const market = venueMarket(request.venue, request.coin, request.quote);
     const toInr = request.quote === "USDT" ? request.usdtInr : 1;
 
     const ask = freshAsk(request.venue, market, request.now);
-    if (ask === null) return skip(`No fresh ${market} price on ${request.venue}.`);
-    const cheapest = cheapestElsewhereInr(request.coin, request.venue, request.usdtInr, request.now);
+    if (ask === null) return skipped(`No fresh ${market} price on ${request.venue}.`);
+    const cheapest = bestElsewhereInr(request.coin, request.venue, request.usdtInr, request.now, "buy");
     if (cheapest !== null && ask * toInr > cheapest * MAXIMUM_PREMIUM) {
-      return skip(`${request.coin} on ${request.venue} is ${(((ask * toInr) / cheapest - 1) * 100).toFixed(2)}% above the cheapest venue; not buying stock at a premium.`);
+      return skipped(`${request.coin} on ${request.venue} is ${(((ask * toInr) / cheapest - 1) * 100).toFixed(2)}% above the cheapest venue; not buying stock at a premium.`);
     }
 
     const rules = await rulesFor(request.venue, market);
-    if (!rules || !rules.tradingEnabled || rules.maintenanceMode) return skip(`${market} rules unavailable or market not trading on ${request.venue}.`);
+    if (!rules || !rules.tradingEnabled || rules.maintenanceMode) return skipped(`${market} rules unavailable or market not trading on ${request.venue}.`);
     const step = quantityStepOf(rules);
-    if (!(step !== null && step > 0)) return skip(`${market} lot step unknown on ${request.venue}.`);
+    if (!(step !== null && step > 0)) return skipped(`${market} lot step unknown on ${request.venue}.`);
 
-    const limit = roundUp(ask * PRICE_BUFFER, priceStepOf(rules));
+    const limit = roundToStep(ask * PRICE_BUFFER, priceStepOf(rules), "up");
     const quantity = floorToStep(request.amountInr / toInr / limit, step);
-    if (quantity <= 0) return skip("Amount rounds to zero at the venue lot step.");
-    if (rules.quantity.minimumQuantity !== null && quantity < rules.quantity.minimumQuantity) return skip(`Below ${request.venue} minimum quantity.`);
-    if (rules.notional.minimumNotional !== null && quantity * limit < rules.notional.minimumNotional) return skip(`Below ${request.venue} minimum order value.`);
+    return this.place(request, market, "buy", quantity, limit, rules, toInr);
+  }
 
-    if (!liveTradingInterlock.tryAcquire("capital-manager")) return skip("A live trade is in progress; buying later.");
+  async sell(request: StockSellRequest): Promise<StockBuyResult> {
+    const market = venueMarket(request.venue, request.coin, request.quote);
+    const toInr = request.quote === "USDT" ? request.usdtInr : 1;
+
+    const bid = freshBid(request.venue, market, request.now);
+    if (bid === null) return skipped(`No fresh ${market} bid on ${request.venue}.`);
+    const best = bestElsewhereInr(request.coin, request.venue, request.usdtInr, request.now, "sell");
+    if (best === null) return skipped(`No other venue prices ${request.coin}; not selling without a price check.`);
+    if (bid.price * toInr < best * MAXIMUM_SELL_DISCOUNT) {
+      return skipped(`${request.coin} bid on ${request.venue} is ${((1 - (bid.price * toInr) / best) * 100).toFixed(2)}% below the best venue; not selling stock at a discount.`);
+    }
+
+    const rules = await rulesFor(request.venue, market);
+    if (!rules || !rules.tradingEnabled || rules.maintenanceMode) return skipped(`${market} rules unavailable or market not trading on ${request.venue}.`);
+    const step = quantityStepOf(rules);
+    if (!(step !== null && step > 0)) return skipped(`${market} lot step unknown on ${request.venue}.`);
+
+    const limit = roundToStep(bid.price / PRICE_BUFFER, priceStepOf(rules), "down");
+    // Only what the best bid can absorb: never walk a thin book.
+    const quantity = floorToStep(Math.min(
+      request.amountInr / toInr / bid.price,
+      request.maximumQuantity,
+      bid.quantity ?? Number.POSITIVE_INFINITY,
+    ), step);
+    return this.place(request, market, "sell", quantity, limit, rules, toInr);
+  }
+
+  private async place(
+    request: StockBuyRequest,
+    market: string,
+    side: "buy" | "sell",
+    quantity: number,
+    limit: number,
+    rules: ExchangeMarketCapability,
+    toInr: number,
+  ): Promise<StockBuyResult> {
+    if (quantity <= 0) return skipped("Amount rounds to zero at the venue lot step.");
+    if (rules.quantity.minimumQuantity !== null && quantity < rules.quantity.minimumQuantity) return skipped(`Below ${request.venue} minimum quantity.`);
+    if (rules.notional.minimumNotional !== null && quantity * limit < rules.notional.minimumNotional) return skipped(`Below ${request.venue} minimum order value.`);
+
+    if (!liveTradingInterlock.tryAcquire("capital-manager")) return skipped("A live trade is in progress; trying later.");
     try {
-      const key = `refill-buy:${request.venue}:${request.coin}:${request.now}`;
-      const order = orderRequest(request.venue, market, "buy", quantity, limit, key, BOUNDED_WAIT_MS);
+      // The buy key keeps its original spelling so journal keys stay comparable.
+      const key = `refill-${side}:${request.venue}:${request.coin}:${request.now}`;
+      const order = orderRequest(request.venue, market, side, quantity, limit, key, BOUNDED_WAIT_MS);
       try {
         centralLiveOrderExecutionGateway.validateNewSubmission(order);
       } catch (error: unknown) {
-        return skip(`Order shape rejected before dispatch: ${error instanceof Error ? error.message : String(error)}`);
+        return skipped(`Order shape rejected before dispatch: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       let response: CentralLiveOrderGatewayResponse | null = null;
@@ -163,7 +227,7 @@ export class DefaultStockBuyExecutor implements StockBuyPort {
       }
 
       const result = response?.record?.result ?? null;
-      if (response?.state === "BLOCKED" && response.record === null) return skip(response.reasons.join(" "));
+      if (response?.state === "BLOCKED" && response.record === null) return skipped(response.reasons.join(" "));
       if (!result || !TERMINAL.has(result.status) || response?.state === "UNCERTAIN_SUBMISSION") {
         return {status: "UNKNOWN", spentInr: request.amountInr, filledQuantity: result?.filledQuantity ?? 0, averagePrice: null,
           orderId: result?.orderId ?? null, detail: `Order ${result?.orderId ?? "(no id)"} outcome unknown: ${(response?.reasons ?? []).join(" ")}`};
@@ -176,7 +240,7 @@ export class DefaultStockBuyExecutor implements StockBuyPort {
         filledQuantity: filled,
         averagePrice: average,
         orderId: result.orderId,
-        detail: `Bought ${filled} of ${quantity} ${request.coin} on ${request.venue} at limit ${limit}.`,
+        detail: `${side === "buy" ? "Bought" : "Sold"} ${filled} of ${quantity} ${request.coin} on ${request.venue} at limit ${limit}.`,
       };
     } finally {
       liveTradingInterlock.release("capital-manager");

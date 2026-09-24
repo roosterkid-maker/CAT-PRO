@@ -22,6 +22,11 @@ services:
       CAT_PRO_REFILL_AUTO_BUY_ENABLED: ${CAT_PRO_REFILL_AUTO_BUY_ENABLED:-true}
       CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR: ${CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR:-10000}
       CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR: ${CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR:-1000}
+      # Capital manager v2 (operator, 2026-09-25): sell idle / surplus stock to
+      # fund coins with live opportunity. Guards: <= INR 5,000/day, 24 h hold,
+      # must earn 2x its cost in a day, <= 0.5% below the best other venue.
+      CAT_PRO_REFILL_AUTO_SELL_ENABLED: ${CAT_PRO_REFILL_AUTO_SELL_ENABLED:-true}
+      CAT_PRO_REFILL_AUTO_SELL_DAILY_CAP_INR: ${CAT_PRO_REFILL_AUTO_SELL_DAILY_CAP_INR:-5000}
 
       # Retired runtime controls cannot accidentally grant authority.
       AUTOMATED_PAPER_TRADING_CONFIRMATION: ""

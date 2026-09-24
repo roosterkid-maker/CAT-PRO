@@ -7,10 +7,11 @@ import type {
 } from "../types/LiveOnlyRuntime";
 
 /*
- * Capital manager refill plan: keeps the core coin basket stocked. AUTO
- * actions (USDT from Binance to a whitelisted exchange) are carried out by
- * the capital manager within its caps; MANUAL actions are exact
- * instructions for the operator.
+ * Capital manager: how the capital that exists is split across the coins
+ * with live opportunity (allocation), and the refill plan that gets each
+ * coin's stock and cash in place. AUTO actions are carried out by the
+ * capital manager within its caps; MANUAL actions are exact instructions
+ * for the operator.
  */
 
 const VENUE: Record<string, string> = {
@@ -39,7 +40,7 @@ export function RefillPlanPanel() {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-default px-5 py-4">
         <h2 className="font-mono text-sm tracking-[0.14em] text-text-primary">
           CAPITAL MANAGER · REFILL PLAN
-          <span className="ml-3 text-[11px] tracking-normal text-text-muted">keeps the core basket stocked</span>
+          <span className="ml-3 text-[11px] tracking-normal text-text-muted">splits capital by live opportunity</span>
         </h2>
         {plan ? (
           <p className="font-mono text-[11px] text-text-muted">
@@ -57,6 +58,11 @@ export function RefillPlanPanel() {
                 {" "}· auto-buy ₹{Math.round(plan.automation.autoBuy.spentTodayInr).toLocaleString("en-IN")} / ₹{plan.automation.autoBuy.dailyCapInr.toLocaleString("en-IN")} today · keeps ₹{plan.automation.autoBuy.cashFloorInr.toLocaleString("en-IN")} cash
               </>
             ) : null}
+            {plan.automation.autoSell?.enabled ? (
+              <>
+                {" "}· auto-sell ₹{Math.round(plan.automation.autoSell.spentTodayInr).toLocaleString("en-IN")} / ₹{plan.automation.autoSell.dailyCapInr.toLocaleString("en-IN")} · {plan.automation.autoSell.minimumHoldHours} h hold
+              </>
+            ) : null}
             {" "}· {autoCount} auto · {actions.length - autoCount} manual
           </p>
         ) : null}
@@ -69,6 +75,55 @@ export function RefillPlanPanel() {
               Auto top-up to {VENUE[venue] ?? venue} paused until {new Date(block.until).toLocaleString("en-GB", {hour12: false})}: {block.reason}
             </p>
           ))}
+        </div>
+      ) : null}
+
+      {plan?.allocation ? (
+        <div className="border-b border-border-default">
+          <p className="px-5 pt-3 font-mono text-[11px] text-text-muted">
+            Allocation · budget ₹{Math.round(plan.allocation.budgetInr).toLocaleString("en-IN")} · allocated ₹{Math.round(plan.allocation.allocatedInr).toLocaleString("en-IN")}
+            {" "}· weighted by the last {plan.allocation.liveSignalHours} h of opportunity
+            {plan.allocation.unfunded.length > 0 ? ` · waiting for capital: ${plan.allocation.unfunded.join(", ")}` : ""}
+          </p>
+          {plan.allocation.coins.length === 0 ? (
+            <p className="px-5 pb-3 pt-1 text-xs text-text-muted">No coin has produced executable opportunity recently; nothing allocated.</p>
+          ) : (
+            <div className="overflow-auto">
+              <table className="w-full min-w-[52rem] text-left text-xs">
+                <thead>
+                  <tr className="text-text-muted">
+                    <th className="px-5 py-2 font-normal">Coin</th>
+                    <th className="px-3 py-2 text-right font-normal">Weight</th>
+                    <th className="px-3 py-2 text-right font-normal">Trades</th>
+                    <th className="px-3 py-2 font-normal">Coin side</th>
+                    <th className="px-3 py-2 font-normal">Cash side</th>
+                    <th className="px-5 py-2 text-right font-normal">Est. ₹/day</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {plan.allocation.coins.map((coin) => (
+                    <tr key={coin.coin} className="border-t border-border-default/60 font-mono">
+                      <td className="px-5 py-2 text-text-primary">{coin.coin}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{coin.weightPercent.toFixed(0)}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-primary">{coin.trades} × ₹{coin.perTradeInr.toLocaleString("en-IN")}</td>
+                      <td className="px-3 py-2">
+                        <Side have={coin.coinHaveInr} need={coin.coinNeedInr} label={`${coin.coin} on ${VENUE[coin.coinVenue] ?? coin.coinVenue}`} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <Side have={coin.cashHaveInr} need={coin.cashNeedInr} label={`${coin.cashAsset} on ${VENUE[coin.cashVenue] ?? coin.cashVenue}`} />
+                      </td>
+                      <td className="px-5 py-2 text-right tabular-nums">₹{Math.round(coin.expectedDailyProfitInr).toLocaleString("en-IN")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {plan.automation.autoSell?.enabled && plan.automation.autoSell.lastSkip ? (
+            <p className="px-5 pb-3 pt-1 font-mono text-[11px] text-text-muted">
+              Stock sell held back: {plan.automation.autoSell.lastSkip.reason}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -124,12 +179,12 @@ export function RefillPlanPanel() {
         <div className="border-t border-border-default px-5 py-3 font-mono text-[11px]">
           <p className="mb-1 text-text-muted">Recent automatic actions</p>
           {plan.recentExecutions.slice(0, 6).map((execution) => {
-            const ok = execution.status === "EXECUTED" || execution.status === "BUY_FILLED" || execution.status === "BUY_PARTIAL";
+            const ok = ["EXECUTED", "BUY_FILLED", "BUY_PARTIAL", "SELL_FILLED", "SELL_PARTIAL"].includes(execution.status);
             return (
               <p key={`${execution.at}-${execution.actionId}`} className={ok ? "text-emerald-300" : "text-amber-300"}>
                 {new Date(execution.at).toLocaleString("en-GB", {hour12: false})} ·{" "}
-                {execution.kind === "STOCK_BUY"
-                  ? `buy ${execution.coin} on ${VENUE[execution.toVenue] ?? execution.toVenue} · ₹${Math.round(execution.spentInr ?? 0).toLocaleString("en-IN")}`
+                {execution.kind === "STOCK_BUY" || execution.kind === "STOCK_SELL"
+                  ? `${execution.kind === "STOCK_BUY" ? "buy" : "sell"} ${execution.coin} on ${VENUE[execution.toVenue] ?? execution.toVenue} · ₹${Math.round(execution.spentInr ?? 0).toLocaleString("en-IN")}`
                   : execution.kind === "FUNDING_SWEEP"
                     ? execution.detail
                     : `${execution.amountUsdt} USDT ${execution.actionId.includes("|bybit>") ? "Bybit" : "Binance"} → ${VENUE[execution.toVenue] ?? execution.toVenue}`}
@@ -141,6 +196,16 @@ export function RefillPlanPanel() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function Side({have, need, label}: {have: number | null; need: number; label: string}) {
+  const ready = have !== null && have >= need * 0.5;
+  return (
+    <span className={ready ? "text-emerald-300" : "text-amber-300"}>
+      ₹{have === null ? "?" : Math.round(have).toLocaleString("en-IN")} / ₹{need.toLocaleString("en-IN")}
+      <span className="block text-[10px] text-text-muted">{label}</span>
+    </span>
   );
 }
 

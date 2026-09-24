@@ -324,6 +324,26 @@ export interface RefillPlanResponse {
   data: {
     generatedAt: number;
     usdtInr: number | null;
+    allocation: {
+      budgetInr: number;
+      allocatedInr: number;
+      liveSignalHours: number;
+      coins: Array<{
+        coin: string;
+        weightPercent: number;
+        trades: number;
+        perTradeInr: number;
+        coinVenue: string;
+        coinNeedInr: number;
+        coinHaveInr: number | null;
+        cashVenue: string;
+        cashAsset: "INR" | "USDT";
+        cashNeedInr: number;
+        cashHaveInr: number | null;
+        expectedDailyProfitInr: number;
+      }>;
+      unfunded: string[];
+    } | null;
     actions: RefillAction[];
     covered: Array<{venue: string; asset: string; haveInr: number | null; targetInr: number}>;
     automation: {
@@ -341,6 +361,14 @@ export interface RefillPlanResponse {
         cashFloorInr: number;
         paused: Record<string, {until: number; reason: string}>;
       };
+      autoSell?: {
+        enabled: boolean;
+        dailyCapInr: number;
+        spentTodayInr: number;
+        minimumHoldHours: number;
+        lastSkip: {at: number; reason: string} | null;
+        paused: Record<string, {until: number; reason: string}>;
+      };
     };
     recentExecutions: Array<{
       at: number;
@@ -348,7 +376,7 @@ export interface RefillPlanResponse {
       toVenue: string;
       amountUsdt: number;
       status: string;
-      kind?: "USDT_TOPUP" | "STOCK_BUY" | "FUNDING_SWEEP";
+      kind?: "USDT_TOPUP" | "STOCK_BUY" | "STOCK_SELL" | "FUNDING_SWEEP";
       coin?: string;
       spentInr?: number;
       detail: string;

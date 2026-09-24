@@ -27,6 +27,8 @@ export interface InventoryValuation {
   holdingInr(venue: string, asset: string): number | null;
   /** INR price of one unit of `asset`; null when no live quote exists. */
   priceInr(asset: string): number | null;
+  /** Assets with a balance on `venue` (empty when that venue's balances are not usable). */
+  assets?(venue: string): readonly string[];
 }
 
 export function createInventoryValuation(now = Date.now()): InventoryValuation {
@@ -83,5 +85,10 @@ export function createInventoryValuation(now = Date.now()): InventoryValuation {
       return price === null ? null : free * price;
     },
     priceInr,
+    assets: (venue) => {
+      const exchange = snapshot.exchanges.find((item) => item.exchange === venue);
+      if (!exchange || !exchange.balanceUsableForDecision) return [];
+      return exchange.assets.filter((item) => item.totalBalance > 0).map((item) => item.asset.toUpperCase());
+    },
   };
 }
