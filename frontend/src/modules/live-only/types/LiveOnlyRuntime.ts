@@ -346,3 +346,37 @@ export interface RefillPlanResponse {
     }>;
   };
 }
+
+export interface InrExecutorResponse {
+  success: boolean;
+  data: {
+    running: boolean;
+    mode: "off" | "shadow" | "live";
+    halted: boolean;
+    haltedReason: string | null;
+    inFlight: boolean;
+    realizedNetInrToday: number;
+    counts: Record<string, number>;
+    blockers: Record<string, number>;
+    policy: {minimumNetPercent: number; targetCapitalPerLegInr: number; inrVenues: string[]} | null;
+    recentAttempts: Array<{
+      at: number;
+      status: string;
+      coin: string;
+      kind: string;
+      routeKey: string;
+      buyVenue: string;
+      sellVenue: string;
+      scannedNetPercent: number;
+      reason: string | null;
+    }>;
+    recentSessions: Array<{
+      sessionId: string;
+      state: string;
+      startedAt: number;
+      updatedAt: number;
+      realizedNetInr: number | null;
+      route: {coin: string; kind: string; buyVenue: string; sellVenue: string};
+    }>;
+  };
+}

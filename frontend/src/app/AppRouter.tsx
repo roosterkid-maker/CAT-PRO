@@ -17,6 +17,10 @@ export type {
   AppPage,
 } from "./routes";
 
+const CommandCenter = lazy(
+  () => import("@/modules/command/pages/CommandCenter"),
+);
+
 const BotDashboard = lazy(
   () => import("@/modules/live-only/pages/LiveOnlyDashboard"),
 );
@@ -95,7 +99,16 @@ export default function AppRouter() {
             APP_PAGE_PATHS.dashboard
           }
           element={
-            <Navigate to={APP_PAGE_PATHS.bot} replace />
+            <Navigate to={APP_PAGE_PATHS.command} replace />
+          }
+        />
+
+        <Route
+          path={
+            APP_PAGE_PATHS.command
+          }
+          element={
+            <CommandCenter />
           }
         />
 

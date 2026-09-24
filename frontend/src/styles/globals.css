@@ -1251,3 +1251,211 @@ summary:focus-visible {
     transition: none;
   }
 }
+
+/* ======================================================= command center */
+/* HUD look for the Command Center: corner brackets, grid glow, big mono
+ * readouts - same neon palette, deliberately unlike the table panels. */
+
+.cc-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgb(0 255 65 / 22%);
+  background:
+    linear-gradient(90deg, rgb(0 255 65 / 7%), transparent 55%),
+    repeating-linear-gradient(0deg, rgb(0 255 65 / 4%) 0 1px, transparent 1px 22px),
+    repeating-linear-gradient(90deg, rgb(0 255 65 / 4%) 0 1px, transparent 1px 22px),
+    var(--panel-solid);
+  padding: 22px 24px;
+  box-shadow: var(--glow-box-green);
+}
+
+.cc-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(0 255 65 / 10%), transparent);
+  transform: translateX(-100%);
+  animation: cc-sweep 6s linear infinite;
+  pointer-events: none;
+}
+
+.cc-kicker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.35em;
+  color: var(--neon-green);
+}
+
+.cc-title {
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: clamp(22px, 3vw, 34px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+}
+
+.cc-live {
+  color: var(--neon-green);
+  text-shadow: var(--glow-green);
+  animation: term-pulse 2.4s ease-in-out infinite;
+}
+
+.cc-kpi {
+  position: relative;
+  border: 1px solid var(--border-default);
+  border-left: 2px solid var(--neon-green);
+  background: linear-gradient(180deg, rgb(255 255 255 / 3%), transparent), var(--panel-solid);
+  padding: 14px 16px;
+  min-height: 108px;
+}
+
+.cc-kpi-value {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  text-shadow: 0 0 12px currentColor;
+}
+
+.cc-panel {
+  position: relative;
+  border: 1px solid var(--border-default);
+  background: var(--panel-solid);
+  min-width: 0;
+}
+
+.cc-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px dashed rgb(0 255 65 / 18%);
+  padding: 10px 16px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.cc-panel-head h2 {
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.cc-corner {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-color: var(--neon-green);
+  pointer-events: none;
+}
+
+.cc-corner-tl { top: -1px; left: -1px; border-top: 2px solid; border-left: 2px solid; }
+.cc-corner-br { right: -1px; bottom: -1px; border-right: 2px solid; border-bottom: 2px solid; }
+
+.cc-venue {
+  border: 1px solid var(--border-subtle);
+  border-top: 2px solid var(--venue);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--venue) 8%, transparent), transparent 60%);
+  padding: 12px;
+  min-width: 0;
+}
+
+.cc-opp-head,
+.cc-opp-row {
+  display: grid;
+  grid-template-columns: 58px minmax(170px, 1.5fr) 70px 96px 104px 70px 62px 78px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.cc-opp-head {
+  height: 32px;
+  border-bottom: 1px solid var(--border-default);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--text-label);
+  white-space: nowrap;
+}
+
+.cc-opp-body {
+  overflow-y: auto;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(0 255 65 / 40%) transparent;
+}
+
+.cc-opp-row {
+  border-bottom: 1px solid rgb(255 255 255 / 5%);
+  transition: background 120ms;
+}
+
+.cc-opp-row:hover {
+  background: rgb(0 255 65 / 5%);
+}
+
+.cc-empty {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.cc-radar {
+  width: 64px;
+  height: 64px;
+  border: 1px solid rgb(0 255 65 / 35%);
+  border-radius: 9999px;
+  background:
+    conic-gradient(from 0deg, rgb(0 255 65 / 45%), transparent 25%),
+    radial-gradient(circle, transparent 45%, rgb(0 255 65 / 12%) 46%, transparent 48%);
+  animation: cc-spin 2.6s linear infinite;
+}
+
+.cc-refill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-left: 2px solid rgb(0 255 65 / 25%);
+  padding: 4px 8px;
+}
+
+@keyframes cc-sweep {
+  to { transform: translateX(100%); }
+}
+
+@keyframes cc-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1100px) {
+  .cc-opp-head,
+  .cc-opp-row {
+    min-width: 780px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-hero::after,
+  .cc-radar,
+  .cc-live {
+    animation: none;
+  }
+}
+
+:root[data-theme="light"] .cc-kpi-value,
+:root[data-theme="light"] .cc-live {
+  text-shadow: none;
+}
+
+:root[data-theme="light"] .cc-hero {
+  box-shadow: none;
+}

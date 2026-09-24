@@ -1,5 +1,6 @@
 export type AppPage =
   | "dashboard"
+  | "command"
   | "bot"
   | "agent-sakhondra"
   | "trade-intelligence"
@@ -27,6 +28,9 @@ export const APP_PAGE_PATHS:
   > = {
   dashboard:
     "/",
+
+  command:
+    "/command",
 
   bot:
     "/bot",
@@ -87,6 +91,7 @@ const PAGE_PRELOADERS:
       () => Promise<unknown>
     >
   > = {
+  command: () => import("@/modules/command/pages/CommandCenter"),
   bot: () => import("@/modules/live-only/pages/LiveOnlyDashboard"),
   "trade-intelligence": () => import("@/pages/Arbitrage"),
   "execution-monitoring": () => import("@/modules/execution-monitoring/pages/ExecutionMonitoringDashboard"),

@@ -23,6 +23,14 @@ import {
 const INITIAL_LOAD_DELAY_MS =
   3_000;
 
+/*
+ * The retired opportunity engine still labels sub-gate edges (0.05-0.4%)
+ * as "PAPER opportunity"; those are not alerts and must not pop up. Real
+ * valid, executable edges (>= the 1% gate) come from the arbitrage scanner
+ * and are listed on the Alerts tab and the Command Center window.
+ */
+const LEGACY_OPPORTUNITY_TOASTS = false;
+
 const OPPORTUNITY_ROUTE_ALERT_COOLDOWN_MS =
   30_000;
 
@@ -220,6 +228,7 @@ export function NotificationEventBridge() {
         ) ?? 0;
 
       if (
+        !LEGACY_OPPORTUNITY_TOASTS ||
         !initializedRef.current ||
         opportunity.decision !==
           "EXECUTE" ||

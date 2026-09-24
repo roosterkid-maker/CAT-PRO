@@ -4,6 +4,7 @@ import {
 
 import {
   fetchCoinStudy,
+  fetchInrExecutor,
   fetchRefillPlan,
   fetchInrScanner,
   fetchLiveOnlyInventory,
@@ -95,6 +96,24 @@ export function useRefillPlan() {
       30_000,
     staleTime:
       15_000,
+    retry:
+      1,
+  });
+}
+
+export function useInrExecutor() {
+  return useQuery({
+    queryKey: [
+      "live-only-inr-executor",
+    ],
+    queryFn: ({signal}) =>
+      fetchInrExecutor(
+        signal,
+      ),
+    refetchInterval:
+      3_000,
+    staleTime:
+      2_000,
     retry:
       1,
   });
