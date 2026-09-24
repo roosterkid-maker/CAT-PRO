@@ -312,11 +312,6 @@ export class InrRouteLiveRunner {
     return true;
   }
 
-  /** Every journaled INR session (newest last), for the live trades feed. */
-  listSessions(): readonly InrRouteSession[] {
-    return this.executor.listSessions();
-  }
-
   getDiagnostics() {
     const now = this.dependencies.now();
     const policy = this.safePolicy();

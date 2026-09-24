@@ -18,10 +18,6 @@ import {
   InrScannerPanel,
 } from "../components/InrScannerPanel";
 
-import {
-  LiveTradesPanel,
-} from "../components/LiveTradesPanel";
-
 /*
  * BOT page: the arbitrage scanner (USDT<->USDT, INR<->INR, USDT<->INR),
  * the wallet/order overview, and the live execution boundary. The legacy
@@ -59,8 +55,6 @@ export default function LiveOnlyDashboard() {
   return (
     <section className="space-y-4">
       <InrScannerPanel />
-
-      <LiveTradesPanel />
 
       <BotOverviewPanels runtime={runtime} />
 

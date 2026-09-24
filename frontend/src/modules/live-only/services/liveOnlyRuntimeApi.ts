@@ -6,7 +6,6 @@ import type {
   InrScannerResponse,
   LiveOnlyInventoryResponse,
   LiveOnlyRuntimeResponse,
-  LiveTradesResponse,
 } from "../types/LiveOnlyRuntime";
 
 export async function fetchLiveOnlyRuntime(
@@ -43,20 +42,6 @@ export async function fetchInrScanner(
   const response =
     await api.get<InrScannerResponse>(
       "/api/live-only/inr-scanner",
-      {
-        signal,
-      },
-    );
-
-  return response.data;
-}
-
-export async function fetchLiveTrades(
-  signal?: AbortSignal,
-): Promise<LiveTradesResponse> {
-  const response =
-    await api.get<LiveTradesResponse>(
-      "/api/live-only/live-trades",
       {
         signal,
       },
