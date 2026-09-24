@@ -154,6 +154,26 @@ async function testAutoExecution(directory: string): Promise<void> {
   assert.equal((await capped.executeAuto(rejecting, now)).find((item) => item.toVenue === "bybit")?.status, "SKIPPED_CAP_REJECTED");
   assert.equal(capped.getPlan(now).automation.lastTopUpAt.bybit, undefined);
 
+  // A refused withdrawal (Binance Travel Rule) backs off for hours instead of
+  // retrying - and spending cap - every cycle.
+  class RefusingPort extends FakePort {
+    async executeCrossExchangeMoves(planValue: RebalancingDecisionPlan): Promise<readonly RebalancingMoveOutcome[]> {
+      return planValue.desiredMoves.map((move) => {
+        this.moves.push(move.amountUsdt);
+        return {kind: "CROSS_EXCHANGE" as const, exchange: "binance" as const, destinationExchange: "bybit" as const, amountUsdt: move.amountUsdt, status: "FAILED" as const,
+          detail: "Binance POST /sapi/v1/capital/withdraw/apply failed: status=400, code=-4104, message=... travel rule restrictions", referenceId: null};
+      });
+    }
+  }
+  const refusing = new RefusingPort();
+  const travel = service("travel");
+  assert.equal((await travel.executeAuto(refusing, now)).find((item) => item.toVenue === "bybit")?.status, "FAILED");
+  assert.equal((await travel.executeAuto(refusing, now + 3 * 60_000)).find((item) => item.toVenue === "bybit")?.status, "SKIPPED_BACKOFF");
+  assert.equal((await travel.executeAuto(refusing, now + 5 * 3_600_000)).find((item) => item.toVenue === "bybit")?.status, "SKIPPED_BACKOFF");
+  assert.deepEqual(refusing.moves, [25], "one attempt, then paused");
+  assert.match(travel.getPlan(now).automation.blocked.bybit?.reason ?? "", /Travel Rule/u);
+  assert.equal((await travel.executeAuto(refusing, now + 6 * 3_600_000 + 1)).find((item) => item.toVenue === "bybit")?.status, "FAILED", "tried again after 6 h");
+
   // Too small to be worth a withdrawal fee.
   const tiny = new RouteRefillService({
     getTargets: () => [{coin: "ONDO", rank: 1, coinVenue: "binance", coinNeedInr: 0, cashVenue: "bybit", cashAsset: "USDT", cashNeedInr: 1_600}],

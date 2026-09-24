@@ -54,6 +54,11 @@ const SOURCE_FLOOR_INR = 500;
 const MINIMUM_ACTION_INR = 300;
 const MINIMUM_AUTO_USDT = 10;
 const DESTINATION_COOLDOWN_MS = 30 * 60_000;
+/* A refused withdrawal is not retried every cycle (each attempt spends cap). */
+const FAILURE_BACKOFF_MS = 30 * 60_000;
+/* Binance -4104: Travel Rule details are missing for this destination; only
+ * the operator can fix that in the Binance app, so wait much longer. */
+const TRAVEL_RULE_BACKOFF_MS = 6 * 3_600_000;
 const MAXIMUM_HISTORY = 50;
 
 export interface RouteRefillExecution {
@@ -61,7 +66,7 @@ export interface RouteRefillExecution {
   readonly actionId: string;
   readonly toVenue: string;
   readonly amountUsdt: number;
-  readonly status: RebalancingMoveOutcome["status"] | "SKIPPED_COOLDOWN" | "SKIPPED_TOO_SMALL";
+  readonly status: RebalancingMoveOutcome["status"] | "SKIPPED_COOLDOWN" | "SKIPPED_TOO_SMALL" | "SKIPPED_BACKOFF";
   readonly detail: string;
   readonly referenceId: string | null;
 }
@@ -69,6 +74,8 @@ export interface RouteRefillExecution {
 interface RefillState {
   readonly schemaVersion: "1.0";
   lastTopUpAt: Record<string, number>;
+  /** Destination -> when automatic top-ups may be tried again after a refusal, and why. */
+  blockedUntil?: Record<string, {until: number; reason: string}>;
   history: RouteRefillExecution[];
 }
 
@@ -154,6 +161,9 @@ export class RouteRefillService {
         maximumPerDayUsdt: config.maximumPerDayCrossExchangeUsdt,
         destinationCooldownMinutes: DESTINATION_COOLDOWN_MS / 60_000,
         lastTopUpAt: {...this.state.lastTopUpAt},
+        blocked: Object.fromEntries(
+          Object.entries(this.state.blockedUntil ?? {}).filter(([, block]) => block.until > now),
+        ),
       },
       recentExecutions: [...this.state.history].reverse().slice(0, 20),
     };
@@ -167,6 +177,12 @@ export class RouteRefillService {
 
     const results: RouteRefillExecution[] = [];
     for (const action of plan.actions.filter((item: RefillAction) => item.mode === "AUTO" && item.kind === "MOVE_USDT")) {
+      const block = this.state.blockedUntil?.[action.toVenue];
+      if (block && block.until > now) {
+        results.push(this.record({at: now, actionId: action.id, toVenue: action.toVenue, amountUsdt: 0, status: "SKIPPED_BACKOFF",
+          detail: `Paused until ${new Date(block.until).toISOString()} after: ${block.reason}`, referenceId: null}, false));
+        continue;
+      }
       const lastAt = this.state.lastTopUpAt[action.toVenue] ?? 0;
       if (now - lastAt < DESTINATION_COOLDOWN_MS) {
         results.push(this.record({at: now, actionId: action.id, toVenue: action.toVenue, amountUsdt: 0, status: "SKIPPED_COOLDOWN",
@@ -199,7 +215,21 @@ export class RouteRefillService {
         }],
       } as unknown as RebalancingDecisionPlan);
       if (!outcome) continue;
-      if (outcome.status === "EXECUTED") this.state.lastTopUpAt[action.toVenue] = now;
+      if (outcome.status === "EXECUTED") {
+        this.state.lastTopUpAt[action.toVenue] = now;
+        if (this.state.blockedUntil) delete this.state.blockedUntil[action.toVenue];
+      } else if (outcome.status === "FAILED") {
+        const travelRule = /-4104|travel rule/iu.test(outcome.detail);
+        this.state.blockedUntil = {
+          ...(this.state.blockedUntil ?? {}),
+          [action.toVenue]: {
+            until: now + (travelRule ? TRAVEL_RULE_BACKOFF_MS : FAILURE_BACKOFF_MS),
+            reason: travelRule
+              ? "Binance refused the withdrawal under Travel Rule (-4104): complete the Travel Rule details for this destination in the Binance app."
+              : outcome.detail,
+          },
+        };
+      }
       results.push(this.record({at: now, actionId: action.id, toVenue: action.toVenue, amountUsdt, status: outcome.status,
         detail: outcome.detail, referenceId: outcome.referenceId}, true));
     }
