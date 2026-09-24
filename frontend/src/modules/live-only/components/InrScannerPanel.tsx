@@ -374,7 +374,7 @@ function NearMissTable({routes, report}: {routes: InrScannedRoute[]; report: Rep
         className="flex w-full items-center justify-between px-5 py-3 text-left font-mono text-xs text-text-primary"
       >
         <span>
-          Near misses ≥ {report.config.nearMissNetPercent}% net <span className="text-text-muted">· hints, thin depth, suspect</span>
+          Near misses ≥ {report.config.nearMissNetPercent}% net + best 5 real routes per type <span className="text-text-muted">· hints, thin depth, suspect</span>
           <span className="ml-2 text-amber-300">{routes.length}</span>
         </span>
         <span className="text-text-muted">{open ? "hide" : "show"}</span>

@@ -403,6 +403,7 @@ interface Conversion {
 export class InrArbitrageScannerService {
   private static readonly MAXIMUM_REPORTED_OPPORTUNITIES = 60;
   private static readonly MAXIMUM_NEAR_MISSES = 60;
+  private static readonly BEST_PER_KIND = 5;
   private static readonly MAXIMUM_CLOSED_WINDOWS = 2_000;
   private static readonly CHECKPOINT_INTERVAL_MS = 30_000;
   private static readonly COINDCX_DEMAND_REQUESTS_PER_SCAN = 4;
@@ -617,13 +618,29 @@ export class InrArbitrageScannerService {
     /* ---- classify ---- */
     const qualifying = routes.filter((route) => route.qualifies).sort((a, b) => b.netEdgePercent - a.netEdgePercent);
     this.opportunities = qualifying.slice(0, InrArbitrageScannerService.MAXIMUM_REPORTED_OPPORTUNITIES);
-    this.nearMisses = routes
+    const nearMissOrder = (a: ScannedRoute, b: ScannedRoute) =>
+      Number(a.suspect) - Number(b.suspect) ||
+      TIER_RANK[b.evidence] - TIER_RANK[a.evidence] ||
+      b.netEdgePercent - a.netEdgePercent;
+    const nearMisses = routes
       .filter((route) => !route.qualifies && route.netEdgePercent >= this.config.nearMissNetPercent)
-      .sort((a, b) =>
-        Number(a.suspect) - Number(b.suspect) ||
-        TIER_RANK[b.evidence] - TIER_RANK[a.evidence] ||
-        b.netEdgePercent - a.netEdgePercent)
+      .sort(nearMissOrder)
       .slice(0, InrArbitrageScannerService.MAXIMUM_NEAR_MISSES);
+    // Always include each route kind's best few real (BOOK, non-suspect)
+    // routes, even far below the near-miss line - USDT<->USDT spreads between
+    // major venues rarely reach 1%, and the operator should still see them.
+    const listed = new Set(nearMisses.map((route) => route.routeKey));
+    for (const kind of ["USDT_USDT", "INR_INR", "INR_USDT"] as const) {
+      routes
+        .filter((route) => route.kind === kind && !route.qualifies && !route.suspect && route.evidence === "BOOK" && !listed.has(route.routeKey))
+        .sort((a, b) => b.netEdgePercent - a.netEdgePercent)
+        .slice(0, InrArbitrageScannerService.BEST_PER_KIND)
+        .forEach((route) => {
+          listed.add(route.routeKey);
+          nearMisses.push(route);
+        });
+    }
+    this.nearMisses = nearMisses.sort(nearMissOrder);
 
     this.trackWindows(qualifying, routes, now);
     this.nominateDepth(routes, now);

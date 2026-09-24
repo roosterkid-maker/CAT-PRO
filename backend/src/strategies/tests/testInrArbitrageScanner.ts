@@ -173,7 +173,7 @@ function testGatesAndEvidence(): void {
   suspect.service.scan();
   report = suspect.service.getReport();
   assert.equal(report.opportunities.length, 0);
-  assert.equal(report.nearMisses.find((route) => route.coin === "SUS")?.suspect, true);
+  assert.equal(report.nearMisses.find((route) => route.coin === "SUS" && route.buyVenue === "unocoin")?.suspect, true);
 
   // CoinSwitch INR quote without quantities is QUOTE evidence: a hint that
   // gets nominated for CoinSwitch depth, never an opportunity.
@@ -357,6 +357,16 @@ function testUsdtUsdtRoute(): void {
   assert.equal(route.conversionVenue, null, "no conversion fee on USDT<->USDT");
   assert.ok(Math.abs(route.netEdgePercent - 4.282) < 1e-9, `net ${route.netEdgePercent}`);
   assert.ok(route.depthAtThresholdInr !== null && Math.abs(route.depthAtThresholdInr - 5_000 * 99.6) < 1e-6, "depth shown in INR at the USDT/INR mid");
+
+  // A thin 0.3% USDT spread is far below the 1% near-miss line but still
+  // listed as that kind's best route.
+  const thin = harness();
+  thin.put(quote({exchange: "coindcx", market: "USDTINR", bestBidPrice: 99.5, bestAskPrice: 99.7, bestBidQty: 500, bestAskQty: 500}));
+  thin.put(quote({exchange: "binance", market: "TTTUSDT", bestBidPrice: 0.999, bestAskPrice: 1.0, bestBidQty: 5_000, bestAskQty: 5_000}));
+  thin.put(quote({exchange: "bybit", market: "TTTUSDT", bestBidPrice: 1.003, bestAskPrice: 1.004, bestBidQty: 5_000, bestAskQty: 5_000}));
+  thin.service.scan();
+  const best = thin.service.getReport().nearMisses.find((item) => item.kind === "USDT_USDT" && item.buyVenue === "binance");
+  assert.ok(best && best.netEdgePercent < 1, "best USDT route shown even below the near-miss line");
 }
 
 testMath();
