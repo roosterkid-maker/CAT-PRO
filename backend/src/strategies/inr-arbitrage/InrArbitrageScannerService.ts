@@ -107,8 +107,8 @@ function readNumberEnv(name: string, fallback: number, min: number, max: number)
 
 export function loadInrScannerConfig(): InrScannerConfig {
   return {
-    minimumNetPercent: readNumberEnv("CAT_PRO_INR_SCAN_MIN_NET_PERCENT", 3, 0.1, 50),
-    nearMissNetPercent: readNumberEnv("CAT_PRO_INR_SCAN_NEAR_MISS_NET_PERCENT", 1, 0, 50),
+    minimumNetPercent: readNumberEnv("CAT_PRO_INR_SCAN_MIN_NET_PERCENT", 1, 0.1, 50),
+    nearMissNetPercent: readNumberEnv("CAT_PRO_INR_SCAN_NEAR_MISS_NET_PERCENT", 0.5, 0, 50),
     suspectGrossPercent: readNumberEnv("CAT_PRO_INR_SCAN_SUSPECT_GROSS_PERCENT", 25, 5, 500),
     windowGraceMs: readNumberEnv("CAT_PRO_INR_SCAN_WINDOW_GRACE_MS", 5_000, 0, 60_000),
     alertAfterMs: readNumberEnv("CAT_PRO_INR_SCAN_ALERT_AFTER_MS", 2_000, 0, 60_000),
@@ -235,6 +235,8 @@ export interface ScannedRoute {
   readonly averageNetAtDepthPercent: number | null;
   /** Largest venue minimum order across both legs, in INR; null if unknown. */
   readonly minimumOrderInr: number | null;
+  /** Both venues' markets known, trading-enabled, not in maintenance; null = rules not loaded yet. */
+  readonly marketsTradable: boolean | null;
   readonly suspect: boolean;
   /** REAL: BOOK evidence, net >= threshold, not suspect, depth covers min order. */
   readonly qualifies: boolean;
@@ -325,7 +327,8 @@ export interface InrScannerDependencies {
   readonly getCostProfile: typeof getStrategyOneTinyLiveCashCostProfile;
   readonly getBook: (exchange: string, market: string) => OrderBook | null;
   /** Cached venue minimums: notional in quote currency and base quantity. */
-  readonly getMinimums: (exchange: string, market: string) => {minimumNotional: number | null; minimumQuantity: number | null} | null | undefined;
+  /** Cached venue market rules; undefined = not fetched yet, null = market unknown to the venue. */
+  readonly getMinimums: (exchange: string, market: string) => {minimumNotional: number | null; minimumQuantity: number | null; tradingEnabled: boolean; maintenanceMode: boolean} | null | undefined;
   readonly requestMinimums: (exchange: string, market: string) => void;
   readonly loadWindows: () => OpportunityWindow[];
   readonly saveWindows: (windows: readonly OpportunityWindow[]) => void;
@@ -366,7 +369,14 @@ const DEFAULT_DEPENDENCIES: InrScannerDependencies = {
   getBook: (exchange, market) => orderBookService.get(exchange, market),
   getMinimums: (exchange, market) => {
     const capability = exchangeCapabilityService.getCachedCapability(exchange, market);
-    return capability ? {minimumNotional: capability.notional.minimumNotional, minimumQuantity: capability.quantity.minimumQuantity} : undefined;
+    return capability
+      ? {
+          minimumNotional: capability.notional.minimumNotional,
+          minimumQuantity: capability.quantity.minimumQuantity,
+          tradingEnabled: capability.tradingEnabled,
+          maintenanceMode: capability.maintenanceMode,
+        }
+      : undefined;
   },
   requestMinimums: requestMinimumsInBackground,
   loadWindows: () => {
@@ -403,7 +413,6 @@ interface Conversion {
 export class InrArbitrageScannerService {
   private static readonly MAXIMUM_REPORTED_OPPORTUNITIES = 60;
   private static readonly MAXIMUM_NEAR_MISSES = 60;
-  private static readonly BEST_PER_KIND = 5;
   private static readonly MAXIMUM_CLOSED_WINDOWS = 2_000;
   private static readonly CHECKPOINT_INTERVAL_MS = 30_000;
   private static readonly COINDCX_DEMAND_REQUESTS_PER_SCAN = 4;
@@ -419,6 +428,7 @@ export class InrArbitrageScannerService {
   private lastScanDurationMs: number | null = null;
   private routesEvaluated = 0;
   private opportunities: ScannedRoute[] = [];
+  private lastRoutes: ScannedRoute[] = [];
   private nearMisses: ScannedRoute[] = [];
   private venues: Record<string, {inrMarkets: number; inrBooks: number; inrQuotes: number; usdtBooks: number}> = {};
   private conversion: InrScannerReport["conversion"] = [];
@@ -433,7 +443,7 @@ export class InrArbitrageScannerService {
   /** `venue|NORMALIZEDMARKET` -> the venue's own market spelling (e.g. LRC_INR). */
   private readonly rawMarkets = new Map<string, string>();
   private readonly lastAlertAtByRoute = new Map<string, number>();
-  private minimumsCache = new Map<string, {minimumNotional: number | null; minimumQuantity: number | null} | null | undefined>();
+  private minimumsCache = new Map<string, {minimumNotional: number | null; minimumQuantity: number | null; tradingEnabled: boolean; maintenanceMode: boolean} | null | undefined>();
 
   constructor(
     private readonly coinDCXSubscriber: InrDemandSubscriber | null,
@@ -466,6 +476,11 @@ export class InrArbitrageScannerService {
     clearInterval(this.timer);
     this.timer = null;
     this.checkpoint(true);
+  }
+
+  /** Every route priced in the last scan, valid or not (diagnostics/tests; never shown as opportunities). */
+  getAllRoutes(): readonly ScannedRoute[] {
+    return this.lastRoutes;
   }
 
   /** Markets on `venue` whose INR route looks promising but has no book yet. */
@@ -614,33 +629,18 @@ export class InrArbitrageScannerService {
       }
     }
     this.routesEvaluated = evaluated;
+    this.lastRoutes = routes;
 
     /* ---- classify ---- */
     const qualifying = routes.filter((route) => route.qualifies).sort((a, b) => b.netEdgePercent - a.netEdgePercent);
     this.opportunities = qualifying.slice(0, InrArbitrageScannerService.MAXIMUM_REPORTED_OPPORTUNITIES);
-    const nearMissOrder = (a: ScannedRoute, b: ScannedRoute) =>
-      Number(a.suspect) - Number(b.suspect) ||
-      TIER_RANK[b.evidence] - TIER_RANK[a.evidence] ||
-      b.netEdgePercent - a.netEdgePercent;
-    const nearMisses = routes
-      .filter((route) => !route.qualifies && route.netEdgePercent >= this.config.nearMissNetPercent)
-      .sort(nearMissOrder)
+    // Diagnostics only (not shown as opportunities): real BOOK routes that
+    // clear the net threshold but fail an executability gate (depth vs
+    // minimum order, market status, rules not loaded yet).
+    this.nearMisses = routes
+      .filter((route) => !route.qualifies && !route.suspect && route.evidence === "BOOK" && route.netEdgePercent >= this.config.minimumNetPercent)
+      .sort((a, b) => b.netEdgePercent - a.netEdgePercent)
       .slice(0, InrArbitrageScannerService.MAXIMUM_NEAR_MISSES);
-    // Always include each route kind's best few real (BOOK, non-suspect)
-    // routes, even far below the near-miss line - USDT<->USDT spreads between
-    // major venues rarely reach 1%, and the operator should still see them.
-    const listed = new Set(nearMisses.map((route) => route.routeKey));
-    for (const kind of ["USDT_USDT", "INR_INR", "INR_USDT"] as const) {
-      routes
-        .filter((route) => route.kind === kind && !route.qualifies && !route.suspect && route.evidence === "BOOK" && !listed.has(route.routeKey))
-        .sort((a, b) => b.netEdgePercent - a.netEdgePercent)
-        .slice(0, InrArbitrageScannerService.BEST_PER_KIND)
-        .forEach((route) => {
-          listed.add(route.routeKey);
-          nearMisses.push(route);
-        });
-    }
-    this.nearMisses = nearMisses.sort(nearMissOrder);
 
     this.trackWindows(qualifying, routes, now);
     this.nominateDepth(routes, now);
@@ -873,12 +873,17 @@ export class InrArbitrageScannerService {
       }
     }
 
-    // Minimums are only resolved for routes worth showing; the lookup clones.
-    const minimumOrderInr = evaluation.netEdgePercent >= this.config.nearMissNetPercent
-      ? this.minimumOrderInr(input.buy, input.costInr / input.buyToInr, input.buyToInr, input.sell, input.proceedsInr / input.sellToInr, input.sellToInr)
-      : null;
+    // Market rules are only resolved for routes worth showing; the lookup clones.
+    const rules = evaluation.netEdgePercent >= this.config.nearMissNetPercent
+      ? this.marketRules(input.buy, input.costInr / input.buyToInr, input.buyToInr, input.sell, input.proceedsInr / input.sellToInr, input.sellToInr)
+      : {minimumOrderInr: null, marketsTradable: null};
+    const minimumOrderInr = rules.minimumOrderInr;
+    // VALID + EXECUTABLE: real books, threshold net, not suspect, both venues'
+    // market rules known with trading enabled and no maintenance, and depth
+    // at the threshold covering the larger minimum order.
     const qualifies =
       worthDepth &&
+      rules.marketsTradable === true &&
       depthAtThresholdInr !== null &&
       depthAtThresholdInr > 0 &&
       depthAtThresholdInr >= (minimumOrderInr ?? 0);
@@ -903,6 +908,7 @@ export class InrArbitrageScannerService {
       depthAtThresholdInr,
       averageNetAtDepthPercent,
       minimumOrderInr,
+      marketsTradable: rules.marketsTradable,
       suspect,
       qualifies,
       observedAt: input.now,
@@ -914,25 +920,42 @@ export class InrArbitrageScannerService {
     return book && book.asks.length && book.bids.length && now - book.timestamp <= this.bookAgeLimit(leg.venue, leg.market.endsWith("INR")) ? book : null;
   }
 
-  /** Largest venue minimum across both legs, converted to INR. */
-  private minimumOrderInr(buy: Leg, buyPrice: number, buyToInr: number, sell: Leg, sellPrice: number, sellToInr: number): number | null {
-    let result: number | null = null;
+  /**
+   * Both legs' venue market rules: the larger minimum order (INR) and whether
+   * both markets are known, trading-enabled and out of maintenance. Unknown
+   * rules are fetched in the background and leave the route non-executable
+   * (marketsTradable null) until they arrive.
+   */
+  private marketRules(
+    buy: Leg,
+    buyPrice: number,
+    buyToInr: number,
+    sell: Leg,
+    sellPrice: number,
+    sellToInr: number,
+  ): {minimumOrderInr: number | null; marketsTradable: boolean | null} {
+    let minimumOrderInr: number | null = null;
+    let marketsTradable: boolean | null = true;
     for (const [leg, price, toInr] of [[buy, buyPrice, buyToInr], [sell, sellPrice, sellToInr]] as const) {
       const cacheKey = `${leg.venue}|${leg.quote.market}`;
       if (!this.minimumsCache.has(cacheKey)) this.minimumsCache.set(cacheKey, this.dependencies.getMinimums(leg.venue, leg.quote.market));
-      const minimums = this.minimumsCache.get(cacheKey);
-      if (minimums === undefined) {
-        this.dependencies.requestMinimums(leg.venue, leg.quote.market);
+      const rules = this.minimumsCache.get(cacheKey);
+      if (!rules) {
+        if (rules === undefined) this.dependencies.requestMinimums(leg.venue, leg.quote.market);
+        marketsTradable = null;
         continue;
       }
-      if (!minimums) continue;
+      if (!rules.tradingEnabled || rules.maintenanceMode) {
+        marketsTradable = false;
+      }
       const candidates = [
-        minimums.minimumNotional !== null ? minimums.minimumNotional * toInr : null,
-        minimums.minimumQuantity !== null ? minimums.minimumQuantity * price * toInr : null,
+        rules.minimumNotional !== null ? rules.minimumNotional * toInr : null,
+        rules.minimumQuantity !== null ? rules.minimumQuantity * price * toInr : null,
       ].filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
-      for (const value of candidates) result = result === null ? value : Math.max(result, value);
+      for (const value of candidates) minimumOrderInr = minimumOrderInr === null ? value : Math.max(minimumOrderInr, value);
     }
-    return result;
+    if (marketsTradable === null) return {minimumOrderInr, marketsTradable: null};
+    return {minimumOrderInr, marketsTradable};
   }
 
   /* ------------------------------------------------------------- windows */

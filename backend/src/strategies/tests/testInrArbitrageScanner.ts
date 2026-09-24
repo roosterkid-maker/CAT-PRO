@@ -50,7 +50,7 @@ function quote(partial: Partial<ExecutableQuote> & Pick<ExecutableQuote, "exchan
   };
 }
 
-function harness(options: {minimums?: Record<string, {minimumNotional: number | null; minimumQuantity: number | null}>; stored?: OpportunityWindow[]} = {}) {
+function harness(options: {minimums?: Record<string, {minimumNotional: number | null; minimumQuantity: number | null; tradingEnabled?: boolean; maintenanceMode?: boolean} | null>; stored?: OpportunityWindow[]} = {}) {
   const quotes = new Map<string, ExecutableQuote>();
   const books = new Map<string, OrderBook>();
   const saved: OpportunityWindow[][] = [];
@@ -72,7 +72,15 @@ function harness(options: {minimums?: Record<string, {minimumNotional: number | 
       getTakerFeePercent: (exchange, market) =>
         exchange === "coindcx" && market.endsWith("INR") ? 0.59 : exchange === "unocoin" ? 0.4 : exchange === "coinswitch" ? 0.3 : 0.1,
       getBook: (exchange, market) => books.get(`${exchange}|${market}`) ?? null,
-      getMinimums: (exchange, market) => options.minimums?.[`${exchange}|${market}`] ?? null,
+      // Default: every market known, trading-enabled, no minimum.
+      getMinimums: (exchange, market) => {
+        const key = `${exchange}|${market}`;
+        if (options.minimums && key in options.minimums) {
+          const rules = options.minimums[key];
+          return rules === null ? null : {tradingEnabled: true, maintenanceMode: false, ...rules};
+        }
+        return {minimumNotional: null, minimumQuantity: null, tradingEnabled: true, maintenanceMode: false};
+      },
       requestMinimums: () => undefined,
       loadWindows: () => options.stored ?? [],
       saveWindows: (windows) => saved.push(windows.map((window) => ({...window}))),
@@ -173,7 +181,8 @@ function testGatesAndEvidence(): void {
   suspect.service.scan();
   report = suspect.service.getReport();
   assert.equal(report.opportunities.length, 0);
-  assert.equal(report.nearMisses.find((route) => route.coin === "SUS" && route.buyVenue === "unocoin")?.suspect, true);
+  assert.equal(suspect.service.getAllRoutes().find((route) => route.coin === "SUS" && route.buyVenue === "unocoin")?.suspect, true);
+  assert.equal(report.nearMisses.some((route) => route.coin === "SUS"), false, "suspect routes are never listed");
 
   // CoinSwitch INR quote without quantities is QUOTE evidence: a hint that
   // gets nominated for CoinSwitch depth, never an opportunity.
@@ -183,7 +192,8 @@ function testGatesAndEvidence(): void {
   hint.service.scan();
   report = hint.service.getReport();
   assert.equal(report.opportunities.length, 0);
-  const hinted = report.nearMisses.find((route) => route.coin === "HNT" && route.sellVenue === "coinswitch")!;
+  const hinted = hint.service.getAllRoutes().find((route) => route.coin === "HNT" && route.sellVenue === "coinswitch")!;
+  assert.equal(report.nearMisses.some((route) => route.coin === "HNT"), false, "quote-only hints are never listed");
   assert.equal(hinted.evidence, "QUOTE");
   assert.deepEqual(hint.service.getDepthNominations("coinswitch"), ["HNT_INR"], "raw venue spelling");
 
@@ -200,7 +210,8 @@ function testGatesAndEvidence(): void {
   flat.put(quote({exchange: "unocoin", market: "FLT_INR", lastPrice: 10, bestBidPrice: 10, bestAskPrice: 10, executable: false, source: "bookTicker"}));
   flat.put(quote({exchange: "coindcx", market: "FLTINR", bestBidPrice: 11, bestAskPrice: 11.1, bestBidQty: 100, bestAskQty: 100}));
   flat.service.scan();
-  assert.equal(flat.service.getReport().nearMisses.find((route) => route.coin === "FLT")?.evidence, "TICKER");
+  assert.equal(flat.service.getAllRoutes().find((route) => route.coin === "FLT")?.evidence, "TICKER");
+  assert.equal(flat.service.getReport().nearMisses.length, 0);
 }
 
 function testInrUsdtWithConversionFallback(): void {
@@ -211,7 +222,8 @@ function testInrUsdtWithConversionFallback(): void {
   h.put(quote({exchange: "binance", market: "XYZUSDT", bestBidPrice: 1.0, bestAskPrice: 1.001, bestBidQty: 1_000, bestAskQty: 1_000}));
   h.service.scan();
   const report = h.service.getReport();
-  const route = report.nearMisses.find((item) => item.kind === "INR_USDT" && item.buyVenue === "coindcx")!;
+  const route = h.service.getAllRoutes().find((item) => item.kind === "INR_USDT" && item.buyVenue === "coindcx")!;
+  assert.equal(report.opportunities.length + report.nearMisses.length, 0, "quote-level conversion routes are not shown");
   assert.ok(route, "INR_USDT priced with the fallback conversion quote");
   assert.equal(route.conversionVenue, "coinswitch");
   assert.equal(route.evidence, "QUOTE", "weakest leg (conversion quote) sets the evidence");
@@ -228,7 +240,7 @@ function testPolledBookUpgradesQuote(): void {
   h.put(quote({exchange: "coindcx", market: "LRCINR", bestBidPrice: 0.94, bestAskPrice: 0.95, bestBidQty: 50_000, bestAskQty: 50_000}));
   h.book("coindcx", "LRCINR", [[0.95, 50_000]], [[0.94, 50_000]]);
   h.service.scan();
-  let route = h.service.getReport().nearMisses.find((item) => item.coin === "LRC" && item.sellVenue === "coinswitch")!;
+  let route = h.service.getAllRoutes().find((item) => item.coin === "LRC" && item.sellVenue === "coinswitch")!;
   assert.equal(route.sellEvidence, "QUOTE");
   assert.deepEqual(h.service.getDepthNominations("coinswitch"), ["LRC_INR"], "raw venue spelling is nominated");
 
@@ -365,8 +377,21 @@ function testUsdtUsdtRoute(): void {
   thin.put(quote({exchange: "binance", market: "TTTUSDT", bestBidPrice: 0.999, bestAskPrice: 1.0, bestBidQty: 5_000, bestAskQty: 5_000}));
   thin.put(quote({exchange: "bybit", market: "TTTUSDT", bestBidPrice: 1.003, bestAskPrice: 1.004, bestBidQty: 5_000, bestAskQty: 5_000}));
   thin.service.scan();
-  const best = thin.service.getReport().nearMisses.find((item) => item.kind === "USDT_USDT" && item.buyVenue === "binance");
-  assert.ok(best && best.netEdgePercent < 1, "best USDT route shown even below the near-miss line");
+  assert.equal(thin.service.getReport().opportunities.length + thin.service.getReport().nearMisses.length, 0, "sub-threshold routes are not shown");
+
+  // A market in maintenance, or one whose rules are not loaded yet, is not executable.
+  for (const rules of [{minimumNotional: null, minimumQuantity: null, maintenanceMode: true}, null]) {
+    const gated = harness({minimums: {"bybit|UUUUSDT": rules}});
+    gated.put(quote({exchange: "coindcx", market: "USDTINR", bestBidPrice: 99.5, bestAskPrice: 99.7, bestBidQty: 500, bestAskQty: 500}));
+    gated.put(quote({exchange: "binance", market: "UUUUSDT", bestBidPrice: 0.999, bestAskPrice: 1.0, bestBidQty: 5_000, bestAskQty: 5_000}));
+    gated.put(quote({exchange: "bybit", market: "UUUUSDT", bestBidPrice: 1.045, bestAskPrice: 1.046, bestBidQty: 5_000, bestAskQty: 5_000}));
+    gated.book("binance", "UUUUSDT", [[1.0, 5_000]], [[0.999, 5_000]]);
+    gated.book("bybit", "UUUUSDT", [[1.046, 5_000]], [[1.045, 5_000]]);
+    gated.service.scan();
+    const gatedReport = gated.service.getReport();
+    assert.equal(gatedReport.opportunities.length, 0, "non-tradable market is not an opportunity");
+    assert.equal(gatedReport.nearMisses[0]?.marketsTradable, rules === null ? null : false);
+  }
 }
 
 testMath();

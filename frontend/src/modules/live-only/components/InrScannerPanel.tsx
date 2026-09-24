@@ -80,12 +80,10 @@ export function InrScannerPanel() {
             <CoinPersistenceTable coins={view!.coinPersistence} now={now} />
             <WindowsLog windows={view!.recentWindows} />
           </div>
-          <NearMissTable routes={view!.nearMisses} report={view!} />
           <p className="border-t border-border-default px-5 py-3 text-[11px] leading-5 text-text-muted">
             Net = gross − every taker fee on the route (INR↔USDT also pays one USDT/INR conversion fee). TDS is a recoverable cash lock shown separately; ? = venue TDS unverified.
-            Evidence: BOOK = executable bid/ask with quantities; QUOTE = prices without quantities; TICKER = last trade only — only BOOK routes count as real.
-            Depth @ {report.config.minimumNetPercent}% walks every published level while each extra unit still clears {report.config.minimumNetPercent}% net; Min order is the larger of both venues&apos; minimum order (INR).
-            Gross above {report.config.suspectGrossPercent}% is marked SUSPECT (usually a stale order or a coin with closed deposits/withdrawals) and never alerted.
+            Only VALID + EXECUTABLE routes are shown: real order books with quantities on both legs, net ≥ {report.config.minimumNetPercent}%, both coins&apos; markets trading-enabled and not in maintenance on both exchanges, and depth @ {report.config.minimumNetPercent}% covering the larger minimum order. Ticker-only prices, stale books, suspect gross (&gt; {report.config.suspectGrossPercent}%) and non-tradable markets are hidden.
+            Depth @ {report.config.minimumNetPercent}% walks every published level while each extra unit still clears {report.config.minimumNetPercent}% net.
           </p>
         </>
       )}
@@ -227,7 +225,7 @@ function OpportunitiesTable({report, now}: {report: Report; now: number}) {
       </div>
       {rows.length === 0 ? (
         <p className="border-t border-border-default px-5 py-4 text-xs text-text-muted">
-          No route clears {report.config.minimumNetPercent}% net with real depth right now. The scanner keeps watching every second; near misses are listed below.
+          No valid, executable route clears {report.config.minimumNetPercent}% net right now. The scanner re-checks every route every second.
         </p>
       ) : (
         <div className="overflow-x-auto border-t border-border-default">
@@ -364,59 +362,6 @@ function WindowsLog({windows}: {windows: InrOpportunityWindow[]}) {
   );
 }
 
-function NearMissTable({routes, report}: {routes: InrScannedRoute[]; report: Report}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="border-t border-border-default">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center justify-between px-5 py-3 text-left font-mono text-xs text-text-primary"
-      >
-        <span>
-          Near misses ≥ {report.config.nearMissNetPercent}% net + best 5 real routes per type <span className="text-text-muted">· hints, thin depth, suspect</span>
-          <span className="ml-2 text-amber-300">{routes.length}</span>
-        </span>
-        <span className="text-text-muted">{open ? "hide" : "show"}</span>
-      </button>
-      {open ? (
-        routes.length === 0 ? (
-          <p className="px-5 pb-4 text-xs text-text-muted">Nothing above {report.config.nearMissNetPercent}% net.</p>
-        ) : (
-          <div className="max-h-96 overflow-auto border-t border-border-default">
-            <table className="w-full min-w-[56rem] text-left text-xs">
-              <thead>
-                <tr className="border-b border-border-default">
-                  <th className="px-5 py-2.5 font-normal">Coin</th>
-                  <th className="px-3 py-2.5 font-normal">Route</th>
-                  <th className="px-3 py-2.5 font-normal">Why not real</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Net</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Gross</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Depth @ {report.config.minimumNetPercent}%</th>
-                  <th className="px-5 py-2.5 text-right font-normal">Min order</th>
-                </tr>
-              </thead>
-              <tbody>
-                {routes.map((route) => (
-                  <tr key={route.routeKey} className="border-b border-border-default/60">
-                    <td className="px-5 py-2 font-mono text-text-primary">{route.coin}</td>
-                    <td className="px-3 py-2"><RouteLabel route={route} /></td>
-                    <td className="px-3 py-2 font-mono text-[10px] text-amber-300">{whyNotReal(route, report)}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-text-primary">{route.netEdgePercent.toFixed(2)}%</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-text-muted">{route.grossEdgePercent.toFixed(2)}%</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-text-muted">{route.depthAtThresholdInr === null ? "—" : formatInr(route.depthAtThresholdInr)}</td>
-                    <td className="px-5 py-2 text-right font-mono tabular-nums text-text-muted">{route.minimumOrderInr === null ? "—" : formatInr(route.minimumOrderInr)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
-      ) : null}
-    </div>
-  );
-}
-
 function RouteLabel({route}: {route: InrScannedRoute}) {
   return (
     <span className="font-mono text-[11px] text-text-muted">
@@ -433,14 +378,6 @@ function RouteLabel({route}: {route: InrScannedRoute}) {
 function EvidenceDot({tier}: {tier: InrEvidenceTier}) {
   const tone = tier === "BOOK" ? "text-emerald-300" : tier === "QUOTE" ? "text-amber-300" : "text-red-300";
   return <span className={`text-[9px] ${tone}`} title={`${tier} evidence`}>{tier}</span>;
-}
-
-function whyNotReal(route: InrScannedRoute, report: Report): string {
-  if (route.suspect) return `SUSPECT gross > ${report.config.suspectGrossPercent}%`;
-  if (route.evidence !== "BOOK") return `${route.evidence} only — awaiting depth`;
-  if (route.netEdgePercent < report.config.minimumNetPercent) return `below ${report.config.minimumNetPercent}% net`;
-  if (route.depthAtThresholdInr !== null && route.minimumOrderInr !== null && route.depthAtThresholdInr < route.minimumOrderInr) return "depth < min order";
-  return "no depth at threshold";
 }
 
 /* ---------------------------------------------------------------- alerts */

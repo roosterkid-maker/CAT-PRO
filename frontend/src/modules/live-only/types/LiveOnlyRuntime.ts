@@ -173,6 +173,7 @@ export interface InrScannedRoute {
   depthAtThresholdInr: number | null;
   averageNetAtDepthPercent: number | null;
   minimumOrderInr: number | null;
+  marketsTradable: boolean | null;
   suspect: boolean;
   qualifies: boolean;
   observedAt: number;
