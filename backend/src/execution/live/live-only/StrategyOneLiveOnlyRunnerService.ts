@@ -28,26 +28,17 @@ import {
 } from "../../../core/persistence/JsonlSnapshotStore";
 
 import {
+  liveTradingInterlock,
+  type LiveTradingInterlock,
+} from "../LiveTradingInterlock";
+
+import {
+  computeDailyRealizedNetInr,
   dailyLossHaltDay,
   dailyLossHaltReason,
   istDayKey,
   loadDailyLossLimitInr,
-  realizedNetInrForIstDay,
-  takerFeeWithSurcharge,
-  usdtInrMid,
 } from "./DailyLossGuard";
-
-import {
-  buildArbitragePnLReport,
-} from "../history/ArbitragePnLReport";
-
-import {
-  executionHistoryService,
-} from "../history/ExecutionHistoryService";
-
-import {
-  getInrArbitrageScanner,
-} from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
 
 import {
   getLiveOnlyRuntimePolicy,
@@ -123,6 +114,8 @@ export interface StrategyOneLiveOnlyRunnerDependencies {
   /* Today's (IST) realized net in rupees across completed live cycles. */
   getDailyRealizedNetInr(now: number): Promise<number>;
   getDailyLossLimitInr(): number;
+  /* Shared with the INR route runner: one live attempt at a time. */
+  readonly interlock: LiveTradingInterlock;
 }
 
 export interface StrategyOneLiveOnlyAttempt {
@@ -316,40 +309,21 @@ function isBaseAssetHeldOnPoolVenue(
   );
 }
 
+const LIVE_TRADING_INTERLOCK_ID =
+  "strategy-one";
+
+/* Halts that may leave inventory exposed also stop the INR route runner. */
+const EXPOSURE_HALT_PATTERN =
+  /RECOVERY_REQUIRED|POSSIBLE_EXPOSURE|PARTIALLY_COMPLETED/u;
+
 const DEFAULT_DEPENDENCIES:
   StrategyOneLiveOnlyRunnerDependencies = {
-  getDailyRealizedNetInr: async (
-    now,
-  ) => {
-    const history =
-      await executionHistoryService
-        .getRecent(
-          500,
-        );
-    const report =
-      buildArbitragePnLReport(
-        history.executions,
-        takerFeeWithSurcharge,
-        500,
-        now,
-      );
-    let rate: number | null = null;
-    try {
-      rate =
-        usdtInrMid(
-          getInrArbitrageScanner()?.getReport().conversion ?? [],
-        );
-    } catch {
-      rate = null;
-    }
-    return realizedNetInrForIstDay(
-      report.latest,
-      now,
-      rate,
-    );
-  },
+  getDailyRealizedNetInr:
+    computeDailyRealizedNetInr,
   getDailyLossLimitInr: () =>
     loadDailyLossLimitInr(),
+  interlock:
+    liveTradingInterlock,
   runtimeEnabled:
     isLiveOnlyRuntimeEnabled,
   getPolicy:
@@ -515,6 +489,15 @@ export class StrategyOneLiveOnlyRunnerService {
     if (restored) {
       this.haltedReason =
         restored.haltedReason;
+      this.dependencies.interlock.setExposureHalt(
+        LIVE_TRADING_INTERLOCK_ID,
+        this.haltedReason !== null &&
+          EXPOSURE_HALT_PATTERN.test(
+            this.haltedReason,
+          )
+          ? this.haltedReason
+          : null,
+      );
       this.attempts =
         restored.attempts
           .map(
@@ -916,6 +899,14 @@ export class StrategyOneLiveOnlyRunnerService {
       this.routeKey(
         candidate,
       );
+    if (
+      !this.dependencies.interlock.tryAcquire(
+        LIVE_TRADING_INTERLOCK_ID,
+      )
+    ) {
+      return;
+    }
+
     this.inFlight =
       true;
 
@@ -958,12 +949,18 @@ export class StrategyOneLiveOnlyRunnerService {
       );
       this.inFlight =
         false;
+      this.dependencies.interlock.release(
+        LIVE_TRADING_INTERLOCK_ID,
+      );
       return;
     }
 
     if (lossStopTripped) {
       this.inFlight =
         false;
+      this.dependencies.interlock.release(
+        LIVE_TRADING_INTERLOCK_ID,
+      );
       this.persist(
         now,
       );
@@ -1276,6 +1273,9 @@ export class StrategyOneLiveOnlyRunnerService {
     } finally {
       this.inFlight =
         false;
+      this.dependencies.interlock.release(
+        LIVE_TRADING_INTERLOCK_ID,
+      );
     }
   }
 
@@ -1594,6 +1594,15 @@ export class StrategyOneLiveOnlyRunnerService {
     now:
       number,
   ): void {
+    this.dependencies.interlock.setExposureHalt(
+      LIVE_TRADING_INTERLOCK_ID,
+      this.haltedReason !== null &&
+        EXPOSURE_HALT_PATTERN.test(
+          this.haltedReason,
+        )
+        ? this.haltedReason
+        : null,
+    );
     this.store.replaceAllAtomically([{
       schemaVersion:
         "1.0",

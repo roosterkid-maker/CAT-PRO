@@ -478,6 +478,16 @@ export class InrArbitrageScannerService {
     this.checkpoint(true);
   }
 
+  /** Currently qualifying REAL routes from the last scan, best net first. */
+  getQualifiedRoutes(): readonly ScannedRoute[] {
+    return this.opportunities;
+  }
+
+  /** Last completed scan time, for staleness checks by consumers. */
+  getLastScanAt(): number | null {
+    return this.lastScanAt;
+  }
+
   /** Every route priced in the last scan, valid or not (diagnostics/tests; never shown as opportunities). */
   getAllRoutes(): readonly ScannedRoute[] {
     return this.lastRoutes;

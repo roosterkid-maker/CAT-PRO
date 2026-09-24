@@ -6,10 +6,19 @@ import {
   getStrategyOneTinyLiveCashCostProfile,
 } from "../evidence/StrategyOneTinyLiveCashCostService";
 
-import type {
-  ArbitragePnLRecord,
-  TakerFeeResolver,
+import {
+  buildArbitragePnLReport,
+  type ArbitragePnLRecord,
+  type TakerFeeResolver,
 } from "../history/ArbitragePnLReport";
+
+import {
+  executionHistoryService,
+} from "../history/ExecutionHistoryService";
+
+import {
+  getInrArbitrageScanner,
+} from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
 
 /*
  * Daily realized-loss stop. Once today's realized net (IST calendar day)
@@ -144,4 +153,44 @@ export function usdtInrMid(
   }
 
   return null;
+}
+
+/*
+ * Extra realized-P&L sources (e.g. the INR route executor) counted by the
+ * shared daily loss stop alongside Strategy #1's paired executions. Each
+ * returns today's (IST) realized net in rupees.
+ */
+const realizedNetSources = new Map<string, (now: number) => number>();
+
+export function registerDailyRealizedNetSource(
+  name: string,
+  source: (now: number) => number,
+): void {
+  realizedNetSources.set(name, source);
+}
+
+export function extraDailyRealizedNetInr(now: number): number {
+  let total = 0;
+  for (const source of realizedNetSources.values()) {
+    const value = source(now);
+    if (Number.isFinite(value)) total += value;
+  }
+  return total;
+}
+
+/** Today's (IST) realized net in rupees: Strategy #1 paired executions plus every registered source. */
+export async function computeDailyRealizedNetInr(
+  now: number,
+): Promise<number> {
+  const history =
+    await executionHistoryService.getRecent(500);
+  const report =
+    buildArbitragePnLReport(history.executions, takerFeeWithSurcharge, 500, now);
+  let rate: number | null = null;
+  try {
+    rate = usdtInrMid(getInrArbitrageScanner()?.getReport().conversion ?? []);
+  } catch {
+    rate = null;
+  }
+  return realizedNetInrForIstDay(report.latest, now, rate) + extraDailyRealizedNetInr(now);
 }

@@ -10,6 +10,12 @@ services:
       CAT_PRO_LIVE_TRADE_CAPITAL_INR: "1500"
       # Halt new live attempts for the rest of the IST day at this realized loss.
       CAT_PRO_LIVE_DAILY_LOSS_LIMIT_INR: "500"
+      # INR route executor (USDT<->INR). shadow = plan from live books and
+      # balances, never send. live additionally needs
+      # CAT_PRO_INR_LIVE_CONFIRMATION=ENABLE_CAT_PRO_INR_ROUTE_LIVE.
+      CAT_PRO_INR_LIVE_MODE: ${CAT_PRO_INR_LIVE_MODE:-shadow}
+      CAT_PRO_INR_LIVE_VENUES: ${CAT_PRO_INR_LIVE_VENUES:-coindcx}
+      CAT_PRO_INR_LIVE_CONFIRMATION: ${CAT_PRO_INR_LIVE_CONFIRMATION:-}
 
       # Retired runtime controls cannot accidentally grant authority.
       AUTOMATED_PAPER_TRADING_CONFIRMATION: ""

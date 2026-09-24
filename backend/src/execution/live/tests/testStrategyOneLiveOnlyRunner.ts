@@ -1,3 +1,5 @@
+import {LiveTradingInterlock} from "../LiveTradingInterlock";
+
 import assert from "node:assert/strict";
 import {
   mkdtempSync,
@@ -808,6 +810,7 @@ function runner(
       isBaseAssetPreFundable: () => true,
       getDailyRealizedNetInr: async () => 0,
       getDailyLossLimitInr: () => 500,
+      interlock: new LiveTradingInterlock(),
       now: () =>
         NOW +
         100,

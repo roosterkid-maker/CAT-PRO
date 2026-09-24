@@ -220,6 +220,10 @@ import {
   strategyOneLiveOnlyRunnerService,
 } from "./execution/live/live-only/StrategyOneLiveOnlyRunnerService";
 
+import {
+  getInrRouteLiveRunner,
+} from "./execution/live/inr-routes/InrRouteLiveRunner";
+
 import centralLiveTriangularRoutes
   from "./execution/live/routes/centralLiveTriangularRoutes";
 
@@ -878,6 +882,11 @@ server.listen(
        * fill ownership are already running before it can observe a candidate.
        */
       strategyOneLiveOnlyRunnerService
+        .start();
+
+      // INR route executor (USDT<->INR). Its own mode gate (off/shadow/live)
+      // decides whether it plans or submits; it shares the live interlock.
+      getInrRouteLiveRunner()
         .start();
 
       /*

@@ -56,6 +56,10 @@ import {
 } from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
 
 import {
+  getInrRouteLiveRunner,
+} from "../inr-routes/InrRouteLiveRunner";
+
+import {
   getCoinSwitchInrDepthPollerDiagnostics,
 } from "../../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
 
@@ -438,6 +442,70 @@ router.get(
  * page polling a 404; the report itself only reads the current bounded
  * snapshot and never triggers a scan.
  */
+router.get(
+  "/inr-executor",
+  (
+    _request,
+    response,
+  ) => {
+    response.setHeader(
+      "Cache-Control",
+      "no-store",
+    );
+    response.json({
+      success:
+        true,
+      data:
+        getInrRouteLiveRunner()
+          .getDiagnostics(),
+    });
+  },
+);
+
+/*
+ * Operator-only: releases an INR executor halt (exposure, recovery or
+ * interruption) after the operator has reconciled the orders involved.
+ */
+router.post(
+  "/inr-executor/release-halt",
+  (
+    request,
+    response,
+  ) => {
+    try {
+      const released =
+        getInrRouteLiveRunner()
+          .releaseHalt(
+            readConfirmationPhrase(
+              request.body,
+            ),
+          );
+      response.json({
+        success:
+          true,
+        data: {
+          released,
+          executor:
+            getInrRouteLiveRunner()
+              .getDiagnostics(),
+        },
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      response.status(409).json({
+        success:
+          false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "INR executor halt release failed.",
+      });
+    }
+  },
+);
+
 router.get(
   "/near-misses",
   (
