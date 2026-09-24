@@ -15,6 +15,10 @@ import {
 } from "../../../orderbook/services/OrderBookService";
 
 import {
+  marketCache,
+} from "../../../services/cache.service";
+
+import {
   exchangeCapabilityService,
 } from "../../capabilities/services/ExchangeCapabilityService";
 
@@ -145,6 +149,8 @@ export interface InrRouteRunnerDependencies {
   /** Pull a fresh book for venues whose books are polled, not streamed (CoinSwitch INR). */
   readonly refreshBook: (venue: string, market: string) => Promise<void>;
   readonly getCapability: (venue: string, market: string) => ExchangeMarketCapability | null;
+  /** Fetch rules that are not cached yet (first attempt on a market). */
+  readonly loadCapability: (venue: string, market: string) => Promise<ExchangeMarketCapability | null>;
   readonly getBalance: (venue: string, asset: string) => {readonly available: number; readonly synchronizedAt: number} | null;
   readonly getTakerFeePercent: (venue: string, market: string, side: "BUY" | "SELL") => number | null;
   readonly getDailyRealizedNetInr: (now: number) => Promise<number>;
@@ -159,10 +165,33 @@ const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
   getPolicy: () => loadInrRouteExecutionPolicy(),
   getQualifiedRoutes: () => getInrArbitrageScanner()?.getQualifiedRoutes() ?? [],
   getAllRoutes: () => getInrArbitrageScanner()?.getAllRoutes() ?? [],
-  // Venues key books differently (UnoCoin stores ADAINR for ADA_INR).
-  getBook: (venue, market) =>
-    orderBookService.get(venue, market) ??
-    orderBookService.get(venue, market.toUpperCase().replace(/[^A-Z0-9]/gu, "")),
+  // Venues key books differently (UnoCoin stores ADAINR for ADA_INR). When
+  // no full book is held (e.g. an unsubscribed CoinDCX USDT market), the
+  // venue's executable top-of-book quote is used as a one-level book, so
+  // sizing never exceeds what is shown at the touch.
+  getBook: (venue, market) => {
+    const canonical = market.toUpperCase().replace(/[^A-Z0-9]/gu, "");
+    const book = orderBookService.get(venue, market) ?? orderBookService.get(venue, canonical);
+    if (book) return book;
+    const quote = marketCache.get(venue, market) ?? marketCache.get(venue, canonical);
+    if (
+      !quote ||
+      !quote.executable ||
+      quote.bestBidPrice === null || quote.bestAskPrice === null ||
+      quote.bestBidQty === null || quote.bestAskQty === null ||
+      !(quote.bestBidQty > 0) || !(quote.bestAskQty > 0) ||
+      !(quote.bestAskPrice > quote.bestBidPrice)
+    ) {
+      return null;
+    }
+    return {
+      exchange: venue,
+      market,
+      bids: [{price: quote.bestBidPrice, quantity: quote.bestBidQty}],
+      asks: [{price: quote.bestAskPrice, quantity: quote.bestAskQty}],
+      timestamp: quote.timestamp,
+    };
+  },
   refreshBook: async (venue, market) => {
     if (!market.toUpperCase().endsWith("INR")) return;
     if (venue === "unocoin") {
@@ -181,6 +210,15 @@ const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
     venue === "coinswitch"
       ? coinSwitchCapability(market)
       : exchangeCapabilityService.getCachedCapability(venue, market, "spot"),
+  loadCapability: async (venue, market) => {
+    // CoinSwitch rules come from the signed rule sync, not an on-demand read.
+    if (venue === "coinswitch") return coinSwitchCapability(market);
+    try {
+      return await exchangeCapabilityService.getCapability({exchange: venue, market, product: "spot"});
+    } catch {
+      return null;
+    }
+  },
   getBalance: (venue, asset) => {
     const balance = tradingAccountService.getExchangeBalance(venue, asset);
     return balance ? {available: balance.availableBalance, synchronizedAt: balance.synchronizedAt} : null;
@@ -387,8 +425,12 @@ export class InrRouteLiveRunner {
     if (oldest > policy.maximumBookAgeMs) return block(`BOOK_STALE: a leg's book is ${oldest} ms old (limit ${policy.maximumBookAgeMs}).`);
 
     /* ---- venue rules ---- */
-    const buyCapability = this.dependencies.getCapability(route.buyVenue, route.buyVenueMarket);
-    const sellCapability = this.dependencies.getCapability(route.sellVenue, route.sellVenueMarket);
+    const buyCapability =
+      this.dependencies.getCapability(route.buyVenue, route.buyVenueMarket) ??
+      (await this.dependencies.loadCapability(route.buyVenue, route.buyVenueMarket));
+    const sellCapability =
+      this.dependencies.getCapability(route.sellVenue, route.sellVenueMarket) ??
+      (await this.dependencies.loadCapability(route.sellVenue, route.sellVenueMarket));
     if (!buyCapability || !sellCapability) return block("RULES_MISSING: market rules are not loaded for a leg.");
     if (!buyCapability.tradingEnabled || buyCapability.maintenanceMode || !sellCapability.tradingEnabled || sellCapability.maintenanceMode) {
       return block("MARKET_CLOSED: a leg's market is not trading.");
