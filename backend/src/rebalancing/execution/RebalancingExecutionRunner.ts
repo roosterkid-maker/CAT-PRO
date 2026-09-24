@@ -56,6 +56,10 @@ import {
   type RebalancingMoveOutcome,
 } from "./RebalancingExecutionService";
 
+import {
+  getRouteRefillService,
+} from "../services/RouteRefillService";
+
 export interface RebalancingExecutionRunnerConfig {
   pollIntervalMs: number;
 }
@@ -169,6 +173,17 @@ export class RebalancingExecutionRunner {
       const sameExchangeOutcome = await rebalancingExecutionService.executeSameExchangeTopUp(
         safetyContext,
       );
+      // Step B: keep the core coin basket's route USDT stocked (Binance ->
+      // whitelisted buy venues); every other refill stays a manual action.
+      try {
+        const refills = await getRouteRefillService().executeAuto(rebalancingExecutionService, now);
+        const moved = refills.filter((refill) => refill.status === "EXECUTED");
+        if (moved.length > 0) {
+          console.log("[RebalancingExecutionRunner] Route refills:", moved.map((refill) => `${refill.amountUsdt} USDT -> ${refill.toVenue}`));
+        }
+      } catch (error: unknown) {
+        console.error("[RebalancingExecutionRunner] Route refill failed:", error instanceof Error ? error.message : error);
+      }
       const outcomes = [...crossExchangeOutcomes, sameExchangeOutcome];
 
       this.lastOutcomes = outcomes;

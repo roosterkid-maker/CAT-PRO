@@ -64,8 +64,12 @@ import {
 } from "../../../strategies/inr-arbitrage/CoinStudyService";
 
 import {
-  usdtInrMid,
-} from "./DailyLossGuard";
+  createInventoryValuation,
+} from "../../../rebalancing/services/InventoryValuation";
+
+import {
+  getRouteRefillService,
+} from "../../../rebalancing/services/RouteRefillService";
 
 import {
   getCoinSwitchInrDepthPollerDiagnostics,
@@ -461,35 +465,8 @@ router.get(
     response,
   ) => {
     try {
-      let rate: number | null = null;
-      try {
-        rate = usdtInrMid(getInrArbitrageScanner()?.getReport().conversion ?? []);
-      } catch {
-        rate = null;
-      }
-      const snapshot =
-        normalizedInventorySnapshotService.getSnapshot();
-      const holding = (venue: string, asset: string): number | null => {
-        const exchange = snapshot.exchanges.find((item) => item.exchange === venue);
-        if (!exchange || !exchange.balanceUsableForDecision) return null;
-        const position = exchange.assets.find((item) => item.asset.toUpperCase() === asset.toUpperCase());
-        if (!position) return 0;
-        if (asset.toUpperCase() === "INR") return position.totalBalance;
-        if (rate === null) return null;
-        if (asset.toUpperCase() === "USDT") return position.totalBalance * rate;
-        if (position.valuation.totalValueUsdt !== null) return position.valuation.totalValueUsdt * rate;
-        // The venue itself may have no valuation for the coin (e.g. FLR on
-        // CoinSwitch): price it from any venue's live quote instead.
-        const coin = asset.toUpperCase();
-        const inrQuote = ["coinswitch", "coindcx", "unocoin"]
-          .map((source) => marketCache.get(source, `${coin}INR`) ?? marketCache.get(source, `${coin}_INR`))
-          .find((quote) => quote && quote.bestBidPrice !== null && quote.bestBidPrice > 0);
-        if (inrQuote?.bestBidPrice) return position.totalBalance * inrQuote.bestBidPrice;
-        const usdtQuote = ["binance", "bybit", "coindcx"]
-          .map((source) => marketCache.get(source, `${coin}USDT`))
-          .find((quote) => quote && quote.bestBidPrice !== null && quote.bestBidPrice > 0);
-        return usdtQuote?.bestBidPrice ? position.totalBalance * usdtQuote.bestBidPrice * rate : null;
-      };
+      const valuation = createInventoryValuation();
+      const holding = (venue: string, asset: string) => valuation.holdingInr(venue, asset);
       response.setHeader("Cache-Control", "no-store");
       response.json({
         success: true,
@@ -502,6 +479,33 @@ router.get(
       response.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : "Coin study is unavailable.",
+      });
+    }
+  },
+);
+
+/*
+ * Capital manager refill plan for the core coin basket: what each route's
+ * sell venue (coin) and buy venue (cash) holds against target, and the
+ * actions to restore it - AUTO (Binance USDT to a whitelisted exchange,
+ * executed by the capital manager) or MANUAL instructions.
+ */
+router.get(
+  "/refill-plan",
+  (
+    _request,
+    response,
+  ) => {
+    try {
+      response.setHeader("Cache-Control", "no-store");
+      response.json({
+        success: true,
+        data: getRouteRefillService().getPlan(),
+      });
+    } catch (error: unknown) {
+      response.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Refill plan is unavailable.",
       });
     }
   },

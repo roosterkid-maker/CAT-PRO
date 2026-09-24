@@ -22,6 +22,10 @@ import {
   CoinStudyPanel,
 } from "../components/CoinStudyPanel";
 
+import {
+  RefillPlanPanel,
+} from "../components/RefillPlanPanel";
+
 /*
  * BOT page: the arbitrage scanner (USDT<->USDT, INR<->INR, USDT<->INR),
  * the wallet/order overview, and the live execution boundary. The legacy
@@ -61,6 +65,8 @@ export default function LiveOnlyDashboard() {
       <InrScannerPanel />
 
       <CoinStudyPanel />
+
+      <RefillPlanPanel />
 
       <BotOverviewPanels runtime={runtime} />
 

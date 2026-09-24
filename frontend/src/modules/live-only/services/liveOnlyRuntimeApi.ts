@@ -4,6 +4,7 @@ import {
 
 import type {
   CoinStudyResponse,
+  RefillPlanResponse,
   InrScannerResponse,
   LiveOnlyInventoryResponse,
   LiveOnlyRuntimeResponse,
@@ -57,6 +58,20 @@ export async function fetchCoinStudy(
   const response =
     await api.get<CoinStudyResponse>(
       "/api/live-only/coin-study",
+      {
+        signal,
+      },
+    );
+
+  return response.data;
+}
+
+export async function fetchRefillPlan(
+  signal?: AbortSignal,
+): Promise<RefillPlanResponse> {
+  const response =
+    await api.get<RefillPlanResponse>(
+      "/api/live-only/refill-plan",
       {
         signal,
       },

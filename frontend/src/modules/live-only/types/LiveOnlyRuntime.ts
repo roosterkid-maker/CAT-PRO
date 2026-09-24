@@ -303,3 +303,45 @@ export interface CoinStudyResponse {
     coins: CoinStudyEntry[];
   };
 }
+
+export interface RefillAction {
+  id: string;
+  priority: number;
+  kind: "MOVE_USDT" | "MOVE_COIN" | "BUY_COIN" | "DEPOSIT_INR";
+  coins: string[];
+  asset: string;
+  fromVenue: string | null;
+  toVenue: string;
+  amountInr: number;
+  quantity: number | null;
+  mode: "AUTO" | "MANUAL";
+  reason: string;
+  howTo: string;
+}
+
+export interface RefillPlanResponse {
+  success: boolean;
+  data: {
+    generatedAt: number;
+    usdtInr: number | null;
+    actions: RefillAction[];
+    covered: Array<{venue: string; asset: string; haveInr: number | null; targetInr: number}>;
+    automation: {
+      enabled: boolean;
+      autoUsdtDestinations: string[];
+      maximumPerTransferUsdt: number;
+      maximumPerDayUsdt: number;
+      destinationCooldownMinutes: number;
+      lastTopUpAt: Record<string, number>;
+    };
+    recentExecutions: Array<{
+      at: number;
+      actionId: string;
+      toVenue: string;
+      amountUsdt: number;
+      status: string;
+      detail: string;
+      referenceId: string | null;
+    }>;
+  };
+}
