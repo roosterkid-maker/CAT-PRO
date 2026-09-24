@@ -60,6 +60,12 @@ export interface RefillPlanInput {
   readonly bybitAutoUsdtDestinations?: readonly string[];
   /** Venues where the capital manager may buy core-basket stock itself. */
   readonly autoBuyVenues?: readonly string[];
+  /**
+   * Stock is only auto-bought when the route's cash side (where the coin is
+   * bought during the arbitrage) holds at least this much: coin stock with
+   * no cash on the other side cannot trade and just sits idle.
+   */
+  readonly autoBuyMinimumCashSideInr?: number;
   /** Refill once holdings fall below this share of target. */
   readonly refillBelowShare: number;
   /** INR kept untouched at a USDT source beyond its own targets. */
@@ -214,7 +220,12 @@ export function planRouteRefills(input: RefillPlanInput): RefillPlan {
         howTo: `Withdraw ${price ? `≈${formatQuantity(amount / price)} ` : ""}${target.asset} from ${name(best.venue)} to your ${name(target.venue)} ${target.asset} deposit address (check the network both sides support).`,
       });
     } else {
-      const autoBuy = target.quote !== undefined && (input.autoBuyVenues ?? []).includes(target.venue);
+      const cashSides = input.targets
+        .filter((entry) => entry.coin === target.asset && entry.coinVenue === target.venue)
+        .map((entry) => ({venue: entry.cashVenue, asset: entry.cashAsset, have: input.holdingInr(entry.cashVenue, entry.cashAsset) ?? 0}));
+      const cashShort = cashSides.find((side) => side.have < (input.autoBuyMinimumCashSideInr ?? 0));
+      const autoBuyVenue = target.quote !== undefined && (input.autoBuyVenues ?? []).includes(target.venue);
+      const autoBuy = autoBuyVenue && !cashShort;
       actions.push({
         id: `BUY_COIN|${target.asset}|${target.venue}`,
         priority: target.rank,
@@ -230,7 +241,9 @@ export function planRouteRefills(input: RefillPlanInput): RefillPlan {
         reason: `${target.asset} sells on ${name(target.venue)}: holds ₹${Math.round(have)} of ₹${Math.round(target.targetInr)} and no other exchange holds it.`,
         howTo: autoBuy
           ? `Capital manager buys ${target.asset} on ${name(target.venue)} with its ${target.quote} (daily buy cap, cash floor and no-premium check apply).`
-          : `Buy ${price ? `≈${formatQuantity(deficit / price)} ` : ""}${target.asset} (≈₹${Math.round(deficit)}) on ${name(target.venue)}, or deposit it there.`,
+          : autoBuyVenue && cashShort
+            ? `Waiting for cash: the route buys ${target.asset} with ${name(cashShort.venue)} ${cashShort.asset}, which holds ₹${Math.round(cashShort.have)}. Fund that first; the capital manager buys ${target.asset} stock once the route can trade.`
+            : `Buy ${price ? `≈${formatQuantity(deficit / price)} ` : ""}${target.asset} (≈₹${Math.round(deficit)}) on ${name(target.venue)}, or deposit it there.`,
       });
     }
   }

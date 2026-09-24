@@ -280,7 +280,8 @@ async function testAutoStockBuy(directory: string): Promise<void> {
     {coin: "LINK", rank: 1, coinVenue: "binance", coinNeedInr: 7_500, cashVenue: "unocoin", cashAsset: "INR", cashNeedInr: 0, coinVenueQuote: "USDT"},
     {coin: "GRAM", rank: 2, coinVenue: "coinswitch", coinNeedInr: 2_400, cashVenue: "bybit", cashAsset: "USDT", cashNeedInr: 0, coinVenueQuote: "INR"},
   ];
-  const holdings: Record<string, number> = {"binance|USDT": 6_000, "coinswitch|INR": 1_500};
+  // Each route's cash side holds a trade's worth, so its stock may be bought.
+  const holdings: Record<string, number> = {"binance|USDT": 6_000, "coinswitch|INR": 1_500, "unocoin|INR": 2_000, "bybit|USDT": 2_000};
 
   // Planner: with auto-buy on, BUY_COIN is AUTO and carries its quote.
   const planned = planRouteRefills({
@@ -290,6 +291,7 @@ async function testAutoStockBuy(directory: string): Promise<void> {
     priceInr: () => null,
     autoUsdtDestinations: [],
     autoBuyVenues: ["binance", "coinswitch"],
+    autoBuyMinimumCashSideInr: 1_500,
     refillBelowShare: 0.5,
     sourceFloorInr: 500,
     minimumActionInr: 300,
@@ -297,6 +299,25 @@ async function testAutoStockBuy(directory: string): Promise<void> {
   const link = planned.actions.find((action) => action.id === "BUY_COIN|LINK|binance");
   assert.equal(link?.mode, "AUTO");
   assert.equal(link?.buyQuote, "USDT");
+
+  // No cash on the route's buy side (UnoCoin INR): the stock could not trade,
+  // so it is not bought; the instruction says what to fund first.
+  const noCash = planRouteRefills({
+    targets,
+    venues: VENUES,
+    holdingInr: (venue, asset) => (venue === "unocoin" ? 10 : holdings[`${venue}|${asset}`] ?? 0),
+    priceInr: () => null,
+    autoUsdtDestinations: [],
+    autoBuyVenues: ["binance", "coinswitch"],
+    autoBuyMinimumCashSideInr: 1_500,
+    refillBelowShare: 0.5,
+    sourceFloorInr: 500,
+    minimumActionInr: 300,
+  });
+  const idleLink = noCash.actions.find((action) => action.id === "BUY_COIN|LINK|binance");
+  assert.equal(idleLink?.mode, "MANUAL");
+  assert.match(idleLink?.howTo ?? "", /Waiting for cash.*UnoCoin INR/u);
+  assert.equal(noCash.actions.find((action) => action.id === "BUY_COIN|GRAM|coinswitch")?.mode, "AUTO", "GRAM's cash side (Bybit USDT) is funded");
 
   class FakeBuy implements StockBuyPort {
     readonly requests: StockBuyRequest[] = [];

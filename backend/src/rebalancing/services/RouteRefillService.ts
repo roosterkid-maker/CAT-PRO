@@ -211,6 +211,7 @@ export class RouteRefillService {
       autoUsdtDestinations,
       bybitAutoUsdtDestinations,
       autoBuyVenues,
+      autoBuyMinimumCashSideInr: this.dependencies.getTradeSizeInr(),
       refillBelowShare: REFILL_BELOW_SHARE,
       sourceFloorInr: SOURCE_FLOOR_INR,
       minimumActionInr: MINIMUM_ACTION_INR,
