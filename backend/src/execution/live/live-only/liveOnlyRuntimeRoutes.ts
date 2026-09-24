@@ -59,6 +59,10 @@ import {
   getCoinSwitchInrDepthPollerDiagnostics,
 } from "../../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
 
+import {
+  opportunityNearMissAnalyticsService,
+} from "../../../arbitrage/services/OpportunityNearMissAnalyticsService";
+
 const router =
   Router();
 
@@ -409,6 +413,56 @@ router.get(
           getCoinSwitchInrDepthPollerDiagnostics(),
       },
     });
+  },
+);
+
+/*
+ * Read-only near-miss analytics for the Arbitrage page. The live-only
+ * runtime unmounted /api/automation/* (PAPER-era routes), which left this
+ * page polling a 404; the report itself only reads the current bounded
+ * snapshot and never triggers a scan.
+ */
+router.get(
+  "/near-misses",
+  (
+    request,
+    response,
+  ) => {
+    const rawLimit =
+      typeof request.query.limit ===
+        "string"
+        ? Number(
+            request.query.limit,
+          )
+        : 20;
+
+    try {
+      response.json({
+        success:
+          true,
+        data:
+          opportunityNearMissAnalyticsService
+            .getReport(
+              Number.isSafeInteger(
+                rawLimit,
+              )
+                ? rawLimit
+                : 20,
+            ),
+      });
+    } catch (
+      error:
+        unknown
+    ) {
+      response.status(500).json({
+        success:
+          false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Opportunity near-miss analytics failed.",
+      });
+    }
   },
 );
 

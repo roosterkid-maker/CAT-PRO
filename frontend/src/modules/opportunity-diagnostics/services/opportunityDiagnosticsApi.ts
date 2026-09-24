@@ -13,7 +13,7 @@ export async function fetchOpportunityNearMissAnalytics(
 ): Promise<OpportunityNearMissAnalyticsResponse> {
   const response =
     await api.get<OpportunityNearMissAnalyticsResponse>(
-      "/api/automation/bottleneck/near-misses",
+      "/api/live-only/near-misses",
       {
         params: {
           limit,

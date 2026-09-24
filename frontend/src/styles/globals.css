@@ -722,6 +722,34 @@ summary:focus-visible {
 .term-strip-item[data-state="loading"] { color: var(--neon-cyan); }
 .term-strip-item[data-state="degraded"] { color: var(--neon-orange); }
 .term-strip-item[data-state="offline"] { color: var(--neon-red); }
+.term-strip-item[data-state="reconnecting"] { color: var(--neon-orange); }
+
+.term-deploy-banner {
+  position: fixed;
+  z-index: 90;
+  right: 1rem;
+  bottom: 3.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid rgb(var(--green-rgb) / 45%);
+  background: var(--panel-solid);
+  box-shadow: var(--glow-box-green);
+  color: var(--neon-green);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+.term-deploy-banner button {
+  border: 1px solid rgb(var(--green-rgb) / 40%);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+}
 
 .term-strip-tag {
   margin-left: auto;

@@ -5,6 +5,7 @@ import { Activity, Moon, Sun } from "lucide-react";
 import type { AppPage } from "@/app/AppRouter";
 import { preloadAppPage } from "@/app/routes";
 import { useSystemHealth } from "@/modules/system-health/hooks/useSystemHealth";
+import { useSocketStore } from "@/store/socket.store";
 
 import ExchangeFleetMenu from "./ExchangeFleetMenu";
 
@@ -24,6 +25,9 @@ const NAV_TABS: ReadonlyArray<{ label: string; page: AppPage }> = [
   { label: "System", page: "system-health" },
   { label: "Recovery", page: "recovery" },
 ];
+
+const HEALTH_STALE_AFTER_MS = 10_000;
+const HEALTH_OFFLINE_AFTER_MS = 30_000;
 
 type ThemeMode = "dark" | "light";
 
@@ -61,10 +65,16 @@ export default function Header({ currentPage, onPageChange }: HeaderProps) {
   const {
     data: healthResponse,
     isLoading,
-    isError,
     dataUpdatedAt,
   } = useSystemHealth();
   const [theme, toggleTheme] = useThemeMode();
+  const socketStatus = useSocketStore((state) => state.status);
+  const now = useNow(1_000);
+  // Status follows how fresh the last successful read is, not the latest
+  // attempt: one aborted request (sleep, deploy restart) must not pin the
+  // header to OFFLINE, and a long-dead feed must not keep showing LIVE.
+  const healthAgeMs = dataUpdatedAt > 0 ? now - dataUpdatedAt : Number.POSITIVE_INFINITY;
+  const isError = healthAgeMs > HEALTH_OFFLINE_AFTER_MS && !isLoading;
 
   const exchanges = useMemo(
     () => healthResponse?.data.exchanges ?? [],
@@ -80,14 +90,16 @@ export default function Header({ currentPage, onPageChange }: HeaderProps) {
   const allConnected =
     totalExchanges > 0 && connectedCount === totalExchanges;
 
-  const terminalState: "live" | "degraded" | "loading" | "offline" =
-    isLoading
+  const terminalState: "live" | "degraded" | "loading" | "reconnecting" | "offline" =
+    isLoading && dataUpdatedAt === 0
       ? "loading"
       : isError
         ? "offline"
-        : allConnected
-          ? "live"
-          : "degraded";
+        : healthAgeMs > HEALTH_STALE_AFTER_MS
+          ? "reconnecting"
+          : allConnected
+            ? "live"
+            : "degraded";
 
   return (
     <header className="term-header">
@@ -147,13 +159,19 @@ export default function Header({ currentPage, onPageChange }: HeaderProps) {
             ? "Printing"
             : terminalState === "loading"
               ? "Connecting"
-              : terminalState === "degraded"
-                ? "Degraded"
-                : "Offline"}
+              : terminalState === "reconnecting"
+                ? "Reconnecting"
+                : terminalState === "degraded"
+                  ? "Degraded"
+                  : "Offline"}
         </span>
         <span className="term-strip-item">
           <span className="term-strip-key">Feeds</span>
-          {connectedCount}/{totalExchanges || "—"}
+          {isError ? "—" : `${connectedCount}/${totalExchanges || "—"}`}
+        </span>
+        <span className="term-strip-item" data-state={socketStatus === "connected" ? "live" : socketStatus === "connecting" ? "loading" : "offline"}>
+          <span className="term-strip-key">Socket</span>
+          {socketStatus}
         </span>
         <SessionUptime />
         <span className="term-strip-item">
