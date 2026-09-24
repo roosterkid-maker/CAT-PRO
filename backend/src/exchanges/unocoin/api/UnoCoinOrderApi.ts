@@ -648,14 +648,22 @@ export class UnoCoinOrderApi {
     expectedOrderId: string,
     expectedMarket: string,
   ): UnoCoinSpotOrder {
+    // The history is already requested for exactly this pair. Some rows
+    // (seen on DASH_INR) carry an empty or non-code coin/base_coin field:
+    // fall back to the requested pair's assets instead of failing the read,
+    // while a row that names a DIFFERENT valid pair is still rejected below.
+    const [expectedCoin, expectedBase] =
+      expectedMarket.split("_");
     const coin =
-      this.requireAsset(
+      this.assetOrFallback(
         row.coin,
+        expectedCoin,
         "coin",
       );
     const baseCoin =
-      this.requireAsset(
+      this.assetOrFallback(
         row.base_coin,
+        expectedBase,
         "base_coin",
       );
     const market =
@@ -969,6 +977,38 @@ export class UnoCoinOrderApi {
       assets[0] as string,
       assets[1] as string,
     ];
+  }
+
+  private assetOrFallback(
+    value: unknown,
+    fallback: string | undefined,
+    field: string,
+  ): string {
+    const candidate =
+      value !== null && typeof value === "object"
+        ? (value as {symbol?: unknown; name?: unknown; code?: unknown}).symbol ??
+          (value as {name?: unknown}).name ??
+          (value as {code?: unknown}).code
+        : value;
+    const asset =
+      this.stringValue(
+        candidate,
+      )
+        .trim()
+        .toUpperCase();
+    if (/^[A-Z0-9]{2,15}$/u.test(asset)) {
+      return asset;
+    }
+    if (fallback && /^[A-Z0-9]{2,15}$/u.test(fallback)) {
+      console.warn(
+        `[UnoCoin] Order-history ${field} ${JSON.stringify(value)} is not an asset code; using the requested pair's ${fallback}.`,
+      );
+      return fallback;
+    }
+    return this.requireAsset(
+      value,
+      field,
+    );
   }
 
   private requireAsset(

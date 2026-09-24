@@ -57,6 +57,7 @@ async function main():
   await testBoundedHistoryAndFillEvidence();
   await testExecutionLifecycle();
   await testPreDispatchValidationAndLostCreateRecovery();
+  await testHistoryAssetFallback();
 
   console.log(
     "UNOCOIN V95 SPOT EXECUTION ADAPTER TEST PASSED.",
@@ -863,6 +864,41 @@ async function testPreDispatchValidationAndLostCreateRecovery(): Promise<void> {
     noBaselineThrew = error instanceof UnoCoinUncertainSubmissionError;
   }
   assertCondition(noBaselineThrew, "Without an order-history baseline a lost create is uncertain, not FAILED.");
+}
+
+/*
+ * Some UnoCoin history rows (seen on DASH_INR) carry an empty or non-code
+ * base_coin. The request already names the pair, so the row falls back to
+ * it; a row naming a different pair is still rejected.
+ */
+async function testHistoryAssetFallback(): Promise<void> {
+  const apiFor = (row: Record<string, unknown>) =>
+    new UnoCoinOrderApi({
+      client: {
+        async getAuthenticated<T>(): Promise<T> {
+          return historyEnvelope([row], 1, 1) as T;
+        },
+        async postAuthenticatedForm<T>(): Promise<T> {
+          throw new Error("Unexpected write in history test.");
+        },
+      } as UnoCoinAuthenticatedOrderClient,
+      maximumHistoryPages: 1,
+    });
+  const credentials: UnoCoinCredentials = {apiToken: FIXTURE_TOKEN};
+
+  for (const baseCoin of [null, "", {symbol: "INR"}]) {
+    const order = await apiFor({...historyRow(0), base_coin: baseCoin}).getSpotOrder(ORDER_ID, "BTC_INR", credentials);
+    assertCondition(order.market === "BTC_INR" && order.status === 0,
+      `A malformed base_coin (${JSON.stringify(baseCoin)}) must fall back to the requested pair.`);
+  }
+
+  let otherPairRejected = false;
+  try {
+    await apiFor({...historyRow(0), base_coin: "USDT"}).getSpotOrder(ORDER_ID, "BTC_INR", credentials);
+  } catch (error: unknown) {
+    otherPairRejected = error instanceof Error && /does not match/u.test(error.message);
+  }
+  assertCondition(otherPairRejected, "A row naming a different pair must still be rejected.");
 }
 
 function unoCoinCapability():
