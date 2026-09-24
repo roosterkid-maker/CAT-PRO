@@ -152,7 +152,7 @@ export type InrEvidenceTier = "BOOK" | "QUOTE" | "TICKER";
 
 export interface InrScannedRoute {
   routeKey: string;
-  kind: "INR_USDT" | "INR_INR";
+  kind: "INR_USDT" | "INR_INR" | "USDT_USDT";
   coin: string;
   buyVenue: string;
   buyMarket: string;
@@ -181,7 +181,7 @@ export interface InrScannedRoute {
 export interface InrOpportunityWindow {
   id: string;
   routeKey: string;
-  kind: "INR_USDT" | "INR_INR";
+  kind: "INR_USDT" | "INR_INR" | "USDT_USDT";
   coin: string;
   buyVenue: string;
   buyMarket: string;

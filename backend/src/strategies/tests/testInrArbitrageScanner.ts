@@ -340,7 +340,27 @@ function testHysteresisAndCooldown(): void {
   assert.equal(report.alerts.length, 1);
 }
 
+function testUsdtUsdtRoute(): void {
+  const h = harness();
+  h.put(quote({exchange: "coindcx", market: "USDTINR", bestBidPrice: 99.5, bestAskPrice: 99.7, bestBidQty: 500, bestAskQty: 500}));
+  // Binance asks 1.00, Bybit bids 1.045: 4.5% gross - 0.1% Binance - 0.118%
+  // Bybit (0.1% fee + 18% GST from its cash-cost profile) = 4.282% net.
+  h.put(quote({exchange: "binance", market: "UUUUSDT", bestBidPrice: 0.999, bestAskPrice: 1.0, bestBidQty: 5_000, bestAskQty: 5_000}));
+  h.put(quote({exchange: "bybit", market: "UUUUSDT", bestBidPrice: 1.045, bestAskPrice: 1.046, bestBidQty: 5_000, bestAskQty: 5_000}));
+  h.book("binance", "UUUUSDT", [[1.0, 5_000]], [[0.999, 5_000]]);
+  h.book("bybit", "UUUUSDT", [[1.046, 5_000]], [[1.045, 5_000]]);
+  h.service.scan();
+  const route = h.service.getReport().opportunities.find((item) => item.kind === "USDT_USDT")!;
+  assert.ok(route, "USDT<->USDT route is scanned");
+  assert.equal(route.buyVenue, "binance");
+  assert.equal(route.sellVenue, "bybit");
+  assert.equal(route.conversionVenue, null, "no conversion fee on USDT<->USDT");
+  assert.ok(Math.abs(route.netEdgePercent - 4.282) < 1e-9, `net ${route.netEdgePercent}`);
+  assert.ok(route.depthAtThresholdInr !== null && Math.abs(route.depthAtThresholdInr - 5_000 * 99.6) < 1e-6, "depth shown in INR at the USDT/INR mid");
+}
+
 testMath();
+testUsdtUsdtRoute();
 testHysteresisAndCooldown();
 testPolledBookUpgradesQuote();
 testRealOpportunityWindowAndAlert();

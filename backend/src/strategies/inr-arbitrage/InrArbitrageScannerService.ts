@@ -39,10 +39,10 @@ import {
 } from "../../core/persistence/JsonlSnapshotStore";
 
 /*
- * INR ARBITRAGE SCANNER - scan and alert only.
+ * ARBITRAGE SCANNER (USDT<->USDT, INR<->INR, USDT<->INR) - scan and alert only.
  *
  * Venues: CoinDCX, UnoCoin, CoinSwitch (INR books) and Binance, Bybit,
- * CoinDCX, CoinSwitch (USDT books). Every second it prices:
+ * CoinDCX, CoinSwitch, UnoCoin (USDT books). Every second it prices:
  *
  *   INR_USDT  coin X bought/sold for INR on an INR venue against X/USDT on
  *             any USDT venue (same venue included), linked through the best
@@ -50,6 +50,8 @@ import {
  *             bid, USDT costs the best ask, and that venue's USDT/INR taker
  *             fee is charged once for the conversion back.
  *   INR_INR   X/INR on one INR venue against X/INR on another.
+ *   USDT_USDT X/USDT on one USDT venue against X/USDT on another (no
+ *             conversion; INR figures use the USDT/INR mid for display).
  *
  * Net edge = gross - every taker fee on the route (with GST surcharges from
  * the cash-cost profiles). TDS is a recoverable cash lock reported beside
@@ -76,7 +78,7 @@ import {
  * This service has no order, balance or transfer authority of any kind.
  */
 
-export type InrRouteKind = "INR_USDT" | "INR_INR";
+export type InrRouteKind = "INR_USDT" | "INR_INR" | "USDT_USDT";
 export type EvidenceTier = "BOOK" | "QUOTE" | "TICKER";
 
 const TIER_RANK: Record<EvidenceTier, number> = {BOOK: 3, QUOTE: 2, TICKER: 1};
@@ -379,7 +381,7 @@ const DEFAULT_DEPENDENCIES: InrScannerDependencies = {
 };
 
 const INR_VENUES = ["coindcx", "unocoin", "coinswitch"] as const;
-const USDT_VENUES = ["binance", "bybit", "coindcx", "coinswitch"] as const;
+const USDT_VENUES = ["binance", "bybit", "coindcx", "coinswitch", "unocoin"] as const;
 const CONVERSION_MARKETS: Readonly<Record<string, string>> = {coindcx: "USDTINR", coinswitch: "USDTINR", unocoin: "USDTINR"};
 const STABLE_COINS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"]);
 
@@ -591,6 +593,25 @@ export class InrArbitrageScannerService {
         }
       }
     }
+
+    // USDT<->USDT: the same coin's USDT books on two venues. The edge is pure
+    // USDT and needs no conversion; the USDT/INR mid is used only to show
+    // depth and minimum order in INR like every other route.
+    const usdtToInr = sellUsdt && buyUsdt
+      ? (sellUsdt.bid + buyUsdt.ask) / 2
+      : sellUsdt?.bid ?? buyUsdt?.ask ?? null;
+    if (usdtToInr !== null) {
+      for (const [market, books] of usdtLegs) {
+        if (books.length < 2) continue;
+        const coin = market.slice(0, -4);
+        if (STABLE_COINS.has(coin)) continue;
+        for (const buy of books) {
+          for (const sell of books) {
+            if (buy.venue !== sell.venue) consider(this.priceUsdtUsdt(coin, buy, sell, usdtToInr, now, legCost));
+          }
+        }
+      }
+    }
     this.routesEvaluated = evaluated;
 
     /* ---- classify ---- */
@@ -716,6 +737,40 @@ export class InrArbitrageScannerService {
       evidence: minTier(inrLeg.tier, usdtLeg.tier, conversion.tier),
       conversionVenue: conversion.venue,
       usdtInrRate: rate,
+      now,
+    });
+  }
+
+  private priceUsdtUsdt(
+    coin: string,
+    buy: Leg,
+    sell: Leg,
+    usdtToInr: number,
+    now: number,
+    legCost: (leg: {venue: string; market: string}, side: "BUY" | "SELL") => {feePercent: number; withholdingPercent: number; verified: boolean} | null,
+  ): ScannedRoute | null {
+    const buyPrice = this.price(buy, "BUY");
+    const sellPrice = this.price(sell, "SELL");
+    if (buyPrice === null || sellPrice === null) return null;
+    const buyCost = legCost(buy, "BUY");
+    const sellCost = legCost(sell, "SELL");
+    if (!buyCost || !sellCost) return null;
+
+    return this.finish({
+      kind: "USDT_USDT",
+      coin,
+      buy,
+      sell,
+      buyToInr: usdtToInr,
+      sellToInr: usdtToInr,
+      costInr: buyPrice * usdtToInr,
+      proceedsInr: sellPrice * usdtToInr,
+      feePercents: [buyCost.feePercent, sellCost.feePercent],
+      withholdingPercents: [buyCost.withholdingPercent, sellCost.withholdingPercent],
+      tdsVerified: buyCost.verified && sellCost.verified,
+      evidence: minTier(buy.tier, sell.tier),
+      conversionVenue: null,
+      usdtInrRate: usdtToInr,
       now,
     });
   }

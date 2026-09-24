@@ -47,13 +47,15 @@ export function InrScannerPanel() {
   const query = useInrScanner();
   const report = query.data?.data;
   const now = useNow(1_000);
+  const [kind, setKind] = useState<RouteKindFilter>("ALL");
   useScannerAlerts(report);
+  const view = report ? filterReport(report, kind) : undefined;
 
   return (
     <section className="panel min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-default px-5 py-4">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="font-mono text-sm font-medium text-text-primary">INR arbitrage scanner</h2>
+          <h2 className="font-mono text-sm font-medium text-text-primary">Arbitrage scanner <span className="text-text-muted">· USDT↔USDT · INR↔INR · USDT↔INR</span></h2>
           <span className="border border-cyan-300/40 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300">SCAN-ONLY · no orders</span>
           {report ? (
             <span className="flex items-center gap-1.5 font-mono text-[11px] text-text-muted">
@@ -72,12 +74,13 @@ export function InrScannerPanel() {
       ) : (
         <>
           <VenueStrip report={report} />
-          <OpportunitiesTable report={report} now={now} />
+          <KindTabs report={report} kind={kind} onChange={setKind} />
+          <OpportunitiesTable report={view!} now={now} />
           <div className="grid border-t border-border-default xl:grid-cols-2">
-            <CoinPersistenceTable coins={report.coinPersistence} now={now} />
-            <WindowsLog windows={report.recentWindows} />
+            <CoinPersistenceTable coins={view!.coinPersistence} now={now} />
+            <WindowsLog windows={view!.recentWindows} />
           </div>
-          <NearMissTable routes={report.nearMisses} report={report} />
+          <NearMissTable routes={view!.nearMisses} report={view!} />
           <p className="border-t border-border-default px-5 py-3 text-[11px] leading-5 text-text-muted">
             Net = gross − every taker fee on the route (INR↔USDT also pays one USDT/INR conversion fee). TDS is a recoverable cash lock shown separately; ? = venue TDS unverified.
             Evidence: BOOK = executable bid/ask with quantities; QUOTE = prices without quantities; TICKER = last trade only — only BOOK routes count as real.
@@ -87,6 +90,62 @@ export function InrScannerPanel() {
         </>
       )}
     </section>
+  );
+}
+
+type RouteKind = InrScannedRoute["kind"];
+type RouteKindFilter = "ALL" | RouteKind;
+
+const KIND_LABEL: Record<RouteKind, string> = {
+  USDT_USDT: "USDT↔USDT",
+  INR_INR: "INR↔INR",
+  INR_USDT: "USDT↔INR",
+};
+
+const KIND_TONE: Record<RouteKind, string> = {
+  USDT_USDT: "bg-emerald-400/15 text-emerald-300",
+  INR_INR: "bg-violet-400/15 text-violet-300",
+  INR_USDT: "bg-cyan-300/15 text-cyan-300",
+};
+
+const KIND_ORDER: RouteKindFilter[] = ["ALL", "USDT_USDT", "INR_INR", "INR_USDT"];
+
+/** Narrows opportunities, windows, near misses and coin stats to one route kind. */
+function filterReport(report: Report, kind: RouteKindFilter): Report {
+  if (kind === "ALL") return report;
+  const keep = <T extends {kind: RouteKind}>(items: T[]) => items.filter((item) => item.kind === kind);
+  const windows = [...report.recentWindows, ...report.activeWindows].filter((window) => window.kind === kind);
+  const coins = new Set(windows.map((window) => window.coin));
+  return {
+    ...report,
+    opportunities: keep(report.opportunities),
+    nearMisses: keep(report.nearMisses),
+    activeWindows: keep(report.activeWindows),
+    recentWindows: keep(report.recentWindows),
+    alerts: keep(report.alerts),
+    coinPersistence: report.coinPersistence.filter((coin) => coins.has(coin.coin)),
+  };
+}
+
+function KindTabs({report, kind, onChange}: {report: Report; kind: RouteKindFilter; onChange: (kind: RouteKindFilter) => void}) {
+  return (
+    <div className="flex flex-wrap gap-1 border-b border-border-default px-5 py-2.5">
+      {KIND_ORDER.map((option) => {
+        const live = option === "ALL" ? report.opportunities.length : report.opportunities.filter((route) => route.kind === option).length;
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(option)}
+            data-active={kind === option}
+            className="border border-transparent px-2.5 py-1 font-mono text-[11px] tracking-[0.12em] text-text-muted data-[active=true]:border-emerald-400/50 data-[active=true]:text-emerald-300"
+          >
+            {option === "ALL" ? "ALL" : KIND_LABEL[option]}
+            <span className={live > 0 ? "ml-1.5 text-emerald-300" : "ml-1.5"}>{live}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -361,8 +420,8 @@ function NearMissTable({routes, report}: {routes: InrScannedRoute[]; report: Rep
 function RouteLabel({route}: {route: InrScannedRoute}) {
   return (
     <span className="font-mono text-[11px] text-text-muted">
-      <span className={`mr-1.5 px-1 text-[9px] ${route.kind === "INR_INR" ? "bg-violet-400/15 text-violet-300" : "bg-cyan-300/15 text-cyan-300"}`}>
-        {route.kind === "INR_INR" ? "INR↔INR" : "INR↔USDT"}
+      <span className={`mr-1.5 px-1 text-[9px] ${KIND_TONE[route.kind]}`}>
+        {KIND_LABEL[route.kind]}
       </span>
       buy <span className="text-text-primary">{shortVenue(route.buyVenue, route.buyMarket)}</span> <EvidenceDot tier={route.buyEvidence} />
       {" → "}sell <span className="text-text-primary">{shortVenue(route.sellVenue, route.sellMarket)}</span> <EvidenceDot tier={route.sellEvidence} />
@@ -404,7 +463,7 @@ function useScannerAlerts(report: Report | undefined) {
       seen.current.add(window.id);
       if (!opportunityAlerts) continue;
       pushNotification({
-        title: `${window.coin} INR arbitrage +${window.peakNetPercent.toFixed(2)}%`,
+        title: `${window.coin} ${KIND_LABEL[window.kind]} arbitrage +${window.peakNetPercent.toFixed(2)}%`,
         message: `Buy ${shortVenue(window.buyVenue, window.buyMarket)} → sell ${shortVenue(window.sellVenue, window.sellMarket)}. Depth ${formatInr(window.peakDepthInr)} at ≥${report.config.minimumNetPercent}% net${window.minimumOrderInr !== null ? `, min order ${formatInr(window.minimumOrderInr)}` : ""}. Live ${formatDuration(window.lastSeenAt - window.startedAt)}. Scan-only — no order placed.`,
         severity: "success",
         durationMs: 12_000,
