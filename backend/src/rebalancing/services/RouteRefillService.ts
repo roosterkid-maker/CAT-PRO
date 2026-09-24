@@ -688,7 +688,11 @@ export class RouteRefillService {
         lastReason = `${candidate.coin} on ${candidate.venue} paused: ${block.reason}`;
         continue;
       }
-      const boughtAt = this.state.lastBuyAt?.[key];
+      // Buys from before lastBuyAt existed are read back from the history.
+      const boughtAt = this.state.lastBuyAt?.[key] ?? this.state.history
+        .filter((entry) => entry.kind === "STOCK_BUY" && entry.coin === candidate.coin && entry.toVenue === candidate.venue &&
+          (entry.status === "BUY_FILLED" || entry.status === "BUY_PARTIAL" || entry.status === "BUY_UNKNOWN"))
+        .reduce<number | undefined>((latest, entry) => (latest === undefined || entry.at > latest ? entry.at : latest), undefined);
       if (boughtAt !== undefined && now - boughtAt < MINIMUM_HOLD_MS) {
         lastReason = `${candidate.coin} on ${candidate.venue} was bought ${Math.round((now - boughtAt) / 3_600_000)} h ago (minimum hold 24 h).`;
         continue;

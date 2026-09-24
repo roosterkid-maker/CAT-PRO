@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {mkdtempSync, rmSync} from "node:fs";
+import {mkdtempSync, rmSync, writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 
@@ -301,6 +301,39 @@ async function testMinimumHold(directory: string): Promise<void> {
   await service.executeAuto(nullPort, now + 25 * 3_600_000);
   assert.equal(port.sells[0]?.coin, "LINK");
   assert.equal(port.sells[0]?.quote, "USDT");
+
+  // A buy recorded before the hold was tracked (only in the history) still holds.
+  const legacyFile = join(directory, "legacy.jsonl");
+  writeFileSync(legacyFile, `${JSON.stringify({storeVersion: 1, sequence: 1, writtenAt: now - 3_600_000, payload: {
+    schemaVersion: "1.0",
+    lastTopUpAt: {},
+    history: [{at: now - 3_600_000, actionId: "BUY_COIN|FET|bybit", toVenue: "bybit", amountUsdt: 0, status: "BUY_FILLED",
+      kind: "STOCK_BUY", coin: "FET", spentInr: 3_950, detail: "bought", referenceId: "o-1"}],
+  }})}\n`);
+  holdings = {"bybit|FET": 6_000, "binance|USDT": 0, "unocoin|INR": 3_000};
+  const legacyPort = new FakeStockPort();
+  const legacy = new RouteRefillService({
+    getTargets: () => [],
+    getAllocation: () => allocateCapital({
+      budgetInr: 30_000,
+      candidates: [candidate({coin: "FET", weight: 1, coinVenue: "bybit", coinVenueQuote: "USDT", cashVenue: "binance", cashAsset: "USDT", maximumTrades: 1, expectedDailyProfitInr: 500})],
+    }),
+    getValuation: () => ({
+      usdtInr: 100,
+      quantity: (venue: string, asset: string) => (holdings[`${venue}|${asset}`] ?? 0) / 10,
+      holdingInr: (venue: string, asset: string) => holdings[`${venue}|${asset}`] ?? 0,
+      priceInr: () => 10,
+      assets: (venue: string) => Object.keys(holdings).filter((key) => key.startsWith(`${venue}|`)).map((key) => key.split("|")[1]!),
+    }),
+    getConfig: config,
+    getTradeSizeInr: () => 1_500,
+    getAutoBuyConfig: () => ({enabled: false, dailyCapInr: 10_000, cashFloorInr: 1_000}),
+    getAutoSellConfig: () => ({enabled: true, dailyCapInr: 5_000}),
+    getBuyPort: async () => legacyPort,
+  }, legacyFile);
+  await legacy.executeAuto(nullPort, now);
+  assert.equal(legacyPort.sells.length, 0, "surplus FET bought an hour ago is held");
+  assert.match(legacy.getPlan(now).automation.autoSell.lastSkip?.reason ?? "", /minimum hold 24 h/u);
 }
 
 async function main(): Promise<void> {
