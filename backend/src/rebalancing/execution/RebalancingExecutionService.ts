@@ -204,14 +204,15 @@ function buildCapTrackers(config: RebalancingExecutionConfig): CapTrackerPair {
         maximumPerTransferUsdt: config.maximumPerTransferUsdt,
         maximumPerDayUsdt: config.maximumPerDaySameExchangeUsdt,
       },
-      "data/rebalancing/same-exchange-cap.jsonl",
+      // logs/ is the host-mounted volume: daily caps must survive redeploys.
+      "logs/live/rebalancing-same-exchange-cap.jsonl",
     ),
     crossExchange: new RebalancingExecutionCapTracker(
       {
         maximumPerTransferUsdt: config.maximumPerTransferUsdt,
         maximumPerDayUsdt: config.maximumPerDayCrossExchangeUsdt,
       },
-      "data/rebalancing/cross-exchange-cap.jsonl",
+      "logs/live/rebalancing-cross-exchange-cap.jsonl",
     ),
   };
 }

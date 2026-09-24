@@ -122,7 +122,8 @@ export class RouteRefillService {
 
   constructor(
     dependencies: Partial<RouteRefillDependencies> = {},
-    filePath = resolve(process.cwd(), "data", "rebalancing", "route-refill.jsonl"),
+    // logs/ is the host-mounted volume: cooldowns and backoffs survive redeploys.
+    filePath = resolve(process.cwd(), "logs", "live", "route-refill.jsonl"),
   ) {
     this.dependencies = {...DEFAULT_DEPENDENCIES, ...dependencies};
     this.store = new JsonlSnapshotStore({filePath, isPayload: isState});
