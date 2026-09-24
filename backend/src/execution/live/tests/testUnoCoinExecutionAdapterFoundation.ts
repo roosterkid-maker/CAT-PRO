@@ -4,6 +4,7 @@ import type {
 
 import {
   UnoCoinExecutionAdapter,
+  UnoCoinUncertainSubmissionError,
 } from "../adapters/UnoCoinExecutionAdapter";
 
 import type {
@@ -25,6 +26,7 @@ import {
   type UnoCoinAuthenticatedOrderClient,
   type UnoCoinCreateLimitOrderRequest,
   type UnoCoinCreatedOrder,
+  type UnoCoinRecentOrder,
   type UnoCoinSpotOrder,
 } from "../../../exchanges/unocoin/api/UnoCoinOrderApi";
 
@@ -54,6 +56,7 @@ async function main():
   await testOfficialHttpContract();
   await testBoundedHistoryAndFillEvidence();
   await testExecutionLifecycle();
+  await testPreDispatchValidationAndLostCreateRecovery();
 
   console.log(
     "UNOCOIN V95 SPOT EXECUTION ADAPTER TEST PASSED.",
@@ -708,6 +711,124 @@ async function testExecutionLifecycle():
         6,
     "Unsupported order types, synthetic IDs, excess precision, unsafe notional, and missing rules must fail before UnoCoin submission.",
   );
+}
+
+/*
+ * UnoCoin has no client order ID. Pair owners get a synchronous cached-only
+ * validation, and a create whose response is lost is matched against the
+ * order-history baseline taken just before it: one new row with the same
+ * side, rate and volume is our order; repeated clean reads with no new row
+ * prove it was never accepted; anything else is an uncertain submission.
+ */
+async function testPreDispatchValidationAndLostCreateRecovery(): Promise<void> {
+  const capability = unoCoinCapability();
+  const baselineRows: UnoCoinRecentOrder[] = [
+    {orderId: "100", side: "buy", price: 5_000_000, quantity: 0.0001},
+  ];
+  let afterCreate: () => UnoCoinRecentOrder[] = () => baselineRows;
+  let listCalls = 0;
+  let statusReads = 0;
+
+  const makeAdapter = (withHistory: boolean) =>
+    new UnoCoinExecutionAdapter({
+      orderApi: {
+        async createLimitOrder(): Promise<UnoCoinCreatedOrder> {
+          throw new Error("socket hang up");
+        },
+        async getSpotOrder(): Promise<UnoCoinSpotOrder> {
+          statusReads += 1;
+          return {...normalizedOrder(1), orderId: "200"};
+        },
+        async requestCancel(): Promise<void> {},
+        ...(withHistory
+          ? {
+              async listRecentOrders(): Promise<UnoCoinRecentOrder[]> {
+                listCalls += 1;
+                return listCalls === 1 ? baselineRows : afterCreate();
+              },
+            }
+          : {}),
+      },
+      credentialsSource: {getCredentials: () => ({apiToken: FIXTURE_TOKEN}), isConfigured: () => true},
+      poller: {
+        async waitForFinalState(liveAdapter: LiveExecutionAdapter, initialResult: LiveExecutionResult) {
+          return liveAdapter.getOrderStatus(initialResult.orderId as string, "BTC_INR", "SPOT");
+        },
+      },
+      audit: {async executionStarted() {}, async orderCreated() {}, async executionFailed() {}},
+      metrics: {record() {}},
+      getMarketCapability: async () => capability,
+      getCachedMarketCapability: () => capability,
+      sleep: async () => {},
+    });
+  const request: LiveExecutionRequest = {
+    exchange: "unocoin", product: "SPOT", market: "BTC_INR", side: "buy", orderType: "limit",
+    quantity: 0.0001, price: 5_000_000, timeoutMs: 4_000, pollingIntervalMs: 1_000, cancelOnTimeout: true,
+  };
+
+  // Synchronous pre-dispatch validation.
+  const validator = makeAdapter(true);
+  validator.validateNewSubmission(request);
+  for (const bad of [{...request, clientOrderId: "synthetic"}, {...request, timeInForce: "GTC" as const}, {...request, quantity: 0.000000001}]) {
+    let rejected = false;
+    try {
+      validator.validateNewSubmission(bad);
+    } catch {
+      rejected = true;
+    }
+    assertCondition(rejected, "UnoCoin pre-dispatch validation must reject client IDs, time-in-force and off-precision quantities.");
+  }
+
+  // One new matching row: the lost create is recovered and monitored.
+  listCalls = 0;
+  afterCreate = () => [{orderId: "200", side: "buy", price: 5_000_000, quantity: 0.0001}, ...baselineRows];
+  const recovered = await makeAdapter(true).execute(request);
+  assertCondition(recovered.orderId === "200" && recovered.status === "FILLED" && statusReads > 0,
+    "A single new matching history row must be reconciled as our order.");
+
+  // No new row across every read: the create provably failed.
+  listCalls = 0;
+  afterCreate = () => baselineRows;
+  const absent = await makeAdapter(true).execute(request);
+  assertCondition(absent.status === "FAILED" && absent.filledQuantity === 0 && absent.orderId === null,
+    "Repeated clean reads with no new order prove the create was never accepted.");
+
+  // Two new identical rows: cannot tell which is ours.
+  listCalls = 0;
+  afterCreate = () => [
+    {orderId: "201", side: "buy", price: 5_000_000, quantity: 0.0001},
+    {orderId: "202", side: "buy", price: 5_000_000, quantity: 0.0001},
+    ...baselineRows,
+  ];
+  let ambiguousThrew = false;
+  try {
+    await makeAdapter(true).execute(request);
+  } catch (error: unknown) {
+    ambiguousThrew = error instanceof UnoCoinUncertainSubmissionError;
+  }
+  assertCondition(ambiguousThrew, "Several matching new orders must surface as an uncertain submission.");
+
+  // History unreadable after the failure.
+  listCalls = 0;
+  afterCreate = () => {
+    throw new Error("HTTP 503");
+  };
+  let unreadableThrew = false;
+  try {
+    await makeAdapter(true).execute(request);
+  } catch (error: unknown) {
+    unreadableThrew = error instanceof UnoCoinUncertainSubmissionError;
+  }
+  assertCondition(unreadableThrew, "Unreadable history after a lost create must surface as an uncertain submission.");
+
+  // No history source at all: never claim a clean failure.
+  let noBaselineThrew = false;
+  try {
+    await makeAdapter(false).execute(request);
+  } catch (error: unknown) {
+    noBaselineThrew = error instanceof UnoCoinUncertainSubmissionError;
+  }
+  assertCondition(noBaselineThrew, "Without an order-history baseline a lost create is uncertain, not FAILED.");
 }
 
 function unoCoinCapability():

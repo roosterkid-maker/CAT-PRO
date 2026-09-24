@@ -145,18 +145,23 @@ interface Snapshot {
  *   coindcx     GTC limit, bounded wait then cancel (adapter: <=10 s, <=1 s polls)
  *   coinswitch  plain limit (the adapter rejects any time-in-force), bounded
  *               wait then cancel, UUID client ID; slower polls for its rate limit
+ *   unocoin     plain limit, NO client ID (the venue has none; the adapter
+ *               reconciles a lost create against an order-history baseline),
+ *               longer wait and 1 s polls (each status read pages history)
  *   binance/bybit  IOC limit
  */
 interface VenueOrderContract {
   readonly timeInForce: "GTC" | "IOC" | undefined;
   readonly boundedWait: boolean;
+  readonly boundedWaitMs?: number;
   readonly pollingMs: number;
-  readonly clientIdFormat: "compact" | "uuid";
+  readonly clientIdFormat: "compact" | "uuid" | "none";
 }
 
 const VENUE_ORDER_CONTRACTS: Readonly<Record<string, VenueOrderContract>> = {
   coindcx: {timeInForce: "GTC", boundedWait: true, pollingMs: 250, clientIdFormat: "compact"},
   coinswitch: {timeInForce: undefined, boundedWait: true, pollingMs: 500, clientIdFormat: "uuid"},
+  unocoin: {timeInForce: undefined, boundedWait: true, boundedWaitMs: 4_000, pollingMs: 1_000, clientIdFormat: "none"},
   binance: {timeInForce: "IOC", boundedWait: false, pollingMs: 250, clientIdFormat: "compact"},
   bybit: {timeInForce: "IOC", boundedWait: false, pollingMs: 250, clientIdFormat: "compact"},
 };
@@ -181,8 +186,10 @@ function orderRequest(
     ...(contract.timeInForce !== undefined ? {timeInForce: contract.timeInForce} : {}),
     quantity,
     price,
-    clientOrderId: contract.clientIdFormat === "uuid" ? uuidClientOrderId(idempotencyKey) : clientOrderId(idempotencyKey),
-    timeoutMs: contract.boundedWait ? boundedWaitMs : 5_000,
+    ...(contract.clientIdFormat === "none"
+      ? {}
+      : {clientOrderId: contract.clientIdFormat === "uuid" ? uuidClientOrderId(idempotencyKey) : clientOrderId(idempotencyKey)}),
+    timeoutMs: contract.boundedWait ? contract.boundedWaitMs ?? boundedWaitMs : 5_000,
     pollingIntervalMs: contract.pollingMs,
     cancelOnTimeout: true,
   };

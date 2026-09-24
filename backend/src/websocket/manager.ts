@@ -16,6 +16,7 @@ import {
 
 import {
   UnoCoinAdapter,
+  registerUnoCoinMarketDataAdapter,
 } from "../exchanges/unocoin/UnoCoinAdapter";
 
 import {
@@ -532,6 +533,9 @@ class WebSocketManager {
       this.coinDCXDemandSubscriptions
         .start();
 
+      registerUnoCoinMarketDataAdapter(
+        this.unoCoinMarketData,
+      );
       registerInrArbitrageScanner(
         this.inrArbitrageScanner,
       );

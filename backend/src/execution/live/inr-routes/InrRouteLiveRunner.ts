@@ -43,6 +43,10 @@ import {
 } from "../../../exchanges/coinswitch/CoinSwitchInrDepthPoller";
 
 import {
+  getUnoCoinMarketDataAdapter,
+} from "../../../exchanges/unocoin/UnoCoinAdapter";
+
+import {
   getInrArbitrageScanner,
   type ScannedRoute,
 } from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
@@ -155,9 +159,17 @@ const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
   getPolicy: () => loadInrRouteExecutionPolicy(),
   getQualifiedRoutes: () => getInrArbitrageScanner()?.getQualifiedRoutes() ?? [],
   getAllRoutes: () => getInrArbitrageScanner()?.getAllRoutes() ?? [],
-  getBook: (venue, market) => orderBookService.get(venue, market),
+  // Venues key books differently (UnoCoin stores ADAINR for ADA_INR).
+  getBook: (venue, market) =>
+    orderBookService.get(venue, market) ??
+    orderBookService.get(venue, market.toUpperCase().replace(/[^A-Z0-9]/gu, "")),
   refreshBook: async (venue, market) => {
-    if (venue !== "coinswitch" || !market.toUpperCase().endsWith("INR")) return;
+    if (!market.toUpperCase().endsWith("INR")) return;
+    if (venue === "unocoin") {
+      await getUnoCoinMarketDataAdapter()?.refreshBookNow(market);
+      return;
+    }
+    if (venue !== "coinswitch") return;
     const poller = getCoinSwitchInrDepthPoller();
     if (!poller) return;
     // Hold background rotation for the attempt so the order's own status
@@ -445,7 +457,7 @@ export class InrRouteLiveRunner {
     };
     const hedgeIsSell = route.buyMarket.endsWith("INR");
     const hedgeCapability = hedgeIsSell ? sellCapability : buyCapability;
-    const hedgeStep = hedgeCapability.quantity.quantityStep;
+    const hedgeStep = quantityStepOf(hedgeCapability);
     if (!(hedgeStep !== null && hedgeStep > 0)) return block("RULES_MISSING: hedge lot step unknown.");
 
     const session = await this.executor.execute({
@@ -458,7 +470,7 @@ export class InrRouteLiveRunner {
         quantityStep: hedgeStep,
         minimumQuantity: hedgeCapability.quantity.minimumQuantity,
         minimumNotional: hedgeCapability.notional.minimumNotional,
-        priceStep: hedgeCapability.price.priceStep,
+        priceStep: priceStepOf(hedgeCapability),
       },
       getHedgeLevels: () => {
         const book = hedgeIsSell
@@ -519,7 +531,7 @@ export class InrRouteLiveRunner {
             bookLevels: book ? {bids: book.bids.length, asks: book.asks.length} : null,
             rulesLoaded: rules !== null,
             tradingEnabled: rules ? rules.tradingEnabled && !rules.maintenanceMode : null,
-            quantityStep: rules?.quantity.quantityStep ?? null,
+            quantityStep: rules ? quantityStepOf(rules) : null,
             minimumNotional: rules?.notional.minimumNotional ?? null,
           };
         }),
@@ -624,9 +636,22 @@ function coinSwitchCapability(market: string): ExchangeMarketCapability | null {
   };
 }
 
+/** Venues that publish decimal precision instead of a step (UnoCoin) get 10^-precision. */
+function quantityStepOf(capability: ExchangeMarketCapability): number | null {
+  const {quantityStep, quantityPrecision} = capability.quantity;
+  if (quantityStep !== null && quantityStep > 0) return quantityStep;
+  return quantityPrecision !== null && quantityPrecision >= 0 ? Number((10 ** -quantityPrecision).toFixed(quantityPrecision)) : null;
+}
+
+function priceStepOf(capability: ExchangeMarketCapability): number | null {
+  const {priceStep, pricePrecision} = capability.price;
+  if (priceStep !== null && priceStep > 0) return priceStep;
+  return pricePrecision !== null && pricePrecision >= 0 ? Number((10 ** -pricePrecision).toFixed(pricePrecision)) : null;
+}
+
 function legRules(capability: ExchangeMarketCapability): InrRouteLegRules {
   return {
-    quantityStep: capability.quantity.quantityStep,
+    quantityStep: quantityStepOf(capability),
     minimumQuantity: capability.quantity.minimumQuantity,
     minimumNotional: capability.notional.minimumNotional,
   };

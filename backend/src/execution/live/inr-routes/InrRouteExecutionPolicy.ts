@@ -24,11 +24,16 @@ export type InrVenueOrderStyle =
   | "GTC_BOUNDED_CANCEL"
   /* Plain limit (no time-in-force on the venue), bounded wait then cancel;
    * reconciled by UUID client order ID. Emulates IOC. */
-  | "LIMIT_BOUNDED_CANCEL";
+  | "LIMIT_BOUNDED_CANCEL"
+  /* Plain limit, no client order ID on the venue: a lost create is matched
+   * against an order-history baseline (side, rate, volume); anything
+   * unmatched halts all trading. */
+  | "LIMIT_BOUNDED_CANCEL_HEURISTIC";
 
 export const INR_ROUTE_SUPPORTED_INR_VENUES: Readonly<Record<string, InrVenueOrderStyle>> = {
   coindcx: "GTC_BOUNDED_CANCEL",
   coinswitch: "LIMIT_BOUNDED_CANCEL",
+  unocoin: "LIMIT_BOUNDED_CANCEL_HEURISTIC",
 };
 
 export const INR_ROUTE_HEDGE_VENUES = ["binance", "bybit", "coindcx"] as const;

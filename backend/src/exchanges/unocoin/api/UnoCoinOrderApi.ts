@@ -58,6 +58,15 @@ export interface UnoCoinSpotOrder {
   status: number;
 }
 
+/** One row of a pair's most recent order history, parsed leniently for reconciliation. */
+export interface UnoCoinRecentOrder {
+  /** null when the row carries no parseable ID (treated as ambiguous by callers). */
+  orderId: string | null;
+  side: "buy" | "sell" | null;
+  price: number | null;
+  quantity: number | null;
+}
+
 export interface UnoCoinAuthenticatedOrderClient {
   getAuthenticated<T>(
     path: string,
@@ -524,6 +533,75 @@ export class UnoCoinOrderApi {
 
     throw new Error(
       `UnoCoin order ${normalizedOrderId} was not found in bounded ${expectedMarket} history.`,
+    );
+  }
+
+  /**
+   * Newest page of the pair's order history. UnoCoin has no client order ID,
+   * so the executor snapshots these IDs before placing an order and, if the
+   * create call's outcome is lost, looks for the one new row matching side,
+   * rate and volume. Throws when the page cannot be read.
+   */
+  async listRecentOrders(
+    market: string,
+    credentials:
+      UnoCoinCredentials,
+  ): Promise<
+    UnoCoinRecentOrder[]
+  > {
+    const [
+      coin,
+      baseCoin,
+    ] =
+      this.marketAssets(
+        market,
+      );
+    const envelope =
+      await this.client
+        .getAuthenticated<
+          UnoCoinOrderHistoryEnvelope
+        >(
+          `/api/exchange/orders/all/${encodeURIComponent(baseCoin)}/${encodeURIComponent(coin)}?page=1`,
+          credentials,
+        );
+
+    if (
+      !Array.isArray(
+        envelope.data,
+      )
+    ) {
+      throw new Error(
+        "UnoCoin order-history response data is not an array.",
+      );
+    }
+
+    return envelope.data.map(
+      (value) => {
+        const row =
+          this.recordOrNull(
+            value,
+          );
+        if (!row) {
+          return {orderId: null, side: null, price: null, quantity: null};
+        }
+        const orderId =
+          this.orderIdOrNull(row.id) ??
+          this.orderIdOrNull(row.order_id);
+        let side: "buy" | "sell" | null = null;
+        try {
+          side = this.historySide(row.order_type);
+        } catch {
+          side = null;
+        }
+        const price = Number(row.rate);
+        const quantity = Number(row.volume);
+        return {
+          orderId,
+          side,
+          price: Number.isFinite(price) && price > 0 ? price : null,
+          quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : null,
+        };
+      },
     );
   }
 

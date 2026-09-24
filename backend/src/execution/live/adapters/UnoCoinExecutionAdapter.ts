@@ -24,6 +24,7 @@ import {
   unoCoinOrderApi,
   type UnoCoinCreateLimitOrderRequest,
   type UnoCoinCreatedOrder,
+  type UnoCoinRecentOrder,
   type UnoCoinSpotOrder,
 } from "../../../exchanges/unocoin/api/UnoCoinOrderApi";
 
@@ -87,7 +88,25 @@ interface UnoCoinOrderApiSource {
         UnoCoinCredentialSource["getCredentials"]
       >,
   ): Promise<void>;
+
+  /** Newest history page; enables recovery of a create whose response was lost. */
+  listRecentOrders?(
+    market: string,
+    credentials:
+      ReturnType<
+        UnoCoinCredentialSource["getCredentials"]
+      >,
+  ): Promise<
+    UnoCoinRecentOrder[]
+  >;
 }
+
+/**
+ * Raised when an order may exist on UnoCoin but cannot be identified. It is
+ * never converted into a FAILED result: the gateway records an uncertain
+ * submission and the INR executor halts all trading.
+ */
+export class UnoCoinUncertainSubmissionError extends Error {}
 
 interface UnoCoinPollerSource {
   waitForFinalState(
@@ -168,6 +187,12 @@ export interface UnoCoinExecutionAdapterOptions {
       ExchangeMarketCapability | null
     >;
 
+  getCachedMarketCapability?:
+    (
+      market: string,
+    ) =>
+      ExchangeMarketCapability | null;
+
   sleep?:
     (
       milliseconds: number,
@@ -227,6 +252,12 @@ export class UnoCoinExecutionAdapter
       ExchangeMarketCapability | null
     >;
 
+  private readonly getCachedMarketCapability:
+    (
+      market: string,
+    ) =>
+      ExchangeMarketCapability | null;
+
   private readonly sleep:
     (
       milliseconds: number,
@@ -234,6 +265,10 @@ export class UnoCoinExecutionAdapter
 
   private readonly now:
     () => number;
+
+  private static readonly LOST_CREATE_READS = 3;
+
+  private static readonly LOST_CREATE_READ_INTERVAL_MS = 1_000;
 
   constructor(
     options:
@@ -272,6 +307,17 @@ export class UnoCoinExecutionAdapter
                 UnoCoinExecutionAdapter
                   .CAPABILITY_MAXIMUM_AGE_MS,
             })
+      );
+    this.getCachedMarketCapability =
+      options.getCachedMarketCapability ??
+      (
+        (market) =>
+          exchangeCapabilityService
+            .getCachedCapability(
+              this.exchange,
+              market,
+              "spot",
+            )
       );
     this.sleep =
       options.sleep ??
@@ -336,22 +382,56 @@ export class UnoCoinExecutionAdapter
         await this.validateRequest(
           request,
         );
-      const created =
-        await this.orderApi
-          .createLimitOrder(
-            {
-              market:
-                capability.market,
-              side:
-                request.side,
-              price:
-                request.price as number,
-              quantity:
-                request.quantity,
-            },
-            this.credentialsSource
-              .getCredentials(),
+      const credentials =
+        this.credentialsSource
+          .getCredentials();
+      // UnoCoin has no client order ID: remember which orders already
+      // exist so a create whose response is lost can still be identified.
+      const baseline =
+        this.orderApi.listRecentOrders
+          ? new Set(
+              (
+                await this.orderApi.listRecentOrders(
+                  capability.market,
+                  credentials,
+                )
+              )
+                .map((order) => order.orderId)
+                .filter((orderId): orderId is string => orderId !== null),
+            )
+          : null;
+      let created: UnoCoinCreatedOrder;
+      try {
+        created =
+          await this.orderApi
+            .createLimitOrder(
+              {
+                market:
+                  capability.market,
+                side:
+                  request.side,
+                price:
+                  request.price as number,
+                quantity:
+                  request.quantity,
+              },
+              credentials,
+            );
+      } catch (
+        createError: unknown
+      ) {
+        const recovered =
+          await this.recoverLostCreate(
+            capability.market,
+            request,
+            baseline,
+            createError,
           );
+        if (!recovered) {
+          throw createError;
+        }
+        created = recovered;
+      }
       const initialResult =
         this.mapCreatedOrder(
           created,
@@ -394,6 +474,12 @@ export class UnoCoinExecutionAdapter
       error:
         unknown
     ) {
+      if (
+        error instanceof
+        UnoCoinUncertainSubmissionError
+      ) {
+        throw error;
+      }
       const completedAt =
         this.now();
       const failureReason =
@@ -576,6 +662,148 @@ export class UnoCoinExecutionAdapter
     );
   }
 
+  /**
+   * Synchronous, cached-only validation for pair owners: order shape plus
+   * the cached official market rules. The fresh-rules read still happens
+   * inside execute() before the order is created.
+   */
+  validateNewSubmission(
+    request:
+      LiveExecutionRequest,
+  ): void {
+    const market =
+      this.validateShape(
+        request,
+      );
+    const capability =
+      this.getCachedMarketCapability(
+        market,
+      );
+
+    if (!capability) {
+      throw new Error(
+        "Cached official UnoCoin market-rule evidence is required before dispatch.",
+      );
+    }
+
+    this.validateCapability(
+      capability,
+      market,
+      request.price as number,
+      request.quantity,
+    );
+  }
+
+  /**
+   * Heuristic recovery of a create call whose outcome was lost. Returns the
+   * one new history row matching side, rate and volume; null when repeated
+   * reads prove no new order exists; throws UnoCoinUncertainSubmissionError
+   * when it cannot tell (reads failing, unparseable or several candidates).
+   */
+  private async recoverLostCreate(
+    market: string,
+    request: LiveExecutionRequest,
+    baseline: ReadonlySet<string> | null,
+    createError: unknown,
+  ): Promise<UnoCoinCreatedOrder | null> {
+    const cause =
+      createError instanceof Error
+        ? createError.message
+        : String(createError);
+
+    if (
+      baseline === null ||
+      !this.orderApi.listRecentOrders
+    ) {
+      throw new UnoCoinUncertainSubmissionError(
+        `UnoCoin create failed (${cause}) and no order-history baseline exists to prove whether it was accepted.`,
+      );
+    }
+
+    const price =
+      request.price as number;
+    const matches = (order: UnoCoinRecentOrder) =>
+      order.side === request.side &&
+      order.price !== null &&
+      order.quantity !== null &&
+      Math.abs(order.price - price) <= Math.max(1e-12, price * 1e-9) &&
+      Math.abs(order.quantity - request.quantity) <= Math.max(1e-12, request.quantity * 1e-9);
+
+    let conclusiveReads = 0;
+    let lastProblem = "";
+    for (
+      let read = 0;
+      read <
+        UnoCoinExecutionAdapter.LOST_CREATE_READS;
+      read += 1
+    ) {
+      await this.sleep(
+        UnoCoinExecutionAdapter.LOST_CREATE_READ_INTERVAL_MS,
+      );
+      let recent: UnoCoinRecentOrder[];
+      try {
+        recent =
+          await this.orderApi.listRecentOrders(
+            market,
+            this.credentialsSource.getCredentials(),
+          );
+      } catch (error: unknown) {
+        lastProblem = error instanceof Error ? error.message : String(error);
+        continue;
+      }
+      const fresh =
+        recent.filter(
+          (order) =>
+            order.orderId === null ||
+            !baseline.has(order.orderId),
+        );
+      const candidates =
+        fresh.filter(matches);
+      const unidentifiable =
+        fresh.filter(
+          (order) =>
+            order.orderId === null ||
+            order.side === null ||
+            order.price === null ||
+            order.quantity === null,
+        );
+
+      if (
+        candidates.length === 1 &&
+        candidates[0].orderId !== null
+      ) {
+        return {
+          orderId: candidates[0].orderId,
+          market,
+          side: request.side,
+          price,
+          quantity: request.quantity,
+        };
+      }
+      if (candidates.length > 1) {
+        throw new UnoCoinUncertainSubmissionError(
+          `UnoCoin create failed (${cause}) and ${candidates.length} new orders match side, rate and volume; cannot tell which is ours.`,
+        );
+      }
+      if (unidentifiable.length > 0) {
+        lastProblem = `${unidentifiable.length} new history row(s) could not be parsed`;
+        continue;
+      }
+      conclusiveReads += 1;
+    }
+
+    if (
+      conclusiveReads ===
+      UnoCoinExecutionAdapter.LOST_CREATE_READS
+    ) {
+      return null;
+    }
+
+    throw new UnoCoinUncertainSubmissionError(
+      `UnoCoin create failed (${cause}) and history reconciliation was inconclusive: ${lastProblem}.`,
+    );
+  }
+
   getReadiness():
     LiveExecutionAdapterReadiness {
     return this.verificationSource
@@ -592,6 +820,36 @@ export class UnoCoinExecutionAdapter
   ): Promise<
     ExchangeMarketCapability
   > {
+    const market =
+      this.validateShape(
+        request,
+      );
+    const capability =
+      await this.getMarketCapability(
+        market,
+      );
+
+    if (!capability) {
+      throw new Error(
+        "Fresh official UnoCoin market-rule evidence is required before order creation.",
+      );
+    }
+
+    this.validateCapability(
+      capability,
+      market,
+      request.price as number,
+      request.quantity,
+    );
+
+    return capability;
+  }
+
+  /** Order-shape checks that need no I/O; returns the normalized market. */
+  private validateShape(
+    request:
+      LiveExecutionRequest,
+  ): string {
     if (
       request.exchange
         .trim()
@@ -679,29 +937,9 @@ export class UnoCoinExecutionAdapter
       request,
     );
 
-    const market =
-      this.requireMarket(
-        request.market,
-      );
-    const capability =
-      await this.getMarketCapability(
-        market,
-      );
-
-    if (!capability) {
-      throw new Error(
-        "Fresh official UnoCoin market-rule evidence is required before order creation.",
-      );
-    }
-
-    this.validateCapability(
-      capability,
-      market,
-      request.price,
-      request.quantity,
+    return this.requireMarket(
+      request.market,
     );
-
-    return capability;
   }
 
   private validateCapability(

@@ -876,6 +876,43 @@ export class UnoCoinAdapter
     }
   }
 
+  /**
+   * Action-time read of one market's book for the INR route executor
+   * (UnoCoin books are otherwise REST-rotated every ~14 s). Honors the
+   * adapter's backoff; returns false instead of throwing.
+   */
+  async refreshBookNow(
+    market: string,
+  ): Promise<boolean> {
+    if (
+      !this.connected ||
+      (this.orderBookBackoffUntil !== null &&
+        this.orderBookBackoffUntil > this.now())
+    ) {
+      return false;
+    }
+
+    const tickerId =
+      this.subscribedMarkets.get(
+        canonicalizeUnoCoinMarket(
+          market,
+        ),
+      ) ??
+      this.selectAvailableMarkets(
+        [market],
+      )[0]?.tickerId;
+
+    if (!tickerId) {
+      return false;
+    }
+
+    return (
+      await this.refreshOrderBook(
+        tickerId,
+      )
+    ) === "SUCCESS";
+  }
+
   private async refreshOrderBooks():
     Promise<void> {
     if (
@@ -1896,4 +1933,15 @@ export class UnoCoinAdapter
       ),
     );
   }
+}
+
+let sharedUnoCoinMarketData: UnoCoinAdapter | null = null;
+
+/** Registered by the websocket manager, which owns the UnoCoin market-data adapter. */
+export function registerUnoCoinMarketDataAdapter(adapter: UnoCoinAdapter): void {
+  sharedUnoCoinMarketData = adapter;
+}
+
+export function getUnoCoinMarketDataAdapter(): UnoCoinAdapter | null {
+  return sharedUnoCoinMarketData;
 }

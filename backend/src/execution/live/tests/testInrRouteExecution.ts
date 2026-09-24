@@ -255,9 +255,21 @@ async function testExecutor(directory: string): Promise<void> {
   assert.equal(uuidClientOrderId("a:primary"), uuidClientOrderId("a:primary"), "stable per idempotency key");
   assert.notEqual(uuidClientOrderId("a:primary"), uuidClientOrderId("a:hedge1"));
 
+  // UnoCoin INR primary: plain limit with NO client order ID (the venue has
+  // none), a longer bounded wait and 1 s polls.
+  const unocoin = new FakeGateway({primary: {kind: "fill", filled: 10, price: 100.5}, hedge1: {kind: "fill", filled: 10, price: 1.199}});
+  const unoSession = await executor(unocoin).execute(executeInput({route: {...ROUTE, routeKey: "uno", buyVenue: "unocoin", buyVenueMarket: "X_INR"}}));
+  assert.equal(unoSession.state, "COMPLETED");
+  assert.equal(unocoin.sent[0].exchange, "unocoin");
+  assert.equal(unocoin.sent[0].market, "X_INR");
+  assert.equal("clientOrderId" in unocoin.sent[0], false, "UnoCoin orders carry no synthetic client ID");
+  assert.equal("timeInForce" in unocoin.sent[0], false);
+  assert.equal(unocoin.sent[0].timeoutMs, 4_000);
+  assert.equal(unocoin.sent[0].pollingIntervalMs, 1_000);
+
   // A venue with no order contract never gets an order.
   const unknownVenue = new FakeGateway({});
-  const noContract = await executor(unknownVenue).execute(executeInput({route: {...ROUTE, buyVenue: "unocoin"}}));
+  const noContract = await executor(unknownVenue).execute(executeInput({route: {...ROUTE, buyVenue: "zebpay"}}));
   assert.equal(noContract.state, "NO_FILL");
   assert.equal(unknownVenue.sent.length, 0);
 
