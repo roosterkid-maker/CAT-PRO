@@ -123,6 +123,8 @@ interface RunnerSnapshot {
 export interface InrRouteRunnerDependencies {
   readonly getPolicy: () => InrRouteExecutionPolicy;
   readonly getQualifiedRoutes: () => readonly ScannedRoute[];
+  /** Every priced route (diagnostics only: readiness probe). */
+  readonly getAllRoutes: () => readonly ScannedRoute[];
   readonly getBook: (venue: string, market: string) => OrderBook | null;
   readonly getCapability: (venue: string, market: string) => ExchangeMarketCapability | null;
   readonly getBalance: (venue: string, asset: string) => {readonly available: number; readonly synchronizedAt: number} | null;
@@ -136,6 +138,7 @@ export interface InrRouteRunnerDependencies {
 const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
   getPolicy: () => loadInrRouteExecutionPolicy(),
   getQualifiedRoutes: () => getInrArbitrageScanner()?.getQualifiedRoutes() ?? [],
+  getAllRoutes: () => getInrArbitrageScanner()?.getAllRoutes() ?? [],
   getBook: (venue, market) => orderBookService.get(venue, market),
   getCapability: (venue, market) => exchangeCapabilityService.getCachedCapability(venue, market, "spot"),
   getBalance: (venue, asset) => {
@@ -234,6 +237,7 @@ export class InrRouteLiveRunner {
       ticks: this.ticks,
       realizedNetInrToday: this.realizedNetInrToday(now),
       interlock: this.dependencies.interlock.getDiagnostics(),
+      readiness: policy ? this.probeReadiness(policy, now) : [],
       recentAttempts: this.attempts.slice(-40).reverse(),
       recentSessions: this.executor.listSessions().slice(-20).reverse(),
       counts: countBy(this.attempts.map((attempt) => attempt.status)),
@@ -429,6 +433,43 @@ export class InrRouteLiveRunner {
       this.persist();
       console.error("[INR-Routes] Halted:", this.haltedReason);
     }
+  }
+
+  /**
+   * For each enabled INR venue: whether the executor can see what an attempt
+   * needs (live book, market rules, INR balance) on a sample of the INR
+   * markets the scanner is pricing, best net first.
+   */
+  private probeReadiness(policy: InrRouteExecutionPolicy, now: number) {
+    const routes = [...this.dependencies.getAllRoutes()].sort((a, b) => b.netEdgePercent - a.netEdgePercent);
+    return policy.inrVenues.map((venue) => {
+      const markets: string[] = [];
+      for (const route of routes) {
+        for (const [legVenue, market] of [[route.buyVenue, route.buyMarket], [route.sellVenue, route.sellMarket]] as const) {
+          if (legVenue === venue && market.endsWith("INR") && !markets.includes(market)) markets.push(market);
+        }
+        if (markets.length >= 5) break;
+      }
+      const balance = this.dependencies.getBalance(venue, "INR");
+      return {
+        venue,
+        inrBalance: balance?.available ?? null,
+        inrBalanceAgeMs: balance ? now - balance.synchronizedAt : null,
+        markets: markets.map((market) => {
+          const book = this.dependencies.getBook(venue, market);
+          const rules = this.dependencies.getCapability(venue, market);
+          return {
+            market,
+            bookAgeMs: book ? now - book.timestamp : null,
+            bookLevels: book ? {bids: book.bids.length, asks: book.asks.length} : null,
+            rulesLoaded: rules !== null,
+            tradingEnabled: rules ? rules.tradingEnabled && !rules.maintenanceMode : null,
+            quantityStep: rules?.quantity.quantityStep ?? null,
+            minimumNotional: rules?.notional.minimumNotional ?? null,
+          };
+        }),
+      };
+    });
   }
 
   private realizedNetInrToday(now: number): number {

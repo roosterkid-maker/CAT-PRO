@@ -307,6 +307,7 @@ function runnerFixture(directory: string, name: string, overrides: Partial<InrRo
   const dependencies: Partial<InrRouteRunnerDependencies> = {
     getPolicy: () => policy("shadow"),
     getQualifiedRoutes: () => [scannedRoute()],
+    getAllRoutes: () => [scannedRoute()],
     getBook: (venue: string) =>
       venue === "coindcx"
         ? {exchange: venue, market: "XINR", bids: [{price: 99, quantity: 10}], asks: [{price: 100, quantity: 5}, {price: 101, quantity: 5}], timestamp: clock - 200}
