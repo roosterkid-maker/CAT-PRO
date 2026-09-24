@@ -88,7 +88,7 @@ const PAGE_PRELOADERS:
     >
   > = {
   bot: () => import("@/modules/live-only/pages/LiveOnlyDashboard"),
-  "trade-intelligence": () => import("@/modules/trade-flow/pages/TradeFlowDashboard"),
+  "trade-intelligence": () => import("@/pages/Arbitrage"),
   "execution-monitoring": () => import("@/modules/execution-monitoring/pages/ExecutionMonitoringDashboard"),
   markets: () => import("@/modules/market/pages/MarketsDashboard"),
   "exchange-health": () => import("@/modules/exchange-health/pages/ExchangeHealthDashboard"),

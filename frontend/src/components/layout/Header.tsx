@@ -16,10 +16,9 @@ interface HeaderProps {
 
 const NAV_TABS: ReadonlyArray<{ label: string; page: AppPage }> = [
   { label: "Bot", page: "bot" },
-  { label: "Trade Intel", page: "trade-intelligence" },
+  { label: "Scanner", page: "arbitrage" },
   { label: "Markets", page: "markets" },
   { label: "Exchanges", page: "exchange-health" },
-  { label: "Arbitrage", page: "arbitrage" },
   { label: "Execution", page: "execution-monitoring" },
   { label: "Alerts", page: "alerts" },
   { label: "System", page: "system-health" },

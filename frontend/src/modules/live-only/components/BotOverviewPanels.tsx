@@ -13,15 +13,14 @@ import type {
   ExecutionHistoryItem,
 } from "@/modules/execution-monitoring/services/executionHistoryApi";
 
-import {
-  useCentralLiveTriangularBridge,
-} from "@/modules/strategies/hooks/useStrategies";
 
 import {
+  useInrScanner,
   useLiveOnlyInventory,
 } from "../hooks/useLiveOnlyRuntime";
 
 import type {
+  InrScannerResponse,
   LiveOnlyInventoryResponse,
   LiveOnlyRuntimeResponse,
 } from "../types/LiveOnlyRuntime";
@@ -36,7 +35,6 @@ type Inventory = LiveOnlyInventoryResponse["data"];
  * a panel with no evidence says so instead of showing a placeholder number.
  */
 
-const FRESH_EDGE_MAX_AGE_MS = 5_000;
 const EDGE_HISTORY_POINTS = 300;
 
 interface ArbCycle {
@@ -50,7 +48,7 @@ interface ArbCycle {
 export function BotOverviewPanels({runtime}: {runtime: Runtime}) {
   const inventoryQuery = useLiveOnlyInventory();
   const historyQuery = useRecentExecutions(100);
-  const triangularQuery = useCentralLiveTriangularBridge();
+  const scanner = useInrScanner().data?.data;
   const inventory = inventoryQuery.data?.data;
   const orders = useMemo(
     () => [...(historyQuery.data?.executions ?? [])].sort((first, second) => second.timestamp - first.timestamp),
@@ -58,8 +56,12 @@ export function BotOverviewPanels({runtime}: {runtime: Runtime}) {
   );
   const cycles = useMemo(() => pairArbCycles(orders), [orders]);
   const usdtInr = inventory?.usdtInr ?? null;
-  const bestEdge = currentBestEdge(runtime);
-  const edgeHistory = useEdgeHistory(bestEdge, runtime.capitalStudy.routes.length > 0);
+  // Best real (BOOK, non-suspect) net across all three route kinds right now.
+  const bestEdge = scanner
+    ? [...scanner.opportunities, ...scanner.nearMisses].reduce<number | null>((best, route) => (best === null || route.netEdgePercent > best ? route.netEdgePercent : best), null)
+    : null;
+  const edgeHistory = useEdgeHistory(bestEdge, scanner?.running ?? false);
+  const scannerGate = scanner?.config.minimumNetPercent ?? runtime.policy.minimumCurrentNetProfitPercent;
 
   const filledCycles = cycles.filter((cycle) => cycle.filled);
   const grossUsdt = filledCycles.reduce((sum, cycle) => sum + cycle.grossUsdt, 0);
@@ -93,12 +95,12 @@ export function BotOverviewPanels({runtime}: {runtime: Runtime}) {
           <div className="grid grid-cols-2 border-b border-border-default lg:border-r lg:border-b-0">
             <MetricCell label="Pair fill rate" value={pairFillRate === null ? "—" : `${pairFillRate.toFixed(1)}%`} tone="good" />
             <MetricCell label="Win streak" value={`${streak}×`} tone="good" />
-            <MetricCell label="Best edge now" value={bestEdge === null ? "—" : `${bestEdge.toFixed(3)}%`} tone={bestEdge !== null && bestEdge >= runtime.policy.minimumCurrentNetProfitPercent ? "good" : "plain"} />
+            <MetricCell label="Best edge now" value={bestEdge === null ? "—" : `${bestEdge.toFixed(3)}%`} tone={bestEdge !== null && bestEdge >= scannerGate ? "good" : "plain"} />
             <MetricCell label="Orders filled" value={`${filledOrders}/${orders.length}`} tone="plain" />
           </div>
 
           <div className="min-w-0 p-5">
-            <EdgeChart points={edgeHistory} gate={runtime.policy.minimumCurrentNetProfitPercent} />
+            <EdgeChart points={edgeHistory} gate={scannerGate} />
           </div>
         </section>
 
@@ -107,129 +109,10 @@ export function BotOverviewPanels({runtime}: {runtime: Runtime}) {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(16rem,20rem)]">
         <LiveOrdersPanel orders={orders} loading={historyQuery.isPending} />
-        <BotsPanel runtime={runtime} triangular={triangularQuery.data?.data} />
-        <div className="space-y-4">
-          <TopRoutesPanel runtime={runtime} />
-          <CoinsPanel inventory={inventory} />
-        </div>
+        <BotsPanel runtime={runtime} scanner={scanner} />
+        <CoinsPanel inventory={inventory} />
       </div>
-
-      <MissingCoinsPanel runtime={runtime} />
     </div>
-  );
-}
-
-interface MissingCoin {
-  key: string;
-  asset: string;
-  exchange: string;
-  side: "SELL" | "BUY";
-  required: number;
-  available: number | null;
-  routes: string[];
-  bestNet: number;
-  passedGate: boolean;
-  lastSeenAt: number | null;
-}
-
-/**
- * Every studied route whose own funding check fails, folded by the coin and
- * venue it is missing. SELL-side gaps are base coins the account must
- * already hold (never auto-bought); BUY-side gaps are quote balance the
- * Capital Manager may top up. Ranked so the coin that would unlock the
- * best recently-seen edge comes first.
- */
-function collectMissingCoins(runtime: Runtime): MissingCoin[] {
-  const byKey = new Map<string, MissingCoin>();
-  const gate = runtime.policy.minimumCurrentNetProfitPercent;
-
-  for (const route of runtime.capitalStudy.routes) {
-    const funding = route.funding;
-    if (!funding) continue;
-    const net = route.latestNetProfitPercent ?? Number.NEGATIVE_INFINITY;
-    const gaps: Array<Omit<MissingCoin, "key" | "routes" | "bestNet" | "passedGate" | "lastSeenAt">> = [];
-
-    if (!funding.sellSufficient && funding.sellRequired !== null) {
-      gaps.push({asset: funding.sellAsset, exchange: funding.sellExchange, side: "SELL", required: funding.sellRequired, available: funding.sellAvailable});
-    }
-    if (!funding.buySufficient && funding.buyRequired !== null) {
-      gaps.push({asset: funding.buyAsset, exchange: funding.buyExchange, side: "BUY", required: funding.buyRequired, available: funding.buyAvailable});
-    }
-
-    for (const gap of gaps) {
-      const key = `${gap.exchange}|${gap.asset}`;
-      const existing = byKey.get(key);
-      const routeLabel = `${route.market.replace(/USDT$/, "")} ${route.buyExchange.slice(0, 3)}→${route.sellExchange.slice(0, 3)}`;
-      if (existing) {
-        existing.required = Math.max(existing.required, gap.required);
-        existing.routes.push(routeLabel);
-        existing.bestNet = Math.max(existing.bestNet, net);
-        existing.passedGate ||= net >= gate;
-        existing.lastSeenAt = Math.max(existing.lastSeenAt ?? 0, route.latestObservedAt ?? 0) || null;
-      } else {
-        byKey.set(key, {...gap, key, routes: [routeLabel], bestNet: net, passedGate: net >= gate, lastSeenAt: route.latestObservedAt ?? null});
-      }
-    }
-  }
-
-  return [...byKey.values()].sort((first, second) => second.bestNet - first.bestNet);
-}
-
-function MissingCoinsPanel({runtime}: {runtime: Runtime}) {
-  const missing = collectMissingCoins(runtime);
-  const legInr = runtime.policy.preferredCapitalPerLegInr;
-
-  return (
-    <section className="panel min-w-0">
-      <PanelHeader
-        title={<>Missing coins <span className="ml-2 text-text-primary">{missing.length}</span></>}
-        aside={<span>what blocks studied routes · one ₹{legInr} leg each</span>}
-      />
-      {missing.length === 0 ? (
-        <p className="p-5 text-xs text-text-muted">Every studied route is funded on both legs.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[40rem] text-left text-xs">
-            <thead>
-              <tr className="border-b border-border-default">
-                <th className="px-5 py-3 font-normal">Coin</th>
-                <th className="px-3 py-3 font-normal">Needed on</th>
-                <th className="px-3 py-3 text-right font-normal">Need</th>
-                <th className="px-3 py-3 text-right font-normal">Have</th>
-                <th className="px-3 py-3 font-normal">Unlocks</th>
-                <th className="px-3 py-3 text-right font-normal">Best net</th>
-                <th className="px-5 py-3 text-right font-normal">Seen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {missing.map((coin) => (
-                <tr key={coin.key} className="border-b border-border-default/60">
-                  <td className="px-5 py-2.5 font-mono text-text-primary">
-                    {coin.asset}
-                    <span className={`ml-2 px-1.5 py-0.5 text-[10px] ${coin.side === "SELL" ? "bg-red-400/15 text-red-300" : "bg-cyan-300/15 text-cyan-300"}`}>{coin.side === "SELL" ? "SELL LEG" : "BUY LEG"}</span>
-                  </td>
-                  <td className="px-3 py-2.5 font-mono uppercase text-text-muted">{coin.exchange}</td>
-                  <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-primary">{formatQuantity(coin.required)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono tabular-nums text-amber-300">{coin.available === null ? "none" : formatQuantity(coin.available)}</td>
-                  <td className="px-3 py-2.5 font-mono text-[11px] text-text-muted">
-                    {coin.routes.slice(0, 2).join(", ")}
-                    {coin.routes.length > 2 ? ` +${coin.routes.length - 2}` : ""}
-                  </td>
-                  <td className={`px-3 py-2.5 text-right font-mono tabular-nums ${coin.passedGate ? "text-emerald-300" : "text-text-primary"}`}>
-                    {Number.isFinite(coin.bestNet) ? `${coin.bestNet.toFixed(3)}%` : "—"}
-                    {coin.passedGate ? <span className="ml-1" title="Cleared the net gate">✓</span> : null}
-                  </td>
-                  <td className="px-5 py-2.5 text-right font-mono text-text-muted">{coin.lastSeenAt ? formatAgo(coin.lastSeenAt) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="border-t border-border-default px-5 py-3 text-[11px] text-text-muted">
-            SELL-leg coins must already sit on that exchange; the Capital Manager never buys base coins. ✓ = the route's latest edge cleared the {runtime.policy.minimumCurrentNetProfitPercent.toFixed(2)}% gate.
-          </p>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -260,13 +143,13 @@ function EdgeChart({points, gate}: {points: Array<{at: number; value: number}>; 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-label">Best net edge · this session</p>
+        <p className="text-label">Best valid net · all routes · this session</p>
         <p className="flex items-center gap-2 font-mono text-[10px] text-text-muted">
           <span className="inline-block h-px w-4 border-t border-dashed border-amber-400" /> gate {gate.toFixed(2)}%
         </p>
       </div>
       {points.length < 2 ? (
-        <p className="mt-6 text-xs text-text-muted">Collecting live edge samples from the capital study…</p>
+        <p className="mt-6 text-xs text-text-muted">Waiting for a valid route (≥ the net gate) from the arbitrage scanner…</p>
       ) : (
         <div className="relative mt-3 flex-1">
           <svg
@@ -408,30 +291,31 @@ function LiveOrdersPanel({orders, loading}: {orders: ExecutionHistoryItem[]; loa
   );
 }
 
-function BotsPanel({runtime, triangular}: {runtime: Runtime; triangular: {bridge: {running: boolean; recentOutcomes: unknown[]}; arm: {currentlyArmed: boolean}} | undefined}) {
+function BotsPanel({runtime, scanner}: {runtime: Runtime; scanner: InrScannerResponse["data"] | undefined}) {
   const runner = runtime.runner;
   const capitalRunner = runtime.capitalManager.runner;
+  const poller = scanner?.coinSwitchInrDepth ?? null;
   const bots: Array<{name: string; online: boolean; value: string; detail: string; age: string}> = [
     {
-      name: "Strategy #1 live",
+      name: "Arbitrage scanner",
+      online: scanner?.running ?? false,
+      value: scanner ? `${scanner.opportunities.length} valid` : "—",
+      detail: scanner ? `${formatCount(scanner.routesEvaluated)} routes · ${scanner.lastScanDurationMs ?? "—"} ms` : "not reporting",
+      age: "1s",
+    },
+    {
+      name: "Live executor",
       online: runner.running && !runner.halted,
       value: runner.halted ? "HALTED" : runner.inFlight ? "IN FLIGHT" : runner.running ? "WATCHING" : "STOPPED",
-      detail: `${runner.completed}/${runner.attempts} completed`,
+      detail: `USDT↔USDT ≥ ${runtime.policy.minimumCurrentNetProfitPercent}% · ${runner.completed}/${runner.attempts} done`,
       age: "live",
     },
     {
-      name: "Snapshot scanner",
-      online: runner.running,
-      value: formatCount(runner.snapshotsObserved),
-      detail: `${runner.candidatesObserved} candidates`,
-      age: "live",
-    },
-    {
-      name: "Capital study",
-      online: runtime.capitalStudy.running,
-      value: `${runtime.capitalStudy.trackedRoutes} routes`,
-      detail: `${runtime.capitalStudy.executionStudyReadyRoutes} ready`,
-      age: "live",
+      name: "CoinSwitch INR depth",
+      online: poller !== null && poller.running && poller.pausedUntil === null,
+      value: poller ? `${poller.activeMarkets.length} mkts` : "—",
+      detail: poller ? `${poller.successes}/${poller.requests} reads ok` : "not reporting",
+      age: poller?.lastSuccessAt ? formatAgo(poller.lastSuccessAt) : "—",
     },
     {
       name: "Capital manager",
@@ -439,13 +323,6 @@ function BotsPanel({runtime, triangular}: {runtime: Runtime; triangular: {bridge
       value: runtime.capitalManager.enabled ? "ENABLED" : "LOCKED",
       detail: capitalRunner.lastError ? "last cycle errored" : `${runtime.capitalManager.withdrawalWhitelistEntries} whitelisted`,
       age: capitalRunner.lastCycleAt ? formatAgo(capitalRunner.lastCycleAt) : "—",
-    },
-    {
-      name: "Triangular bridge",
-      online: triangular?.bridge.running ?? false,
-      value: triangular ? (triangular.arm.currentlyArmed ? "ARMED" : "DISARMED") : "—",
-      detail: triangular ? `${triangular.bridge.recentOutcomes.length} outcomes` : "no evidence",
-      age: "live",
     },
   ];
   const online = bots.filter((bot) => bot.online).length;
@@ -466,51 +343,6 @@ function BotsPanel({runtime, triangular}: {runtime: Runtime; triangular: {bridge
           </div>
         ))}
       </div>
-    </section>
-  );
-}
-
-function TopRoutesPanel({runtime}: {runtime: Runtime}) {
-  const [view, setView] = useState<"gainers" | "losers">("gainers");
-  const routes = runtime.capitalStudy.routes
-    .filter((route) => route.latestNetProfitPercent !== null && route.latestNetProfitPercent !== undefined)
-    .sort((first, second) => (view === "gainers" ? 1 : -1) * ((second.latestNetProfitPercent ?? 0) - (first.latestNetProfitPercent ?? 0)))
-    .slice(0, 5);
-
-  return (
-    <section className="panel">
-      <PanelHeader title="Top routes" aside="latest net" />
-      <div className="grid grid-cols-2 border-b border-border-default">
-        {(["gainers", "losers"] as const).map((option) => (
-          <button
-            key={option}
-            type="button"
-            onClick={() => setView(option)}
-            data-active={view === option}
-            className="border-b-2 border-transparent py-2.5 font-mono text-[11px] capitalize tracking-[0.12em] text-text-muted data-[active=true]:border-emerald-400 data-[active=true]:text-emerald-300"
-          >
-            {option}
-          </button>
-        ))}
-      </div>
-      {routes.length === 0 ? (
-        <p className="p-5 text-xs text-text-muted">No studied routes yet.</p>
-      ) : (
-        <ol>
-          {routes.map((route, index) => (
-            <li key={route.routeKey} className="flex items-center gap-3 px-5 py-2.5 font-mono text-xs">
-              <span className="w-3 text-text-muted">{index + 1}</span>
-              <span className="min-w-0 flex-1 truncate text-text-primary">
-                {route.market.replace(/USDT$/, "")}
-                <span className="ml-2 text-[10px] uppercase text-text-muted">{route.buyExchange.slice(0, 3)}→{route.sellExchange.slice(0, 3)}</span>
-              </span>
-              <span className={(route.latestNetProfitPercent ?? 0) >= route.effectiveMinimumCurrentNetProfitPercent ? "text-emerald-300" : "text-text-primary"}>
-                {(route.latestNetProfitPercent ?? 0) >= 0 ? "+" : ""}{(route.latestNetProfitPercent ?? 0).toFixed(3)}%
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
     </section>
   );
 }
@@ -600,13 +432,6 @@ function profitableStreak(filledCycles: ArbCycle[]): number {
     streak += 1;
   }
   return streak;
-}
-
-function currentBestEdge(runtime: Runtime): number | null {
-  const fresh = runtime.capitalStudy.routes
-    .filter((route) => route.latestNetProfitPercent !== null && route.latestNetProfitPercent !== undefined && route.latestEvidenceAgeMs !== null && route.latestEvidenceAgeMs !== undefined && route.latestEvidenceAgeMs <= FRESH_EDGE_MAX_AGE_MS)
-    .map((route) => route.latestNetProfitPercent as number);
-  return fresh.length > 0 ? Math.max(...fresh) : null;
 }
 
 /** Samples the best fresh edge once per runtime poll for this browser session. */

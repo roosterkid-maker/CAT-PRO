@@ -1,6 +1,5 @@
 import {
   Activity,
-  ArrowRight,
   Landmark,
   ShieldCheck,
   WalletCards,
@@ -8,16 +7,8 @@ import {
 } from "lucide-react";
 
 import {
-  useOpportunities,
-} from "@/modules/arbitrage/hooks/useOpportunities";
-
-import {
   useLiveOnlyRuntime,
 } from "../hooks/useLiveOnlyRuntime";
-
-import {
-  CentralLiveTriangularSection,
-} from "../components/CentralLiveTriangularSection";
 
 import {
   BotOverviewPanels,
@@ -27,23 +18,17 @@ import {
   InrScannerPanel,
 } from "../components/InrScannerPanel";
 
+/*
+ * BOT page: the arbitrage scanner (USDT<->USDT, INR<->INR, USDT<->INR),
+ * the wallet/order overview, and the live execution boundary. The legacy
+ * opportunity-engine stream and the triangular panel were retired with the
+ * old USDT-only system.
+ */
 export default function LiveOnlyDashboard() {
   const runtimeQuery =
     useLiveOnlyRuntime();
-  const opportunitiesQuery =
-    useOpportunities();
   const runtime =
     runtimeQuery.data?.data;
-  const candidates =
-    (opportunitiesQuery.data?.data ?? [])
-      .filter(
-        (opportunity) =>
-          opportunity.decision === "EXECUTE",
-      )
-      .sort(
-        (first, second) =>
-          second.netProfitPercent - first.netProfitPercent,
-      );
 
   if (
     runtimeQuery.isPending
@@ -76,10 +61,10 @@ export default function LiveOnlyDashboard() {
       <header className="rounded-2xl border border-emerald-300/25 bg-panel p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="font-mono text-xs font-bold tracking-[0.18em] text-emerald-300">CAT PRO · LIVE-ONLY</p>
-            <h1 className="mt-2 text-3xl font-bold text-text-primary">One runtime, bounded real execution</h1>
+            <p className="font-mono text-xs font-bold tracking-[0.18em] text-emerald-300">LIVE EXECUTION</p>
+            <h1 className="mt-2 text-3xl font-bold text-text-primary">Order execution status</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-text-muted">
-              PAPER, Shadow and Tiny-LIVE controls are retired from this operator surface. Every order still requires fresh exact-route preflight, final last-look, durable authority and journal-before-I/O.
+              Every live order requires a fresh exact-route preflight, a final order-time last-look, durable authority and journal-before-I/O. One trade at a time; any possible exposure halts execution.
             </p>
           </div>
           <StatusBadge label={live ? "LIVE RUNNER READY" : runtime.runner.halted ? "HALTED" : "LIVE LOCKED"} good={live} />
@@ -99,32 +84,6 @@ export default function LiveOnlyDashboard() {
           <p className="mt-2 text-sm text-red-200/80">{runtime.runner.haltedReason}</p>
         </section>
       ) : null}
-
-      <section className="rounded-2xl border border-border-default bg-panel p-5">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-primary">Current executable candidates</p>
-            <h2 className="mt-1 text-xl font-bold text-text-primary">Fresh opportunity stream</h2>
-          </div>
-          <StatusBadge label={`${candidates.length} EXECUTE`} good={candidates.length > 0} />
-        </div>
-        <div className="mt-4 space-y-2">
-          {candidates.length === 0 ? (
-            <p className="rounded-xl border border-border-default bg-background-subtle p-4 text-sm text-text-muted">No route currently passes the opportunity engine. The runner waits; it does not weaken gates or create an order from stale evidence.</p>
-          ) : candidates.slice(0, 10).map((opportunity) => (
-            <article key={opportunity.id} className="grid gap-3 rounded-xl border border-border-default bg-background-subtle p-4 md:grid-cols-[1fr_auto_auto] md:items-center">
-              <div>
-                <p className="font-mono font-bold text-text-primary">{opportunity.market}</p>
-                <p className="mt-1 flex items-center gap-2 text-xs uppercase text-text-muted">{opportunity.buyExchange}<ArrowRight className="size-3" />{opportunity.sellExchange}</p>
-              </div>
-              <div className="text-left md:text-right"><p className="text-xs text-text-muted">Net</p><p className="font-mono font-bold text-emerald-300">{opportunity.netProfitPercent.toFixed(3)}%</p></div>
-              <div className="text-left md:text-right"><p className="text-xs text-text-muted">Quality</p><p className="font-mono font-bold text-text-primary">{opportunity.overallScore}</p></div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <CentralLiveTriangularSection />
 
       <section className="grid gap-4 xl:grid-cols-2">
         <EvidencePanel title="Non-negotiable order boundary" icon={<ShieldCheck className="size-5" />} facts={[

@@ -21,9 +21,6 @@ const BotDashboard = lazy(
   () => import("@/modules/live-only/pages/LiveOnlyDashboard"),
 );
 
-const TradeFlowDashboard = lazy(
-  () => import("@/modules/trade-flow/pages/TradeFlowDashboard"),
-);
 
 const ExecutionMonitoringDashboard =
   lazy(
@@ -147,7 +144,7 @@ export default function AppRouter() {
             ]
           }
           element={
-            <TradeFlowDashboard />
+            <Navigate to={APP_PAGE_PATHS.arbitrage} replace />
           }
         />
 

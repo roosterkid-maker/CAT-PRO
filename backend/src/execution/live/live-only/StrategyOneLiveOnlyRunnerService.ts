@@ -1447,11 +1447,20 @@ export class StrategyOneLiveOnlyRunnerService {
     );
   }
 
+  /*
+   * Each record is the complete cumulative runner state (halt, last 500
+   * attempts, exclusions) and restore reads only the newest one, so older
+   * copies were pure growth: the append-only file reached ~854 MB (2,923
+   * snapshots of ~300 KB). The state is now written as a crash-safe
+   * checkpoint - fsynced temp file, atomic rename, previous copy kept as
+   * `.previous` - which bounds the file to one snapshot with the same
+   * restore semantics.
+   */
   private persist(
     now:
       number,
   ): void {
-    this.store.append({
+    this.store.replaceAllAtomically([{
       schemaVersion:
         "1.0",
       savedAt:
@@ -1466,7 +1475,7 @@ export class StrategyOneLiveOnlyRunnerService {
         [
           ...this.excludedMarkets.values(),
         ],
-    });
+    }]);
   }
 }
 
