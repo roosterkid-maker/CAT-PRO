@@ -63,7 +63,7 @@ assert.equal(
 );
 assert.equal(
   policy.minimumCurrentNetProfitPercent,
-  0.2,
+  1,
 );
 assert.equal(
   policy.minimumPostStressNetProfitPercent,

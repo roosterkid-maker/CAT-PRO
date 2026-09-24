@@ -10,7 +10,7 @@ import {
   opportunityService,
   type OpportunitySnapshot,
 } from "../../arbitrage/services/OpportunityService";
-import {getLiveOnlyRuntimePolicy} from "../../config/LiveOnlyRuntimePolicy";
+import {getLiveOnlyRuntimePolicy, LIVE_ONLY_MINIMUM_CURRENT_NET_PROFIT_PERCENT} from "../../config/LiveOnlyRuntimePolicy";
 import {
   strategyOneFundedRouteService,
   type StrategyOneFundedRouteReport,
@@ -25,7 +25,7 @@ export const CAPITAL_STUDY_REQUIRED_CURRENT_SAMPLES = 0;
 export const CAPITAL_STUDY_REQUIRED_QUALIFICATION_CYCLES = 0;
 export const CAPITAL_STUDY_REQUIRED_TOTAL_SAMPLES = 0;
 export const CAPITAL_STUDY_MINIMUM_SAMPLE_SPACING_MS = 750;
-export const CAPITAL_STUDY_BASELINE_NET_PERCENT = 0.20;
+export const CAPITAL_STUDY_BASELINE_NET_PERCENT = LIVE_ONLY_MINIMUM_CURRENT_NET_PROFIT_PERCENT;
 export const CAPITAL_STUDY_HARD_NET_FLOOR_PERCENT = 0.10;
 
 const MAXIMUM_TRACKED_ROUTES = 64;

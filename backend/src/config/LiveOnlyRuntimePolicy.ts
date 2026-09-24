@@ -4,12 +4,21 @@ export const LIVE_ONLY_RUNTIME_PROFILE =
 export const LIVE_ONLY_RUNTIME_CONFIRMATION =
   "ENABLE_CAT_PRO_LIVE_ONLY_RUNTIME" as const;
 
+/*
+ * Operator-set current fee-adjusted net gate for every LIVE-only USDT<->USDT
+ * attempt (2026-09-24: raised 0.20% -> 1.00% to match the arbitrage
+ * scanner's 1% rule). The capital study reads the same constant so the
+ * runner's eligibility filter and its preflight can never disagree.
+ */
+export const LIVE_ONLY_MINIMUM_CURRENT_NET_PROFIT_PERCENT =
+  1 as const;
+
 export interface LiveOnlyRuntimePolicy {
   readonly enabled: boolean;
   readonly minimumCapitalPerLegInr: 600;
   readonly preferredCapitalPerLegInr: number;
   readonly maximumCapitalPerLegInr: 1_000;
-  readonly minimumCurrentNetProfitPercent: 0.2;
+  readonly minimumCurrentNetProfitPercent: number;
   readonly minimumPostStressNetProfitPercent: 0.07;
   readonly maximumStatutoryCashWithholdingPercentPerAttempt: 2.1;
   readonly maximumOpportunityAgeMs: 600;
@@ -156,7 +165,7 @@ export function getLiveOnlyRuntimePolicy(
     maximumCapitalPerLegInr:
       1_000 as const,
     minimumCurrentNetProfitPercent:
-      0.2 as const,
+      LIVE_ONLY_MINIMUM_CURRENT_NET_PROFIT_PERCENT,
     minimumPostStressNetProfitPercent:
       0.07 as const,
     maximumStatutoryCashWithholdingPercentPerAttempt:
