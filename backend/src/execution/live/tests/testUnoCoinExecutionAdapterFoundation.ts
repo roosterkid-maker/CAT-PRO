@@ -798,6 +798,21 @@ async function testPreDispatchValidationAndLostCreateRecovery(): Promise<void> {
   }
   assertCondition(unknownRejected, "An unpublished UnoCoin minimum volume must still block dispatch.");
 
+  // A refused cancel (HTTP 422: order already completed) reads the order
+  // back instead of failing; the terminal state is the answer.
+  const refusedCancel = new UnoCoinExecutionAdapter({
+    orderApi: {
+      async createLimitOrder(): Promise<UnoCoinCreatedOrder> { throw new Error("not expected"); },
+      async getSpotOrder(): Promise<UnoCoinSpotOrder> { return normalizedOrder(1); },
+      async requestCancel(): Promise<void> { throw new Error("UnoCoin authenticated POST /api/exchange/cancel failed with HTTP 422."); },
+    },
+    credentialsSource: {getCredentials: () => ({apiToken: FIXTURE_TOKEN}), isConfigured: () => true},
+    sleep: async () => {},
+  });
+  const afterRefusal = await refusedCancel.cancelOrder(ORDER_ID, "BTC_INR", "SPOT");
+  assertCondition(afterRefusal.status === "FILLED" && afterRefusal.filledQuantity === 0.0001,
+    "A refused UnoCoin cancel must resolve to the order's real terminal state.");
+
   // One new matching row: the lost create is recovered and monitored.
   listCalls = 0;
   afterCreate = () => [{orderId: "200", side: "buy", price: 5_000_000, quantity: 0.0001}, ...baselineRows];

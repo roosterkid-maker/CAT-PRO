@@ -114,6 +114,8 @@ export interface InrRouteGatewayPort {
     readonly now?: number;
   }): Promise<CentralLiveOrderGatewayResponse>;
   cancelOrReconcile(idempotencyKey: string, now?: number): Promise<CentralLiveOrderGatewayResponse>;
+  /** Read-only re-read of a known order (no new submission, no cancel). */
+  readOrReconcile(idempotencyKey: string, now?: number): Promise<CentralLiveOrderGatewayResponse>;
 }
 
 export interface InrRouteHedgeVenueRules {
@@ -225,6 +227,14 @@ const DEFAULT_FILE = resolve(process.cwd(), "logs", "live", "inr-route-sessions.
 const MAXIMUM_SESSIONS = 300;
 const TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED", "FAILED"]);
 
+/*
+ * Some venues report fills late (UnoCoin order history lagged a real fill
+ * by several seconds and then refused the cancel with HTTP 422). Before an
+ * outcome is declared unknown, a known order is re-read a few times.
+ */
+const LATE_OUTCOME_READS = 6;
+const LATE_OUTCOME_READ_INTERVAL_MS = 2_500;
+
 export class InrRouteSessionExecutor {
   private readonly store: JsonlSnapshotStore<Snapshot>;
   private sessions: InrRouteSession[] = [];
@@ -233,6 +243,8 @@ export class InrRouteSessionExecutor {
     private readonly gateway: InrRouteGatewayPort,
     filePath = DEFAULT_FILE,
     private readonly now: () => number = Date.now,
+    private readonly sleep: (milliseconds: number) => Promise<void> =
+      (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   ) {
     this.store = new JsonlSnapshotStore({filePath, isPayload: isSnapshot});
     this.sessions = [...(this.store.readLatest()?.sessions ?? [])];
@@ -402,6 +414,22 @@ export class InrRouteSessionExecutor {
       }
     } catch (error: unknown) {
       failure = message(error);
+    }
+
+    // A known order ID whose final state is still unclear: re-read it
+    // (read-only) until the venue reports a terminal state or reads run out.
+    const readsNeeded = () =>
+      response?.record?.result?.orderId !== null &&
+      response?.record?.result?.orderId !== undefined &&
+      !TERMINAL.has(response.record.result.status);
+    for (let read = 0; read < LATE_OUTCOME_READS && readsNeeded(); read += 1) {
+      await this.sleep(LATE_OUTCOME_READ_INTERVAL_MS);
+      try {
+        response = await this.gateway.readOrReconcile(idempotencyKey, this.now());
+        failure = null;
+      } catch (error: unknown) {
+        failure = message(error);
+      }
     }
 
     const result = response?.record?.result ?? null;

@@ -99,6 +99,8 @@ function testPlanner(): void {
 
 type Outcome =
   | {kind: "fill"; filled: number; price: number}
+  /* Venue reports the fill late: TIMED_OUT, cancel refused, then FILLED after N reads. */
+  | {kind: "late"; filled: number; price: number; readsUntilFilled: number}
   | {kind: "uncertain"}
   | {kind: "throw"};
 
@@ -111,14 +113,27 @@ class FakeGateway implements InrRouteGatewayPort {
     if (this.rejectValidation && request.exchange === this.rejectValidation) throw new Error(`${request.exchange} rejects this order shape`);
   }
 
+  readonly reads: string[] = [];
+  private readonly requested = new Map<string, number>();
+
+  private record(leg: string, status: string, filled: number, price: number) {
+    return {
+      state: status === "FILLED" || status === "CANCELLED" ? "READY" as const : "EVIDENCE_INCOMPLETE" as const,
+      record: {result: {status, filledQuantity: filled, averageFillPrice: price, orderId: `order-${leg}`}},
+      reasons: [],
+    } as never;
+  }
+
   async executeOrReconcile(input: {readonly request: LiveExecutionRequest; readonly idempotencyKey: string}) {
     this.sent.push(input.request);
+    this.requested.set(input.idempotencyKey, input.request.quantity);
     const leg = input.idempotencyKey.split(":").at(-1) as string;
     const outcome = this.outcomes[leg] ?? {kind: "fill", filled: 0, price: 0};
     if (outcome.kind === "throw") throw new Error("socket hang up");
     if (outcome.kind === "uncertain") {
       return {state: "UNCERTAIN_SUBMISSION" as const, record: null, reasons: ["no order id"]};
     }
+    if (outcome.kind === "late") return this.record(leg, "TIMED_OUT", 0, 0);
     return {
       state: "READY" as const,
       record: {
@@ -133,8 +148,23 @@ class FakeGateway implements InrRouteGatewayPort {
     } as never;
   }
 
-  async cancelOrReconcile(): Promise<never> {
-    throw new Error("not expected");
+  async cancelOrReconcile(idempotencyKey: string) {
+    const leg = idempotencyKey.split(":").at(-1) as string;
+    const outcome = this.outcomes[leg];
+    if (outcome?.kind !== "late") throw new Error("not expected");
+    // Cancel refused (order already done) - outcome still unclear.
+    return this.record(leg, "TIMED_OUT", 0, 0);
+  }
+
+  async readOrReconcile(idempotencyKey: string) {
+    this.reads.push(idempotencyKey);
+    const leg = idempotencyKey.split(":").at(-1) as string;
+    const outcome = this.outcomes[leg];
+    if (outcome?.kind !== "late") throw new Error("not expected");
+    const reads = this.reads.filter((key) => key === idempotencyKey).length;
+    return reads >= outcome.readsUntilFilled
+      ? this.record(leg, "FILLED", outcome.filled, outcome.price)
+      : this.record(leg, "TIMED_OUT", 0, 0);
   }
 }
 
@@ -178,7 +208,7 @@ function executeInput(overrides: Partial<InrRouteExecuteInput> = {}): InrRouteEx
 async function testExecutor(directory: string): Promise<void> {
   let file = 0;
   const executor = (gateway: FakeGateway) =>
-    new InrRouteSessionExecutor(gateway, join(directory, `sessions-${file++}.jsonl`), () => NOW);
+    new InrRouteSessionExecutor(gateway, join(directory, `sessions-${file++}.jsonl`), () => NOW, async () => undefined);
 
   // Full fill, full hedge.
   const complete = new FakeGateway({primary: {kind: "fill", filled: 10, price: 100.5}, hedge1: {kind: "fill", filled: 10, price: 1.199}});
@@ -220,6 +250,22 @@ async function testExecutor(directory: string): Promise<void> {
   assert.equal(recovery.state, "RECOVERY_REQUIRED");
   assert.equal(recovery.residualQuantity, 10);
   assert.equal(stuck.sent.length, 4, "primary plus three bounded hedge attempts");
+
+  // The SKY incident: UnoCoin filled at once but reported it late (TIMED_OUT,
+  // cancel refused). Re-reading the known order finds FILLED and hedges.
+  const late = new FakeGateway({primary: {kind: "late", filled: 10, price: 100.5, readsUntilFilled: 3}, hedge1: {kind: "fill", filled: 10, price: 1.199}});
+  const lateSession = await executor(late).execute(executeInput({route: {...ROUTE, routeKey: "late", buyVenue: "unocoin", buyVenueMarket: "X_INR"}}));
+  assert.equal(lateSession.state, "COMPLETED", JSON.stringify(lateSession.reasons));
+  assert.equal(late.reads.length, 3, "the known order is re-read until the venue reports FILLED");
+  assert.equal(lateSession.primary?.filledQuantity, 10);
+  assert.equal(late.sent[1].exchange, "bybit", "then the exact fill is hedged");
+  assert.equal(late.sent[1].quantity, 10);
+
+  // Still unclear after every re-read: halt, never guess a hedge.
+  const neverKnown = new FakeGateway({primary: {kind: "late", filled: 10, price: 100.5, readsUntilFilled: 99}});
+  const unknownSession = await executor(neverKnown).execute(executeInput());
+  assert.equal(unknownSession.state, "POSSIBLE_EXPOSURE");
+  assert.equal(neverKnown.sent.length, 1);
 
   // Unknown primary outcome: no hedge is guessed.
   const uncertain = new FakeGateway({primary: {kind: "uncertain"}});
@@ -372,7 +418,7 @@ function runnerFixture(directory: string, name: string, overrides: Partial<InrRo
   let balanceSyncedAt = NOW - 1_000;
   const interlock = overrides.interlock ?? new LiveTradingInterlock();
   const gateway = overrides.gateway ?? new FakeGateway({});
-  const executor = new InrRouteSessionExecutor(gateway, join(directory, `${name}-sessions.jsonl`), () => clock);
+  const executor = new InrRouteSessionExecutor(gateway, join(directory, `${name}-sessions.jsonl`), () => clock, async () => undefined);
   const dependencies: Partial<InrRouteRunnerDependencies> = {
     getPolicy: () => policy("shadow"),
     getQualifiedRoutes: () => [scannedRoute()],

@@ -611,27 +611,49 @@ export class UnoCoinExecutionAdapter
       this.credentialsSource
         .getCredentials();
 
-    await this.orderApi
-      .requestCancel(
-        normalizedOrderId,
-        credentials,
-      );
+    let cancelError:
+      unknown =
+      null;
+
+    try {
+      await this.orderApi
+        .requestCancel(
+          normalizedOrderId,
+          credentials,
+        );
+    } catch (
+      error: unknown
+    ) {
+      // UnoCoin refuses to cancel an order that already completed (HTTP
+      // 422) while its history may still lag the fill. Read the order
+      // back instead of failing: a terminal state is the real answer.
+      cancelError = error;
+    }
 
     let latest:
       LiveExecutionResult | null =
       null;
 
+    // After a refused cancel the order is usually already done: read the
+    // lagging history less often (each read pages it) but for longer.
+    const attempts =
+      cancelError === null
+        ? UnoCoinExecutionAdapter.CANCEL_CONFIRMATION_ATTEMPTS
+        : 8;
+    const intervalMs =
+      cancelError === null
+        ? UnoCoinExecutionAdapter.CANCEL_CONFIRMATION_INTERVAL_MS
+        : 1_000;
+
     for (
       let attempt = 0;
       attempt <
-        UnoCoinExecutionAdapter
-          .CANCEL_CONFIRMATION_ATTEMPTS;
+        attempts;
       attempt +=
         1
     ) {
       await this.sleep(
-        UnoCoinExecutionAdapter
-          .CANCEL_CONFIRMATION_INTERVAL_MS,
+        intervalMs,
       );
       const order =
         await this.orderApi
@@ -656,9 +678,14 @@ export class UnoCoinExecutionAdapter
     }
 
     throw new Error(
-      latest
-        ? `UnoCoin cancellation remained unconfirmed at status ${latest.status}.`
-        : "UnoCoin cancellation produced no status evidence.",
+      [
+        latest
+          ? `UnoCoin cancellation remained unconfirmed at status ${latest.status}.`
+          : "UnoCoin cancellation produced no status evidence.",
+        cancelError !== null
+          ? `Cancel request failed: ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
+          : null,
+      ].filter(Boolean).join(" "),
     );
   }
 
