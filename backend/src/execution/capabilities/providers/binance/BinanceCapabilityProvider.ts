@@ -596,13 +596,13 @@ export class BinanceCapabilityProvider
       readonly ExchangeOrderType[],
   ): ExchangeTimeInForce[] {
     /*
-     * Current market-rules parsing does not
-     * expose Binance timeInForce metadata.
-     *
-     * GTC is safely associated with standard
-     * limit orders. IOC and FOK are not claimed
-     * until the API parser explicitly exposes
-     * them.
+     * Binance's exchangeInfo does not list
+     * time-in-force per symbol: its spot API
+     * documents GTC, IOC and FOK for every
+     * LIMIT order. Claiming only GTC made the
+     * shared validator refuse every IOC/FOK
+     * limit (INR-route hedges, Strategy #1
+     * FOK legs) before dispatch.
      */
     if (
       supportedOrderTypes.includes(
@@ -611,6 +611,8 @@ export class BinanceCapabilityProvider
     ) {
       return [
         "GTC",
+        "IOC",
+        "FOK",
       ];
     }
 
