@@ -7,6 +7,7 @@ import {
   resetDynamicLegSizeForTests,
 } from "../../execution/live/inr-routes/InrDynamicLegSize";
 import {loadInrRouteExecutionPolicy} from "../../execution/live/inr-routes/InrRouteExecutionPolicy";
+import {loadDailyLossLimitInr} from "../../execution/live/live-only/DailyLossGuard";
 
 function testLegSize(): void {
   // Small capital keeps the configured leg; the leg grows so the budget
@@ -32,6 +33,24 @@ function testLegSize(): void {
   assert.equal(loadInrRouteExecutionPolicy({CAT_PRO_LIVE_TRADE_CAPITAL_INR: "1500"}).targetCapitalPerLegInr, 1_500, "dynamic legs off");
   publishDynamicLegSize({legInr: 3_000, budgetInr: 48_000, at: Date.now() - 16 * 60_000});
   assert.equal(loadInrRouteExecutionPolicy(environment).targetCapitalPerLegInr, 1_500, "stale publication");
+  resetDynamicLegSizeForTests();
+}
+
+function testLossStop(): void {
+  // 2% of the deployable budget, never below the configured ₹500, never
+  // above ₹5,000; the configured stop when no fresh budget exists.
+  const environment = {CAT_PRO_LIVE_DAILY_LOSS_LIMIT_INR: "500", CAT_PRO_LIVE_DAILY_LOSS_LIMIT_PERCENT: "2"};
+  resetDynamicLegSizeForTests();
+  assert.equal(loadDailyLossLimitInr(environment), 500, "no budget published");
+  publishDynamicLegSize({legInr: 1_500, budgetInr: 23_746, at: Date.now()});
+  assert.equal(loadDailyLossLimitInr(environment), 500, "2% of ₹23,746 is ₹475: the ₹500 floor holds");
+  publishDynamicLegSize({legInr: 3_700, budgetInr: 60_000, at: Date.now()});
+  assert.equal(loadDailyLossLimitInr(environment), 1_200);
+  publishDynamicLegSize({legInr: 5_000, budgetInr: 1_000_000, at: Date.now()});
+  assert.equal(loadDailyLossLimitInr(environment), 5_000, "hard ceiling");
+  assert.equal(loadDailyLossLimitInr({CAT_PRO_LIVE_DAILY_LOSS_LIMIT_INR: "500"}), 500, "percent not set: fixed stop");
+  publishDynamicLegSize({legInr: 3_700, budgetInr: 60_000, at: Date.now() - 16 * 60_000});
+  assert.equal(loadDailyLossLimitInr(environment), 500, "stale budget");
   resetDynamicLegSizeForTests();
 }
 
@@ -88,5 +107,6 @@ function testVenuePlan(): void {
 }
 
 testLegSize();
+testLossStop();
 testVenuePlan();
 console.log("Venue plan passed: per-leg size grows with capital within the cap and falls back safely; the plan tells how much cash each exchange should hold for all current opportunities, naming coins only for stock on the wrong exchange.");

@@ -20,6 +20,10 @@ import {
   getInrArbitrageScanner,
 } from "../../../strategies/inr-arbitrage/InrArbitrageScannerService";
 
+import {
+  getDynamicLegSize,
+} from "../inr-routes/InrDynamicLegSize";
+
 /*
  * Daily realized-loss stop. Once today's realized net (IST calendar day)
  * reaches -limit, the live runner halts new attempts for the rest of that
@@ -37,21 +41,43 @@ const IST_OFFSET_MS =
 export const FALLBACK_USDT_INR_RATE =
   100;
 
+/* The scaled stop never exceeds this, whatever the budget. */
+export const MAXIMUM_DAILY_LOSS_LIMIT_INR =
+  5_000;
+
+/**
+ * The configured stop, or - when CAT_PRO_LIVE_DAILY_LOSS_LIMIT_PERCENT is
+ * set (operator, 2026-09-25: 2%) - that share of the capital manager's
+ * deployable budget, never below the configured stop and never above
+ * ₹5,000. Without a fresh budget it is the configured stop.
+ */
 export function loadDailyLossLimitInr(
   environment: NodeJS.ProcessEnv = process.env,
+  now: number = Date.now(),
 ): number {
   const raw =
     environment.CAT_PRO_LIVE_DAILY_LOSS_LIMIT_INR?.trim();
   const value =
     raw ? Number(raw) : 500;
 
-  if (!Number.isFinite(value) || value <= 0 || value > 5_000) {
+  if (!Number.isFinite(value) || value <= 0 || value > MAXIMUM_DAILY_LOSS_LIMIT_INR) {
     throw new Error(
       "CAT_PRO_LIVE_DAILY_LOSS_LIMIT_INR must be a positive rupee amount up to ₹5,000.",
     );
   }
 
-  return value;
+  const percent =
+    Number(environment.CAT_PRO_LIVE_DAILY_LOSS_LIMIT_PERCENT?.trim() || 0);
+  const budget =
+    percent > 0 && percent <= 10
+      ? getDynamicLegSize(now)?.budgetInr ?? null
+      : null;
+  if (budget === null) return value;
+
+  return Math.min(
+    MAXIMUM_DAILY_LOSS_LIMIT_INR,
+    Math.max(value, Math.round((budget * percent) / 100)),
+  );
 }
 
 export function istDayKey(

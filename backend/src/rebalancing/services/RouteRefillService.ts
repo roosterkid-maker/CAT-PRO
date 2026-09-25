@@ -51,6 +51,10 @@ import {
 } from "./CapitalAllocator";
 
 import {
+  loadDailyLossLimitInr,
+} from "../../execution/live/live-only/DailyLossGuard";
+
+import {
   legSizeForBudget,
   loadDynamicLegConfig,
   publishDynamicLegSize,
@@ -224,6 +228,14 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
     perLegInr,
     ideal,
   };
+}
+
+function safeLossLimit(): number | null {
+  try {
+    return loadDailyLossLimitInr();
+  } catch {
+    return null;
+  }
 }
 
 function targetsFromAllocation(allocation: CapitalAllocation): RefillTarget[] {
@@ -411,6 +423,7 @@ export class RouteRefillService {
           perLegInr: tradeSizeInr,
           configuredLegInr,
           dynamicLeg: loadDynamicLegConfig(),
+          dailyLossLimitInr: safeLossLimit(),
         }
         : null,
       venuePlan: allocation?.ideal

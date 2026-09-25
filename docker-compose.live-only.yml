@@ -10,6 +10,9 @@ services:
       CAT_PRO_LIVE_TRADE_CAPITAL_INR: "1500"
       # Halt new live attempts for the rest of the IST day at this realized loss.
       CAT_PRO_LIVE_DAILY_LOSS_LIMIT_INR: "500"
+      # Loss stop scales with capital (operator, 2026-09-25): 2% of the
+      # deployable budget, never below the INR stop above, never above INR 5,000.
+      CAT_PRO_LIVE_DAILY_LOSS_LIMIT_PERCENT: ${CAT_PRO_LIVE_DAILY_LOSS_LIMIT_PERCENT:-2}
       # INR route executor (USDT<->INR). shadow = plan from live books and
       # balances, never send. live additionally needs
       # CAT_PRO_INR_LIVE_CONFIRMATION=ENABLE_CAT_PRO_INR_ROUTE_LIVE.

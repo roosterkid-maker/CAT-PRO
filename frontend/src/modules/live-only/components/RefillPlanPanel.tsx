@@ -89,6 +89,9 @@ export function RefillPlanPanel() {
                 {plan.allocation.dynamicLeg.enabled
                   ? ` (auto: grows with capital, ₹${plan.allocation.configuredLegInr.toLocaleString("en-IN")}–₹${plan.allocation.dynamicLeg.maximumInr.toLocaleString("en-IN")})`
                   : ""}
+                {plan.allocation.dailyLossLimitInr !== null
+                  ? ` · daily loss stop ₹${plan.allocation.dailyLossLimitInr.toLocaleString("en-IN")}`
+                  : ""}
               </>
             ) : null}
           </p>
