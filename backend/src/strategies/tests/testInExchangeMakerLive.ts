@@ -5,6 +5,7 @@ import {join} from "node:path";
 
 import type {InrRouteExecuteInput, InrRouteSession} from "../../execution/live/inr-routes/InrRouteSessionExecutor";
 import {
+  applyToPosition,
   InExchangeMakerLiveEngine,
   IXM_HALT_RELEASE_CONFIRMATION,
   IXM_LIVE_CONFIRMATION,
@@ -29,15 +30,15 @@ function testConfig(): void {
   assert.equal(live.quoteInr, 150, "floored at the INR minimum order");
 }
 
-function session(state: InrRouteSession["state"], filled: number, realized: number | null, residual = 0): InrRouteSession {
+function session(state: InrRouteSession["state"], filled: number, realized: number | null, residual = 0, hedgePrice = 0.001952, reasons?: string[]): InrRouteSession {
   return {
     schemaVersion: "1.0", sessionId: `s-${state}`, route: {} as never, plan: {} as never, primarySide: "buy", state,
     startedAt: NOW, updatedAt: NOW,
     primary: filled > 0 ? {idempotencyKey: "p", venue: "coindcx", market: "RWAINR", side: "buy", requestedQuantity: 3_100, limitPrice: 0.19227,
       filledQuantity: filled, averagePrice: 0.19227, orderId: "o1", status: "FILLED", bufferPercent: null, reasons: []} : null,
     hedges: filled > 0 ? [{idempotencyKey: "h", venue: "coindcx", market: "RWAUSDT", side: "sell", requestedQuantity: filled, limitPrice: 0.00195,
-      filledQuantity: filled - residual, averagePrice: 0.001952, orderId: "o2", status: "FILLED", bufferPercent: 0.15, reasons: []}] : [],
-    hedgedQuantity: filled - residual, residualQuantity: residual, residualInr: 0, realizedNetInr: realized, reasons: state === "RECOVERY_REQUIRED" ? ["unhedged"] : [],
+      filledQuantity: filled - residual, averagePrice: hedgePrice, orderId: "o2", status: "FILLED", bufferPercent: 0.15, reasons: []}] : [],
+    hedgedQuantity: filled - residual, residualQuantity: residual, residualInr: 0, realizedNetInr: realized, reasons: reasons ?? (state === "RECOVERY_REQUIRED" ? ["unhedged"] : []),
   };
 }
 
@@ -146,7 +147,10 @@ async function testAttempts(directory: string): Promise<void> {
   assert.equal(await filled.engine.attempt("RWA", "BUY"), "COMPLETED");
   let diagnostics = filled.engine.getDiagnostics();
   assert.equal(diagnostics.recentFills.length, 1);
-  assert.equal(diagnostics.realizedTodayInr, 4.2);
+  // P&L from the position walk: sold at 0.001952 x 100 less 0.2%, bought at 0.19227 plus 0.59%.
+  const expected = 3_100 * (0.001952 * 100 * 0.998 - 0.19227 * 1.0059);
+  assert.ok(Math.abs(diagnostics.realizedTodayInr - expected) < 1e-6, `realized ${diagnostics.realizedTodayInr} vs ${expected}`);
+  assert.equal(diagnostics.inventory.RWA, 0, "a fully hedged fill leaves IXM flat");
   assert.equal(diagnostics.haltedReason, null);
   assert.equal(filled.published.length, 0);
 
@@ -165,13 +169,40 @@ async function testAttempts(directory: string): Promise<void> {
   assert.equal(await broken.engine.attempt("RWA", "BUY"), "RECOVERY_REQUIRED");
 
   // Daily loss stop: halts IXM (not the other runners) and lifts at IST midnight.
-  const losing = harness(directory, "losing", {outcome: session("COMPLETED", 3_100, -250)});
+  const losing = harness(directory, "losing", {outcome: session("COMPLETED", 3_100, null, 0, 0.00115)});
   await losing.engine.attempt("RWA", "BUY");
   assert.match(losing.engine.getDiagnostics().haltedReason ?? "", /^IXM_DAILY_LOSS\[/u);
   assert.equal(losing.published.length, 0, "a loss stop is not an exposure halt");
   assert.match(await losing.engine.attempt("RWA", "BUY"), /^HALTED/u);
   losing.advance(24 * 3_600_000);
   assert.equal(losing.engine.getDiagnostics().haltedReason, null);
+
+  // A partial fill under the hedge market's minimum is carried, not halted, and joins the next hedge.
+  const carry = harness(directory, "carry", {outcome: session("RECOVERY_REQUIRED", 1_000, null, 1_000, 0.001952, ["HEDGE_BELOW_MINIMUM: 1000 is under the hedge market's minimum order."])});
+  assert.equal(await carry.engine.attempt("RWA", "BUY"), "RECOVERY_REQUIRED");
+  assert.equal(carry.engine.getDiagnostics().haltedReason, null);
+  assert.equal(carry.engine.getDiagnostics().inventory.RWA, 1_000);
+  assert.equal(carry.engine.getDiagnostics().recentFills[0]!.state, "CARRIED");
+  await carry.engine.attempt("RWA", "BUY");
+  assert.equal(carry.calls[1]!.hedgeQuantityAdjustment, 1_000, "the next bid's hedge also sells the carried 1,000");
+  await carry.engine.attempt("RWA", "SELL");
+  assert.equal(carry.calls[2]!.hedgeQuantityAdjustment, -2_000, "an ask first uses up carried stock before buying back");
+  // Past the inventory limit it is an exposure again.
+  const big = harness(directory, "big", {config: {maximumInventoryInr: 100}, outcome: session("RECOVERY_REQUIRED", 1_000, null, 1_000, 0.001952, ["HEDGE_BELOW_MINIMUM: x"])});
+  await big.engine.attempt("RWA", "BUY");
+  assert.match(big.engine.getDiagnostics().haltedReason ?? "", /^IXM RECOVERY_REQUIRED/u);
+  assert.equal(big.engine.releaseHalt(IXM_HALT_RELEASE_CONFIRMATION, {flattened: true}), true);
+  assert.equal(big.engine.getDiagnostics().inventory.RWA, 0, "released as flattened by hand");
+
+  // Average-cost accounting.
+  const position = {quantity: 0, averageInr: 0};
+  assert.equal(applyToPosition(position, 2, 100), 0);
+  assert.equal(applyToPosition(position, 2, 110), 0);
+  assert.equal(position.averageInr, 105);
+  assert.equal(applyToPosition(position, -3, 120), 45);
+  assert.equal(applyToPosition(position, -3, 90), -15, "closing the last long unit below cost");
+  assert.equal(position.quantity, -2);
+  assert.equal(position.averageInr, 90);
 
   // Off: start() runs no worker.
   const off = harness(directory, "off", {config: {mode: "off"}});

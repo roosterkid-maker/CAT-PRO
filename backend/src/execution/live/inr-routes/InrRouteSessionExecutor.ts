@@ -134,7 +134,15 @@ export interface InrRouteExecuteInput {
   readonly hedgeRules: InrRouteHedgeVenueRules;
   /** Fresh hedge-side levels (bids to sell into, asks to buy from); refreshed per attempt on polled venues. */
   readonly getHedgeLevels: () => Promise<readonly OrderBookLevel[] | null>;
+  /**
+   * Units added to the fill to get the hedge target (IXM's carried
+   * inventory: + hedges more, - hedges less); the target never goes below 0.
+   */
+  readonly hedgeQuantityAdjustment?: number;
 }
+
+/** Marks a hedge skipped because it is under the hedge market's minimum order. */
+export const HEDGE_BELOW_MINIMUM = "HEDGE_BELOW_MINIMUM";
 
 interface Snapshot {
   readonly schemaVersion: "1.0";
@@ -324,6 +332,11 @@ export class InrRouteSessionExecutor {
       return this.save({...session, state: "POSSIBLE_EXPOSURE", reasons: [...session.reasons, "PRIMARY outcome is unknown; no hedge can be sized safely."]});
     }
     const filled = primary.fill.filledQuantity ?? 0;
+    if (primary.fill.status === "FILLED" && filled + 1e-12 < primary.fill.requestedQuantity) {
+      // A venue that says FILLED but reports less is not trusted either way.
+      return this.save({...session, state: "POSSIBLE_EXPOSURE", reasons: [...session.reasons,
+        `PRIMARY reported FILLED with ${filled} of ${primary.fill.requestedQuantity}; fill size unknown.`]});
+    }
     if (filled <= 0) {
       return this.save({...session, state: "NO_FILL", realizedNetInr: 0, reasons: [...session.reasons, "PRIMARY filled nothing; no exposure."]});
     }
@@ -332,8 +345,9 @@ export class InrRouteSessionExecutor {
     session = this.save({...session, state: "HEDGING", updatedAt: this.now()});
 
     let hedged = 0;
+    const target = Math.max(0, filled + (input.hedgeQuantityAdjustment ?? 0));
     for (const [attempt, bufferPercent] of input.hedgeBufferPercents.entries()) {
-      const remaining = floorToStep(filled - hedged, input.hedgeRules.quantityStep);
+      const remaining = floorToStep(target - hedged, input.hedgeRules.quantityStep);
       if (remaining <= 0) break;
       const levels = await input.getHedgeLevels();
       const touch = levels ? worstPrice(levels, remaining) : null;
@@ -346,8 +360,11 @@ export class InrRouteSessionExecutor {
         input.hedgeRules.priceStep,
         hedgeSide,
       );
-      if (input.hedgeRules.minimumNotional !== null && remaining * price < input.hedgeRules.minimumNotional) break;
-      if (input.hedgeRules.minimumQuantity !== null && remaining < input.hedgeRules.minimumQuantity) break;
+      if ((input.hedgeRules.minimumNotional !== null && remaining * price < input.hedgeRules.minimumNotional) ||
+        (input.hedgeRules.minimumQuantity !== null && remaining < input.hedgeRules.minimumQuantity)) {
+        session = this.save({...session, reasons: [...session.reasons, `${HEDGE_BELOW_MINIMUM}: ${remaining} is under the hedge market's minimum order.`]});
+        break;
+      }
 
       const key = `${sessionId}:hedge${attempt + 1}`;
       const request = hedgeRequest(key, remaining, price);
@@ -371,7 +388,7 @@ export class InrRouteSessionExecutor {
       hedged += result.fill.filledQuantity ?? 0;
     }
 
-    const residual = Math.max(0, filled - hedged);
+    const residual = Math.max(0, target - hedged);
     const referencePrice = primary.fill.averagePrice ?? primaryLimit;
     const primaryToInr = primarySide === "buy" ? input.route.buyToInr : input.route.sellToInr;
     const residualInr = residual * referencePrice * primaryToInr;

@@ -571,7 +571,8 @@ router.post(
       response.status(503).json({success: false, message: "In-exchange maker live engine is not started."});
       return;
     }
-    response.json({success: true, data: {released: live.releaseHalt(confirmation), engine: live.getDiagnostics()}});
+    const flattened = request.body?.flattened === true;
+    response.json({success: true, data: {released: live.releaseHalt(confirmation, {flattened}), engine: live.getDiagnostics()}});
   },
 );
 

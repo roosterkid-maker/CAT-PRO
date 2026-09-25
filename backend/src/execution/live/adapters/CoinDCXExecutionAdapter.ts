@@ -601,12 +601,19 @@ export class CoinDCXExecutionAdapter
         order.status,
       );
 
+    /*
+     * CoinDCX can report status "filled" with a stale remaining_quantity
+     * (seen: remaining = total on a filled order, fee charged). A FILLED
+     * order is fully filled.
+     */
     const filledQuantity =
-      Math.max(
-        0,
-        order.totalQuantity -
-          order.remainingQuantity,
-      );
+      status === "FILLED"
+        ? order.totalQuantity
+        : Math.max(
+          0,
+          order.totalQuantity -
+            order.remainingQuantity,
+        );
 
     return {
       success:
@@ -636,7 +643,9 @@ export class CoinDCXExecutionAdapter
       filledQuantity,
 
       remainingQuantity:
-        order.remainingQuantity,
+        status === "FILLED"
+          ? 0
+          : order.remainingQuantity,
 
       requestedPrice:
         order.pricePerUnit,

@@ -10,9 +10,10 @@ import type {
   OrderBook,
 } from "../../orderbook/models/OrderBook";
 
-import type {
-  InrRouteExecuteInput,
-  InrRouteSession,
+import {
+  HEDGE_BELOW_MINIMUM,
+  type InrRouteExecuteInput,
+  type InrRouteSession,
 } from "../../execution/live/inr-routes/InrRouteSessionExecutor";
 
 import {
@@ -123,12 +124,42 @@ export interface IxmLiveFill {
   /** Units the hedge could not cover (dust). */
   readonly residualQuantity: number;
   readonly state: string;
+  /** Units hedged on the USDT book (can exceed the fill when carried inventory joins the hedge). */
+  readonly hedgedQuantity?: number;
+  /** IXM's position in the coin after this fill. */
+  readonly positionAfter?: number;
+}
+
+/** IXM's own position in a coin: signed units at an average fee-inclusive INR cost. */
+export interface IxmPosition {
+  quantity: number;
+  averageInr: number;
+}
+
+/** Average-cost accounting: applies a trade of `delta` units at `priceInr`; returns realized INR. */
+export function applyToPosition(position: IxmPosition, delta: number, priceInr: number): number {
+  if (!(Math.abs(delta) > 1e-12)) return 0;
+  if (Math.abs(position.quantity) <= 1e-12 || Math.sign(position.quantity) === Math.sign(delta)) {
+    const total = Math.abs(position.quantity) + Math.abs(delta);
+    position.averageInr = (Math.abs(position.quantity) * position.averageInr + Math.abs(delta) * priceInr) / total;
+    position.quantity += delta;
+    return 0;
+  }
+  const closed = Math.min(Math.abs(position.quantity), Math.abs(delta));
+  const realized = closed * (position.quantity > 0 ? priceInr - position.averageInr : position.averageInr - priceInr);
+  position.quantity += delta;
+  if (Math.abs(position.quantity) <= 1e-9) position.quantity = 0;
+  // Crossing through flat opens the rest at this trade's price.
+  else if (Math.sign(position.quantity) === Math.sign(delta)) position.averageInr = priceInr;
+  return realized;
 }
 
 interface LiveState {
   readonly schemaVersion: "1.0";
   haltedReason: string | null;
   fills: IxmLiveFill[];
+  /** coin -> IXM's position (below-minimum fills carried until a hedge can take them). */
+  positions?: Record<string, IxmPosition>;
   /** IST day -> realized INR. */
   daily: Record<string, number>;
   counts: Record<string, number>;
@@ -176,6 +207,15 @@ export class InExchangeMakerLiveEngine {
   ) {
     this.store = new JsonlSnapshotStore({filePath, isPayload: isLiveState});
     this.state = this.store.readLatest() ?? {schemaVersion: "1.0", haltedReason: null, fills: [], daily: {}, counts: {}};
+    if (!this.state.positions) {
+      // Earlier state: rebuild each coin's position from its unhedged residuals.
+      const positions: Record<string, IxmPosition> = {};
+      for (const fill of this.state.fills) {
+        const position = positions[fill.coin] ?? (positions[fill.coin] = {quantity: 0, averageInr: 0});
+        applyToPosition(position, (fill.side === "BUY" ? 1 : -1) * fill.residualQuantity, fill.inrPrice);
+      }
+      this.state.positions = positions;
+    }
     if (this.state.haltedReason && !this.state.haltedReason.startsWith(DAILY_LOSS_PREFIX)) {
       this.dependencies.publishHalt(this.state.haltedReason);
     }
@@ -195,10 +235,15 @@ export class InExchangeMakerLiveEngine {
     await Promise.allSettled(this.workers);
   }
 
-  /** Operator release of a halt (the daily-loss halt lifts on its own at IST midnight). */
-  releaseHalt(confirmation: string): boolean {
+  /**
+   * Operator release of a halt (the daily-loss halt lifts on its own at IST
+   * midnight). `flattened`: the operator closed IXM's open positions by hand,
+   * so they are cleared.
+   */
+  releaseHalt(confirmation: string, options: {readonly flattened?: boolean} = {}): boolean {
     if (confirmation !== IXM_HALT_RELEASE_CONFIRMATION || !this.state.haltedReason) return false;
     this.state.haltedReason = null;
+    if (options.flattened) this.state.positions = {};
     this.dependencies.publishHalt(null);
     this.persist();
     return true;
@@ -219,6 +264,7 @@ export class InExchangeMakerLiveEngine {
       counts: {...this.state.counts},
       lastBlock: {...this.lastBlock},
       inventory: Object.fromEntries(this.config.coins.map((coin) => [coin, this.netQuantity(coin)])),
+      positions: Object.fromEntries(this.config.coins.map((coin) => [coin, {...(this.state.positions?.[coin] ?? {quantity: 0, averageInr: 0})}])),
       recentFills: [...this.state.fills].reverse().slice(0, 50),
     };
   }
@@ -317,6 +363,9 @@ export class InExchangeMakerLiveEngine {
 
     const feesPercent = this.dependencies.inrFeePercent() + this.dependencies.usdtFeePercent();
     const buyInr = side === "BUY";
+    // Carried inventory joins this fill's hedge: flatten as far as the fill allows.
+    const carried = this.netQuantity(coin);
+    const hedgeQuantityAdjustment = buyInr ? Math.max(-quantity, carried) : Math.max(-quantity, -carried);
     const session = await this.dependencies.execute({
       route: {
         routeKey: `IXM|${coin}|coindcx|${buyInr ? inrMarket : usdtMarket}|coindcx|${buyInr ? usdtMarket : inrMarket}`,
@@ -343,6 +392,7 @@ export class InExchangeMakerLiveEngine {
         expectedNetInr: 0,
       },
       primaryTimeoutMs: this.config.primaryTimeoutMs,
+      hedgeQuantityAdjustment,
       hedgeBufferPercents: [0.15, 0.5, 1],
       dustToleranceInr: 150,
       hedgeRules: {
@@ -373,8 +423,25 @@ export class InExchangeMakerLiveEngine {
       return block("NO_FILL");
     }
     const filled = session.primary?.filledQuantity ?? 0;
+    let carriedBelowMinimum = false;
     if (filled > 0) {
-      const realized = session.realizedNetInr ?? 0;
+      // P&L from IXM's position: the INR leg and the hedge at fee-inclusive INR prices.
+      const inrFee = this.dependencies.inrFeePercent() / 100;
+      const usdtFee = this.dependencies.usdtFeePercent() / 100;
+      const positions = this.state.positions ?? (this.state.positions = {});
+      const position = positions[coin] ?? (positions[coin] = {quantity: 0, averageInr: 0});
+      const inrPrice = session.primary?.averagePrice ?? price;
+      let realized = applyToPosition(position, (buyInr ? 1 : -1) * filled, inrPrice * (buyInr ? 1 + inrFee : 1 - inrFee));
+      const usdtInr = buyInr ? quote.usdtInrBid : quote.usdtInrAsk;
+      for (const hedge of session.hedges) {
+        const units = hedge.filledQuantity ?? 0;
+        if (!(units > 0) || !hedge.averagePrice) continue;
+        realized += applyToPosition(position, (buyInr ? -1 : 1) * units, hedge.averagePrice * usdtInr * (buyInr ? 1 - usdtFee : 1 + usdtFee));
+      }
+      // Under the hedge minimum is carried (not an exposure) while within the inventory limit.
+      carriedBelowMinimum = session.state === "RECOVERY_REQUIRED" &&
+        session.reasons.some((reason) => reason.startsWith(HEDGE_BELOW_MINIMUM)) &&
+        Math.abs(position.quantity) * inrPrice <= this.config.maximumInventoryInr;
       const hedgeFill = session.hedges.find((hedge) => (hedge.filledQuantity ?? 0) > 0);
       this.state.fills.push({
         at: session.updatedAt,
@@ -387,7 +454,9 @@ export class InExchangeMakerLiveEngine {
         usdtInr: buyInr ? quote.usdtInrBid : quote.usdtInrAsk,
         realizedInr: realized,
         residualQuantity: session.residualQuantity,
-        state: session.state,
+        state: carriedBelowMinimum ? "CARRIED" : session.state,
+        hedgedQuantity: session.hedgedQuantity,
+        positionAfter: position.quantity,
       });
       if (this.state.fills.length > MAXIMUM_FILLS) this.state.fills = this.state.fills.slice(-MAXIMUM_FILLS);
       const day = istDay(now);
@@ -396,7 +465,7 @@ export class InExchangeMakerLiveEngine {
         this.state.haltedReason = `${DAILY_LOSS_PREFIX}${day}]: IXM realized ₹${this.state.daily[day]!.toFixed(2)} today reached the -₹${this.config.dailyLossLimitInr} stop.`;
       }
     }
-    if (session.state !== "COMPLETED" && session.state !== "DUST_RESIDUAL") {
+    if (session.state !== "COMPLETED" && session.state !== "DUST_RESIDUAL" && !carriedBelowMinimum) {
       // Possible exposure, unhedged residual, or any state we do not expect.
       this.state.haltedReason = `IXM ${session.state}: session ${session.sessionId} on ${coin} ${side}. ${session.reasons.join(" ")}`.trim();
       this.dependencies.publishHalt(this.state.haltedReason);
@@ -444,11 +513,9 @@ export class InExchangeMakerLiveEngine {
     return reason;
   }
 
-  /** Net unhedged position: a hedged session is flat; only its residual moves it. */
+  /** IXM's open position in the coin (carried, unhedged units). */
   private netQuantity(coin: string): number {
-    return this.state.fills
-      .filter((fill) => fill.coin === coin)
-      .reduce((sum, fill) => sum + (fill.side === "BUY" ? 1 : -1) * fill.residualQuantity, 0);
+    return this.state.positions?.[coin]?.quantity ?? 0;
   }
 
   private persist(): void {
