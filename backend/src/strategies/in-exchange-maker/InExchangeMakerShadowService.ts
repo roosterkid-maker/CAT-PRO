@@ -231,6 +231,10 @@ export interface InExchangeMakerDependencies {
   readonly fetchVolumes: () => Promise<ReadonlyMap<string, number>>;
   /** Polled venues: refresh these INR books before quoting (optional). */
   readonly refreshBooks?: (markets: readonly string[]) => Promise<void>;
+  /** Streamed venues: keep these books subscribed (called every quoting pass). */
+  readonly subscribeBooks?: (markets: readonly string[]) => void;
+  /** Streamed venues: called with a market whenever its book changes; returns an unsubscribe. */
+  readonly onBookUpdate?: (listener: (market: string) => void) => () => void;
   readonly now: () => number;
 }
 
@@ -289,6 +293,8 @@ function isPersisted(value: unknown): value is PersistedState {
 }
 
 const SNAPSHOT_RETENTION_MS = 10 * 60_000;
+/* Book updates arrive in bursts: one re-price per coin per this window. */
+const REQUOTE_DEBOUNCE_MS = 100;
 const MAXIMUM_FILLS = 2_000;
 const DETAILS_REFRESH_MS = 60 * 60_000;
 
@@ -304,6 +310,11 @@ export class InExchangeMakerShadowService {
   private state: PersistedState;
   private polling = false;
   private readonly config: InExchangeMakerConfig;
+  private trackedSet = new Set<string>();
+  private readonly pendingRequotes = new Map<string, ReturnType<typeof setTimeout>>();
+  private unsubscribeBooks: (() => void) | null = null;
+  private bookUpdates = 0;
+  private requotes = 0;
 
   constructor(
     private readonly dependencies: InExchangeMakerDependencies,
@@ -323,12 +334,35 @@ export class InExchangeMakerShadowService {
     this.timers.push(setInterval(() => this.quoteCycle(), this.config.quoteIntervalMs));
     this.timers.push(setInterval(() => void this.tradeCycle(), this.config.tradePollIntervalMs));
     for (const timer of this.timers) timer.unref?.();
+    // Event-driven: re-price a coin shortly after any book it depends on moves.
+    this.unsubscribeBooks = this.dependencies.onBookUpdate?.((market) => this.onBook(market)) ?? null;
   }
 
   stop(): void {
     for (const timer of this.timers) clearInterval(timer);
     this.timers = [];
+    for (const timer of this.pendingRequotes.values()) clearTimeout(timer);
+    this.pendingRequotes.clear();
+    this.unsubscribeBooks?.();
+    this.unsubscribeBooks = null;
     this.persist();
+  }
+
+  private onBook(marketValue: string): void {
+    const market = marketValue.toUpperCase().replace(/[^A-Z0-9]/gu, "");
+    this.bookUpdates += 1;
+    const coins = market === "USDTINR"
+      ? this.tracked
+      : [market.endsWith("USDT") ? market.slice(0, -4) : market.endsWith("INR") ? market.slice(0, -3) : ""].filter((coin) => this.trackedSet.has(coin));
+    for (const coin of coins) {
+      if (this.pendingRequotes.has(coin)) continue;
+      const timer = setTimeout(() => {
+        this.pendingRequotes.delete(coin);
+        this.requote(coin);
+      }, REQUOTE_DEBOUNCE_MS);
+      timer.unref?.();
+      this.pendingRequotes.set(coin, timer);
+    }
   }
 
   /** Net position per coin from the simulated fills (units bought minus sold). */
@@ -367,29 +401,57 @@ export class InExchangeMakerShadowService {
     }
     ranked.sort((a, b) => b.score - a.score);
     this.tracked = ranked.slice(0, this.config.maximumTrackedCoins).map((entry) => entry.coin);
+    this.trackedSet = new Set(this.tracked);
 
-    for (const coin of this.tracked) {
-      const inr = this.dependencies.getInrBook(`${coin}INR`)!;
-      const hedge = this.dependencies.getHedgeBook(coin)!;
-      const tick = this.details.get(`${coin}INR`)?.tick ?? tickFromPrice(inr.bid ?? inr.ask ?? hedge.bid * conversion.bid);
-      const quotes = computeMakerQuotes({
-        inrBid: inr.bid, inrAsk: inr.ask, usdtBid: hedge.bid, usdtAsk: hedge.ask,
-        usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask,
-        inrFeePercent: inrFee, usdtFeePercent: hedgeFee, targetEdgePercent: this.config.targetEdgePercent, tick,
-      });
-      // Inventory limit: a side that would push the net position further
-      // past the limit stops quoting until fills on the other side bring
-      // it back (no transfer ever rebalances it).
-      const netInr = this.netQuantity(coin) * hedge.bid * conversion.bid;
-      const bid = netInr >= this.config.maximumInventoryInr ? null : quotes.bid;
-      const ask = netInr <= -this.config.maximumInventoryInr ? null : quotes.ask;
-      const state = this.coin(coin);
-      state.lastQuote = {...quotes, bid, ask, at: now, inrBid: inr.bid, inrAsk: inr.ask,
-        spreadPercent: inr.bid !== null && inr.ask !== null ? (inr.ask / inr.bid - 1) * 100 : null, hedgeVenue: hedge.venue};
-      state.snapshots.push({at: now, bid, ask, usdtBid: hedge.bid, usdtAsk: hedge.ask, usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask, hedgeVenue: hedge.venue});
-      state.snapshots = state.snapshots.filter((snapshot) => now - snapshot.at <= SNAPSHOT_RETENTION_MS);
-      for (const at of state.filledByQuote.keys()) if (now - at > SNAPSHOT_RETENTION_MS) state.filledByQuote.delete(at);
+    for (const coin of this.tracked) this.quoteCoin(coin, now, conversion, inrFee, hedgeFee);
+    // Streamed venues: keep the tracked coins' INR and USDT books open.
+    this.dependencies.subscribeBooks?.(this.tracked.flatMap((coin) => [`${coin}INR`, `${coin}USDT`]));
+  }
+
+  /** Re-prices one tracked coin now (a book it depends on just changed). */
+  requote(coin: string): void {
+    if (!this.trackedSet.has(coin)) return;
+    const conversion = this.dependencies.getConversion();
+    if (!conversion) return;
+    this.requotes += 1;
+    this.quoteCoin(coin, this.dependencies.now(), conversion, this.dependencies.inrFeePercent(), this.dependencies.hedgeFeePercent());
+  }
+
+  private quoteCoin(coin: string, now: number, conversion: TopOfBook, inrFee: number, hedgeFee: number): void {
+    const inr = this.dependencies.getInrBook(`${coin}INR`);
+    const hedge = this.dependencies.getHedgeBook(coin);
+    const state = this.coin(coin);
+    if (!inr || !hedge) {
+      // The book went stale: our quote is withdrawn until it is fresh again.
+      if (state.lastQuote && (state.lastQuote.bid !== null || state.lastQuote.ask !== null)) {
+        state.lastQuote = {...state.lastQuote, bid: null, ask: null, at: now};
+        state.snapshots.push({...(state.snapshots.at(-1) ?? {usdtBid: 0, usdtAsk: 0, usdtInrBid: 0, usdtInrAsk: 0}), at: now, bid: null, ask: null});
+      }
+      return;
     }
+    const tick = this.details.get(`${coin}INR`)?.tick ?? tickFromPrice(inr.bid ?? inr.ask ?? hedge.bid * conversion.bid);
+    const quotes = computeMakerQuotes({
+      inrBid: inr.bid, inrAsk: inr.ask, usdtBid: hedge.bid, usdtAsk: hedge.ask,
+      usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask,
+      inrFeePercent: inrFee, usdtFeePercent: hedgeFee, targetEdgePercent: this.config.targetEdgePercent, tick,
+    });
+    // Inventory limit: a side that would push the net position further
+    // past the limit stops quoting until fills on the other side bring
+    // it back (no transfer ever rebalances it).
+    const netInr = this.netQuantity(coin) * hedge.bid * conversion.bid;
+    const bid = netInr >= this.config.maximumInventoryInr ? null : quotes.bid;
+    const ask = netInr <= -this.config.maximumInventoryInr ? null : quotes.ask;
+    state.lastQuote = {...quotes, bid, ask, at: now, inrBid: inr.bid, inrAsk: inr.ask,
+      spreadPercent: inr.bid !== null && inr.ask !== null ? (inr.ask / inr.bid - 1) * 100 : null, hedgeVenue: hedge.venue};
+    // Keep a snapshot when our prices or the hedge moved, or once a second.
+    const last = state.snapshots.at(-1);
+    if (!last || last.bid !== bid || last.ask !== ask || last.usdtBid !== hedge.bid || last.usdtAsk !== hedge.ask || now - last.at >= 1_000) {
+      state.snapshots.push({at: now, bid, ask, usdtBid: hedge.bid, usdtAsk: hedge.ask, usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask, hedgeVenue: hedge.venue});
+    }
+    if (state.snapshots.length > 0 && now - state.snapshots[0]!.at > SNAPSHOT_RETENTION_MS) {
+      state.snapshots = state.snapshots.filter((snapshot) => now - snapshot.at <= SNAPSHOT_RETENTION_MS);
+    }
+    for (const at of state.filledByQuote.keys()) if (now - at > SNAPSHOT_RETENTION_MS) state.filledByQuote.delete(at);
   }
 
   /** One trade pass: read each tracked coin's public INR trades and fill our standing quotes. */
@@ -487,6 +549,7 @@ export class InExchangeMakerShadowService {
       startedAt: this.state.startedAt,
       hoursObserved: hours,
       config: this.config,
+      speed: {bookUpdates: this.bookUpdates, requotes: this.requotes, streamed: Boolean(this.dependencies.onBookUpdate)},
       totals: {
         fills: this.state.fills.length,
         edgeInr: totalEdge,
@@ -501,7 +564,8 @@ export class InExchangeMakerShadowService {
         .sort((a, b) => b.edgeInr - a.edgeInr),
       tracked: this.tracked.map((coin) => {
         const state = this.coins.get(coin);
-        return {coin, tradesSeen: state?.tradesSeen ?? 0, dailyVolumeInr: this.volumes.get(`${coin}INR`) ?? null, quote: state?.lastQuote ?? null};
+        return {coin, tradesSeen: state?.tradesSeen ?? 0, dailyVolumeInr: this.volumes.get(`${coin}INR`) ?? null, quote: state?.lastQuote ?? null,
+          quoteAgeMs: state?.lastQuote ? now - state.lastQuote.at : null};
       }),
       recentFills: [...this.state.fills].reverse().slice(0, 200),
       safety: {orderSubmissionAllowed: false, note: "Shadow simulation: quotes and fills are computed, never sent."},

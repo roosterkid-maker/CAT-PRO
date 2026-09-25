@@ -34,6 +34,8 @@ const UNOCOIN_BOOK_URL = "https://api.unocoin.com/api/v1/asset/orderbook";
 const UNOCOIN_TRADES_URL = "https://api.unocoin.com/api/v1/exchange/historical_trades";
 
 const QUOTE_MAX_AGE_MS = 60_000;
+/* A streamed book older than this is stale (the ticker fallback is 60 s). */
+const BOOK_MAX_AGE_MS = 5_000;
 const HEDGE_MAX_AGE_MS = 10_000;
 const UNOCOIN_BOOK_MAX_AGE_MS = 30_000;
 
@@ -91,24 +93,43 @@ async function coinDcxVolumes(): Promise<ReadonlyMap<string, number>> {
   return volumes;
 }
 
-function startCoinDcx(): InExchangeMakerShadowService {
+/* A CoinDCX quote: the streamed book when fresh, else the 10 s REST ticker. */
+function coinDcxTop(market: string): TopOfBook | null {
+  const quote = marketCache.get("coindcx", market);
+  return top(quote, quote?.executable ? BOOK_MAX_AGE_MS : QUOTE_MAX_AGE_MS);
+}
+
+export interface CoinDcxBookSubscriber {
+  requestTemporarySubscription(market: string, ttlMs?: number): boolean;
+}
+
+function startCoinDcx(books: CoinDcxBookSubscriber | null): InExchangeMakerShadowService {
   const existing = getInExchangeMakerShadow("coindcx");
   if (existing) return existing;
   const service = new InExchangeMakerShadowService({
     listInrMarkets: () => marketCache.getByExchange("coindcx").map((quote) => canonical(quote.market)).filter((market) => market.endsWith("INR")),
-    getInrBook: (market) => top(marketCache.get("coindcx", market), QUOTE_MAX_AGE_MS),
+    getInrBook: (market) => coinDcxTop(market),
     getHedgeBook: (coin) => {
-      const book = top(marketCache.get("coindcx", `${coin}USDT`), QUOTE_MAX_AGE_MS);
+      const book = coinDcxTop(`${coin}USDT`);
       return book ? {...book, venue: "coindcx"} : null;
     },
-    getConversion: () => top(marketCache.get("coindcx", "USDTINR"), QUOTE_MAX_AGE_MS),
+    // Keep each tracked coin's INR and USDT books streaming (renewed every pass).
+    subscribeBooks: books
+      ? (markets) => {
+        for (const market of markets) books.requestTemporarySubscription(market, 120_000);
+      }
+      : undefined,
+    onBookUpdate: (listener) => marketCache.subscribeToExecutableUpdates((update) => {
+      if (update.exchange === "coindcx" && update.kind === "UPSERT") listener(update.market);
+    }),
+    getConversion: () => coinDcxTop("USDTINR"),
     inrFeePercent: () => getExchangeTakerFeePercent("coindcx", "XINR") ?? 0.59,
     hedgeFeePercent: () => getExchangeTakerFeePercent("coindcx", "XUSDT") ?? 0.2,
     fetchMarketDetails: coinDcxMarketDetails,
     fetchTrades: coinDcxTrades,
     fetchVolumes: coinDcxVolumes,
     now: Date.now,
-  }, {venue: "coindcx"});
+  }, {venue: "coindcx", tradePollIntervalMs: 5_000});
   registerInExchangeMakerShadow("coindcx", service);
   service.start();
   return service;
@@ -203,8 +224,8 @@ function startUnoCoin(): InExchangeMakerShadowService {
   return service;
 }
 
-/** Starts both shadows (idempotent). */
-export function startInExchangeMakerShadow(): void {
-  startCoinDcx();
+/** Starts both shadows (idempotent); CoinDCX streams books through its order-book socket. */
+export function startInExchangeMakerShadow(coinDcxBooks: CoinDcxBookSubscriber | null = null): void {
+  startCoinDcx(coinDcxBooks);
   startUnoCoin();
 }

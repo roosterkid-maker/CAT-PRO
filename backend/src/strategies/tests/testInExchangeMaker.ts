@@ -145,6 +145,47 @@ async function testService(directory: string): Promise<void> {
   service.stop();
 }
 
+async function testStreamedRequote(directory: string): Promise<void> {
+  // A streamed venue: the tracked coin's books are kept subscribed, and a
+  // book change re-prices that coin within the debounce, not on the timer.
+  let inrBid = 0.44125;
+  const subscribed: string[][] = [];
+  let listener: ((market: string) => void) | null = null;
+  const service = new InExchangeMakerShadowService({
+    listInrMarkets: () => ["ALEXINR"],
+    getInrBook: () => ({bid: inrBid, ask: 0.45235}),
+    getHedgeBook: () => ({bid: 0.004475, ask: 0.004478, venue: "coindcx"}),
+    getConversion: () => ({bid: 99.9, ask: 99.92}),
+    inrFeePercent: () => 0.59,
+    hedgeFeePercent: () => 0.2006,
+    fetchMarketDetails: async () => new Map([["ALEXINR", {pair: "I-ALEX_INR", tick: 0.00001, minimumNotional: 100, active: true}]]),
+    fetchTrades: async () => [],
+    fetchVolumes: async () => new Map([["ALEXINR", 37_006]]),
+    subscribeBooks: (markets) => subscribed.push([...markets]),
+    onBookUpdate: (callback) => {
+      listener = callback;
+      return () => { listener = null; };
+    },
+    now: () => Date.now(),
+  }, {quoteIntervalMs: 60_000, tradePollIntervalMs: 60_000}, join(directory, "ixm-stream.jsonl"));
+  service.start();
+  await service.tradeCycle();
+  service.quoteCycle();
+  assert.deepEqual(subscribed.at(-1), ["ALEXINR", "ALEXUSDT"]);
+  assert.equal(service.getReport().tracked[0]?.quote?.bid, 0.44126);
+  // The INR best bid moves up; the book update re-prices within ~100 ms.
+  inrBid = 0.4413;
+  listener!("ALEXINR");
+  listener!("ALEXINR"); // a burst collapses into one re-price
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const report = service.getReport();
+  assert.equal(report.tracked[0]?.quote?.bid, 0.44131);
+  assert.equal(report.speed.requotes, 1);
+  assert.equal(report.speed.bookUpdates, 2);
+  service.stop();
+  assert.equal(listener, null, "unsubscribed on stop");
+}
+
 async function testPolledVenue(directory: string): Promise<void> {
   // UnoCoin: INR books are polled (only the busiest, with a hedge), the
   // hedge is another exchange's USDT book.
@@ -192,6 +233,7 @@ async function main(): Promise<void> {
     testFill();
     await testService(directory);
     await testPolledVenue(directory);
+    await testStreamedRequote(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }

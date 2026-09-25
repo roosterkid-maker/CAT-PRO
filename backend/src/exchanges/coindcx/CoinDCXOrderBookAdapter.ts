@@ -201,12 +201,13 @@ export class CoinDCXOrderBookAdapter {
     60_000;
 
   /*
-   * Shared by the USDT demand scanner, opportunity recovery and the INR
-   * route study (which self-limits to 16). 120 base + 30 temporary stays
-   * well under ORDER_BOOK.ABSOLUTE_MAX_MARKETS (300).
+   * Shared by the USDT demand scanner, opportunity recovery, the INR route
+   * study (which self-limits to 16) and the in-exchange maker (up to 15
+   * coins x INR + USDT books). 120 base + 60 temporary stays well under
+   * ORDER_BOOK.ABSOLUTE_MAX_MARKETS (300).
    */
   private static readonly MAXIMUM_TEMPORARY_SUBSCRIPTIONS =
-    30;
+    60;
 
   private static readonly MAXIMUM_CONCURRENT_SNAPSHOT_BOOTSTRAPS =
     6;

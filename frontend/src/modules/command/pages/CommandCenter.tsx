@@ -396,7 +396,7 @@ function InExchangePanel({maker, executor, venue, onVenue}: {
   return (
     <HudPanel
       title="IN-EXCHANGE · SAME COIN INR ↔ USDT"
-      meta={maker ? `${VENUE_NAME[venue]} maker shadow · hedge on ${venue === "coindcx" ? "CoinDCX USDT" : "Binance/Bybit USDT"} · ${maker.hoursObserved.toFixed(1)} h observed · edge target ${maker.config.targetEdgePercent}% · no orders sent` : "starting…"}
+      meta={maker ? `${VENUE_NAME[venue]} maker shadow · hedge on ${venue === "coindcx" ? "CoinDCX USDT" : "Binance/Bybit USDT"} · ${maker.speed?.streamed ? `live books · ${maker.speed.bookUpdates.toLocaleString("en-IN")} updates · ${maker.speed.requotes.toLocaleString("en-IN")} re-prices` : "polled books"} · ${maker.hoursObserved.toFixed(1)} h · edge target ${maker.config.targetEdgePercent}% · no orders sent` : "starting…"}
     >
       <div className="mb-3 flex gap-2 font-mono text-[11px]">
         {(["coindcx", "unocoin"] as const).map((option) => (
@@ -429,12 +429,13 @@ function InExchangePanel({maker, executor, venue, onVenue}: {
                   <th className="px-2 py-1.5 text-right font-normal">Our bid</th>
                   <th className="px-2 py-1.5 text-right font-normal">Our ask</th>
                   <th className="px-2 py-1.5 text-right font-normal">Hedge</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Age</th>
                   <th className="px-2 py-1.5 text-right font-normal">Trades</th>
                 </tr>
               </thead>
               <tbody>
                 {(maker?.tracked ?? []).length === 0 ? (
-                  <tr><td colSpan={8} className="px-2 py-6 text-center text-text-muted">No coin has room for a maker quote right now.</td></tr>
+                  <tr><td colSpan={9} className="px-2 py-6 text-center text-text-muted">No coin has room for a maker quote right now.</td></tr>
                 ) : (
                   (maker?.tracked ?? []).map((row) => (
                     <tr key={row.coin} className="border-t border-border-default/50">
@@ -445,6 +446,9 @@ function InExchangePanel({maker, executor, venue, onVenue}: {
                       <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.bid ? "text-emerald-300" : "text-text-muted"}`}>{price(row.quote?.bid ?? null)}</td>
                       <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.ask ? "text-rose-300" : "text-text-muted"}`}>{price(row.quote?.ask ?? null)}</td>
                       <td className="px-2 py-1.5 text-right text-text-muted">{row.quote?.hedgeVenue ?? "—"}</td>
+                      <td className={`px-2 py-1.5 text-right tabular-nums ${row.quoteAgeMs != null && row.quoteAgeMs < 2_000 ? "text-emerald-300" : "text-text-muted"}`}>
+                        {row.quoteAgeMs == null ? "—" : row.quoteAgeMs < 1_000 ? `${row.quoteAgeMs} ms` : `${(row.quoteAgeMs / 1_000).toFixed(1)} s`}
+                      </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{row.tradesSeen}</td>
                     </tr>
                   ))

@@ -551,7 +551,7 @@ class WebSocketManager {
        * In-exchange maker (CoinDCX INR vs USDT books): shadow simulation
        * only - quotes and fills are computed, never sent.
        */
-      startInExchangeMakerShadow();
+      startInExchangeMakerShadow(this.coinDCXOrderBook);
 
       registerCoinSwitchInrDepthPoller(
         this.coinSwitchInrDepthPoller,
