@@ -492,17 +492,16 @@ export class UnoCoinOrderApi {
               ),
           );
 
-      if (
-        matches.length >
-        1
-      ) {
-        throw new Error(
-          `UnoCoin order history contains duplicate matches for order ${normalizedOrderId}.`,
-        );
-      }
-
+      // An order filled in pieces is listed as one row per piece under the
+      // same id (seen on DASH_INR 2026-09-25: three completed rows summing to
+      // the order). Those merge into one order; anything else stays ambiguous.
       const match =
-        matches[0];
+        matches.length > 1
+          ? this.mergeSplitFillRows(
+              matches,
+              normalizedOrderId,
+            )
+          : matches[0];
 
       if (match) {
         return this.normalizeHistoryOrder(
@@ -640,6 +639,44 @@ export class UnoCoinOrderApi {
         "UnoCoin cancellation request was not accepted.",
       );
     }
+  }
+
+  /**
+   * Rows of one order, each a completed piece (status 1) of the same side
+   * and coin with no transaction list of its own, become one completed
+   * order whose fills are the pieces. Any other shape of repeated id is
+   * refused: the outcome is then treated as unknown, never guessed.
+   */
+  private mergeSplitFillRows(
+    rows: readonly Record<string, unknown>[],
+    orderId: string,
+  ): Record<string, unknown> {
+    const first = rows[0]!;
+    const same = (field: string) =>
+      rows.every((row) => this.stringValue(row[field]).toUpperCase() === this.stringValue(first[field]).toUpperCase());
+    const piecesOnly = rows.every((row) =>
+      Number(row.status) === 1 &&
+      (row.exchange_transactions === undefined || row.exchange_transactions === null ||
+        (Array.isArray(row.exchange_transactions) && row.exchange_transactions.length === 0)));
+    if (!same("order_type") || !same("coin") || !same("advance_order_type") || !piecesOnly) {
+      throw new Error(
+        `UnoCoin order history contains duplicate matches for order ${orderId}.`,
+      );
+    }
+    const pieces = rows.map((row, index) => ({
+      volume: this.positiveNumber(row.volume, `piece ${index} volume`),
+      rate: this.positiveNumber(row.rate, `piece ${index} rate`),
+    }));
+    const volume = pieces.reduce((total, piece) => total + piece.volume, 0);
+    const buy = this.stringValue(first.order_type).toUpperCase() === "BID";
+    return {
+      ...first,
+      // The limit is the worst piece price for the side.
+      rate: String(buy ? Math.max(...pieces.map((piece) => piece.rate)) : Math.min(...pieces.map((piece) => piece.rate))),
+      volume: String(volume),
+      status: 1,
+      exchange_transactions: pieces.map((piece) => ({volume: String(piece.volume), rate: String(piece.rate)})),
+    };
   }
 
   private normalizeHistoryOrder(
