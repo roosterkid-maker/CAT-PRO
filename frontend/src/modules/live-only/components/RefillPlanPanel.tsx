@@ -56,7 +56,7 @@ export function RefillPlanPanel() {
             ) : null}
             {plan.automation.autoBuy?.enabled ? (
               <>
-                {" "}· auto-buy ₹{Math.round(plan.automation.autoBuy.spentTodayInr).toLocaleString("en-IN")} / ₹{plan.automation.autoBuy.dailyCapInr.toLocaleString("en-IN")} today · keeps ₹{plan.automation.autoBuy.cashFloorInr.toLocaleString("en-IN")} cash
+                {" "}· auto-buy ₹{Math.round(plan.automation.autoBuy.spentTodayInr).toLocaleString("en-IN")} {plan.automation.autoBuy.dailyCapInr === null ? " today (no daily cap)" : ` / ₹${plan.automation.autoBuy.dailyCapInr.toLocaleString("en-IN")} today`} · keeps ₹{plan.automation.autoBuy.cashFloorInr.toLocaleString("en-IN")} cash
               </>
             ) : null}
             {plan.automation.autoSell?.enabled ? (

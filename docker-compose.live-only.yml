@@ -32,7 +32,8 @@ services:
       # limits 2026-09-24): core coins only, up to target, <= INR 10,000/day,
       # keeping INR 1,000 of cash on the venue, never at a > 1% premium.
       CAT_PRO_REFILL_AUTO_BUY_ENABLED: ${CAT_PRO_REFILL_AUTO_BUY_ENABLED:-true}
-      CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR: ${CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR:-10000}
+      # "none" = no daily cap (operator, 2026-09-25).
+      CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR: ${CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR:-none}
       CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR: ${CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR:-1000}
       # Capital manager v2 (operator, 2026-09-25): sell idle / surplus stock to
       # fund coins with live opportunity. Guards: <= INR 5,000/day, 24 h hold,

@@ -375,7 +375,7 @@ export interface RefillPlanResponse {
       blocked: Record<string, {until: number; reason: string}>;
       autoBuy: {
         enabled: boolean;
-        dailyCapInr: number;
+        dailyCapInr: number | null;
         spentTodayInr: number;
         cashFloorInr: number;
         paused: Record<string, {until: number; reason: string}>;

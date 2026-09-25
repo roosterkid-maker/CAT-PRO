@@ -125,7 +125,8 @@ const SELL_VENUE_QUOTES: Readonly<Record<string, readonly ("INR" | "USDT")[]>> =
 
 export interface AutoBuyConfig {
   readonly enabled: boolean;
-  readonly dailyCapInr: number;
+  /** null: no daily cap (operator, 2026-09-25); buys stay bounded by target, cash floor and premium. */
+  readonly dailyCapInr: number | null;
   readonly cashFloorInr: number;
 }
 
@@ -136,7 +137,9 @@ export function loadAutoBuyConfig(environment: NodeJS.ProcessEnv = process.env):
   };
   return {
     enabled: environment.CAT_PRO_REFILL_AUTO_BUY_ENABLED?.trim().toLowerCase() === "true",
-    dailyCapInr: Math.min(number("CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR", 5_000), 50_000),
+    dailyCapInr: ["none", "unlimited", "off"].includes(environment.CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR?.trim().toLowerCase() ?? "")
+      ? null
+      : Math.min(number("CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR", 5_000), 50_000),
     cashFloorInr: number("CAT_PRO_REFILL_AUTO_BUY_CASH_FLOOR_INR", 1_000),
   };
 }
@@ -648,7 +651,8 @@ export class RouteRefillService {
       if (block && block.until > now) continue;
 
       const spent = this.state.buySpentInr?.[day] ?? 0;
-      const remaining = plan.automation.autoBuy.dailyCapInr - spent;
+      const cap = plan.automation.autoBuy.dailyCapInr;
+      const remaining = cap === null ? Number.POSITIVE_INFINITY : cap - spent;
       const cash = valuation.holdingInr(action.toVenue, quote) ?? 0;
       const allowedByCash = cash - plan.automation.autoBuy.cashFloorInr;
       const amountInr = Math.floor(Math.min(action.amountInr, remaining, allowedByCash));

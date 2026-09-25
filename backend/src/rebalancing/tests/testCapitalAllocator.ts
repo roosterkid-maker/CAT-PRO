@@ -4,7 +4,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 
 import {allocateCapital, cashPool, type AllocationCandidate, type CapitalAllocation} from "../services/CapitalAllocator";
-import {RouteRefillService} from "../services/RouteRefillService";
+import {loadAutoBuyConfig, RouteRefillService} from "../services/RouteRefillService";
 import type {StockBuyPort, StockBuyRequest, StockBuyResult, StockSellRequest} from "../services/StockBuyExecutor";
 import type {RebalancingExecutionConfig} from "../execution/RebalancingExecutionConfig";
 import {buildLiveSignal, ingestWindows} from "../../strategies/inr-arbitrage/CoinStudyService";
@@ -24,6 +24,13 @@ function candidate(overrides: Partial<AllocationCandidate>): AllocationCandidate
     studyRank: null,
     ...overrides,
   };
+}
+
+function testAutoBuyCap(): void {
+  // "none" lifts the daily buy cap; numbers still cap (at most INR 50,000).
+  assert.equal(loadAutoBuyConfig({CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR: "none"}).dailyCapInr, null);
+  assert.equal(loadAutoBuyConfig({CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR: "10000"}).dailyCapInr, 10_000);
+  assert.equal(loadAutoBuyConfig({CAT_PRO_REFILL_AUTO_BUY_DAILY_CAP_INR: "999999"}).dailyCapInr, 50_000);
 }
 
 function testAllocator(): void {
@@ -356,6 +363,7 @@ async function testMinimumHold(directory: string): Promise<void> {
 async function main(): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "cat-pro-allocator-"));
   try {
+    testAutoBuyCap();
     testAllocator();
     testLiveSignal();
     await testStockSells(directory);
