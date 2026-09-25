@@ -465,6 +465,21 @@ export interface InExchangeMakerResponse {
         hedgeVenue: string;
       } | null;
     }>;
-    recentFills: Array<{coin: string; side: "BUY" | "SELL"; at: number; price: number; quantity: number; notionalInr: number; edgeInr: number; edgePercent: number}>;
+    recentFills: Array<{
+      coin: string;
+      side: "BUY" | "SELL";
+      at: number;
+      price: number;
+      quantity: number;
+      notionalInr: number;
+      edgeInr: number;
+      edgePercent: number;
+      hedgeVenue?: string;
+      hedgePriceUsdt?: number;
+      hedgeUsdt?: number;
+      usdtInr?: number;
+      inrFeeInr?: number;
+      hedgeFeeInr?: number;
+    }>;
   };
 }

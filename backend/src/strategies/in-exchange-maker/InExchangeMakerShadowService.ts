@@ -92,6 +92,7 @@ interface QuoteSnapshot {
   readonly usdtAsk: number;
   readonly usdtInrBid: number;
   readonly usdtInrAsk: number;
+  readonly hedgeVenue?: string;
 }
 
 export interface ShadowFill {
@@ -104,6 +105,13 @@ export interface ShadowFill {
   /** INR kept after the INR fee, the hedge at the USDT book and its fee. */
   readonly edgeInr: number;
   readonly edgePercent: number;
+  /* The hedge leg and the costs, for the detailed fill view. */
+  readonly hedgeVenue?: string;
+  readonly hedgePriceUsdt?: number;
+  readonly hedgeUsdt?: number;
+  readonly usdtInr?: number;
+  readonly inrFeeInr?: number;
+  readonly hedgeFeeInr?: number;
 }
 
 /**
@@ -117,23 +125,33 @@ export function simulateFill(input: {
   readonly quoteSizeInr: number;
   readonly inrFeePercent: number;
   readonly usdtFeePercent: number;
+  /** Units of this standing quote already filled (a quote fills once, then is re-placed). */
+  readonly alreadyFilled?: {readonly bid: number; readonly ask: number};
 }): ShadowFill | null {
   const inr = input.inrFeePercent / 100;
   const usdt = input.usdtFeePercent / 100;
   const {trade, quote} = input;
   if (trade.buyerMaker && quote.bid !== null && trade.price <= quote.bid) {
-    const quantity = Math.min(trade.quantity, input.quoteSizeInr / quote.bid);
+    const quantity = Math.min(trade.quantity, input.quoteSizeInr / quote.bid - (input.alreadyFilled?.bid ?? 0));
+    if (!(quantity > 1e-12)) return null;
     const cost = quantity * quote.bid * (1 + inr);
-    const hedge = quantity * quote.usdtBid * (1 - usdt) * quote.usdtInrBid;
+    const hedgeUsdt = quantity * quote.usdtBid;
+    const hedge = hedgeUsdt * (1 - usdt) * quote.usdtInrBid;
     return {coin: input.coin, side: "BUY", at: trade.at, price: quote.bid, quantity, notionalInr: quantity * quote.bid,
-      edgeInr: hedge - cost, edgePercent: ((hedge - cost) / cost) * 100};
+      edgeInr: hedge - cost, edgePercent: ((hedge - cost) / cost) * 100,
+      hedgeVenue: quote.hedgeVenue, hedgePriceUsdt: quote.usdtBid, hedgeUsdt, usdtInr: quote.usdtInrBid,
+      inrFeeInr: quantity * quote.bid * inr, hedgeFeeInr: hedgeUsdt * usdt * quote.usdtInrBid};
   }
   if (!trade.buyerMaker && quote.ask !== null && trade.price >= quote.ask) {
-    const quantity = Math.min(trade.quantity, input.quoteSizeInr / quote.ask);
+    const quantity = Math.min(trade.quantity, input.quoteSizeInr / quote.ask - (input.alreadyFilled?.ask ?? 0));
+    if (!(quantity > 1e-12)) return null;
     const proceeds = quantity * quote.ask * (1 - inr);
-    const hedge = quantity * quote.usdtAsk * (1 + usdt) * quote.usdtInrAsk;
+    const hedgeUsdt = quantity * quote.usdtAsk;
+    const hedge = hedgeUsdt * (1 + usdt) * quote.usdtInrAsk;
     return {coin: input.coin, side: "SELL", at: trade.at, price: quote.ask, quantity, notionalInr: quantity * quote.ask,
-      edgeInr: proceeds - hedge, edgePercent: ((proceeds - hedge) / hedge) * 100};
+      edgeInr: proceeds - hedge, edgePercent: ((proceeds - hedge) / hedge) * 100,
+      hedgeVenue: quote.hedgeVenue, hedgePriceUsdt: quote.usdtAsk, hedgeUsdt, usdtInr: quote.usdtInrAsk,
+      inrFeeInr: quantity * quote.ask * inr, hedgeFeeInr: hedgeUsdt * usdt * quote.usdtInrAsk};
   }
   return null;
 }
@@ -251,6 +269,8 @@ const STABLE_COINS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "U
 
 interface CoinState {
   snapshots: QuoteSnapshot[];
+  /** Units filled per standing quote (keyed by its time), so one quote cannot fill twice. */
+  filledByQuote: Map<number, {bid: number; ask: number}>;
   seen: Set<string>;
   lastTradeAt: number;
   tradesSeen: number;
@@ -291,9 +311,9 @@ export class InExchangeMakerShadowService {
     filePath?: string,
   ) {
     this.config = {...DEFAULT_IN_EXCHANGE_MAKER_CONFIG, ...config};
-    const defaultFile = this.config.venue === "coindcx"
-      ? "in-exchange-maker-shadow.jsonl"
-      : `in-exchange-maker-shadow-${this.config.venue}.jsonl`;
+    // v2: fills from before one standing quote could fill only once are
+    // left untouched in the v1 files and not counted.
+    const defaultFile = `in-exchange-maker-shadow-${this.config.venue}-v2.jsonl`;
     this.store = new JsonlSnapshotStore({filePath: filePath ?? resolve(process.cwd(), "logs", "live", defaultFile), isPayload: isPersisted});
     this.state = this.store.readLatest() ?? {schemaVersion: "1.0", startedAt: dependencies.now(), fills: []};
   }
@@ -366,8 +386,9 @@ export class InExchangeMakerShadowService {
       const state = this.coin(coin);
       state.lastQuote = {...quotes, bid, ask, at: now, inrBid: inr.bid, inrAsk: inr.ask,
         spreadPercent: inr.bid !== null && inr.ask !== null ? (inr.ask / inr.bid - 1) * 100 : null, hedgeVenue: hedge.venue};
-      state.snapshots.push({at: now, bid, ask, usdtBid: hedge.bid, usdtAsk: hedge.ask, usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask});
+      state.snapshots.push({at: now, bid, ask, usdtBid: hedge.bid, usdtAsk: hedge.ask, usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask, hedgeVenue: hedge.venue});
       state.snapshots = state.snapshots.filter((snapshot) => now - snapshot.at <= SNAPSHOT_RETENTION_MS);
+      for (const at of state.filledByQuote.keys()) if (now - at > SNAPSHOT_RETENTION_MS) state.filledByQuote.delete(at);
     }
   }
 
@@ -425,8 +446,10 @@ export class InExchangeMakerShadowService {
           if (!standing || trade.at - standing.at > 2 * this.config.quoteIntervalMs) continue;
           state.tradesSeen += 1;
           state.lastTradeAt = Math.max(state.lastTradeAt, trade.at);
-          const fill = simulateFill({coin, trade, quote: standing, quoteSizeInr: this.config.quoteSizeInr, inrFeePercent: inrFee, usdtFeePercent: hedgeFee});
+          const filled = state.filledByQuote.get(standing.at) ?? {bid: 0, ask: 0};
+          const fill = simulateFill({coin, trade, quote: standing, quoteSizeInr: this.config.quoteSizeInr, inrFeePercent: inrFee, usdtFeePercent: hedgeFee, alreadyFilled: filled});
           if (fill) {
+            state.filledByQuote.set(standing.at, fill.side === "BUY" ? {...filled, bid: filled.bid + fill.quantity} : {...filled, ask: filled.ask + fill.quantity});
             this.state.fills.push(fill);
             if (this.state.fills.length > MAXIMUM_FILLS) this.state.fills = this.state.fills.slice(-MAXIMUM_FILLS);
           }
@@ -480,7 +503,7 @@ export class InExchangeMakerShadowService {
         const state = this.coins.get(coin);
         return {coin, tradesSeen: state?.tradesSeen ?? 0, dailyVolumeInr: this.volumes.get(`${coin}INR`) ?? null, quote: state?.lastQuote ?? null};
       }),
-      recentFills: [...this.state.fills].reverse().slice(0, 30),
+      recentFills: [...this.state.fills].reverse().slice(0, 200),
       safety: {orderSubmissionAllowed: false, note: "Shadow simulation: quotes and fills are computed, never sent."},
     };
   }
@@ -488,7 +511,7 @@ export class InExchangeMakerShadowService {
   private coin(coin: string): CoinState {
     let state = this.coins.get(coin);
     if (!state) {
-      state = {snapshots: [], seen: new Set(), lastTradeAt: 0, tradesSeen: 0, lastQuote: null};
+      state = {snapshots: [], filledByQuote: new Map(), seen: new Set(), lastTradeAt: 0, tradesSeen: 0, lastQuote: null};
       this.coins.set(coin, state);
     }
     return state;

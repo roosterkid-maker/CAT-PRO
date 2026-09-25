@@ -121,6 +121,14 @@ async function testService(directory: string): Promise<void> {
   // The same trade is not counted twice.
   await service.tradeCycle();
   assert.equal(service.getReport().totals.fills, 1);
+  // Several trades in the same moment cannot fill one standing quote twice.
+  const repeated = service.getReport().recentFills[0]!;
+  assert.ok(Math.abs(repeated.notionalInr - 1_500) < 1, "the first trade filled the whole ₹1,500 quote");
+  assert.equal(repeated.hedgeVenue, "coindcx");
+  assert.ok((repeated.hedgeUsdt ?? 0) > 0 && (repeated.inrFeeInr ?? 0) > 0);
+  trades = [...trades, {price: 0.44125, quantity: 5_000, at: now - 400, buyerMaker: true}, {price: 0.44125, quantity: 5_000, at: now - 300, buyerMaker: true}];
+  await service.tradeCycle();
+  assert.equal(service.getReport().totals.fills, 1, "same quote, already filled");
 
   // Inventory limit: after a second buy the net position (~INR 3,000) is past
   // the INR 2,000 limit, so the bid stops; the ask keeps quoting.

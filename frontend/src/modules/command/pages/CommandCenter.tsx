@@ -238,6 +238,7 @@ export default function CommandCenter() {
 
       {/* ======================= in-exchange (same coin, INR vs USDT) ======================= */}
       <InExchangePanel maker={maker} executor={executor} venue={makerVenue} onVenue={setMakerVenue} />
+      <InExchangeFillsPanel maker={maker} venue={makerVenue} />
 
       {/* ======================= charts ======================= */}
       <div className="grid gap-4 lg:grid-cols-3">
@@ -486,6 +487,82 @@ function InExchangePanel({maker, executor, venue, onVenue}: {
             )}
           </div>
         </div>
+      </div>
+    </HudPanel>
+  );
+}
+
+/*
+ * Every simulated in-exchange fill in full: when, which exchange, the INR
+ * leg (our maker order), the USDT hedge leg, the USDT/INR rate, the fees,
+ * and what was left.
+ */
+function InExchangeFillsPanel({maker, venue}: {maker: Maker | undefined; venue: "coindcx" | "unocoin"}) {
+  const fills = maker?.recentFills ?? [];
+  const qty = (value: number) => (value >= 1_000 ? value.toFixed(0) : value >= 1 ? value.toFixed(3) : value.toPrecision(4));
+  return (
+    <HudPanel
+      title="IN-EXCHANGE FILLS · FULL DETAIL"
+      meta={`${VENUE_NAME[venue]} · shadow simulation · latest ${fills.length} fills · no orders sent`}
+    >
+      <div className="overflow-auto" style={{maxHeight: 420}}>
+        <table className="w-full min-w-[72rem] text-left font-mono text-[11px]">
+          <thead className="sticky top-0 bg-[var(--cc-panel,#0b0f0d)] text-text-muted">
+            <tr>
+              <th className="px-2 py-1.5 font-normal">Time (IST)</th>
+              <th className="px-2 py-1.5 font-normal">Exchange</th>
+              <th className="px-2 py-1.5 font-normal">Coin</th>
+              <th className="px-2 py-1.5 font-normal">Side</th>
+              <th className="px-2 py-1.5 text-right font-normal">INR leg (maker)</th>
+              <th className="px-2 py-1.5 text-right font-normal">INR amount</th>
+              <th className="px-2 py-1.5 text-right font-normal">Hedge leg (USDT)</th>
+              <th className="px-2 py-1.5 text-right font-normal">USDT amount</th>
+              <th className="px-2 py-1.5 text-right font-normal">USDT/INR</th>
+              <th className="px-2 py-1.5 text-right font-normal">Fees</th>
+              <th className="px-2 py-1.5 text-right font-normal">Edge</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fills.length === 0 ? (
+              <tr><td colSpan={11} className="px-2 py-8 text-center text-text-muted">No simulated fill yet on {VENUE_NAME[venue]}.</td></tr>
+            ) : (
+              fills.map((fill) => (
+                <tr key={`${fill.coin}-${fill.at}-${fill.side}-${fill.quantity}`} className="border-t border-border-default/50 align-top">
+                  <td className="whitespace-nowrap px-2 py-1.5 text-text-muted">
+                    {new Date(fill.at).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false})}
+                  </td>
+                  <td className="px-2 py-1.5">{VENUE_NAME[venue]}</td>
+                  <td className="px-2 py-1.5 text-text-primary">{fill.coin}</td>
+                  <td className={`px-2 py-1.5 ${fill.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>
+                    {fill.side === "BUY" ? "BUY (bid hit)" : "SELL (ask lifted)"}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {qty(fill.quantity)} {fill.coin} @ ₹{price(fill.price)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums text-text-primary">{inr(fill.notionalInr)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {fill.hedgePriceUsdt !== undefined ? (
+                      <>
+                        <span className={fill.side === "BUY" ? "text-rose-300" : "text-emerald-300"}>{fill.side === "BUY" ? "SELL" : "BUY"}</span>{" "}
+                        {qty(fill.quantity)} @ ${price(fill.hedgePriceUsdt)}
+                        <span className="block text-[10px] text-text-muted">{fill.hedgeVenue ?? ""}</span>
+                      </>
+                    ) : "—"}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{fill.hedgeUsdt !== undefined ? `$${fill.hedgeUsdt.toFixed(2)}` : "—"}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">{fill.usdtInr !== undefined ? fill.usdtInr.toFixed(2) : "—"}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
+                    {fill.inrFeeInr !== undefined && fill.hedgeFeeInr !== undefined ? inr(fill.inrFeeInr + fill.hedgeFeeInr) : "—"}
+                  </td>
+                  <td className={`px-2 py-1.5 text-right tabular-nums ${fill.edgeInr >= 0 ? "text-emerald-300" : "text-red-300"}`}>
+                    {fill.edgeInr >= 0 ? "+" : ""}{inr(fill.edgeInr)}
+                    <span className="block text-[10px]">{fill.edgePercent.toFixed(2)}%</span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </HudPanel>
   );
