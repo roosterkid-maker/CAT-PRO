@@ -371,8 +371,11 @@ export function NotificationEventBridge() {
           break;
 
         case "TIMED_OUT":
+          // A resting maker order that timed out unfilled is routine (IXM
+          // re-places one every few seconds): nothing to alert on.
           if (
-            !executionFailureAlerts
+            !executionFailureAlerts ||
+            !(execution.filledQuantity > 0)
           ) {
             break;
           }
@@ -399,8 +402,11 @@ export function NotificationEventBridge() {
 
         case "FAILED":
         case "REJECTED":
+          // CoinDCX's price-band refusal (OMS-VF-0042) is expected on thin
+          // books; the maker backs off on its own.
           if (
-            !executionFailureAlerts
+            !executionFailureAlerts ||
+            (execution.failureReason ?? "").includes("OMS-VF-0042")
           ) {
             break;
           }
@@ -427,7 +433,8 @@ export function NotificationEventBridge() {
 
         case "CANCELLED":
           if (
-            !executionFailureAlerts
+            !executionFailureAlerts ||
+            !(execution.filledQuantity > 0)
           ) {
             break;
           }
