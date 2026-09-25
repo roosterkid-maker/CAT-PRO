@@ -163,8 +163,10 @@ export class RouteExitCostService {
     const usable = destination ? networks.filter((network) => destination.includes(canonicalNetwork(network.network))) : networks;
     const cheapest = [...usable].sort((a, b) => (a.withdrawFee ?? Infinity) - (b.withdrawFee ?? Infinity))[0];
     if (!cheapest) {
-      return {status: "CLOSED", network: null, feeUnits: null,
-        detail: `${from} has no open ${coin} withdrawal network${destination ? ` that ${to} accepts (${destination.join("/")})` : ""}.`};
+      const reason = destination && destination.length === 0
+        ? `${to} has ${coin} deposits closed on every network.`
+        : `${from} has no open ${coin} withdrawal network${destination ? ` that ${to} accepts (${destination.join("/")})` : ""}.`;
+      return {status: "CLOSED", network: null, feeUnits: null, detail: reason};
     }
     return {status: "OK", network: canonicalNetwork(cheapest.network), feeUnits: cheapest.withdrawFee,
       detail: `${from} ${coin} withdrawal on ${canonicalNetwork(cheapest.network)}: fee ${cheapest.withdrawFee} ${coin}.`};
