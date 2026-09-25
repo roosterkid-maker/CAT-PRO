@@ -214,6 +214,30 @@ function testGatesAndEvidence(): void {
   assert.equal(flat.service.getReport().nearMisses.length, 0);
 }
 
+function testInVenueDiscovery(): void {
+  // CoinDCX lists ALEX in INR and USDT, but opens books only on demand. Its
+  // ticker quotes (bid/ask, no sizes) show a gross same-exchange loop edge:
+  // buy ALEX/USDT 0.0044, sell ALEX/INR 0.46, close USDT/INR at 99.9.
+  const h = harness();
+  const ticker = (market: string, bid: number, ask: number) =>
+    quote({exchange: "coindcx", market, bestBidPrice: bid, bestAskPrice: ask, executable: false, source: "bookTicker"});
+  h.put(ticker("USDTINR", 99.8, 99.9));
+  h.put(ticker("ALEXINR", 0.46, 0.47));
+  h.put(ticker("ALEXUSDT", 0.0044, 0.00441));
+  // No edge: INR and USDT prices agree.
+  h.put(ticker("ZECINR", 159_800, 160_700));
+  h.put(ticker("ZECUSDT", 1_598, 1_598.1));
+  h.service.scan();
+  const discovery = h.service.getReport().inVenueDiscovery;
+  assert.deepEqual(discovery?.candidates.map((candidate) => [candidate.coin, candidate.direction]), [["ALEX", "USDT>INR"]]);
+  assert.ok((discovery?.candidates[0]?.grossPercent ?? 0) > 4);
+  assert.ok(h.demand.includes("ALEXINR") && h.demand.includes("ALEXUSDT"), "both books opened");
+  assert.ok(!h.demand.includes("ZECINR"));
+  // Asked once per book while the request is open.
+  h.service.scan();
+  assert.equal(h.demand.filter((market) => market === "ALEXINR").length, 1);
+}
+
 function testInrUsdtWithConversionFallback(): void {
   const h = harness();
   // Only a CoinSwitch USDT/INR quote (no quantities) exists as the conversion.
@@ -399,5 +423,6 @@ testHysteresisAndCooldown();
 testPolledBookUpgradesQuote();
 testRealOpportunityWindowAndAlert();
 testGatesAndEvidence();
+testInVenueDiscovery();
 testInrUsdtWithConversionFallback();
 void testCoinSwitchInrDepthPoller().then(() => console.log("testInrArbitrageScanner: PASS"));

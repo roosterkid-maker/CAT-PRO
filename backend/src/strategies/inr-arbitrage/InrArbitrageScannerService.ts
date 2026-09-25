@@ -311,6 +311,11 @@ export interface InrScannerReport {
   readonly coinPersistence: readonly CoinPersistence[];
   readonly alerts: readonly OpportunityWindow[];
   readonly depthNominations: Readonly<Record<string, readonly string[]>>;
+  /** CoinDCX same-exchange loops seen on ticker quotes, and the books opened for them. */
+  readonly inVenueDiscovery?: {
+    readonly candidates: readonly {coin: string; grossPercent: number; direction: "USDT>INR" | "INR>USDT"}[];
+    readonly openBooks: readonly string[];
+  };
   readonly minimumOrderCoverage: {readonly known: number; readonly pending: number};
   readonly safety: {
     readonly scanOnly: true;
@@ -421,6 +426,13 @@ export class InrArbitrageScannerService {
   private static readonly COINDCX_DEMAND_REQUESTS_PER_SCAN = 4;
   private static readonly COINDCX_MAXIMUM_OPEN_DEMAND = 16;
   private static readonly COINDCX_DEMAND_TTL_MS = 45_000;
+  /* Same-exchange discovery: gross loop edge that earns both books a look. */
+  private static readonly IN_VENUE_DISCOVERY_GROSS_PERCENT = 1;
+  private static readonly IN_VENUE_REQUESTS_PER_SCAN = 2;
+  private static readonly IN_VENUE_MAXIMUM_OPEN = 12;
+  private static readonly IN_VENUE_TTL_MS = 60_000;
+  private readonly inVenueDemandExpiry = new Map<string, number>();
+  private inVenueCandidates: {coin: string; grossPercent: number; direction: "USDT>INR" | "INR>USDT"}[] = [];
   private static readonly NOMINATIONS_PER_VENUE = 40;
 
   readonly config: InrScannerConfig;
@@ -542,10 +554,13 @@ export class InrArbitrageScannerService {
     const venues: Record<string, {inrMarkets: number; inrBooks: number; inrQuotes: number; usdtBooks: number}> = {};
     for (const venue of new Set<string>([...INR_VENUES, ...USDT_VENUES])) venues[venue] = {inrMarkets: 0, inrBooks: 0, inrQuotes: 0, usdtBooks: 0};
 
+    // CoinDCX quotes of any tier, for same-exchange loop discovery.
+    const coinDcxQuotes = new Map<string, ExecutableQuote>();
     for (const quote of this.dependencies.getAllQuotes()) {
       const venue = quote.exchange;
       if (!venues[venue]) continue;
       const market = normalizeMarket(quote.market);
+      if (venue === "coindcx") coinDcxQuotes.set(market, quote);
 
       if (CONVERSION_MARKETS[venue] === market) {
         const tier = this.tier(quote, venue, now);
@@ -662,6 +677,7 @@ export class InrArbitrageScannerService {
 
     this.trackWindows(qualifying, routes, now);
     this.nominateDepth(routes, now);
+    this.discoverInVenueLoops(coinDcxQuotes, now);
     const shown = routes.filter((route) => route.netEdgePercent >= this.config.nearMissNetPercent);
     this.minimumsKnown = shown.filter((route) => route.minimumOrderInr !== null).length;
     this.minimumsPending = shown.length - this.minimumsKnown;
@@ -696,6 +712,10 @@ export class InrArbitrageScannerService {
         .slice(0, 50)
         .map((window) => ({...window})),
       depthNominations: structuredClone(this.depthNominations),
+      inVenueDiscovery: {
+        candidates: this.inVenueCandidates.map((candidate) => ({...candidate})),
+        openBooks: [...this.inVenueDemandExpiry.keys()],
+      },
       minimumOrderCoverage: {known: this.minimumsKnown, pending: this.minimumsPending},
       safety: {scanOnly: true, orderSubmissionAllowed: false, balanceMutationAllowed: false, tdsNettedIntoEdge: false},
     };
@@ -1102,6 +1122,63 @@ export class InrArbitrageScannerService {
       this.lastCheckpointAt = now;
     } catch (error: unknown) {
       console.warn("[INR-Scanner] Window checkpoint failed:", error instanceof Error ? error.message : error);
+    }
+  }
+
+  /* ------------------------------------------- same-exchange loop discovery */
+
+  /**
+   * CoinDCX lists hundreds of coins in both INR and USDT, but opens books
+   * only on demand, so a same-exchange loop (buy in one quote, sell in the
+   * other, close through USDT/INR) is invisible until both books exist.
+   * Ticker quotes (bid/ask, no sizes) are enough to spot a gross loop edge;
+   * such a coin gets both books opened for a minute so the scanner can
+   * price it as a REAL route. Discovery only: nothing here trades.
+   */
+  private discoverInVenueLoops(quotes: ReadonlyMap<string, ExecutableQuote>, now: number): void {
+    for (const [market, expiresAt] of this.inVenueDemandExpiry) if (expiresAt <= now) this.inVenueDemandExpiry.delete(market);
+    const fresh = (quote: ExecutableQuote | undefined) =>
+      quote && quote.bestBidPrice !== null && quote.bestAskPrice !== null && quote.bestBidPrice > 0 &&
+      quote.bestAskPrice > quote.bestBidPrice && now - quote.timestamp <= this.config.maximumTickerAgeMs
+        ? {bid: quote.bestBidPrice, ask: quote.bestAskPrice}
+        : null;
+    const conversion = fresh(quotes.get("USDTINR"));
+    if (!conversion) {
+      this.inVenueCandidates = [];
+      return;
+    }
+    const candidates: {coin: string; grossPercent: number; direction: "USDT>INR" | "INR>USDT"}[] = [];
+    for (const [market, quote] of quotes) {
+      if (!market.endsWith("INR") || market.length <= 3) continue;
+      const coin = market.slice(0, -3);
+      if (STABLE_COINS.has(coin)) continue;
+      const inr = fresh(quote);
+      const usdt = fresh(quotes.get(`${coin}USDT`));
+      if (!inr || !usdt) continue;
+      // USDT -> coin -> INR -> USDT, and INR -> coin -> USDT -> INR, before fees.
+      const usdtFirst = (inr.bid / (usdt.ask * conversion.ask) - 1) * 100;
+      const inrFirst = ((usdt.bid * conversion.bid) / inr.ask - 1) * 100;
+      const best = Math.max(usdtFirst, inrFirst);
+      if (best < InrArbitrageScannerService.IN_VENUE_DISCOVERY_GROSS_PERCENT || best > this.config.suspectGrossPercent) continue;
+      candidates.push({coin, grossPercent: best, direction: usdtFirst >= inrFirst ? "USDT>INR" : "INR>USDT"});
+    }
+    candidates.sort((a, b) => b.grossPercent - a.grossPercent);
+    this.inVenueCandidates = candidates.slice(0, 20);
+    if (!this.coinDCXSubscriber) return;
+    let requested = 0;
+    for (const candidate of candidates) {
+      if (requested >= InrArbitrageScannerService.IN_VENUE_REQUESTS_PER_SCAN) break;
+      for (const market of [`${candidate.coin}INR`, `${candidate.coin}USDT`]) {
+        if (this.inVenueDemandExpiry.size >= InrArbitrageScannerService.IN_VENUE_MAXIMUM_OPEN) break;
+        if (this.inVenueDemandExpiry.has(market) || this.demandExpiry.has(market)) continue;
+        // A book already streaming needs no request.
+        const quote = quotes.get(market);
+        if (quote && this.tier(quote, "coindcx", now, market.endsWith("INR")) === "BOOK") continue;
+        requested += 1;
+        if (this.coinDCXSubscriber.requestTemporarySubscription(market, InrArbitrageScannerService.IN_VENUE_TTL_MS)) {
+          this.inVenueDemandExpiry.set(market, now + InrArbitrageScannerService.IN_VENUE_TTL_MS);
+        }
+      }
     }
   }
 

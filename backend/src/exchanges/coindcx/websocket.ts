@@ -22,8 +22,10 @@ interface CoinDCXSocketResponse {
 export class CoinDCXWebSocket implements ExchangeAdapter {
   readonly name = COINDCX.NAME;
 
+  // One REST call carries every market's best bid/ask; 10 s keeps those
+  // quotes inside the INR scanner's ticker freshness window.
   private static readonly PUBLIC_TICKER_REFRESH_MS =
-    60_000;
+    10_000;
 
   private socket: Socket | null = null;
   private subscribed = false;
@@ -34,6 +36,8 @@ export class CoinDCXWebSocket implements ExchangeAdapter {
   private publicTickerRefreshTimer:
     ReturnType<typeof setInterval> | null =
     null;
+
+  private lastPublishedTickerCount = -1;
 
   private publicTickerRefreshInProgress =
     false;
@@ -271,9 +275,12 @@ export class CoinDCXWebSocket implements ExchangeAdapter {
           1;
       }
 
-      console.log(
-        `[${this.name}] Loaded ${published} ticker-only public REST markets for cross-exchange depth discovery.`,
-      );
+      if (published !== this.lastPublishedTickerCount) {
+        this.lastPublishedTickerCount = published;
+        console.log(
+          `[${this.name}] Loaded ${published} ticker-only public REST markets for cross-exchange depth discovery.`,
+        );
+      }
     } catch (
       error:
         unknown

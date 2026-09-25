@@ -11,6 +11,10 @@ export interface CoinDCXPublicTicker {
 
   last_price?: unknown;
 
+  bid?: unknown;
+
+  ask?: unknown;
+
   timestamp?: unknown;
 }
 
@@ -110,25 +114,37 @@ export function normalizeCoinDCXPublicTicker(
       incoming.timestamp,
     );
 
+  // The REST ticker publishes the best bid and ask (no sizes): kept as a
+  // quote so the INR scanner can see two-sided prices on markets whose book
+  // is not streamed. The market cache never lets a size-less quote refresh
+  // or replace a real book.
+  const bid =
+    positiveNumberOrNull(incoming.bid);
+  const ask =
+    positiveNumberOrNull(incoming.ask);
+  const twoSided =
+    bid !== null &&
+    ask !== null &&
+    ask > bid;
   return {
     exchange:
       "coindcx",
     market,
     lastPrice,
     bid:
-      null,
+      twoSided ? bid : null,
     ask:
-      null,
+      twoSided ? ask : null,
     bestBidPrice:
-      null,
+      twoSided ? bid : null,
     bestBidQty:
       null,
     bestAskPrice:
-      null,
+      twoSided ? ask : null,
     bestAskQty:
       null,
     spread:
-      null,
+      twoSided ? ask - bid : null,
     timestamp:
       sourceTimestamp !==
           null &&
