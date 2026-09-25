@@ -462,6 +462,37 @@ export function buildLiveSignal(state: StudyState, input: {
   }).sort((a, b) => b.score - a.score);
 }
 
+/* A reverse direction must carry this share of a route's edge to refill it. */
+const TWO_WAY_SHARE = 0.2;
+const TWO_WAY_MINIMUM_EDGE_MINUTES = 5;
+
+/**
+ * Pure: "COIN|buyVenue>sellVenue" for every executable direction whose
+ * reverse (buy on the sell venue, sell on the buy venue) also produced edge
+ * over the study days - at least 20% of this direction's edge time and 5
+ * minutes. Such a route's inventory rebalances by trading back.
+ */
+export function twoWayPairs(state: StudyState, now: number): Set<string> {
+  const since = istDay(now - (STUDY_DAYS - 1) * 86_400_000);
+  const edge = new Map<string, number>();
+  for (const [day, routes] of Object.entries(state.days)) {
+    if (day < since) continue;
+    for (const aggregate of Object.values(routes)) {
+      if (!isExecutableAggregate(aggregate)) continue;
+      const key = `${aggregate.coin}|${aggregate.buyVenue}>${aggregate.sellVenue}`;
+      edge.set(key, (edge.get(key) ?? 0) + aggregate.edgeMs);
+    }
+  }
+  const pairs = new Set<string>();
+  for (const [key, edgeMs] of edge) {
+    const [coin, venues] = key.split("|");
+    const [buy, sell] = (venues ?? "").split(">");
+    const reverse = edge.get(`${coin}|${sell}>${buy}`) ?? 0;
+    if (reverse >= edgeMs * TWO_WAY_SHARE && reverse >= TWO_WAY_MINIMUM_EDGE_MINUTES * 60_000) pairs.add(key);
+  }
+  return pairs;
+}
+
 function isState(value: unknown): value is StudyState {
   const state = value as Partial<StudyState> | null;
   return !!state && state.schemaVersion === "1.0" && typeof state.days === "object" && state.days !== null;
@@ -474,6 +505,7 @@ export class CoinStudyService {
   private state: StudyState;
   private timer: ReturnType<typeof setInterval> | null = null;
   private dirty = false;
+  private twoWay: {at: number; pairs: Set<string>} | null = null;
 
   constructor(
     private readonly getClosedWindowsSince: (endedAtOrAfter: number) => readonly OpportunityWindow[] =
@@ -510,6 +542,16 @@ export class CoinStudyService {
     } catch (error: unknown) {
       console.warn("[Coin-Study] Sync failed:", error instanceof Error ? error.message : error);
     }
+  }
+
+  /** Whether buying `coin` on `buyVenue` and selling on `sellVenue` is two-way (cached 5 minutes). */
+  isTwoWay(coin: string, buyVenue: string, sellVenue: string): boolean {
+    const now = this.now();
+    if (!this.twoWay || now - this.twoWay.at > 5 * 60_000) {
+      this.sync();
+      this.twoWay = {at: now, pairs: twoWayPairs(this.state, now)};
+    }
+    return this.twoWay.pairs.has(`${coin.toUpperCase()}|${buyVenue.toLowerCase()}>${sellVenue.toLowerCase()}`);
   }
 
   getLiveSignal(tradeSizeInr: number, hours = 6): readonly LiveCoinSignal[] {

@@ -56,9 +56,23 @@ async function main(): Promise<void> {
     assert.deepEqual([back.status, back.network, back.feeUnits], ["OK", "ETH", 0.3]);
     // Binance's own switch: DASH withdrawals off.
     assert.equal(service.exit("DASH", "binance", "unocoin").status, "CLOSED");
-    // No data source for CoinDCX / CoinSwitch: unknown, not blocked.
-    assert.equal(service.exit("FLR", "coinswitch", "bybit").status, "UNKNOWN");
-    assert.equal(service.exit("FLR", "bybit", "coinswitch").status, "OK");
+    // CoinDCX / CoinSwitch publish no transfer data and, for this account,
+    // offer no coin withdrawal and a short deposit list: closed until the
+    // operator confirms a coin.
+    assert.equal(service.exit("FLR", "coinswitch", "bybit").status, "CLOSED");
+    assert.equal(service.exit("FLR", "bybit", "coinswitch").status, "CLOSED");
+    service.setClosed("coinswitch", "FLR", false, "deposit");
+    assert.equal(service.exit("FLR", "bybit", "coinswitch").status, "OK", "FLR deposits into CoinSwitch confirmed");
+    service.setClosed("coinswitch", "FLR", false);
+    assert.equal(service.exit("FLR", "coinswitch", "bybit").status, "UNKNOWN", "confirmed withdrawal, fee unknown");
+    service.setClosed("coinswitch", "FLR", true, "deposit");
+    assert.equal(service.exit("FLR", "bybit", "coinswitch").status, "CLOSED", "confirmation withdrawn");
+
+    // A two-way route refills by trading back: allowed whatever the transfer.
+    const twoWay = service.exit("DRIFT", "bybit", "coinswitch", {twoWay: true});
+    assert.equal(twoWay.status, "TWO_WAY");
+    assert.equal(twoWay.feeUnits, null);
+    assert.equal(service.exit("LINK", "unocoin", "binance", {twoWay: true}).status, "TWO_WAY");
     // A coin UnoCoin does not list cannot be verified.
     assert.equal(service.exit("XYZ", "unocoin", "binance").status, "UNVERIFIED");
 
@@ -84,7 +98,7 @@ async function main(): Promise<void> {
     const gram = reloaded.exit("GRAM", "binance", "coinswitch");
     assert.equal(gram.status, "CLOSED");
     assert.match(gram.detail, /coinswitch does not accept GRAM deposits/u);
-    assert.equal(reloaded.exit("GRAM", "coinswitch", "binance").status, "UNKNOWN", "only deposits into CoinSwitch are marked");
+    assert.equal(reloaded.exit("GRAM", "coinswitch", "binance").status, "CLOSED", "CoinSwitch withdrawals are unconfirmed by default");
     // UnoCoin names the network only in its notes.
     assert.equal(unoCoinNetworkOf("LINK", ["Only ERC-20 (Ethereum Chain) is supported."]), "ETH");
     assert.equal(unoCoinNetworkOf("NEAR", ["Only BSC (Binance Chain) is supported."]), "BSC");
@@ -93,7 +107,7 @@ async function main(): Promise<void> {
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
-  console.log("Route exit cost passed: UnoCoin fee/network from its wallet, Binance/Bybit per-network switches and fees, destination network matching, operator closed marks that persist, failed sources blocked, venues without data unknown.");
+  console.log("Route exit cost passed: UnoCoin fee/network from its wallet, Binance/Bybit per-network switches and fees, destination network matching, operator closed marks that persist, failed sources blocked, CoinDCX/CoinSwitch closed until confirmed, two-way routes exempt.");
 }
 
 void main().catch((error: unknown) => {

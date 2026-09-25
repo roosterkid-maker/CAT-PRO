@@ -16,7 +16,13 @@ import {
  *            no "withdraw enabled" flag, so the operator marks closed coins
  *   Binance  per-network withdraw switch and fee (coin config API)
  *   Bybit    per-chain withdraw/deposit switches and fee (coin info API)
- *   CoinDCX, CoinSwitch  no source: UNKNOWN (not blocked)
+ *   CoinDCX, CoinSwitch  no source and, for this account, no coin withdrawal
+ *            and only a short deposit list: CLOSED unless the operator
+ *            confirms a coin (operator, 2026-09-25)
+ *
+ * A TWO-WAY route (its reverse direction also trades, per the coin study)
+ * needs no transfer at all: its stock refills by trading back. It is
+ * allowed whatever the transfer status.
  *
  * The operator can also mark a DESTINATION that does not accept a coin at
  * all (e.g. CoinSwitch lists no GRAM deposit), which no API reports.
@@ -24,7 +30,7 @@ import {
  * A fee is spread over a batch of trades moved together; a route whose net
  * after that share falls below the live threshold should not trade.
  */
-export type ExitStatus = "OK" | "CLOSED" | "UNVERIFIED" | "UNKNOWN";
+export type ExitStatus = "OK" | "CLOSED" | "UNVERIFIED" | "UNKNOWN" | "TWO_WAY";
 
 export interface ExitCost {
   readonly status: ExitStatus;
@@ -52,6 +58,8 @@ export interface ExitCostSources {
 export const EXIT_BATCH_TRADES = 5;
 const REFRESH_EVERY_MS = 30 * 60_000;
 const SOURCED_VENUES = ["unocoin", "binance", "bybit"] as const;
+/* Exchanges with no transfer data: coins move only where the operator confirmed. */
+const UNCONFIRMED_VENUES = ["coindcx", "coinswitch"] as const;
 
 /** Share of each trade's notional the exit fee takes, over a batch. */
 export function exitCostPercent(feeUnits: number, coinPriceInr: number, tradeNotionalInr: number): number {
@@ -123,27 +131,56 @@ export class RouteExitCostService {
     return [...this.marks.closed];
   }
 
-  /** Operator: mark a coin's withdrawals (or deposits) on a venue closed, or open again. */
+  /**
+   * Operator: mark a coin's withdrawals (or deposits) on a venue closed, or
+   * open again. On an exchange without transfer data, opening records an
+   * explicit confirmation (the default there is closed).
+   */
   setClosed(venue: string, coin: string, closed: boolean, side: "withdraw" | "deposit" = "withdraw"): readonly string[] {
-    const key = `${venue.trim().toLowerCase()}:${coin.trim().toUpperCase()}${side === "deposit" ? ":deposit" : ""}`;
+    const base = `${venue.trim().toLowerCase()}:${coin.trim().toUpperCase()}`;
+    const key = `${base}${side === "deposit" ? ":deposit" : ""}`;
+    const open = `${base}:${side === "deposit" ? "deposit-open" : "open"}`;
     const next = new Set(this.marks.closed);
-    if (closed) next.add(key);
-    else next.delete(key);
+    if (closed) {
+      next.add(key);
+      next.delete(open);
+    } else {
+      next.delete(key);
+      if ((UNCONFIRMED_VENUES as readonly string[]).includes(venue.trim().toLowerCase())) next.add(open);
+    }
     this.marks = {schemaVersion: "1.0", closed: [...next].sort()};
     this.store.replaceAllAtomically([this.marks]);
     return this.closedMarks();
   }
 
-  /** Can `coin` bought on `from` be moved to `to`, and at what fee? */
-  exit(coinValue: string, fromValue: string, toValue: string): ExitCost {
-    const coin = coinValue.toUpperCase();
-    const from = fromValue.toLowerCase();
-    const to = toValue.toLowerCase();
+  /**
+   * Can a route that buys `coin` on `from` and sells it on `to` repeat? Yes
+   * when the coin can be moved there (with its fee), or when the route is
+   * two-way and refills by trading back.
+   */
+  exit(coinValue: string, fromValue: string, toValue: string, options: {readonly twoWay?: boolean} = {}): ExitCost {
+    const transfer = this.transferExit(coinValue.toUpperCase(), fromValue.toLowerCase(), toValue.toLowerCase());
+    if (options.twoWay) {
+      return {status: "TWO_WAY", network: null, feeUnits: null,
+        detail: `Two-way route: the reverse direction trades too, so stock refills without a transfer (${transfer.detail})`};
+    }
+    return transfer;
+  }
+
+  private transferExit(coin: string, from: string, to: string): ExitCost {
     if (this.marks.closed.includes(`${from}:${coin}`)) {
       return {status: "CLOSED", network: null, feeUnits: null, detail: `${coin} withdrawals on ${from} are marked closed.`};
     }
     if (this.marks.closed.includes(`${to}:${coin}:deposit`)) {
       return {status: "CLOSED", network: null, feeUnits: null, detail: `${to} does not accept ${coin} deposits (marked).`};
+    }
+    if ((UNCONFIRMED_VENUES as readonly string[]).includes(to) && !this.marks.closed.includes(`${to}:${coin}:deposit-open`)) {
+      return {status: "CLOSED", network: null, feeUnits: null, detail: `${to} deposits of ${coin} are not confirmed (${to} publishes no transfer data).`};
+    }
+    if ((UNCONFIRMED_VENUES as readonly string[]).includes(from)) {
+      return this.marks.closed.includes(`${from}:${coin}:open`)
+        ? {status: "UNKNOWN", network: null, feeUnits: null, detail: `${from} ${coin} withdrawals confirmed by the operator; fee unknown.`}
+        : {status: "CLOSED", network: null, feeUnits: null, detail: `${from} withdrawals of ${coin} are not confirmed (${from} publishes no transfer data).`};
     }
     if (!(SOURCED_VENUES as readonly string[]).includes(from)) {
       return {status: "UNKNOWN", network: null, feeUnits: null, detail: `${from} publishes no withdrawal data.`};

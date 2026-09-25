@@ -7,7 +7,7 @@ import {allocateCapital, cashPool, type AllocationCandidate, type CapitalAllocat
 import {loadAutoBuyConfig, RouteRefillService} from "../services/RouteRefillService";
 import type {StockBuyPort, StockBuyRequest, StockBuyResult, StockSellRequest} from "../services/StockBuyExecutor";
 import type {RebalancingExecutionConfig} from "../execution/RebalancingExecutionConfig";
-import {buildLiveSignal, ingestWindows} from "../../strategies/inr-arbitrage/CoinStudyService";
+import {buildLiveSignal, ingestWindows, twoWayPairs} from "../../strategies/inr-arbitrage/CoinStudyService";
 import type {OpportunityWindow} from "../../strategies/inr-arbitrage/InrArbitrageScannerService";
 
 function candidate(overrides: Partial<AllocationCandidate>): AllocationCandidate {
@@ -123,6 +123,18 @@ function testLiveSignal(): void {
   ingestWindows(flicker, Array.from({length: 500}, (_, index) => window({coin: "SKY", startedAt: now - 3_600_000 + index * 1_000, durationMs: 1_000})));
   const sky = buildLiveSignal(flicker, {now, hours: 6, tradeSizeInr: 1_500})[0]!;
   assert.ok(sky.expectedDailyProfitInr <= 10 * 0.02 * 1_500 + 1e-9, String(sky.expectedDailyProfitInr));
+
+  // Two-way: DRIFT Bybit->CoinSwitch 10 min, CoinSwitch->Bybit 3 min (30%):
+  // both directions refill each other. GRAM only ever goes one way.
+  const both = {schemaVersion: "1.0" as const, firstWindowAt: null, lastIngestedEndedAt: 0, boundaryIds: [] as string[], days: {}};
+  ingestWindows(both, [
+    window({coin: "DRIFT", buyVenue: "bybit", buyMarket: "DRIFTUSDT", sellVenue: "coinswitch", sellMarket: "DRIFT_INR", durationMs: 600_000}),
+    window({coin: "DRIFT", buyVenue: "coinswitch", buyMarket: "DRIFT_INR", sellVenue: "bybit", sellMarket: "DRIFTUSDT", durationMs: 300_000, startedAt: now - 1_800_000}),
+    window({startedAt: now - 1_200_000, durationMs: 600_000}),
+  ]);
+  const pairs = twoWayPairs(both, now);
+  assert.ok(pairs.has("DRIFT|bybit>coinswitch") && pairs.has("DRIFT|coinswitch>bybit"));
+  assert.ok(!pairs.has("GRAM|binance>coinswitch"));
 }
 
 function config(): RebalancingExecutionConfig {

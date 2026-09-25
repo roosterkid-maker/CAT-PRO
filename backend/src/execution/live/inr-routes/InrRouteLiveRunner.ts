@@ -81,6 +81,10 @@ import {
 } from "./DefaultRouteExitCostSources";
 
 import {
+  getCoinStudyService,
+} from "../../../strategies/inr-arbitrage/CoinStudyService";
+
+import {
   loadInrRouteExecutionPolicy,
   type InrRouteExecutionPolicy,
 } from "./InrRouteExecutionPolicy";
@@ -240,7 +244,7 @@ const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
   getExitCost: async (coin, from, to) => {
     const service = getOrCreateRouteExitCostService();
     await service.ensureFresh();
-    return service.exit(coin, from, to);
+    return service.exit(coin, from, to, {twoWay: getCoinStudyService().isTwoWay(coin, from, to)});
   },
   getDailyRealizedNetInr: computeDailyRealizedNetInr,
   getDailyLossLimitInr: () => loadDailyLossLimitInr(),

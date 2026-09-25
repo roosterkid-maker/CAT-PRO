@@ -204,7 +204,9 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
     });
   }
   const viable = routes.filter((route) => {
-    const exit = exits.exit(route.coin, route.cashVenue, route.coinVenue);
+    const exit = exits.exit(route.coin, route.cashVenue, route.coinVenue, {
+      twoWay: getCoinStudyService().isTwoWay(route.coin, route.cashVenue, route.coinVenue),
+    });
     if (exit.status === "CLOSED" || exit.status === "UNVERIFIED") {
       exitBlocked.push({coin: route.coin, from: route.cashVenue, to: route.coinVenue, reason: exit.detail});
       return false;
