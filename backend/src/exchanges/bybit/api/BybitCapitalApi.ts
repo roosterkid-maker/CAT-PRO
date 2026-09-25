@@ -30,6 +30,14 @@ export interface BybitWithdrawRequest {
   readonly beneficiaryName: string;
 }
 
+export interface BybitCoinChain {
+  readonly chain: string;
+  readonly withdrawEnabled: boolean;
+  readonly depositEnabled: boolean;
+  /** NaN when Bybit publishes no fee for the chain. */
+  readonly withdrawFee: number;
+}
+
 export class BybitCapitalApi {
   private vasps: readonly {vaspEntityId: string; vaspName: string}[] | null = null;
 
@@ -63,6 +71,25 @@ export class BybitCapitalApi {
     }
     const wanted = vaspName.trim().toLowerCase();
     return this.vasps.find((entry) => entry.vaspName.trim().toLowerCase() === wanted)?.vaspEntityId || null;
+  }
+
+  /** Every coin's chains: withdraw/deposit switches and withdrawal fee. */
+  async getCoinChains(): Promise<Map<string, readonly BybitCoinChain[]>> {
+    const result = await this.client.getSigned<{rows?: readonly {coin?: unknown; chains?: readonly Record<string, unknown>[]}[]}>(
+      "/v5/asset/coin/query-info",
+    );
+    const chains = new Map<string, BybitCoinChain[]>();
+    for (const row of result.rows ?? []) {
+      const coin = String(row.coin ?? "").toUpperCase();
+      if (!coin) continue;
+      chains.set(coin, (row.chains ?? []).map((chain) => ({
+        chain: String(chain.chain ?? "").toUpperCase(),
+        withdrawEnabled: String(chain.chainWithdraw ?? "") === "1",
+        depositEnabled: String(chain.chainDeposit ?? "") === "1",
+        withdrawFee: Number(chain.withdrawFee),
+      })).filter((chain) => chain.chain !== ""));
+    }
+    return chains;
   }
 
   async withdraw(request: BybitWithdrawRequest): Promise<{id: string}> {

@@ -93,6 +93,7 @@ const DETERMINISTIC_TESTS = [
   "health/tests/testApplicationReadiness.js",
   "execution/live/tests/testUnoCoinExecutionAdapterFoundation.js",
   "execution/live/tests/testUnoCoinSplitFillHistory.js",
+  "execution/live/tests/testRouteExitCost.js",
   "execution/live/tests/testExecutionAdapterVerificationService.js",
   "execution/live/tests/testExecutionHealthService.js",
   "execution/live/tests/testExchangeClockSynchronizationRunner.js",

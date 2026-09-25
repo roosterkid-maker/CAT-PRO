@@ -55,6 +55,14 @@ import {
 } from "../../execution/live/live-only/DailyLossGuard";
 
 import {
+  exitCostPercent,
+} from "../../execution/live/inr-routes/RouteExitCostService";
+
+import {
+  getOrCreateRouteExitCostService,
+} from "../../execution/live/inr-routes/DefaultRouteExitCostSources";
+
+import {
   legSizeForBudget,
   loadDynamicLegConfig,
   publishDynamicLegSize,
@@ -90,6 +98,8 @@ const BUY_UNKNOWN_BACKOFF_MS = 6 * 3_600_000;
 /* Capital manager v2 (operator, 2026-09-25): allocation follows the last
  * hours of live opportunity, smoothed; stock sells are guarded. */
 const LIVE_SIGNAL_HOURS = 6;
+/* A route must still clear this net after its share of the exit fee. */
+const EXIT_MINIMUM_NET_PERCENT = 1;
 const LIVE_WEIGHT = 0.8;
 const MAXIMUM_TRADES_PER_COIN = 5;
 /* Below this per-trade size a route cannot clear venue minimums. */
@@ -163,7 +173,12 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
   const coins = new Set([...live.filter((coin) => coin.score > 0).map((coin) => coin.coin), ...study.coreBasket]);
 
   // Routes first; the per-trade size depends on the budget, computed below.
-  const routes: (Omit<AllocationCandidate, "perTradeInr"> & {depthInr: number | null})[] = [];
+  // A route whose coin cannot leave its buy venue (or only at a fee that
+  // eats the edge) gets no capital: its profit would stay stuck as coin.
+  const exits = getOrCreateRouteExitCostService();
+  void exits.ensureFresh().catch(() => undefined);
+  const exitBlocked: {coin: string; from: string; to: string; reason: string}[] = [];
+  const routes: (Omit<AllocationCandidate, "perTradeInr"> & {depthInr: number | null; netPercent: number})[] = [];
   for (const coin of coins) {
     const signal = liveByCoin.get(coin);
     const entry = study.coins.find((item) => item.coin === coin);
@@ -182,8 +197,26 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
       expectedDailyProfitInr: signal?.expectedDailyProfitInr ?? 0,
       studyRank: entry?.rank ?? null,
       depthInr: signal?.averageDepthInr ?? entry?.averageDepthInr ?? null,
+      netPercent: signal?.averageNetPercent ?? entry?.averageNetPercent ?? 0,
     });
   }
+  const viable = routes.filter((route) => {
+    const exit = exits.exit(route.coin, route.cashVenue, route.coinVenue);
+    if (exit.status === "CLOSED" || exit.status === "UNVERIFIED") {
+      exitBlocked.push({coin: route.coin, from: route.cashVenue, to: route.coinVenue, reason: exit.detail});
+      return false;
+    }
+    const price = valuation.priceInr(route.coin);
+    if (exit.feeUnits !== null && exit.feeUnits > 0 && price !== null) {
+      const percent = exitCostPercent(exit.feeUnits, price, tradeSizeInr);
+      if (route.netPercent - percent < EXIT_MINIMUM_NET_PERCENT) {
+        exitBlocked.push({coin: route.coin, from: route.cashVenue, to: route.coinVenue,
+          reason: `${exit.detail} That is ${percent.toFixed(1)}% per trade over a batch; the route's ${route.netPercent.toFixed(1)}% net does not cover it.`});
+        return false;
+      }
+    }
+    return true;
+  });
 
   // What each cash pool can supply: its cash, plus idle coins on that
   // exchange (they can be sold into its quote). A candidate coin already on
@@ -191,7 +224,7 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
   // be moved and counts for neither.
   const pools: Record<string, number> = {};
   const held = new Map<string, number>();
-  const candidateVenue = new Map(routes.map((route) => [route.coin, route.coinVenue]));
+  const candidateVenue = new Map(viable.map((route) => [route.coin, route.coinVenue]));
   for (const venue of VENUES) {
     for (const asset of valuation.assets?.(venue) ?? []) {
       const value = Math.max(0, valuation.holdingInr(venue, asset) ?? 0);
@@ -214,8 +247,8 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
   const perLegInr = dynamic.enabled ? legSizeForBudget(budgetInr, tradeSizeInr, dynamic.maximumInr) : tradeSizeInr;
   if (dynamic.enabled) publishDynamicLegSize({legInr: perLegInr, budgetInr, at: now});
 
-  const candidates: AllocationCandidate[] = routes
-    .map(({depthInr, ...route}) => ({
+  const candidates: AllocationCandidate[] = viable
+    .map(({depthInr, netPercent: _net, ...route}) => ({
       ...route,
       perTradeInr: Math.round(depthInr === null ? perLegInr : Math.min(perLegInr, depthInr)),
       coinHeldInr: held.get(route.coin) ?? 0,
@@ -227,6 +260,7 @@ export function buildCapitalAllocation(tradeSizeInr: number, valuation: Inventor
     ...allocateCapital({budgetInr, poolCapacityInr: pools, candidates}),
     perLegInr,
     ideal,
+    exitBlocked,
   };
 }
 
@@ -424,6 +458,7 @@ export class RouteRefillService {
           configuredLegInr,
           dynamicLeg: loadDynamicLegConfig(),
           dailyLossLimitInr: safeLossLimit(),
+          exitBlocked: allocation.exitBlocked ?? [],
         }
         : null,
       venuePlan: allocation?.ideal

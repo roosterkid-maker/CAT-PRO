@@ -68,6 +68,10 @@ import {
 } from "../../../rebalancing/services/InventoryValuation";
 
 import {
+  getOrCreateRouteExitCostService,
+} from "../inr-routes/DefaultRouteExitCostSources";
+
+import {
   getRouteRefillService,
 } from "../../../rebalancing/services/RouteRefillService";
 
@@ -508,6 +512,49 @@ router.get(
         message: error instanceof Error ? error.message : "Refill plan is unavailable.",
       });
     }
+  },
+);
+
+/* Route exit costs: which coins can leave which exchange, and operator marks. */
+router.get(
+  "/exit-cost",
+  async (
+    request,
+    response,
+  ) => {
+    const service = getOrCreateRouteExitCostService();
+    await service.ensureFresh().catch(() => undefined);
+    const coin = typeof request.query.coin === "string" ? request.query.coin.trim().toUpperCase() : "";
+    const from = typeof request.query.from === "string" ? request.query.from.trim().toLowerCase() : "";
+    const to = typeof request.query.to === "string" ? request.query.to.trim().toLowerCase() : "";
+    response.setHeader("Cache-Control", "no-store");
+    response.json({
+      success: true,
+      data: {
+        closed: service.closedMarks(),
+        exit: coin && from && to ? service.exit(coin, from, to) : null,
+      },
+    });
+  },
+);
+
+/* Operator-only: mark a coin's withdrawals on an exchange closed, or open again. */
+router.post(
+  "/exit-cost/mark",
+  (
+    request,
+    response,
+  ) => {
+    const venue = typeof request.body?.venue === "string" ? request.body.venue.trim().toLowerCase() : "";
+    const coin = typeof request.body?.coin === "string" ? request.body.coin.trim().toUpperCase() : "";
+    if (!venue || !/^[A-Z0-9]{1,15}$/u.test(coin) || typeof request.body?.closed !== "boolean") {
+      response.status(400).json({success: false, message: "venue, coin and closed (boolean) are required."});
+      return;
+    }
+    response.json({
+      success: true,
+      data: {closed: getOrCreateRouteExitCostService().setClosed(venue, coin, request.body.closed)},
+    });
   },
 );
 

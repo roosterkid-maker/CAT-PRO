@@ -348,6 +348,7 @@ export interface RefillPlanResponse {
       configuredLegInr: number;
       dynamicLeg: {enabled: boolean; maximumInr: number};
       dailyLossLimitInr: number | null;
+      exitBlocked: Array<{coin: string; from: string; to: string; reason: string}>;
     } | null;
     venuePlan: {
       rows: Array<{

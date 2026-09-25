@@ -438,6 +438,32 @@ export class BinanceCapitalTransferApi {
     return match ? this.normalizeCoinConfig(match) : null;
   }
 
+  /** Every coin's network configuration in one signed read. */
+  async getAllCoinConfigs(
+    credentials?: BinanceCredentials,
+  ): Promise<Map<string, BinanceCoinConfig>> {
+    await this.client.synchronizeServerTime();
+    const response = await this.client.getSigned<BinanceCoinConfigResponse[]>(
+      BINANCE.REST.ASSET_CONFIG,
+      {},
+      credentials,
+    );
+    if (!Array.isArray(response)) {
+      throw new Error("Invalid Binance asset-config response.");
+    }
+    const configs = new Map<string, BinanceCoinConfig>();
+    for (const entry of response) {
+      const coin = this.toOptionalString(entry.coin)?.toUpperCase();
+      if (!coin) continue;
+      try {
+        configs.set(coin, this.normalizeCoinConfig(entry));
+      } catch {
+        // One malformed coin does not hide the others.
+      }
+    }
+    return configs;
+  }
+
   async getDepositAddress(
     coin: string,
     network: string,

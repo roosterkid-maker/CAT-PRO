@@ -51,6 +51,8 @@ export interface CapitalAllocation {
   readonly perLegInr?: number;
   /** The same capital split as if it could sit anywhere: where it SHOULD be. */
   readonly ideal?: CapitalAllocation;
+  /** Routes left out because their coin cannot leave the buy venue economically. */
+  readonly exitBlocked?: readonly {coin: string; from: string; to: string; reason: string}[];
 }
 
 export interface VenuePlanRow {

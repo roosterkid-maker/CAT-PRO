@@ -71,6 +71,16 @@ import {
 } from "../LiveTradingInterlock";
 
 import {
+  EXIT_BATCH_TRADES,
+  exitCostPercent,
+  type ExitCost,
+} from "./RouteExitCostService";
+
+import {
+  getOrCreateRouteExitCostService,
+} from "./DefaultRouteExitCostSources";
+
+import {
   loadInrRouteExecutionPolicy,
   type InrRouteExecutionPolicy,
 } from "./InrRouteExecutionPolicy";
@@ -159,6 +169,8 @@ export interface InrRouteRunnerDependencies {
   /** What the central gateway checks before it will send an order to a venue. */
   readonly getVenueOrderReadiness: (venue: string) => {readonly ready: boolean; readonly detail: string};
   readonly interlock: LiveTradingInterlock;
+  /** Can the coin bought on `from` be withdrawn to `to`, and at what fee? */
+  readonly getExitCost: (coin: string, from: string, to: string) => Promise<ExitCost>;
   readonly now: () => number;
 }
 
@@ -225,6 +237,11 @@ const DEFAULT_DEPENDENCIES: InrRouteRunnerDependencies = {
     return balance ? {available: balance.availableBalance, synchronizedAt: balance.synchronizedAt} : null;
   },
   getTakerFeePercent: takerFeeWithSurcharge,
+  getExitCost: async (coin, from, to) => {
+    const service = getOrCreateRouteExitCostService();
+    await service.ensureFresh();
+    return service.exit(coin, from, to);
+  },
   getDailyRealizedNetInr: computeDailyRealizedNetInr,
   getDailyLossLimitInr: () => loadDailyLossLimitInr(),
   getVenueOrderReadiness: (venue) => {
@@ -482,6 +499,17 @@ export class InrRouteLiveRunner {
       maximumCapitalInr: policy.maximumCapitalPerLegInr,
     });
     if (!planned.ok) return block(planned.reason);
+
+    /* ---- the coin bought here must be able to reach the sell venue ---- */
+    const exit = await this.dependencies.getExitCost(route.coin, route.buyVenue, route.sellVenue);
+    if (exit.status === "CLOSED" || exit.status === "UNVERIFIED") return block(`EXIT_${exit.status}: ${exit.detail}`);
+    if (exit.feeUnits !== null && exit.feeUnits > 0) {
+      const exitPercent = exitCostPercent(exit.feeUnits, planned.plan.buyAveragePrice * buyToInr, planned.plan.notionalInr);
+      const netAfterExit = planned.plan.expectedNetPercent - exitPercent;
+      if (netAfterExit < policy.minimumNetPercent) {
+        return block(`EXIT_COST: ${exit.detail} Over a ${EXIT_BATCH_TRADES}-trade batch that is ${exitPercent.toFixed(2)}% per trade; net after it ${netAfterExit.toFixed(2)}% < ${policy.minimumNetPercent}%.`);
+      }
+    }
 
     this.nextAllowedAt.set(route.routeKey, now + policy.routeCooldownMs);
     if (policy.mode === "shadow") {

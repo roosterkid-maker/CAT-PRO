@@ -153,6 +153,16 @@ export function RefillPlanPanel() {
               </table>
             </div>
           )}
+          {plan.allocation.exitBlocked?.length ? (
+            <div className="px-5 pb-2 pt-1 font-mono text-[11px] text-amber-300">
+              <p className="text-text-muted">Routes left out: their coin cannot leave the buy exchange at a fee the edge covers</p>
+              {plan.allocation.exitBlocked.slice(0, 6).map((item) => (
+                <p key={`${item.coin}-${item.from}-${item.to}`}>
+                  {item.coin} · {VENUE[item.from] ?? item.from} → {VENUE[item.to] ?? item.to}: <span className="text-text-muted">{item.reason}</span>
+                </p>
+              ))}
+            </div>
+          ) : null}
           {plan.automation.autoSell?.enabled && plan.automation.autoSell.lastSkip ? (
             <p className="px-5 pb-3 pt-1 font-mono text-[11px] text-text-muted">
               Stock sell held back: {plan.automation.autoSell.lastSkip.reason}

@@ -434,6 +434,7 @@ function runnerFixture(directory: string, name: string, overrides: Partial<InrRo
     getDailyRealizedNetInr: async () => 0,
     getDailyLossLimitInr: () => 500,
     getVenueOrderReadiness: () => ({ready: true, detail: "fixture"}),
+    getExitCost: async () => ({status: "UNKNOWN" as const, network: null, feeUnits: null, detail: "fixture"}),
     now: () => clock,
     ...overrides,
     interlock,
@@ -569,6 +570,25 @@ async function testRunner(directory: string): Promise<void> {
   assert.equal(stuck.interlock.tryAcquire("strategy-one"), true);
 
   // Daily loss stop.
+  // Exit cost: the coin bought on the buy venue must be able to reach the
+  // sell venue. A closed withdrawal blocks; a fee that eats the edge over a
+  // 5-trade batch blocks; a small fee trades.
+  const closedExit = runnerFixture(directory, "exit-closed", {
+    getExitCost: async () => ({status: "CLOSED" as const, network: null, feeUnits: null, detail: "withdrawals closed"}),
+  });
+  await closedExit.runner.tick();
+  assert.match(closedExit.runner.getDiagnostics().recentAttempts[0]?.reason ?? "", /^EXIT_CLOSED: withdrawals closed/u);
+  const costlyExit = runnerFixture(directory, "exit-costly", {
+    getExitCost: async () => ({status: "OK" as const, network: "ETH", feeUnits: 50, detail: "fee 50."}),
+  });
+  await costlyExit.runner.tick();
+  assert.match(costlyExit.runner.getDiagnostics().recentAttempts[0]?.reason ?? "", /^EXIT_COST: fee 50\./u);
+  const cheapExit = runnerFixture(directory, "exit-cheap", {
+    getExitCost: async () => ({status: "OK" as const, network: "BSC", feeUnits: 0.0001, detail: "fee 0.0001."}),
+  });
+  await cheapExit.runner.tick();
+  assert.equal(cheapExit.runner.getDiagnostics().recentAttempts[0]?.status, "SHADOW");
+
   const loss = runnerFixture(directory, "loss", {getDailyRealizedNetInr: async () => -500});
   await loss.runner.tick();
   assert.match(loss.runner.getDiagnostics().haltedReason ?? "", /^DAILY_LOSS_LIMIT\[/u);
