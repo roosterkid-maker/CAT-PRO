@@ -523,10 +523,11 @@ router.get(
 router.get(
   "/in-exchange-maker",
   (
-    _request,
+    request,
     response,
   ) => {
-    const shadow = getInExchangeMakerShadow();
+    const venue = typeof request.query.venue === "string" && request.query.venue.trim() ? request.query.venue.trim().toLowerCase() : "coindcx";
+    const shadow = getInExchangeMakerShadow(venue);
     response.setHeader("Cache-Control", "no-store");
     if (!shadow) {
       response.status(503).json({success: false, message: "In-exchange maker shadow is not running."});

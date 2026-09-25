@@ -69,12 +69,16 @@ export async function fetchCoinStudy(
 }
 
 export async function fetchInExchangeMaker(
+  venue: string,
   signal?: AbortSignal,
 ): Promise<InExchangeMakerResponse> {
   const response =
     await api.get<InExchangeMakerResponse>(
       "/api/live-only/in-exchange-maker",
       {
+        params: {
+          venue,
+        },
         signal,
       },
     );

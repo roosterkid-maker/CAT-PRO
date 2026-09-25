@@ -97,7 +97,8 @@ export default function CommandCenter() {
   const inventory = useLiveOnlyInventory().data?.data;
   const scanner = useInrScanner().data?.data;
   const executor = useInrExecutor().data?.data;
-  const maker = useInExchangeMaker().data?.data;
+  const [makerVenue, setMakerVenue] = useState<"coindcx" | "unocoin">("coindcx");
+  const maker = useInExchangeMaker(makerVenue).data?.data;
   const pnl = useArbitragePnL(200).data;
   const orders = useRecentExecutions(200).data?.executions;
   const study = useCoinStudy().data?.data;
@@ -236,7 +237,7 @@ export default function CommandCenter() {
       </div>
 
       {/* ======================= in-exchange (same coin, INR vs USDT) ======================= */}
-      <InExchangePanel maker={maker} executor={executor} />
+      <InExchangePanel maker={maker} executor={executor} venue={makerVenue} onVenue={setMakerVenue} />
 
       {/* ======================= charts ======================= */}
       <div className="grid gap-4 lg:grid-cols-3">
@@ -382,15 +383,32 @@ function price(value: number | null): string {
  * One coin, one exchange: the thin INR book against the liquid USDT book.
  * Maker quotes (shadow) and the taker-loop checks the INR executor records.
  */
-function InExchangePanel({maker, executor}: {maker: Maker | undefined; executor: Executor | undefined}) {
+function InExchangePanel({maker, executor, venue, onVenue}: {
+  maker: Maker | undefined;
+  executor: Executor | undefined;
+  venue: "coindcx" | "unocoin";
+  onVenue: (venue: "coindcx" | "unocoin") => void;
+}) {
   const loops = (executor?.recentAttempts ?? [])
     .filter((attempt) => attempt.buyVenue === attempt.sellVenue)
     .slice(0, 8);
   return (
     <HudPanel
       title="IN-EXCHANGE · SAME COIN INR ↔ USDT"
-      meta={maker ? `CoinDCX maker shadow · ${maker.hoursObserved.toFixed(1)} h observed · edge target ${maker.config.targetEdgePercent}% · no orders sent` : "starting…"}
+      meta={maker ? `${VENUE_NAME[venue]} maker shadow · hedge on ${venue === "coindcx" ? "CoinDCX USDT" : "Binance/Bybit USDT"} · ${maker.hoursObserved.toFixed(1)} h observed · edge target ${maker.config.targetEdgePercent}% · no orders sent` : "starting…"}
     >
+      <div className="mb-3 flex gap-2 font-mono text-[11px]">
+        {(["coindcx", "unocoin"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onVenue(option)}
+            className={`border px-3 py-1 ${venue === option ? "border-emerald-400/60 text-emerald-300" : "border-border-default text-text-muted hover:text-text-primary"}`}
+          >
+            {VENUE_NAME[option]}
+          </button>
+        ))}
+      </div>
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <div className="min-w-0">
           <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -409,12 +427,13 @@ function InExchangePanel({maker, executor}: {maker: Maker | undefined; executor:
                   <th className="px-2 py-1.5 text-right font-normal">Spread</th>
                   <th className="px-2 py-1.5 text-right font-normal">Our bid</th>
                   <th className="px-2 py-1.5 text-right font-normal">Our ask</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Hedge</th>
                   <th className="px-2 py-1.5 text-right font-normal">Trades</th>
                 </tr>
               </thead>
               <tbody>
                 {(maker?.tracked ?? []).length === 0 ? (
-                  <tr><td colSpan={7} className="px-2 py-6 text-center text-text-muted">No coin has room for a maker quote right now.</td></tr>
+                  <tr><td colSpan={8} className="px-2 py-6 text-center text-text-muted">No coin has room for a maker quote right now.</td></tr>
                 ) : (
                   (maker?.tracked ?? []).map((row) => (
                     <tr key={row.coin} className="border-t border-border-default/50">
@@ -424,6 +443,7 @@ function InExchangePanel({maker, executor}: {maker: Maker | undefined; executor:
                       <td className="px-2 py-1.5 text-right tabular-nums text-amber-300">{row.quote ? `${row.quote.spreadPercent.toFixed(2)}%` : "—"}</td>
                       <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.bid ? "text-emerald-300" : "text-text-muted"}`}>{price(row.quote?.bid ?? null)}</td>
                       <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.ask ? "text-rose-300" : "text-text-muted"}`}>{price(row.quote?.ask ?? null)}</td>
+                      <td className="px-2 py-1.5 text-right text-text-muted">{row.quote?.hedgeVenue ?? "—"}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{row.tradesSeen}</td>
                     </tr>
                   ))

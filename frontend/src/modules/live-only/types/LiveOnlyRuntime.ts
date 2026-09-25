@@ -442,12 +442,13 @@ export interface InExchangeMakerResponse {
   success: boolean;
   data: {
     generatedAt: number;
+    venue: string;
     mode: "SHADOW";
     startedAt: number;
     hoursObserved: number;
     config: {targetEdgePercent: number; quoteSizeInr: number; maximumTrackedCoins: number};
     totals: {fills: number; edgeInr: number; edgeInrPerDay: number; volumeInr: number};
-    coins: Array<{coin: string; fills: number; edgeInr: number; volumeInr: number; buys: number; sells: number}>;
+    coins: Array<{coin: string; fills: number; edgeInr: number; volumeInr: number; buys: number; sells: number; netQuantity: number}>;
     tracked: Array<{
       coin: string;
       tradesSeen: number;
@@ -461,6 +462,7 @@ export interface InExchangeMakerResponse {
         ask: number | null;
         maximumBid: number;
         minimumAsk: number;
+        hedgeVenue: string;
       } | null;
     }>;
     recentFills: Array<{coin: string; side: "BUY" | "SELL"; at: number; price: number; quantity: number; notionalInr: number; edgeInr: number; edgePercent: number}>;

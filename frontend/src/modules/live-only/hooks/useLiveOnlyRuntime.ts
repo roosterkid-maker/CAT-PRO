@@ -84,13 +84,15 @@ export function useCoinStudy() {
   });
 }
 
-export function useInExchangeMaker() {
+export function useInExchangeMaker(venue: string) {
   return useQuery({
     queryKey: [
       "live-only-in-exchange-maker",
+      venue,
     ],
     queryFn: ({signal}) =>
       fetchInExchangeMaker(
+        venue,
         signal,
       ),
     refetchInterval:

@@ -6,10 +6,6 @@ import {
   JsonlSnapshotStore,
 } from "../../core/persistence/JsonlSnapshotStore";
 
-import type {
-  ExecutableQuote,
-} from "../../core/models/ExecutableQuote";
-
 /*
  * IN-EXCHANGE MAKER (IXM) - SHADOW.
  *
@@ -146,36 +142,61 @@ export interface MarketDetail {
   readonly active: boolean;
 }
 
+export interface TopOfBook {
+  readonly bid: number;
+  readonly ask: number;
+}
+
+/**
+ * Everything venue-specific. CoinDCX: maker on its INR book, hedge on its
+ * own USDT book. UnoCoin: maker on its INR book, hedge on Binance/Bybit
+ * (UnoCoin's USDT books are too thin to hedge on).
+ */
 export interface InExchangeMakerDependencies {
-  readonly getQuote: (market: string) => ExecutableQuote | undefined;
+  /** Canonical INR markets on the maker exchange ("ALEXINR"). */
   readonly listInrMarkets: () => readonly string[];
+  /** Fresh two-sided INR top of book on the maker exchange, or null. */
+  readonly getInrBook: (market: string) => TopOfBook | null;
+  /** Fresh two-sided top of book of the coin's USDT hedge market, or null. */
+  readonly getHedgeBook: (coin: string) => (TopOfBook & {venue: string}) | null;
+  /** USDT/INR used to value the hedge. */
+  readonly getConversion: () => TopOfBook | null;
+  readonly inrFeePercent: () => number;
+  readonly hedgeFeePercent: () => number;
   readonly fetchMarketDetails: () => Promise<ReadonlyMap<string, MarketDetail>>;
-  readonly fetchTrades: (pair: string) => Promise<readonly PublicTrade[]>;
-  /** 24 h traded value per market in its quote currency (INR for an INR market). */
+  readonly fetchTrades: (coin: string, detail: MarketDetail | undefined) => Promise<readonly PublicTrade[]>;
+  /** 24 h traded value per INR market, in INR. */
   readonly fetchVolumes: () => Promise<ReadonlyMap<string, number>>;
-  readonly getFeePercent: (market: string) => number;
+  /** Polled venues: refresh these INR books before quoting (optional). */
+  readonly refreshBooks?: (markets: readonly string[]) => Promise<void>;
   readonly now: () => number;
 }
 
 export interface InExchangeMakerConfig {
+  readonly venue: string;
   readonly targetEdgePercent: number;
   readonly quoteSizeInr: number;
   readonly maximumTrackedCoins: number;
   readonly quoteIntervalMs: number;
   readonly tradePollIntervalMs: number;
-  readonly maximumQuoteAgeMs: number;
   /** INR books trading less than this a day are too quiet to fill a maker. */
   readonly minimumDailyVolumeInr: number;
+  /** A coin's net position (fills bought minus sold) beyond this stops that side. */
+  readonly maximumInventoryInr: number;
+  /** Polled venues: how many busiest INR books to refresh each trade pass. */
+  readonly bookRefreshCandidates: number;
 }
 
 export const DEFAULT_IN_EXCHANGE_MAKER_CONFIG: InExchangeMakerConfig = {
+  venue: "coindcx",
   targetEdgePercent: 0.3,
   quoteSizeInr: 1_500,
   maximumTrackedCoins: 15,
   quoteIntervalMs: 5_000,
   tradePollIntervalMs: 15_000,
-  maximumQuoteAgeMs: 60_000,
   minimumDailyVolumeInr: 20_000,
+  maximumInventoryInr: 4_500,
+  bookRefreshCandidates: 10,
 };
 
 interface CoinState {
@@ -183,7 +204,7 @@ interface CoinState {
   seen: Set<string>;
   lastTradeAt: number;
   tradesSeen: number;
-  lastQuote: (MakerQuotes & {at: number; inrBid: number; inrAsk: number; spreadPercent: number}) | null;
+  lastQuote: (MakerQuotes & {at: number; inrBid: number; inrAsk: number; spreadPercent: number; hedgeVenue: string}) | null;
 }
 
 interface PersistedState {
@@ -212,13 +233,18 @@ export class InExchangeMakerShadowService {
   private readonly store: JsonlSnapshotStore<PersistedState>;
   private state: PersistedState;
   private polling = false;
+  private readonly config: InExchangeMakerConfig;
 
   constructor(
     private readonly dependencies: InExchangeMakerDependencies,
-    private readonly config: InExchangeMakerConfig = DEFAULT_IN_EXCHANGE_MAKER_CONFIG,
-    filePath = resolve(process.cwd(), "logs", "live", "in-exchange-maker-shadow.jsonl"),
+    config: Partial<InExchangeMakerConfig> = {},
+    filePath?: string,
   ) {
-    this.store = new JsonlSnapshotStore({filePath, isPayload: isPersisted});
+    this.config = {...DEFAULT_IN_EXCHANGE_MAKER_CONFIG, ...config};
+    const defaultFile = this.config.venue === "coindcx"
+      ? "in-exchange-maker-shadow.jsonl"
+      : `in-exchange-maker-shadow-${this.config.venue}.jsonl`;
+    this.store = new JsonlSnapshotStore({filePath: filePath ?? resolve(process.cwd(), "logs", "live", defaultFile), isPayload: isPersisted});
     this.state = this.store.readLatest() ?? {schemaVersion: "1.0", startedAt: dependencies.now(), fills: []};
   }
 
@@ -235,54 +261,59 @@ export class InExchangeMakerShadowService {
     this.persist();
   }
 
+  /** Net position per coin from the simulated fills (units bought minus sold). */
+  private netQuantity(coin: string): number {
+    return this.state.fills.reduce((sum, fill) => (fill.coin === coin ? sum + (fill.side === "BUY" ? fill.quantity : -fill.quantity) : sum), 0);
+  }
+
   /** One quoting pass: choose the coins worth watching and price their quotes. */
   quoteCycle(): void {
     const now = this.dependencies.now();
-    const fresh = (quote: ExecutableQuote | undefined) =>
-      quote && quote.bestBidPrice !== null && quote.bestAskPrice !== null && quote.bestBidPrice > 0 &&
-      quote.bestAskPrice > quote.bestBidPrice && now - quote.timestamp <= this.config.maximumQuoteAgeMs
-        ? {bid: quote.bestBidPrice, ask: quote.bestAskPrice}
-        : null;
-    const conversion = fresh(this.dependencies.getQuote("USDTINR"));
+    const conversion = this.dependencies.getConversion();
     if (!conversion) return;
-    const inrFee = this.dependencies.getFeePercent("XINR");
-    const usdtFee = this.dependencies.getFeePercent("XUSDT");
+    const inrFee = this.dependencies.inrFeePercent();
+    const hedgeFee = this.dependencies.hedgeFeePercent();
 
-    // Coins in both quotes whose INR spread leaves room for the fees and
-    // edge, ranked by that room times the book's traffic: a wide spread
-    // nobody trades never fills.
-    const room = inrFee + usdtFee + this.config.targetEdgePercent;
-    const ranked: {coin: string; spreadPercent: number; score: number}[] = [];
+    // Coins with an INR book and a hedge book whose INR spread leaves room
+    // for the fees and edge, ranked by that room times the book's traffic:
+    // a wide spread nobody trades never fills.
+    const room = inrFee + hedgeFee + this.config.targetEdgePercent;
+    const ranked: {coin: string; score: number}[] = [];
     for (const market of this.dependencies.listInrMarkets()) {
       const coin = market.slice(0, -3);
       if (!coin || coin === "USDT") continue;
-      const inr = fresh(this.dependencies.getQuote(market));
-      const usdt = fresh(this.dependencies.getQuote(`${coin}USDT`));
-      if (!inr || !usdt) continue;
+      const inr = this.dependencies.getInrBook(market);
+      const hedge = this.dependencies.getHedgeBook(coin);
+      if (!inr || !hedge) continue;
       const detail = this.details.get(market);
       if (detail && !detail.active) continue;
       const spreadPercent = (inr.ask / inr.bid - 1) * 100;
       if (spreadPercent < room || spreadPercent > 25) continue;
       const volumeInr = this.volumes.get(market) ?? 0;
       if (this.volumes.size > 0 && volumeInr < this.config.minimumDailyVolumeInr) continue;
-      ranked.push({coin, spreadPercent, score: (spreadPercent - room) * Math.sqrt(Math.max(1, volumeInr))});
+      ranked.push({coin, score: (spreadPercent - room) * Math.sqrt(Math.max(1, volumeInr))});
     }
     ranked.sort((a, b) => b.score - a.score);
     this.tracked = ranked.slice(0, this.config.maximumTrackedCoins).map((entry) => entry.coin);
 
     for (const coin of this.tracked) {
-      const inr = fresh(this.dependencies.getQuote(`${coin}INR`))!;
-      const usdt = fresh(this.dependencies.getQuote(`${coin}USDT`))!;
+      const inr = this.dependencies.getInrBook(`${coin}INR`)!;
+      const hedge = this.dependencies.getHedgeBook(coin)!;
       const tick = this.details.get(`${coin}INR`)?.tick ?? tickFromPrice(inr.bid);
       const quotes = computeMakerQuotes({
-        inrBid: inr.bid, inrAsk: inr.ask, usdtBid: usdt.bid, usdtAsk: usdt.ask,
+        inrBid: inr.bid, inrAsk: inr.ask, usdtBid: hedge.bid, usdtAsk: hedge.ask,
         usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask,
-        inrFeePercent: inrFee, usdtFeePercent: usdtFee, targetEdgePercent: this.config.targetEdgePercent, tick,
+        inrFeePercent: inrFee, usdtFeePercent: hedgeFee, targetEdgePercent: this.config.targetEdgePercent, tick,
       });
+      // Inventory limit: a side that would push the net position further
+      // past the limit stops quoting until fills on the other side bring
+      // it back (no transfer ever rebalances it).
+      const netInr = this.netQuantity(coin) * ((inr.bid + inr.ask) / 2);
+      const bid = netInr >= this.config.maximumInventoryInr ? null : quotes.bid;
+      const ask = netInr <= -this.config.maximumInventoryInr ? null : quotes.ask;
       const state = this.coin(coin);
-      state.lastQuote = {...quotes, at: now, inrBid: inr.bid, inrAsk: inr.ask, spreadPercent: (inr.ask / inr.bid - 1) * 100};
-      state.snapshots.push({at: now, bid: quotes.bid, ask: quotes.ask, usdtBid: usdt.bid, usdtAsk: usdt.ask,
-        usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask});
+      state.lastQuote = {...quotes, bid, ask, at: now, inrBid: inr.bid, inrAsk: inr.ask, spreadPercent: (inr.ask / inr.bid - 1) * 100, hedgeVenue: hedge.venue};
+      state.snapshots.push({at: now, bid, ask, usdtBid: hedge.bid, usdtAsk: hedge.ask, usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask});
       state.snapshots = state.snapshots.filter((snapshot) => now - snapshot.at <= SNAPSHOT_RETENTION_MS);
     }
   }
@@ -309,13 +340,25 @@ export class InExchangeMakerShadowService {
           // Tick sizes fall back to price-derived steps until the next try.
         }
       }
-      const inrFee = this.dependencies.getFeePercent("XINR");
-      const usdtFee = this.dependencies.getFeePercent("XUSDT");
+      if (this.dependencies.refreshBooks) {
+        // Polled venues: refresh the busiest INR books that have a hedge.
+        const busiest = this.dependencies.listInrMarkets()
+          .filter((market) => this.dependencies.getHedgeBook(market.slice(0, -3)) !== null)
+          .filter((market) => (this.volumes.get(market) ?? 0) >= this.config.minimumDailyVolumeInr)
+          .sort((a, b) => (this.volumes.get(b) ?? 0) - (this.volumes.get(a) ?? 0))
+          .slice(0, this.config.bookRefreshCandidates);
+        try {
+          await this.dependencies.refreshBooks(busiest);
+        } catch {
+          // Stale books simply drop out of the next quoting pass.
+        }
+      }
+      const inrFee = this.dependencies.inrFeePercent();
+      const hedgeFee = this.dependencies.hedgeFeePercent();
       for (const coin of this.tracked) {
-        const pair = this.details.get(`${coin}INR`)?.pair ?? `I-${coin}_INR`;
         let trades: readonly PublicTrade[];
         try {
-          trades = await this.dependencies.fetchTrades(pair);
+          trades = await this.dependencies.fetchTrades(coin, this.details.get(`${coin}INR`));
         } catch {
           continue;
         }
@@ -324,12 +367,12 @@ export class InExchangeMakerShadowService {
           const key = `${trade.at}|${trade.price}|${trade.quantity}|${trade.buyerMaker}`;
           if (state.seen.has(key)) continue;
           state.seen.add(key);
-          // Only trades after we started watching this coin can meet our quotes.
+          // Only trades while our quote stood can meet it.
           const standing = [...state.snapshots].reverse().find((snapshot) => snapshot.at <= trade.at);
           if (!standing || trade.at - standing.at > 2 * this.config.quoteIntervalMs) continue;
           state.tradesSeen += 1;
           state.lastTradeAt = Math.max(state.lastTradeAt, trade.at);
-          const fill = simulateFill({coin, trade, quote: standing, quoteSizeInr: this.config.quoteSizeInr, inrFeePercent: inrFee, usdtFeePercent: usdtFee});
+          const fill = simulateFill({coin, trade, quote: standing, quoteSizeInr: this.config.quoteSizeInr, inrFeePercent: inrFee, usdtFeePercent: hedgeFee});
           if (fill) {
             this.state.fills.push(fill);
             if (this.state.fills.length > MAXIMUM_FILLS) this.state.fills = this.state.fills.slice(-MAXIMUM_FILLS);
@@ -359,6 +402,7 @@ export class InExchangeMakerShadowService {
     return {
       schemaVersion: "1.0" as const,
       generatedAt: now,
+      venue: this.config.venue,
       mode: "SHADOW" as const,
       startedAt: this.state.startedAt,
       hoursObserved: hours,
@@ -369,7 +413,7 @@ export class InExchangeMakerShadowService {
         edgeInrPerDay: (totalEdge / hours) * 24,
         volumeInr: this.state.fills.reduce((sum, fill) => sum + fill.notionalInr, 0),
       },
-      coins: [...perCoin.entries()].map(([coin, entry]) => ({coin, ...entry})).sort((a, b) => b.edgeInr - a.edgeInr),
+      coins: [...perCoin.entries()].map(([coin, entry]) => ({coin, ...entry, netQuantity: this.netQuantity(coin)})).sort((a, b) => b.edgeInr - a.edgeInr),
       tracked: this.tracked.map((coin) => {
         const state = this.coins.get(coin);
         return {coin, tradesSeen: state?.tradesSeen ?? 0, dailyVolumeInr: this.volumes.get(`${coin}INR`) ?? null, quote: state?.lastQuote ?? null};
@@ -392,7 +436,7 @@ export class InExchangeMakerShadowService {
     try {
       this.store.replaceAllAtomically([this.state]);
     } catch (error: unknown) {
-      console.warn("[IXM-Shadow] Persist failed:", error instanceof Error ? error.message : error);
+      console.warn(`[IXM-Shadow ${this.config.venue}] Persist failed:`, error instanceof Error ? error.message : error);
     }
   }
 }
@@ -404,12 +448,12 @@ export function tickFromPrice(price: number): number {
   return Number(`1e${Math.floor(Math.log10(price)) - 4}`);
 }
 
-let shared: InExchangeMakerShadowService | null = null;
+const shared = new Map<string, InExchangeMakerShadowService>();
 
-export function registerInExchangeMakerShadow(service: InExchangeMakerShadowService): void {
-  shared = service;
+export function registerInExchangeMakerShadow(venue: string, service: InExchangeMakerShadowService): void {
+  shared.set(venue, service);
 }
 
-export function getInExchangeMakerShadow(): InExchangeMakerShadowService | null {
-  return shared;
+export function getInExchangeMakerShadow(venue = "coindcx"): InExchangeMakerShadowService | null {
+  return shared.get(venue) ?? null;
 }

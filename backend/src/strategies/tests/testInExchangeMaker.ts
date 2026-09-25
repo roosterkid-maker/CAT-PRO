@@ -54,6 +54,10 @@ async function testService(directory: string): Promise<void> {
   const put = (market: string, bid: number, ask: number) =>
     quotes.set(market, {exchange: "coindcx", market, lastPrice: bid, bestBidPrice: bid, bestBidQty: null, bestAskPrice: ask, bestAskQty: null,
       spread: ask - bid, timestamp: now, source: "bookTicker", executable: false});
+  const book = (market: string) => {
+    const quote = quotes.get(market);
+    return quote && quote.bestBidPrice !== null && quote.bestAskPrice !== null ? {bid: quote.bestBidPrice, ask: quote.bestAskPrice} : null;
+  };
   put("USDTINR", 99.9, 99.92);
   put("ALEXINR", 0.44125, 0.45235);
   put("ALEXUSDT", 0.004475, 0.004478);
@@ -61,16 +65,22 @@ async function testService(directory: string): Promise<void> {
   put("ZECUSDT", 1_598.03, 1_598.04);
   let trades: PublicTrade[] = [{price: 0.44, quantity: 100, at: now - 60_000, buyerMaker: true}];
   const service = new InExchangeMakerShadowService({
-    getQuote: (market) => quotes.get(market),
     listInrMarkets: () => ["ALEXINR", "ZECINR", "USDTINR"],
+    getInrBook: (market) => book(market),
+    getHedgeBook: (coin) => {
+      const hedge = book(`${coin}USDT`);
+      return hedge ? {...hedge, venue: "coindcx"} : null;
+    },
+    getConversion: () => book("USDTINR"),
+    inrFeePercent: () => 0.59,
+    hedgeFeePercent: () => 0.2006,
     fetchMarketDetails: async () => new Map([["ALEXINR", {pair: "I-ALEX_INR", tick: 0.00001, minimumNotional: 100, active: true}]]),
-    fetchTrades: async (pair) => (pair === "I-ALEX_INR" ? trades : []),
+    fetchTrades: async (coin) => (coin === "ALEX" ? trades : []),
     fetchVolumes: async () => new Map([["ALEXINR", 37_006], ["ZECINR", 29_335_195]]),
-    getFeePercent: (market) => (market.endsWith("INR") ? 0.59 : 0.2006),
     now: () => now,
-  }, undefined, join(directory, "ixm.jsonl"));
+  }, {maximumInventoryInr: 2_000}, join(directory, "ixm.jsonl"));
 
-  await service.tradeCycle(); // loads tick sizes
+  await service.tradeCycle(); // loads tick sizes and volumes
   service.quoteCycle();
   let report = service.getReport();
   assert.deepEqual(report.tracked.map((coin) => coin.coin), ["ALEX"]);
@@ -87,7 +97,51 @@ async function testService(directory: string): Promise<void> {
   // The same trade is not counted twice.
   await service.tradeCycle();
   assert.equal(service.getReport().totals.fills, 1);
+
+  // Inventory limit: after a second buy the net position (~INR 3,000) is past
+  // the INR 2,000 limit, so the bid stops; the ask keeps quoting.
+  service.quoteCycle();
+  now += 2_000;
+  trades = [...trades, {price: 0.44125, quantity: 5_000, at: now - 500, buyerMaker: true}];
+  await service.tradeCycle();
+  service.quoteCycle();
+  report = service.getReport();
+  assert.equal(report.totals.fills, 2);
+  assert.equal(report.tracked[0]?.quote?.bid, null, "bid paused past the inventory limit");
+  assert.ok((report.coins[0]?.netQuantity ?? 0) > 0);
   assert.equal(report.safety.orderSubmissionAllowed, false);
+  service.stop();
+}
+
+async function testPolledVenue(directory: string): Promise<void> {
+  // UnoCoin: INR books are polled (only the busiest, with a hedge), the
+  // hedge is another exchange's USDT book.
+  const now = 1_790_000_000_000;
+  const refreshed: string[][] = [];
+  const books = new Map<string, {bid: number; ask: number}>();
+  const service = new InExchangeMakerShadowService({
+    listInrMarkets: () => ["SKYINR", "LINKINR", "QUIETINR", "NOHEDGEINR"],
+    getInrBook: (market) => books.get(market) ?? null,
+    getHedgeBook: (coin) => (coin === "SKY" ? {bid: 0.0727, ask: 0.0728, venue: "binance/bybit"} : coin === "LINK" || coin === "QUIET" ? {bid: 13.3, ask: 13.31, venue: "binance"} : null),
+    getConversion: () => ({bid: 99.9, ask: 99.92}),
+    inrFeePercent: () => 0.4,
+    hedgeFeePercent: () => 0.1,
+    fetchMarketDetails: async () => new Map(),
+    fetchTrades: async () => [],
+    fetchVolumes: async () => new Map([["SKYINR", 90_000], ["LINKINR", 40_000], ["QUIETINR", 500], ["NOHEDGEINR", 500_000]]),
+    refreshBooks: async (markets) => {
+      refreshed.push([...markets]);
+      books.set("SKYINR", {bid: 6.9, ask: 7.4});
+    },
+    now: () => now,
+  }, {venue: "unocoin"}, join(directory, "ixm-uno.jsonl"));
+  await service.tradeCycle();
+  assert.deepEqual(refreshed[0], ["SKYINR", "LINKINR"], "busiest books with a hedge, quiet and unhedged skipped");
+  service.quoteCycle();
+  const report = service.getReport();
+  assert.equal(report.venue, "unocoin");
+  assert.equal(report.tracked[0]?.coin, "SKY");
+  assert.equal(report.tracked[0]?.quote?.hedgeVenue, "binance/bybit");
   service.stop();
 }
 
@@ -97,6 +151,7 @@ async function main(): Promise<void> {
     testQuotes();
     testFill();
     await testService(directory);
+    await testPolledVenue(directory);
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
