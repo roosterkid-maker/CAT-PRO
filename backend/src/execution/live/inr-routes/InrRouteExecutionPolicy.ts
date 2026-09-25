@@ -65,6 +65,12 @@ export interface InrRouteExecutionPolicy {
   readonly hedgeBufferPercents: readonly number[];
   /** Unhedged remainder below this INR value is recorded as dust, not a halt. */
   readonly dustToleranceInr: number;
+  /**
+   * Same-exchange loops (buy the coin in one quote and sell it in the other
+   * on ONE exchange, closing through that exchange's USDT/INR market): off,
+   * shadow (priced and recorded, no order) or live.
+   */
+  readonly inVenueMode: InrRouteExecutionMode;
 }
 
 function number(environment: NodeJS.ProcessEnv, name: string, fallback: number, min: number, max: number): number {
@@ -75,6 +81,16 @@ function number(environment: NodeJS.ProcessEnv, name: string, fallback: number, 
     throw new Error(`${name} must be between ${min} and ${max}.`);
   }
   return value;
+}
+
+function inVenueModeOf(environment: NodeJS.ProcessEnv, mode: InrRouteExecutionMode): InrRouteExecutionMode {
+  const requested = environment.CAT_PRO_INR_IN_VENUE_MODE?.trim().toLowerCase() || "shadow";
+  if (requested !== "off" && requested !== "shadow" && requested !== "live") {
+    throw new Error("CAT_PRO_INR_IN_VENUE_MODE must be off, shadow or live.");
+  }
+  // Never more live than the executor itself.
+  if (mode === "off") return "off";
+  return requested === "live" && mode !== "live" ? "shadow" : requested;
 }
 
 export function loadInrRouteExecutionPolicy(
@@ -121,6 +137,7 @@ export function loadInrRouteExecutionPolicy(
     maximumCapitalPerLegInr: Math.max(livePolicy.maximumCapitalPerLegInr, targetCapitalPerLegInr),
     minimumNetPercent: number(environment, "CAT_PRO_INR_LIVE_MIN_NET_PERCENT", 1, 0.5, 20),
     routeCooldownMs: number(environment, "CAT_PRO_INR_LIVE_ROUTE_COOLDOWN_MS", 60_000, 5_000, 3_600_000),
+    inVenueMode: inVenueModeOf(environment, mode),
     maximumBookAgeMs: 3_000,
     maximumBalanceAgeMs: 15_000,
     primaryTimeoutMs: 2_500,

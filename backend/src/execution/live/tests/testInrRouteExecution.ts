@@ -16,6 +16,7 @@ import {
 } from "../inr-routes/InrRouteSessionExecutor";
 import {
   INR_ROUTE_HALT_RELEASE_CONFIRMATION,
+  inVenueLoopNetPercent,
   InrRouteLiveRunner,
   type InrRouteRunnerDependencies,
 } from "../inr-routes/InrRouteLiveRunner";
@@ -588,6 +589,43 @@ async function testRunner(directory: string): Promise<void> {
   });
   await cheapExit.runner.tick();
   assert.equal(cheapExit.runner.getDiagnostics().recentAttempts[0]?.status, "SHADOW");
+
+  // Same-exchange loop on CoinDCX: buy X with USDT, sell X for INR, close
+  // INR -> USDT on CoinDCX's own USDT/INR market. Priced and recorded in
+  // shadow (even with no balances), never sent; a loop whose USDT/INR leg
+  // eats the edge is blocked; with the in-venue mode off it is not tried.
+  const loopRoute = scannedRoute({
+    routeKey: "INR_USDT|X|coindcx|XUSDT|coindcx|XINR", buyVenue: "coindcx", buyMarket: "XUSDT", buyVenueMarket: "XUSDT",
+    sellVenue: "coindcx", sellMarket: "XINR", sellVenueMarket: "XINR",
+  });
+  const loopBooks = (usdtInrAsk: number) => (venue: string, market: string) => ({
+    exchange: venue,
+    market,
+    bids: [{price: market === "XINR" ? 110 : market === "USDTINR" ? usdtInrAsk - 0.1 : 1.19, quantity: 1_000}],
+    asks: [{price: market === "XINR" ? 111 : market === "USDTINR" ? usdtInrAsk : 1.2, quantity: 1_000}],
+    timestamp: NOW - 200,
+  });
+  const inVenue = (name: string, usdtInrAsk: number, inVenueMode: "off" | "shadow" | "live") => runnerFixture(directory, name, {
+    getPolicy: () => ({...policy("live"), inVenueMode}),
+    getQualifiedRoutes: () => [loopRoute],
+    getBook: loopBooks(usdtInrAsk),
+    getBalance: () => null,
+  });
+  // 1 USDT -> 0.8317 X -> 91.30 INR -> 1.0124 USDT at USDT/INR 90 (0.2% fee each leg): +1.24%.
+  const loopShadow = inVenue("loop-shadow", 90, "shadow");
+  await loopShadow.runner.tick();
+  const loopAttempt = loopShadow.runner.getDiagnostics().recentAttempts[0];
+  assert.equal(loopAttempt?.status, "SHADOW", JSON.stringify(loopAttempt));
+  assert.match(loopAttempt?.reason ?? "", /^IN_VENUE_SHADOW: coindcx X: .*loop net 1\.24%/u);
+  assert.equal(loopShadow.gateway.sent.length, 0);
+  // USDT costs 92 INR on this exchange: the loop loses.
+  const loopDear = inVenue("loop-dear", 92, "shadow");
+  await loopDear.runner.tick();
+  assert.match(loopDear.runner.getDiagnostics().recentAttempts[0]?.reason ?? "", /^IN_VENUE_NET: /u);
+  const loopOff = inVenue("loop-off", 90, "off");
+  await loopOff.runner.tick();
+  assert.equal(loopOff.runner.getDiagnostics().recentAttempts.length, 0);
+  assert.ok(Math.abs(inVenueLoopNetPercent({buyInUsdt: false, buyAsk: 100, sellBid: 1.2, usdtInrAsk: 91, usdtInrBid: 90, buyFeePercent: 0, sellFeePercent: 0, conversionFeePercent: 0}) - 8) < 1e-9);
 
   const loss = runnerFixture(directory, "loss", {getDailyRealizedNetInr: async () => -500});
   await loss.runner.tick();

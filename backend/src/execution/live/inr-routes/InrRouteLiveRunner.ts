@@ -398,9 +398,58 @@ export class InrRouteLiveRunner {
     }
   }
 
+  /** Prices a same-exchange loop from fresh books, including the USDT/INR leg and its fee. */
+  private async priceInVenueLoop(
+    route: ScannedRoute,
+    buyBook: OrderBook,
+    sellBook: OrderBook,
+  ): Promise<{ok: true; netPercent: number; depthInr: number; detail: string} | {ok: false; reason: string}> {
+    const venue = route.buyVenue;
+    const conversionMarket = venue === "coindcx" ? "USDTINR" : "USDT_INR";
+    await this.dependencies.refreshBook(venue, conversionMarket);
+    const conversion = this.dependencies.getBook(venue, conversionMarket);
+    const conversionAsk = conversion?.asks[0]?.price;
+    const conversionBid = conversion?.bids[0]?.price;
+    if (!conversion || !(conversionAsk && conversionAsk > 0) || !(conversionBid && conversionBid > 0)) {
+      return {ok: false, reason: `IN_VENUE_CONVERSION_MISSING: no ${venue} ${conversionMarket} book to close the loop.`};
+    }
+    const buyInUsdt = quoteAsset(route.buyMarket) === "USDT";
+    const buyAsk = buyBook.asks[0];
+    const sellBid = sellBook.bids[0];
+    if (!buyAsk || !sellBid) return {ok: false, reason: "BOOK_MISSING: a loop leg has an empty side."};
+    const fee = (market: string, side: "BUY" | "SELL") => this.dependencies.getTakerFeePercent(venue, market, side);
+    const buyFee = fee(route.buyVenueMarket, "BUY");
+    const sellFee = fee(route.sellVenueMarket, "SELL");
+    const conversionFee = fee(conversionMarket, buyInUsdt ? "BUY" : "SELL");
+    if (buyFee === null || sellFee === null || conversionFee === null) return {ok: false, reason: "FEE_UNKNOWN: a loop leg's taker fee is unknown."};
+    const netPercent = inVenueLoopNetPercent({
+      buyInUsdt,
+      buyAsk: buyAsk.price,
+      sellBid: sellBid.price,
+      usdtInrAsk: conversionAsk,
+      usdtInrBid: conversionBid,
+      buyFeePercent: buyFee,
+      sellFeePercent: sellFee,
+      conversionFeePercent: conversionFee,
+    });
+    const usdtInr = (conversionAsk + conversionBid) / 2;
+    const toInr = (market: string) => (quoteAsset(market) === "USDT" ? usdtInr : 1);
+    const depthInr = Math.min(buyAsk.price * buyAsk.quantity * toInr(route.buyMarket), sellBid.price * sellBid.quantity * toInr(route.sellMarket));
+    return {
+      ok: true,
+      netPercent,
+      depthInr,
+      detail: `${venue} ${route.coin}: buy ${route.buyVenueMarket} ${buyAsk.price}, sell ${route.sellVenueMarket} ${sellBid.price}, close ${conversionMarket} ${buyInUsdt ? `ask ${conversionAsk}` : `bid ${conversionBid}`} (fees ${buyFee}/${sellFee}/${conversionFee}%)`,
+    };
+  }
+
   private eligible(route: ScannedRoute, policy: InrRouteExecutionPolicy, now: number): boolean {
     if (route.kind !== "INR_USDT" && route.kind !== "INR_INR") return false;
     if ((this.nextAllowedAt.get(route.routeKey) ?? 0) > now) return false;
+    // A same-exchange loop trades both quotes on that one INR exchange.
+    if (route.buyVenue === route.sellVenue) {
+      return route.kind === "INR_USDT" && policy.inVenueMode !== "off" && policy.inrVenues.includes(route.buyVenue);
+    }
     for (const [venue, market] of [[route.buyVenue, route.buyMarket], [route.sellVenue, route.sellMarket]] as const) {
       const allowed = market.endsWith("INR")
         ? policy.inrVenues.includes(venue)
@@ -462,6 +511,20 @@ export class InrRouteLiveRunner {
     if (!buyCapability || !sellCapability) return block("RULES_MISSING: market rules are not loaded for a leg.");
     if (!buyCapability.tradingEnabled || buyCapability.maintenanceMode || !sellCapability.tradingEnabled || sellCapability.maintenanceMode) {
       return block("MARKET_CLOSED: a leg's market is not trading.");
+    }
+
+    /* ---- same-exchange loop: priced through the exchange's own USDT/INR ---- */
+    if (route.buyVenue === route.sellVenue) {
+      const loop = await this.priceInVenueLoop(route, buyBook, sellBook);
+      if (!loop.ok) return block(loop.reason);
+      if (loop.netPercent < policy.minimumNetPercent) {
+        return block(`IN_VENUE_NET: ${loop.detail}; loop net ${loop.netPercent.toFixed(2)}% < ${policy.minimumNetPercent}%.`);
+      }
+      if (policy.inVenueMode !== "live") {
+        this.nextAllowedAt.set(route.routeKey, now + policy.routeCooldownMs);
+        this.record(route, "SHADOW", `IN_VENUE_SHADOW: ${loop.detail}; loop net ${loop.netPercent.toFixed(2)}% on ₹${Math.round(loop.depthInr)} top-of-book depth. No order sent.`, null, null);
+        return;
+      }
     }
 
     /* ---- balances, synchronized after the last trade ---- */
@@ -738,6 +801,30 @@ function legRules(capability: ExchangeMarketCapability): InrRouteLegRules {
     minimumQuantity: capability.quantity.minimumQuantity,
     minimumNotional: capability.notional.minimumNotional,
   };
+}
+
+/**
+ * Net of one same-exchange loop at the top of book, all three legs taker:
+ * USDT -> coin -> INR -> USDT (buy leg in USDT) or INR -> coin -> USDT -> INR
+ * (buy leg in INR), the last leg on the exchange's own USDT/INR market.
+ */
+export function inVenueLoopNetPercent(input: {
+  readonly buyInUsdt: boolean;
+  readonly buyAsk: number;
+  readonly sellBid: number;
+  readonly usdtInrAsk: number;
+  readonly usdtInrBid: number;
+  readonly buyFeePercent: number;
+  readonly sellFeePercent: number;
+  readonly conversionFeePercent: number;
+}): number {
+  const keep = (percent: number) => 1 - percent / 100;
+  const coin = keep(input.buyFeePercent) / input.buyAsk;
+  const proceeds = coin * input.sellBid * keep(input.sellFeePercent);
+  const back = input.buyInUsdt
+    ? (proceeds / input.usdtInrAsk) * keep(input.conversionFeePercent)
+    : proceeds * input.usdtInrBid * keep(input.conversionFeePercent);
+  return (back - 1) * 100;
 }
 
 function quoteAsset(market: string): string {

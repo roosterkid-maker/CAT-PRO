@@ -162,6 +162,9 @@ export class RouteExitCostService {
    * two-way and refills by trading back.
    */
   exit(coinValue: string, fromValue: string, toValue: string, options: {readonly twoWay?: boolean} = {}): ExitCost {
+    if (fromValue.toLowerCase() === toValue.toLowerCase()) {
+      return {status: "OK", network: null, feeUnits: 0, detail: "Same exchange: nothing to transfer."};
+    }
     const transfer = this.transferExit(coinValue.toUpperCase(), fromValue.toLowerCase(), toValue.toLowerCase());
     if (options.twoWay) {
       return {status: "TWO_WAY", network: null, feeUnits: null,
