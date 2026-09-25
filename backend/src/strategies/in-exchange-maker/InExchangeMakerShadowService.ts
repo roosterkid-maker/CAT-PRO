@@ -151,6 +151,8 @@ export interface InExchangeMakerDependencies {
   readonly listInrMarkets: () => readonly string[];
   readonly fetchMarketDetails: () => Promise<ReadonlyMap<string, MarketDetail>>;
   readonly fetchTrades: (pair: string) => Promise<readonly PublicTrade[]>;
+  /** 24 h traded value per market in its quote currency (INR for an INR market). */
+  readonly fetchVolumes: () => Promise<ReadonlyMap<string, number>>;
   readonly getFeePercent: (market: string) => number;
   readonly now: () => number;
 }
@@ -162,6 +164,8 @@ export interface InExchangeMakerConfig {
   readonly quoteIntervalMs: number;
   readonly tradePollIntervalMs: number;
   readonly maximumQuoteAgeMs: number;
+  /** INR books trading less than this a day are too quiet to fill a maker. */
+  readonly minimumDailyVolumeInr: number;
 }
 
 export const DEFAULT_IN_EXCHANGE_MAKER_CONFIG: InExchangeMakerConfig = {
@@ -171,6 +175,7 @@ export const DEFAULT_IN_EXCHANGE_MAKER_CONFIG: InExchangeMakerConfig = {
   quoteIntervalMs: 5_000,
   tradePollIntervalMs: 15_000,
   maximumQuoteAgeMs: 60_000,
+  minimumDailyVolumeInr: 20_000,
 };
 
 interface CoinState {
@@ -201,6 +206,8 @@ export class InExchangeMakerShadowService {
   private tracked: string[] = [];
   private details: ReadonlyMap<string, MarketDetail> = new Map();
   private detailsAt = 0;
+  private volumes: ReadonlyMap<string, number> = new Map();
+  private volumesAt = 0;
   private timers: ReturnType<typeof setInterval>[] = [];
   private readonly store: JsonlSnapshotStore<PersistedState>;
   private state: PersistedState;
@@ -241,9 +248,11 @@ export class InExchangeMakerShadowService {
     const inrFee = this.dependencies.getFeePercent("XINR");
     const usdtFee = this.dependencies.getFeePercent("XUSDT");
 
-    // Coins in both quotes whose INR spread leaves room for the fees and edge.
+    // Coins in both quotes whose INR spread leaves room for the fees and
+    // edge, ranked by that room times the book's traffic: a wide spread
+    // nobody trades never fills.
     const room = inrFee + usdtFee + this.config.targetEdgePercent;
-    const ranked: {coin: string; spreadPercent: number}[] = [];
+    const ranked: {coin: string; spreadPercent: number; score: number}[] = [];
     for (const market of this.dependencies.listInrMarkets()) {
       const coin = market.slice(0, -3);
       if (!coin || coin === "USDT") continue;
@@ -253,9 +262,12 @@ export class InExchangeMakerShadowService {
       const detail = this.details.get(market);
       if (detail && !detail.active) continue;
       const spreadPercent = (inr.ask / inr.bid - 1) * 100;
-      if (spreadPercent >= room && spreadPercent <= 25) ranked.push({coin, spreadPercent});
+      if (spreadPercent < room || spreadPercent > 25) continue;
+      const volumeInr = this.volumes.get(market) ?? 0;
+      if (this.volumes.size > 0 && volumeInr < this.config.minimumDailyVolumeInr) continue;
+      ranked.push({coin, spreadPercent, score: (spreadPercent - room) * Math.sqrt(Math.max(1, volumeInr))});
     }
-    ranked.sort((a, b) => b.spreadPercent - a.spreadPercent);
+    ranked.sort((a, b) => b.score - a.score);
     this.tracked = ranked.slice(0, this.config.maximumTrackedCoins).map((entry) => entry.coin);
 
     for (const coin of this.tracked) {
@@ -281,6 +293,14 @@ export class InExchangeMakerShadowService {
     this.polling = true;
     try {
       const now = this.dependencies.now();
+      if (now - this.volumesAt > 60_000) {
+        try {
+          this.volumes = await this.dependencies.fetchVolumes();
+          this.volumesAt = now;
+        } catch {
+          // Ranking falls back to spread alone until the next try.
+        }
+      }
       if (now - this.detailsAt > DETAILS_REFRESH_MS) {
         try {
           this.details = await this.dependencies.fetchMarketDetails();
@@ -352,7 +372,7 @@ export class InExchangeMakerShadowService {
       coins: [...perCoin.entries()].map(([coin, entry]) => ({coin, ...entry})).sort((a, b) => b.edgeInr - a.edgeInr),
       tracked: this.tracked.map((coin) => {
         const state = this.coins.get(coin);
-        return {coin, tradesSeen: state?.tradesSeen ?? 0, quote: state?.lastQuote ?? null};
+        return {coin, tradesSeen: state?.tradesSeen ?? 0, dailyVolumeInr: this.volumes.get(`${coin}INR`) ?? null, quote: state?.lastQuote ?? null};
       }),
       recentFills: [...this.state.fills].reverse().slice(0, 30),
       safety: {orderSubmissionAllowed: false, note: "Shadow simulation: quotes and fills are computed, never sent."},

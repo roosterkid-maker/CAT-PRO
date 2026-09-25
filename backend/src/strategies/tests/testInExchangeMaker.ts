@@ -65,6 +65,7 @@ async function testService(directory: string): Promise<void> {
     listInrMarkets: () => ["ALEXINR", "ZECINR", "USDTINR"],
     fetchMarketDetails: async () => new Map([["ALEXINR", {pair: "I-ALEX_INR", tick: 0.00001, minimumNotional: 100, active: true}]]),
     fetchTrades: async (pair) => (pair === "I-ALEX_INR" ? trades : []),
+    fetchVolumes: async () => new Map([["ALEXINR", 37_006], ["ZECINR", 29_335_195]]),
     getFeePercent: (market) => (market.endsWith("INR") ? 0.59 : 0.2006),
     now: () => now,
   }, undefined, join(directory, "ixm.jsonl"));

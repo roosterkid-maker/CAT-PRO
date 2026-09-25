@@ -17,6 +17,7 @@ import {
 /* CoinDCX public reads behind the in-exchange maker shadow. Read-only. */
 const MARKET_DETAILS_URL = "https://api.coindcx.com/exchange/v1/markets_details";
 const TRADE_HISTORY_URL = "https://public.coindcx.com/market_data/trade_history";
+const TICKER_URL = "https://api.coindcx.com/exchange/ticker";
 
 async function fetchJson(url: string): Promise<unknown> {
   const response = await fetch(url, {signal: AbortSignal.timeout(8_000)});
@@ -49,6 +50,18 @@ async function fetchTrades(pair: string): Promise<readonly PublicTrade[]> {
     .filter((trade) => trade.price > 0 && trade.quantity > 0 && Number.isFinite(trade.at));
 }
 
+async function fetchVolumes(): Promise<ReadonlyMap<string, number>> {
+  const rows = await fetchJson(TICKER_URL);
+  if (!Array.isArray(rows)) throw new Error("CoinDCX ticker is not an array.");
+  const volumes = new Map<string, number>();
+  for (const row of rows as Record<string, unknown>[]) {
+    const market = typeof row.market === "string" ? row.market.toUpperCase().replace(/[^A-Z0-9]/gu, "") : "";
+    const volume = Number(row.volume);
+    if (market && Number.isFinite(volume) && volume >= 0) volumes.set(market, volume);
+  }
+  return volumes;
+}
+
 /** The shared CoinDCX shadow, created and started on first use. */
 export function startInExchangeMakerShadow(): InExchangeMakerShadowService {
   const existing = getInExchangeMakerShadow();
@@ -60,6 +73,7 @@ export function startInExchangeMakerShadow(): InExchangeMakerShadowService {
       .filter((market) => market.endsWith("INR")),
     fetchMarketDetails,
     fetchTrades,
+    fetchVolumes,
     getFeePercent: (market) => getExchangeTakerFeePercent("coindcx", market) ?? (market.endsWith("INR") ? 0.59 : 0.2),
     now: Date.now,
   });
