@@ -404,7 +404,7 @@ function InExchangePanel({maker, executor, venue, onVenue, live}: {
       <div className={`mb-3 border px-3 py-2 font-mono text-[11px] ${live?.haltedReason ? "border-red-400/50 text-red-300" : live?.mode === "live" ? "border-emerald-400/50 text-emerald-300" : "border-border-default text-text-muted"}`}>
         {!live ? "LIVE engine: unavailable" : live.mode !== "live" ? "LIVE: OFF · shadow only (CoinDCX live needs CAT_PRO_IXM_MODE=live + confirmation)" : (
           <>
-            LIVE: {live.haltedReason ? `HALTED · ${live.haltedReason}` : "ON"} · coins {live.config.coins.join(", ")} · ₹{live.config.quoteInr}/quote · today {live.realizedTodayInr >= 0 ? "+" : ""}₹{live.realizedTodayInr.toFixed(2)} (stop -₹{live.config.dailyLossLimitInr}) · live fills {live.recentFills.length}
+            LIVE: {live.haltedReason ? `HALTED · ${live.haltedReason}` : "ON"} · coins {live.auto ? `auto (up to ${live.config.maximumCoins ?? 3}): ${(live.activeCoins ?? []).join(", ") || "choosing…"}` : live.config.coins.join(", ")} · ₹{live.config.quoteInr}/quote · today {live.realizedTodayInr >= 0 ? "+" : ""}₹{live.realizedTodayInr.toFixed(2)} (stop -₹{live.config.dailyLossLimitInr}) · live fills {live.recentFills.length}
           </>
         )}
       </div>

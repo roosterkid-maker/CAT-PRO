@@ -7,9 +7,11 @@ import type {InrRouteExecuteInput, InrRouteSession} from "../../execution/live/i
 import {
   applyToPosition,
   InExchangeMakerLiveEngine,
+  selectIxmCoins,
   IXM_HALT_RELEASE_CONFIRMATION,
   IXM_LIVE_CONFIRMATION,
   loadIxmLiveConfig,
+  type IxmCandidate,
   type IxmLiveConfig,
 } from "../in-exchange-maker/InExchangeMakerLiveEngine";
 
@@ -52,6 +54,7 @@ function harness(directory: string, name: string, overrides: {
   config?: Partial<IxmLiveConfig>;
   bookAgeMs?: number;
   rest?: boolean;
+  rank?: () => readonly IxmCandidate[];
 } = {}) {
   let now = NOW;
   const calls: InrRouteExecuteInput[] = [];
@@ -80,6 +83,7 @@ function harness(directory: string, name: string, overrides: {
     publishHalt: (reason) => published.push(reason),
     now: () => now,
     sleep: async () => undefined,
+    rankCandidates: overrides.rank,
   }, join(directory, `${name}.jsonl`));
   return {engine, calls, published, fetched, advance: (ms: number) => { now += ms; }};
 }
@@ -203,6 +207,24 @@ async function testAttempts(directory: string): Promise<void> {
   assert.equal(applyToPosition(position, -3, 90), -15, "closing the last long unit below cost");
   assert.equal(position.quantity, -2);
   assert.equal(position.averageInr, 90);
+
+  // Auto coins: bid-side edge from the shadow's recent fills; exclusions honoured.
+  const candidates = [
+    {coin: "AAA", fills: 5, buys: 3, sells: 2, buyEdgeInr: 12, sellEdgeInr: 20},
+    {coin: "BBB", fills: 4, buys: 4, sells: 0, buyEdgeInr: 15, sellEdgeInr: 0},
+    {coin: "CCC", fills: 6, buys: 0, sells: 6, buyEdgeInr: 0, sellEdgeInr: 40},
+    {coin: "DDD", fills: 1, buys: 1, sells: 0, buyEdgeInr: 30, sellEdgeInr: 0},
+    {coin: "EEE", fills: 3, buys: 2, sells: 1, buyEdgeInr: -5, sellEdgeInr: 1},
+  ];
+  assert.deepEqual(selectIxmCoins(candidates, 3).map((entry) => entry.coin), ["AAA", "BBB"], "asks alone, one fill or no edge do not qualify");
+  assert.deepEqual(selectIxmCoins(candidates, 1).map((entry) => entry.coin), ["AAA"]);
+  assert.deepEqual(selectIxmCoins(candidates, 3, ["AAA"]).map((entry) => entry.coin), ["BBB"]);
+  let ranked = candidates;
+  const auto = harness(directory, "auto", {config: {coins: [], maximumCoins: 2}, rank: () => ranked});
+  assert.deepEqual(auto.engine.selectCoins(), ["AAA", "BBB"]);
+  ranked = [{coin: "FFF", fills: 3, buys: 3, sells: 0, buyEdgeInr: 9, sellEdgeInr: 0}];
+  assert.deepEqual(auto.engine.selectCoins(), ["FFF"], "coins that stop filling are dropped");
+  assert.equal(auto.engine.getDiagnostics().auto, true);
 
   // Off: start() runs no worker.
   const off = harness(directory, "off", {config: {mode: "off"}});

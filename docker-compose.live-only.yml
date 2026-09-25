@@ -38,7 +38,10 @@ services:
       # the operator sets mode=live AND the confirmation phrase in .env.
       CAT_PRO_IXM_MODE: ${CAT_PRO_IXM_MODE:-off}
       CAT_PRO_IXM_LIVE_CONFIRMATION: ${CAT_PRO_IXM_LIVE_CONFIRMATION:-}
+      # Empty = auto: coins chosen every 5 min from the shadow's last 2 h of fills.
       CAT_PRO_IXM_COINS: ${CAT_PRO_IXM_COINS:-}
+      CAT_PRO_IXM_MAX_COINS: ${CAT_PRO_IXM_MAX_COINS:-3}
+      CAT_PRO_IXM_EXCLUDE: ${CAT_PRO_IXM_EXCLUDE:-}
       CAT_PRO_IXM_QUOTE_INR: ${CAT_PRO_IXM_QUOTE_INR:-600}
       CAT_PRO_IXM_MAX_INVENTORY_INR: ${CAT_PRO_IXM_MAX_INVENTORY_INR:-2000}
       CAT_PRO_IXM_DAILY_LOSS_INR: ${CAT_PRO_IXM_DAILY_LOSS_INR:-200}

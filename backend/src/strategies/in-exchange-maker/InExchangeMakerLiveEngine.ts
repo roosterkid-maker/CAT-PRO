@@ -56,11 +56,46 @@ export const IXM_HALT_RELEASE_CONFIRMATION = "CONFIRM_IXM_HALT_RELEASE";
 
 export interface IxmLiveConfig {
   readonly mode: "off" | "live";
+  /** Fixed coins; empty = choose coins automatically from the shadow's recent fills. */
   readonly coins: readonly string[];
   readonly quoteInr: number;
   readonly maximumInventoryInr: number;
   readonly dailyLossLimitInr: number;
   readonly primaryTimeoutMs: number;
+  /** Auto mode: at most this many coins at once. */
+  readonly maximumCoins?: number;
+  /** Auto mode: never these coins. */
+  readonly excludedCoins?: readonly string[];
+}
+
+/** A coin's recent shadow record: real trades that crossed the maker's price. */
+export interface IxmCandidate {
+  readonly coin: string;
+  readonly fills: number;
+  readonly buys: number;
+  readonly sells: number;
+  readonly buyEdgeInr: number;
+  readonly sellEdgeInr: number;
+}
+
+/*
+ * Auto coin choice. A bid is placeable with INR alone (its hedge sells the
+ * coin just bought), an ask needs stock of the coin, so bid-side edge
+ * counts fully and ask-side edge a quarter. A coin needs at least two
+ * recent shadow fills, one of them a bid, and positive edge.
+ */
+export function selectIxmCoins(
+  candidates: readonly IxmCandidate[],
+  maximum: number,
+  excluded: readonly string[] = [],
+): {coin: string; score: number}[] {
+  const skip = new Set(excluded);
+  return candidates
+    .filter((candidate) => !skip.has(candidate.coin) && candidate.fills >= 2 && candidate.buys >= 1)
+    .map((candidate) => ({coin: candidate.coin, score: candidate.buyEdgeInr + 0.25 * candidate.sellEdgeInr}))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, maximum));
 }
 
 export function loadIxmLiveConfig(environment: NodeJS.ProcessEnv = process.env, liveRuntimeEnabled = false): IxmLiveConfig {
@@ -84,6 +119,11 @@ export function loadIxmLiveConfig(environment: NodeJS.ProcessEnv = process.env, 
     dailyLossLimitInr: number("CAT_PRO_IXM_DAILY_LOSS_INR", 200, 50, 5_000),
     // CoinDCX's audited GTC contract allows at most 10 s.
     primaryTimeoutMs: number("CAT_PRO_IXM_ORDER_LIFE_MS", 8_000, 1_000, 10_000),
+    maximumCoins: number("CAT_PRO_IXM_MAX_COINS", 3, 1, 5),
+    excludedCoins: (environment.CAT_PRO_IXM_EXCLUDE ?? "")
+      .split(",")
+      .map((coin) => coin.trim().toUpperCase())
+      .filter((coin) => /^[A-Z0-9]{1,15}$/u.test(coin)),
   };
 }
 
@@ -109,7 +149,12 @@ export interface IxmLiveDependencies {
   readonly publishHalt: (reason: string | null) => void;
   readonly now: () => number;
   readonly sleep: (milliseconds: number) => Promise<void>;
+  /** Auto mode: the shadow's recent per-coin record (tracked coins only). */
+  readonly rankCandidates?: () => readonly IxmCandidate[];
 }
+
+/* Auto mode re-chooses coins this often. */
+const SELECTION_INTERVAL_MS = 5 * 60_000;
 
 export interface IxmLiveFill {
   readonly at: number;
@@ -199,6 +244,10 @@ export class InExchangeMakerLiveEngine {
   private readonly workers: Promise<void>[] = [];
   private lastBlock: Record<string, string> = {};
   private readonly bands = new Map<string, {minimum: number; maximum: number; at: number}>();
+  /** Coins the workers quote now (fixed, or chosen in auto mode). */
+  private readonly active = new Set<string>();
+  private readonly spawned = new Set<string>();
+  private selection: {at: number; chosen: {coin: string; score: number}[]} = {at: 0, chosen: []};
 
   constructor(
     private readonly config: IxmLiveConfig,
@@ -221,13 +270,59 @@ export class InExchangeMakerLiveEngine {
     }
   }
 
+  private get auto(): boolean {
+    return this.config.coins.length === 0;
+  }
+
   start(): void {
-    if (this.running || this.config.mode !== "live" || this.config.coins.length === 0) return;
+    if (this.running || this.config.mode !== "live") return;
     this.running = true;
-    for (const coin of this.config.coins) {
-      for (const side of ["BUY", "SELL"] as const) this.workers.push(this.work(coin, side));
+    if (this.auto) {
+      this.workers.push(this.supervise());
+    } else {
+      for (const coin of this.config.coins) this.activate(coin);
     }
-    console.log(`[IXM-Live] Started: coins=${this.config.coins.join(",")} quote=₹${this.config.quoteInr} life=${this.config.primaryTimeoutMs}ms.`);
+    console.log(`[IXM-Live] Started: coins=${this.auto ? `auto (up to ${this.config.maximumCoins ?? 3})` : this.config.coins.join(",")} quote=₹${this.config.quoteInr} life=${this.config.primaryTimeoutMs}ms.`);
+  }
+
+  /**
+   * Auto mode: choose the coins whose recent shadow fills show real trades
+   * crossing our price. A coin with an open IXM position stays active so
+   * its carried units can still join a hedge.
+   */
+  selectCoins(now = this.dependencies.now()): string[] {
+    const chosen = selectIxmCoins(this.dependencies.rankCandidates?.() ?? [], this.config.maximumCoins ?? 3, this.config.excludedCoins ?? []);
+    this.selection = {at: now, chosen};
+    const keep = Object.entries(this.state.positions ?? {}).filter(([, position]) => Math.abs(position.quantity) > 1e-9).map(([coin]) => coin);
+    const next = new Set([...chosen.map((entry) => entry.coin), ...keep]);
+    for (const coin of [...this.active]) if (!next.has(coin)) this.active.delete(coin);
+    for (const coin of next) this.activate(coin);
+    return [...this.active];
+  }
+
+  private activate(coin: string): void {
+    this.active.add(coin);
+    if (!this.running) return;
+    for (const side of ["BUY", "SELL"] as const) {
+      const key = `${coin}|${side}`;
+      if (this.spawned.has(key)) continue;
+      this.spawned.add(key);
+      this.workers.push(this.work(coin, side).finally(() => this.spawned.delete(key)));
+    }
+  }
+
+  private async supervise(): Promise<void> {
+    // Let the shadow gather a few minutes of fills after a restart.
+    let next = this.dependencies.now() + 60_000;
+    while (this.running) {
+      if (this.dependencies.now() >= next) {
+        const before = [...this.active].join(",");
+        const coins = this.selectCoins();
+        if (coins.join(",") !== before) console.log(`[IXM-Live] Coins: ${coins.join(",") || "none"} (auto).`);
+        next = this.dependencies.now() + SELECTION_INTERVAL_MS;
+      }
+      await this.dependencies.sleep(1_000);
+    }
   }
 
   async stop(): Promise<void> {
@@ -259,12 +354,15 @@ export class InExchangeMakerLiveEngine {
       mode: this.config.mode,
       running: this.running,
       config: this.config,
+      auto: this.auto,
+      activeCoins: [...this.active],
+      selection: this.selection,
       haltedReason: this.haltedNow(now),
       realizedTodayInr: this.realizedTodayInr(now),
       counts: {...this.state.counts},
       lastBlock: {...this.lastBlock},
-      inventory: Object.fromEntries(this.config.coins.map((coin) => [coin, this.netQuantity(coin)])),
-      positions: Object.fromEntries(this.config.coins.map((coin) => [coin, {...(this.state.positions?.[coin] ?? {quantity: 0, averageInr: 0})}])),
+      inventory: Object.fromEntries(this.reportedCoins().map((coin) => [coin, this.netQuantity(coin)])),
+      positions: Object.fromEntries(this.reportedCoins().map((coin) => [coin, {...(this.state.positions?.[coin] ?? {quantity: 0, averageInr: 0})}])),
       recentFills: [...this.state.fills].reverse().slice(0, 50),
     };
   }
@@ -474,8 +572,14 @@ export class InExchangeMakerLiveEngine {
     return block(session.state);
   }
 
+  /** Configured, active and position-holding coins. */
+  private reportedCoins(): string[] {
+    const open = Object.entries(this.state.positions ?? {}).filter(([, position]) => Math.abs(position.quantity) > 1e-9).map(([coin]) => coin);
+    return [...new Set([...this.config.coins, ...this.active, ...open])];
+  }
+
   private async work(coin: string, side: "BUY" | "SELL"): Promise<void> {
-    while (this.running) {
+    while (this.running && this.active.has(coin)) {
       let outcome: string;
       try {
         outcome = await this.attempt(coin, side);

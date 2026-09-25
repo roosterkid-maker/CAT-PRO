@@ -554,6 +554,25 @@ export class InExchangeMakerShadowService {
     }
   }
 
+  /** Per tracked coin: shadow fills in the last `windowMs` (for the live engine's coin choice). */
+  recentCoinStats(windowMs: number, now = this.dependencies.now()) {
+    const stats = new Map<string, {coin: string; fills: number; buys: number; sells: number; buyEdgeInr: number; sellEdgeInr: number}>();
+    for (const fill of this.state.fills) {
+      if (now - fill.at > windowMs || !this.trackedSet.has(fill.coin)) continue;
+      const entry = stats.get(fill.coin) ?? {coin: fill.coin, fills: 0, buys: 0, sells: 0, buyEdgeInr: 0, sellEdgeInr: 0};
+      entry.fills += 1;
+      if (fill.side === "BUY") {
+        entry.buys += 1;
+        entry.buyEdgeInr += fill.edgeInr;
+      } else {
+        entry.sells += 1;
+        entry.sellEdgeInr += fill.edgeInr;
+      }
+      stats.set(fill.coin, entry);
+    }
+    return [...stats.values()];
+  }
+
   getReport(now = this.dependencies.now()) {
     const perCoin = new Map<string, {fills: number; edgeInr: number; volumeInr: number; buys: number; sells: number}>();
     for (const fill of this.state.fills) {

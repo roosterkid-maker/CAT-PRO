@@ -491,7 +491,10 @@ export interface InExchangeMakerLiveResponse {
   data: {
     mode: "off" | "live";
     running: boolean;
-    config: {coins: string[]; quoteInr: number; maximumInventoryInr: number; dailyLossLimitInr: number; primaryTimeoutMs: number};
+    config: {coins: string[]; quoteInr: number; maximumInventoryInr: number; dailyLossLimitInr: number; primaryTimeoutMs: number; maximumCoins?: number};
+    auto?: boolean;
+    activeCoins?: string[];
+    selection?: {at: number; chosen: Array<{coin: string; score: number}>};
     haltedReason: string | null;
     realizedTodayInr: number;
     counts: Record<string, number>;

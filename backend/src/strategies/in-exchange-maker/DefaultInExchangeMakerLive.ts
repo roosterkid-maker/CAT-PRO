@@ -134,6 +134,8 @@ export function startInExchangeMakerLive(): InExchangeMakerLiveEngine {
     getQuote: (coin) => getInExchangeMakerShadow("coindcx")?.getLiveQuote(coin) ?? null,
     getBook: (market) => orderBookService.get("coindcx", market) ?? null,
     fetchBook,
+    // Auto coins: the last two hours of the CoinDCX shadow's fills.
+    rankCandidates: () => getInExchangeMakerShadow("coindcx")?.recentCoinStats(2 * 3_600_000) ?? [],
     getRules: rules,
     getBalance: (asset) => tradingAccountService.getExchangeBalance("coindcx", asset)?.availableBalance ?? null,
     execute: (input) => executor.execute(input),
