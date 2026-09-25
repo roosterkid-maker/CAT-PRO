@@ -16,9 +16,10 @@ import {
  *            no "withdraw enabled" flag, so the operator marks closed coins
  *   Binance  per-network withdraw switch and fee (coin config API)
  *   Bybit    per-chain withdraw/deposit switches and fee (coin info API)
- *   CoinDCX, CoinSwitch  no source and, for this account, no coin withdrawal
- *            and only a short deposit list: CLOSED unless the operator
- *            confirms a coin (operator, 2026-09-25)
+ *   CoinDCX, CoinSwitch, UnoCoin  for this account no coin withdrawal and
+ *            only a short deposit list (UnoCoin: DASH and SKY refused):
+ *            CLOSED unless the operator confirms a coin (operator,
+ *            2026-09-25); a confirmed UnoCoin coin uses its API fee
  *
  * A TWO-WAY route (its reverse direction also trades, per the coin study)
  * needs no transfer at all: its stock refills by trading back. It is
@@ -59,7 +60,9 @@ export const EXIT_BATCH_TRADES = 5;
 const REFRESH_EVERY_MS = 30 * 60_000;
 const SOURCED_VENUES = ["unocoin", "binance", "bybit"] as const;
 /* Exchanges with no transfer data: coins move only where the operator confirmed. */
-const UNCONFIRMED_VENUES = ["coindcx", "coinswitch"] as const;
+const UNCONFIRMED_VENUES = ["coindcx", "coinswitch", "unocoin"] as const;
+/* Unconfirmed venues whose fee/network data is still used once a coin is confirmed. */
+const DATA_ONCE_CONFIRMED = ["unocoin"] as const;
 
 /** Share of each trade's notional the exit fee takes, over a batch. */
 export function exitCostPercent(feeUnits: number, coinPriceInr: number, tradeNotionalInr: number): number {
@@ -175,12 +178,15 @@ export class RouteExitCostService {
       return {status: "CLOSED", network: null, feeUnits: null, detail: `${to} does not accept ${coin} deposits (marked).`};
     }
     if ((UNCONFIRMED_VENUES as readonly string[]).includes(to) && !this.marks.closed.includes(`${to}:${coin}:deposit-open`)) {
-      return {status: "CLOSED", network: null, feeUnits: null, detail: `${to} deposits of ${coin} are not confirmed (${to} publishes no transfer data).`};
+      return {status: "CLOSED", network: null, feeUnits: null, detail: `${to} deposits of ${coin} are not confirmed for this account.`};
     }
     if ((UNCONFIRMED_VENUES as readonly string[]).includes(from)) {
-      return this.marks.closed.includes(`${from}:${coin}:open`)
-        ? {status: "UNKNOWN", network: null, feeUnits: null, detail: `${from} ${coin} withdrawals confirmed by the operator; fee unknown.`}
-        : {status: "CLOSED", network: null, feeUnits: null, detail: `${from} withdrawals of ${coin} are not confirmed (${from} publishes no transfer data).`};
+      if (!this.marks.closed.includes(`${from}:${coin}:open`)) {
+        return {status: "CLOSED", network: null, feeUnits: null, detail: `${from} withdrawals of ${coin} are not confirmed for this account.`};
+      }
+      if (!(DATA_ONCE_CONFIRMED as readonly string[]).includes(from)) {
+        return {status: "UNKNOWN", network: null, feeUnits: null, detail: `${from} ${coin} withdrawals confirmed by the operator; fee unknown.`};
+      }
     }
     if (!(SOURCED_VENUES as readonly string[]).includes(from)) {
       return {status: "UNKNOWN", network: null, feeUnits: null, detail: `${from} publishes no withdrawal data.`};

@@ -36,6 +36,14 @@ async function main(): Promise<void> {
     const service = new RouteExitCostService(sources(), join(directory, "closed.jsonl"), () => 1_000_000, ["unocoin:DASH"]);
     await service.ensureFresh();
 
+    // UnoCoin refused DASH and SKY withdrawals for this account: every coin
+    // is closed until the operator confirms it; a confirmed coin uses the
+    // wallet API's fee and network.
+    assert.equal(service.exit("LINK", "unocoin", "binance").status, "CLOSED");
+    assert.match(service.exit("LINK", "unocoin", "binance").detail, /not confirmed for this account/u);
+    for (const coin of ["LINK", "NEAR", "SKY"]) service.setClosed("unocoin", coin, false);
+    service.setClosed("unocoin", "LINK", false, "deposit");
+
     // LINK leaves UnoCoin only on ERC-20 at 1.226 LINK: allowed, but over a
     // 5-trade batch of ₹1,480 at ₹1,275/LINK that is ~21% per trade.
     const link = service.exit("LINK", "unocoin", "binance");
@@ -73,7 +81,8 @@ async function main(): Promise<void> {
     assert.equal(twoWay.status, "TWO_WAY");
     assert.equal(twoWay.feeUnits, null);
     assert.equal(service.exit("LINK", "unocoin", "binance", {twoWay: true}).status, "TWO_WAY");
-    // A coin UnoCoin does not list cannot be verified.
+    // A confirmed coin UnoCoin does not list cannot be verified.
+    service.setClosed("unocoin", "XYZ", false);
     assert.equal(service.exit("XYZ", "unocoin", "binance").status, "UNVERIFIED");
 
     // A failed source is UNVERIFIED (blocked), never silently allowed.
@@ -81,6 +90,7 @@ async function main(): Promise<void> {
       throw new Error("down");
     }}), join(directory, "failing.jsonl"), () => 1_000_000, []);
     await failing.ensureFresh();
+    failing.setClosed("unocoin", "LINK", false);
     assert.equal(failing.exit("LINK", "unocoin", "binance").status, "UNVERIFIED");
 
     // Operator marks persist and can be lifted.

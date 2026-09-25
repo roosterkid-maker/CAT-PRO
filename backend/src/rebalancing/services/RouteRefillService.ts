@@ -360,6 +360,8 @@ export interface RouteRefillDependencies {
   /** Allocation behind the targets; null when targets come from elsewhere (no sells then). */
   readonly getAllocation: (tradeSizeInr: number, valuation: InventoryValuation) => CapitalAllocation | null;
   readonly getAutoSellConfig: () => AutoSellConfig;
+  /** Whether `coin` held on `venue` can be withdrawn anywhere it could be sold. */
+  readonly canLeave: (coin: string, venue: string) => boolean;
 }
 
 const DEFAULT_DEPENDENCIES: RouteRefillDependencies = {
@@ -371,6 +373,10 @@ const DEFAULT_DEPENDENCIES: RouteRefillDependencies = {
   getBuyPort: async () => new (await import("./StockBuyExecutor")).DefaultStockBuyExecutor(),
   getAllocation: (tradeSizeInr, valuation) => buildCapitalAllocation(tradeSizeInr, valuation),
   getAutoSellConfig: () => loadAutoSellConfig(),
+  canLeave: (coin, venue) => {
+    const exits = getOrCreateRouteExitCostService();
+    return ["binance", "bybit"].some((to) => to !== venue && exits.exit(coin, venue, to).status !== "CLOSED");
+  },
 };
 
 function isState(value: unknown): value is RefillState {
@@ -750,7 +756,6 @@ export class RouteRefillService {
       const unmet = entry.inr - (poolCash.get(pool) ?? 0);
       if (unmet > 0) demand.set(pool, {...entry, inr: unmet});
     }
-    if (demand.size === 0) return skip("The cash already on each exchange covers every allocated coin; nothing needs freed cash.");
 
     const allocatedAt = new Map(allocation.coins.map((coin) => [coin.coin, coin]));
     // A coin with opportunity that is only waiting for capital keeps its stock.
@@ -773,6 +778,9 @@ export class RouteRefillService {
     // Idle (non-allocated) stock first, then surplus core stock; bigger first.
     candidates.sort((a, b) => Number(b.idle) - Number(a.idle) || b.surplusInr - a.surplusInr);
     if (candidates.length === 0) return skip("No idle or surplus stock to sell.");
+    if (demand.size === 0 && !candidates.some((candidate) => candidate.idle && !this.dependencies.canLeave(candidate.coin, candidate.venue))) {
+      return skip("The cash already on each exchange covers every allocated coin; nothing needs freed cash.");
+    }
 
     let lastReason = "";
     for (const candidate of candidates) {
@@ -796,17 +804,23 @@ export class RouteRefillService {
         .filter((option) => option.pool !== undefined && option.pool.inr >= MINIMUM_SELL_INR)
         .sort((a, b) => (b.pool?.profitInr ?? 0) - (a.pool?.profitInr ?? 0));
       const option = options[0];
-      if (!option?.pool) {
+      // Idle stock that can never leave this exchange (withdrawals closed)
+      // is turned back into the exchange's cash whenever the price is fair:
+      // held as coin it can only be sold here anyway. The executor's
+      // no-discount check still refuses a sale below the market elsewhere.
+      const stuck = !option?.pool && candidate.idle && !this.dependencies.canLeave(candidate.coin, candidate.venue);
+      if (!option?.pool && !stuck) {
         lastReason = `Cash from ${candidate.coin} on ${candidate.venue} would not reach any coin that needs it.`;
         continue;
       }
-      const amountInr = Math.floor(Math.min(candidate.surplusInr, option.pool.inr, remainingCap));
+      const quote = option?.pool ? option.quote : (SELL_VENUE_QUOTES[candidate.venue] ?? ["INR"])[0]!;
+      const amountInr = Math.floor(Math.min(candidate.surplusInr, option?.pool?.inr ?? Number.POSITIVE_INFINITY, remainingCap));
       if (amountInr < MINIMUM_SELL_INR) {
         lastReason = `${candidate.coin}: sellable amount ₹${amountInr} is below the ₹${MINIMUM_SELL_INR} minimum.`;
         continue;
       }
       const cost = amountInr * SWITCH_COST_SHARE;
-      if (option.pool.profitInr < SWITCH_BENEFIT_MULTIPLE * cost) {
+      if (option?.pool && option.pool.profitInr < SWITCH_BENEFIT_MULTIPLE * cost) {
         lastReason = `Selling ₹${amountInr} of ${candidate.coin} costs ≈₹${cost.toFixed(0)}; the coins waiting on that cash (${[...option.pool.coins].join(", ")}) earn ≈₹${option.pool.profitInr.toFixed(0)}/day, under ${SWITCH_BENEFIT_MULTIPLE}x the cost.`;
         continue;
       }
@@ -817,7 +831,7 @@ export class RouteRefillService {
       const outcome = await port.sell({
         venue: candidate.venue,
         coin: candidate.coin,
-        quote: option.quote,
+        quote,
         amountInr,
         maximumQuantity: quantity,
         usdtInr,
@@ -845,7 +859,9 @@ export class RouteRefillService {
         kind: "STOCK_SELL",
         coin: candidate.coin,
         spentInr: outcome.spentInr,
-        detail: `${outcome.detail} ${candidate.idle ? "Idle stock" : "Surplus stock"} → ${option.quote} for ${[...option.pool.coins].join(", ")}.`,
+        detail: option?.pool
+          ? `${outcome.detail} ${candidate.idle ? "Idle stock" : "Surplus stock"} → ${quote} for ${[...option.pool.coins].join(", ")}.`
+          : `${outcome.detail} Stuck stock (${candidate.coin} cannot leave ${candidate.venue}) → ${quote} at a fair price.`,
         referenceId: outcome.orderId,
       }, true)];
     }

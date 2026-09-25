@@ -284,6 +284,33 @@ async function testStockSells(directory: string): Promise<void> {
   await waiting.executeAuto(nullPort, now);
   assert.equal(waitingPort.sells.length, 0, "SKY stock waits for UnoCoin INR; it is never sold as idle");
 
+  // Stuck stock: LINK on UnoCoin cannot leave (withdrawals closed) and no
+  // coin needs its cash. It is sold back into UnoCoin INR anyway - held as
+  // coin it could only ever be sold there - leaving the price check to the
+  // executor; stock that can still leave is kept for a coin that needs it.
+  const liquidate = (name: string, canLeave: boolean) => {
+    const port = new FakeStockPort();
+    return {port, service: new RouteRefillService({
+      getTargets: () => [],
+      getAllocation: () => allocateCapital({budgetInr: 0, candidates: []}),
+      getValuation: () => ({...valuation(), usable: () => true}),
+      getConfig: config,
+      getTradeSizeInr: () => 1_500,
+      getAutoBuyConfig: () => ({enabled: false, dailyCapInr: null, cashFloorInr: 1_000}),
+      getAutoSellConfig: () => ({enabled: true, dailyCapInr: 5_000}),
+      getBuyPort: async () => port,
+      canLeave: () => canLeave,
+    }, join(directory, `${name}.jsonl`))};
+  };
+  holdings = {"unocoin|LINK": 1_500, "unocoin|INR": 1_134};
+  const stuckRun = liquidate("stuck", false);
+  const stuckResults = await stuckRun.service.executeAuto(nullPort, now);
+  assert.deepEqual(stuckRun.port.sells.map((sell) => [sell.venue, sell.coin, sell.quote, sell.amountInr]), [["unocoin", "LINK", "INR", 1_500]]);
+  assert.match(stuckResults.find((item) => item.kind === "STOCK_SELL")?.detail ?? "", /Stuck stock \(LINK cannot leave unocoin\)/u);
+  const movableRun = liquidate("movable", true);
+  await movableRun.service.executeAuto(nullPort, now);
+  assert.equal(movableRun.port.sells.length, 0, "stock that can leave is not dumped");
+
   // Daily sell cap: after ₹5,000 of sells, nothing more today.
   const capPort = new FakeStockPort();
   const capped = service("cap", capPort);
