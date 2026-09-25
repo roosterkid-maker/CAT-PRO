@@ -5,6 +5,7 @@ import {
 import type {
   CoinStudyResponse,
   InrExecutorResponse,
+  InExchangeMakerResponse,
   RefillPlanResponse,
   InrScannerResponse,
   LiveOnlyInventoryResponse,
@@ -59,6 +60,20 @@ export async function fetchCoinStudy(
   const response =
     await api.get<CoinStudyResponse>(
       "/api/live-only/coin-study",
+      {
+        signal,
+      },
+    );
+
+  return response.data;
+}
+
+export async function fetchInExchangeMaker(
+  signal?: AbortSignal,
+): Promise<InExchangeMakerResponse> {
+  const response =
+    await api.get<InExchangeMakerResponse>(
+      "/api/live-only/in-exchange-maker",
       {
         signal,
       },

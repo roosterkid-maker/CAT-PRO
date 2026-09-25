@@ -17,6 +17,7 @@ import type {
 
 import {
   useCoinStudy,
+  useInExchangeMaker,
   useInrExecutor,
   useInrScanner,
   useLiveOnlyInventory,
@@ -25,6 +26,7 @@ import {
 } from "@/modules/live-only/hooks/useLiveOnlyRuntime";
 
 import type {
+  InExchangeMakerResponse,
   InrScannedRoute,
   InrScannerResponse,
   LiveOnlyInventoryResponse,
@@ -95,6 +97,7 @@ export default function CommandCenter() {
   const inventory = useLiveOnlyInventory().data?.data;
   const scanner = useInrScanner().data?.data;
   const executor = useInrExecutor().data?.data;
+  const maker = useInExchangeMaker().data?.data;
   const pnl = useArbitragePnL(200).data;
   const orders = useRecentExecutions(200).data?.executions;
   const study = useCoinStudy().data?.data;
@@ -232,6 +235,9 @@ export default function CommandCenter() {
         </div>
       </div>
 
+      {/* ======================= in-exchange (same coin, INR vs USDT) ======================= */}
+      <InExchangePanel maker={maker} executor={executor} />
+
       {/* ======================= charts ======================= */}
       <div className="grid gap-4 lg:grid-cols-3">
         <HudPanel title="TRADES / HOUR" meta="filled orders · last 24 h">
@@ -359,6 +365,109 @@ function OpportunityWindow({
         )}
       </div>
     </div>
+  );
+}
+
+/* ---------------------------------------------------------- in-exchange */
+
+type Maker = InExchangeMakerResponse["data"];
+type Executor = NonNullable<ReturnType<typeof useInrExecutor>["data"]>["data"];
+
+function price(value: number | null): string {
+  if (value === null) return "—";
+  return value >= 100 ? value.toFixed(2) : value >= 1 ? value.toFixed(4) : value.toPrecision(5);
+}
+
+/*
+ * One coin, one exchange: the thin INR book against the liquid USDT book.
+ * Maker quotes (shadow) and the taker-loop checks the INR executor records.
+ */
+function InExchangePanel({maker, executor}: {maker: Maker | undefined; executor: Executor | undefined}) {
+  const loops = (executor?.recentAttempts ?? [])
+    .filter((attempt) => attempt.buyVenue === attempt.sellVenue)
+    .slice(0, 8);
+  return (
+    <HudPanel
+      title="IN-EXCHANGE · SAME COIN INR ↔ USDT"
+      meta={maker ? `CoinDCX maker shadow · ${maker.hoursObserved.toFixed(1)} h observed · edge target ${maker.config.targetEdgePercent}% · no orders sent` : "starting…"}
+    >
+      <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
+        <div className="min-w-0">
+          <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <Kpi label="SIM FILLS" value={String(maker?.totals.fills ?? 0)} sub="real trades through our quotes" accent="cyan" />
+            <Kpi label="SIM EDGE" value={maker ? inr(maker.totals.edgeInr) : "—"} sub="after INR + USDT fees" accent={maker && maker.totals.edgeInr > 0 ? "green" : "muted"} />
+            <Kpi label="EST. / DAY" value={maker ? inr(maker.totals.edgeInrPerDay) : "—"} sub="at the observed rate" accent={maker && maker.totals.edgeInrPerDay > 0 ? "green" : "muted"} />
+            <Kpi label="WATCHING" value={String(maker?.tracked.length ?? 0)} sub="coins: spread room × volume" accent="muted" />
+          </div>
+          <div className="overflow-auto" style={{maxHeight: 320}}>
+            <table className="w-full min-w-[46rem] text-left font-mono text-[11px]">
+              <thead className="sticky top-0 bg-[var(--cc-panel,#0b0f0d)] text-text-muted">
+                <tr>
+                  <th className="px-2 py-1.5 font-normal">Coin</th>
+                  <th className="px-2 py-1.5 text-right font-normal">24 h vol</th>
+                  <th className="px-2 py-1.5 text-right font-normal">INR bid / ask</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Spread</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Our bid</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Our ask</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Trades</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(maker?.tracked ?? []).length === 0 ? (
+                  <tr><td colSpan={7} className="px-2 py-6 text-center text-text-muted">No coin has room for a maker quote right now.</td></tr>
+                ) : (
+                  (maker?.tracked ?? []).map((row) => (
+                    <tr key={row.coin} className="border-t border-border-default/50">
+                      <td className="px-2 py-1.5 text-text-primary">{row.coin}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">{row.dailyVolumeInr === null ? "—" : compactInr(row.dailyVolumeInr)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{row.quote ? `${price(row.quote.inrBid)} / ${price(row.quote.inrAsk)}` : "—"}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-amber-300">{row.quote ? `${row.quote.spreadPercent.toFixed(2)}%` : "—"}</td>
+                      <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.bid ? "text-emerald-300" : "text-text-muted"}`}>{price(row.quote?.bid ?? null)}</td>
+                      <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.ask ? "text-rose-300" : "text-text-muted"}`}>{price(row.quote?.ask ?? null)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{row.tradesSeen}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="min-w-0 space-y-3">
+          <div>
+            <p className="mb-1 font-mono text-[10px] text-text-muted">SIMULATED FILLS</p>
+            <div className="overflow-auto" style={{maxHeight: 180}}>
+              {(maker?.recentFills ?? []).length === 0 ? (
+                <p className="font-mono text-[11px] text-text-muted">None yet: waiting for a real trade through one of our quotes.</p>
+              ) : (
+                (maker?.recentFills ?? []).map((fill) => (
+                  <p key={`${fill.coin}-${fill.at}-${fill.side}`} className="font-mono text-[11px]">
+                    <span className="text-text-muted">{new Date(fill.at).toLocaleTimeString("en-GB", {hour12: false})}</span>{" "}
+                    <span className={fill.side === "BUY" ? "text-emerald-300" : "text-rose-300"}>{fill.side}</span>{" "}
+                    <span className="text-text-primary">{fill.coin}</span> {inr(fill.notionalInr)}{" "}
+                    <span className={fill.edgeInr >= 0 ? "text-emerald-300" : "text-red-300"}>{fill.edgeInr >= 0 ? "+" : ""}{inr(fill.edgeInr)} ({fill.edgePercent.toFixed(2)}%)</span>
+                  </p>
+                ))
+              )}
+            </div>
+          </div>
+          <div>
+            <p className="mb-1 font-mono text-[10px] text-text-muted">TAKER LOOPS (INR executor, shadow)</p>
+            {loops.length === 0 ? (
+              <p className="font-mono text-[11px] text-text-muted">No same-exchange loop priced recently (most appear 00:00–09:00 IST).</p>
+            ) : (
+              loops.map((attempt) => (
+                <p key={`${attempt.at}-${attempt.coin}`} className="truncate font-mono text-[11px]" title={attempt.reason ?? ""}>
+                  <span className="text-text-muted">{new Date(attempt.at).toLocaleTimeString("en-GB", {hour12: false})}</span>{" "}
+                  <span className={attempt.status === "SHADOW" ? "text-cyan-300" : "text-amber-300"}>{attempt.status}</span>{" "}
+                  <span className="text-text-primary">{attempt.coin}</span>{" "}
+                  <span className="text-text-muted">{(attempt.reason ?? "").replace(/^IN_VENUE_(SHADOW|NET): /u, "")}</span>
+                </p>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </HudPanel>
   );
 }
 

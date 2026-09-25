@@ -5,6 +5,7 @@ import {
 import {
   fetchCoinStudy,
   fetchInrExecutor,
+  fetchInExchangeMaker,
   fetchRefillPlan,
   fetchInrScanner,
   fetchLiveOnlyInventory,
@@ -80,6 +81,22 @@ export function useCoinStudy() {
       15_000,
     retry:
       1,
+  });
+}
+
+export function useInExchangeMaker() {
+  return useQuery({
+    queryKey: [
+      "live-only-in-exchange-maker",
+    ],
+    queryFn: ({signal}) =>
+      fetchInExchangeMaker(
+        signal,
+      ),
+    refetchInterval:
+      10_000,
+    staleTime:
+      5_000,
   });
 }
 
