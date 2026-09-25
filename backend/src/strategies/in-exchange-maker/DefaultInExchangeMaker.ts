@@ -194,7 +194,7 @@ function startUnoCoin(): InExchangeMakerShadowService {
     fetchVolumes: unoCoinVolumes,
     refreshBooks: unoCoinRefreshBooks,
     now: Date.now,
-  }, {venue: "unocoin", bookRefreshCandidates: 12});
+  }, {venue: "unocoin", bookRefreshCandidates: 12, maximumSpreadPercent: 80});
   registerInExchangeMakerShadow("unocoin", service);
   service.start();
   return service;

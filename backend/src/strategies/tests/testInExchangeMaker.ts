@@ -120,28 +120,35 @@ async function testPolledVenue(directory: string): Promise<void> {
   const refreshed: string[][] = [];
   const books = new Map<string, {bid: number; ask: number}>();
   const service = new InExchangeMakerShadowService({
-    listInrMarkets: () => ["SKYINR", "LINKINR", "QUIETINR", "NOHEDGEINR"],
+    listInrMarkets: () => ["SKYINR", "LINKINR", "QUIETINR", "NOHEDGEINR", "USDCINR"],
     getInrBook: (market) => books.get(market) ?? null,
-    getHedgeBook: (coin) => (coin === "SKY" ? {bid: 0.0727, ask: 0.0728, venue: "binance/bybit"} : coin === "LINK" || coin === "QUIET" ? {bid: 13.3, ask: 13.31, venue: "binance"} : null),
+    getHedgeBook: (coin) => (coin === "SKY" ? {bid: 0.0727, ask: 0.0728, venue: "binance/bybit"} : coin === "LINK" || coin === "QUIET" || coin === "USDC" ? {bid: 13.3, ask: 13.31, venue: "binance"} : null),
     getConversion: () => ({bid: 99.9, ask: 99.92}),
     inrFeePercent: () => 0.4,
     hedgeFeePercent: () => 0.1,
     fetchMarketDetails: async () => new Map(),
     fetchTrades: async () => [],
-    fetchVolumes: async () => new Map([["SKYINR", 90_000], ["LINKINR", 40_000], ["QUIETINR", 500], ["NOHEDGEINR", 500_000]]),
+    fetchVolumes: async () => new Map([["SKYINR", 90_000], ["LINKINR", 40_000], ["QUIETINR", 500], ["NOHEDGEINR", 500_000], ["USDCINR", 600_000]]),
     refreshBooks: async (markets) => {
       refreshed.push([...markets]);
       books.set("SKYINR", {bid: 6.9, ask: 7.4});
+      books.set("USDCINR", {bid: 95, ask: 100});
+      // A 60% UnoCoin book is still quoted (inside its wider cap).
+      books.set("LINKINR", {bid: 802, ask: 1_288.89});
     },
     now: () => now,
-  }, {venue: "unocoin"}, join(directory, "ixm-uno.jsonl"));
+  }, {venue: "unocoin", maximumSpreadPercent: 80}, join(directory, "ixm-uno.jsonl"));
   await service.tradeCycle();
-  assert.deepEqual(refreshed[0], ["SKYINR", "LINKINR"], "busiest books with a hedge, quiet and unhedged skipped");
+  assert.deepEqual(refreshed[0], ["USDCINR", "SKYINR", "LINKINR"], "busiest books with a hedge, quiet and unhedged skipped");
   service.quoteCycle();
   const report = service.getReport();
   assert.equal(report.venue, "unocoin");
-  assert.equal(report.tracked[0]?.coin, "SKY");
-  assert.equal(report.tracked[0]?.quote?.hedgeVenue, "binance/bybit");
+  assert.ok(!report.tracked.some((coin) => coin.coin === "USDC"), "stablecoins are not a coin edge");
+  assert.deepEqual(report.tracked.map((coin) => coin.coin).sort(), ["LINK", "SKY"]);
+  assert.equal(report.tracked.find((coin) => coin.coin === "SKY")?.quote?.hedgeVenue, "binance/bybit");
+  // The LINK bid sits one tick above 802, far below fair: a very safe quote.
+  const link = report.tracked.find((coin) => coin.coin === "LINK")?.quote;
+  assert.ok(link?.bid !== null && (link?.bid ?? 0) < (link?.maximumBid ?? 0));
   service.stop();
 }
 

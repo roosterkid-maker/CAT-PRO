@@ -185,6 +185,8 @@ export interface InExchangeMakerConfig {
   readonly maximumInventoryInr: number;
   /** Polled venues: how many busiest INR books to refresh each trade pass. */
   readonly bookRefreshCandidates: number;
+  /** Books wider than this are ignored (a thin venue's books can be far wider). */
+  readonly maximumSpreadPercent: number;
 }
 
 export const DEFAULT_IN_EXCHANGE_MAKER_CONFIG: InExchangeMakerConfig = {
@@ -197,7 +199,11 @@ export const DEFAULT_IN_EXCHANGE_MAKER_CONFIG: InExchangeMakerConfig = {
   minimumDailyVolumeInr: 20_000,
   maximumInventoryInr: 4_500,
   bookRefreshCandidates: 10,
+  maximumSpreadPercent: 25,
 };
+
+/* Stablecoins track USDT: an INR/USDT spread on them is conversion, not a coin edge. */
+const STABLE_COINS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "USDP"]);
 
 interface CoinState {
   snapshots: QuoteSnapshot[];
@@ -281,14 +287,14 @@ export class InExchangeMakerShadowService {
     const ranked: {coin: string; score: number}[] = [];
     for (const market of this.dependencies.listInrMarkets()) {
       const coin = market.slice(0, -3);
-      if (!coin || coin === "USDT") continue;
+      if (!coin || STABLE_COINS.has(coin)) continue;
       const inr = this.dependencies.getInrBook(market);
       const hedge = this.dependencies.getHedgeBook(coin);
       if (!inr || !hedge) continue;
       const detail = this.details.get(market);
       if (detail && !detail.active) continue;
       const spreadPercent = (inr.ask / inr.bid - 1) * 100;
-      if (spreadPercent < room || spreadPercent > 25) continue;
+      if (spreadPercent < room || spreadPercent > this.config.maximumSpreadPercent) continue;
       const volumeInr = this.volumes.get(market) ?? 0;
       if (this.volumes.size > 0 && volumeInr < this.config.minimumDailyVolumeInr) continue;
       ranked.push({coin, score: (spreadPercent - room) * Math.sqrt(Math.max(1, volumeInr))});
