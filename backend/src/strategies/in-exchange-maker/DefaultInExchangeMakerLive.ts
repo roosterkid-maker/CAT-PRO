@@ -53,6 +53,10 @@ import {
   getInExchangeMakerShadow,
 } from "./InExchangeMakerShadowService";
 
+import type {
+  OrderBook,
+} from "../../orderbook/models/OrderBook";
+
 /* The live in-exchange maker on CoinDCX, wired to the audited order path. */
 const IXM_RUNNER = "ixm";
 let engine: InExchangeMakerLiveEngine | null = null;
@@ -79,6 +83,46 @@ function rules(market: string): IxmMarketRules | null {
   };
 }
 
+/* REST snapshots for books the stream does not keep fresh (quiet, quarantined or past the subscription cap). */
+const COINDCX_ORDERBOOK_URL = "https://public.coindcx.com/market_data/orderbook";
+const SNAPSHOT_REUSE_MS = 300;
+const snapshots = new Map<string, {at: number; book: Promise<OrderBook | null>}>();
+
+function coinDcxPair(market: string): string | null {
+  const match = /^([A-Z0-9]+?)(INR|USDT)$/u.exec(market);
+  if (!match) return null;
+  return match[2] === "INR" ? `I-${match[1]}_INR` : `B-${match[1]}_USDT`;
+}
+
+function levels(side: unknown): OrderBook["bids"] {
+  if (!side || typeof side !== "object") return [];
+  return Object.entries(side as Record<string, unknown>)
+    .map(([price, quantity]) => ({price: Number(price), quantity: Number(quantity)}))
+    .filter((level) => level.price > 0 && level.quantity > 0);
+}
+
+async function fetchSnapshot(market: string): Promise<OrderBook | null> {
+  const pair = coinDcxPair(market);
+  if (!pair) return null;
+  const response = await fetch(`${COINDCX_ORDERBOOK_URL}?pair=${encodeURIComponent(pair)}`, {signal: AbortSignal.timeout(2_000)});
+  if (!response.ok) return null;
+  const body = await response.json() as {bids?: unknown; asks?: unknown};
+  const bids = levels(body.bids).sort((a, b) => b.price - a.price);
+  const asks = levels(body.asks).sort((a, b) => a.price - b.price);
+  if (bids.length === 0 && asks.length === 0) return null;
+  // Stamped on receipt: the snapshot is the book as of this response.
+  return {exchange: "coindcx", market, bids, asks, timestamp: Date.now()};
+}
+
+/** Shares one in-flight or very recent snapshot between the bid and ask workers. */
+function fetchBook(market: string): Promise<OrderBook | null> {
+  const cached = snapshots.get(market);
+  if (cached && Date.now() - cached.at <= SNAPSHOT_REUSE_MS) return cached.book;
+  const book = fetchSnapshot(market).catch(() => null);
+  snapshots.set(market, {at: Date.now(), book});
+  return book;
+}
+
 export function startInExchangeMakerLive(): InExchangeMakerLiveEngine {
   if (engine) return engine;
   const config = loadIxmLiveConfig(process.env, isLiveOnlyRuntimeEnabled(process.env));
@@ -89,6 +133,7 @@ export function startInExchangeMakerLive(): InExchangeMakerLiveEngine {
   engine = new InExchangeMakerLiveEngine(config, {
     getQuote: (coin) => getInExchangeMakerShadow("coindcx")?.getLiveQuote(coin) ?? null,
     getBook: (market) => orderBookService.get("coindcx", market) ?? null,
+    fetchBook,
     getRules: rules,
     getBalance: (asset) => tradingAccountService.getExchangeBalance("coindcx", asset)?.availableBalance ?? null,
     execute: (input) => executor.execute(input),

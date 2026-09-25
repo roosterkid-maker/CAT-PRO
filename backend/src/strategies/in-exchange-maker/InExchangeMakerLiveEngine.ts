@@ -20,8 +20,9 @@ import {
   floorToStep,
 } from "../../execution/live/inr-routes/InrRoutePlanner";
 
-import type {
-  LiveMakerQuote,
+import {
+  computeMakerQuotes,
+  type LiveMakerQuote,
 } from "./InExchangeMakerShadowService";
 
 /*
@@ -35,6 +36,11 @@ import type {
  * primaryTimeoutMs, then is cancelled), and whatever it filled is hedged on
  * the USDT book with widening buffers. An unfilled order is simply
  * re-placed at the next price.
+ *
+ * Prices are re-derived at order time from fresh INR and USDT books (the
+ * stream when it is fresh, else a REST snapshot), so a quiet or
+ * unsubscribed book never blocks or misprices an order; the hedge reads a
+ * fresh book the same way.
  *
  * Guards: live only with CAT_PRO_IXM_MODE=live, its confirmation phrase and
  * the LIVE-only runtime; allowlisted coins only; a fixed small quote; a
@@ -90,6 +96,8 @@ export interface IxmMarketRules {
 export interface IxmLiveDependencies {
   readonly getQuote: (coin: string) => LiveMakerQuote | null;
   readonly getBook: (market: string) => OrderBook | null;
+  /** A REST snapshot when the streamed book is stale (optional). */
+  readonly fetchBook?: (market: string) => Promise<OrderBook | null>;
   readonly getRules: (market: string) => IxmMarketRules | null;
   readonly getBalance: (asset: string) => number | null;
   readonly execute: (input: InrRouteExecuteInput) => Promise<InrRouteSession>;
@@ -132,8 +140,17 @@ function isLiveState(value: unknown): value is LiveState {
 }
 
 const IST_OFFSET_MS = 330 * 60_000;
-const QUOTE_MAX_AGE_MS = 1_500;
+/* The shadow quote only says the coin is tracked and carries USDT/INR; prices come from fresh books. */
+const QUOTE_MAX_AGE_MS = 10_000;
 const BOOK_MAX_AGE_MS = 1_500;
+/* Same edge the shadow quotes with. */
+const TARGET_EDGE_PERCENT = 0.3;
+
+function bestOf(book: OrderBook): {bid: number | null; ask: number | null} {
+  const bid = book.bids.reduce<number | null>((best, level) => (level.quantity > 0 && (best === null || level.price > best) ? level.price : best), null);
+  const ask = book.asks.reduce<number | null>((best, level) => (level.quantity > 0 && (best === null || level.price < best) ? level.price : best), null);
+  return {bid, ask};
+}
 const DAILY_LOSS_PREFIX = "IXM_DAILY_LOSS[";
 const MAXIMUM_FILLS = 500;
 
@@ -214,25 +231,40 @@ export class InExchangeMakerLiveEngine {
     if (halted) return block(`HALTED: ${halted}`);
     if (this.dependencies.otherExposureHalted()) return block("PAUSED: another runner has an exposure halt.");
 
-    const quote = this.dependencies.getQuote(coin);
-    if (!quote || now - quote.at > QUOTE_MAX_AGE_MS) return block("NO_QUOTE: no fresh shadow quote.");
-    const price = side === "BUY" ? quote.bid : quote.ask;
-    if (price === null) return block("NO_QUOTE: the shadow does not quote this side now.");
+    const shadow = this.dependencies.getQuote(coin);
+    if (!shadow || now - shadow.at > QUOTE_MAX_AGE_MS) return block("NO_QUOTE: the shadow is not tracking this coin now.");
 
     const inrMarket = `${coin}INR`;
     const usdtMarket = `${coin}USDT`;
-    // Never cross: a maker bid must stay below the best ask (and an ask
-    // above the best bid) of a fresh INR book, or it would trade as taker.
-    const book = this.dependencies.getBook(inrMarket);
-    if (!book || now - book.timestamp > BOOK_MAX_AGE_MS) return block("BOOK_STALE: the INR book is not fresh.");
-    const bestAsk = book.asks.reduce<number | null>((best, level) => (best === null || level.price < best ? level.price : best), null);
-    const bestBid = book.bids.reduce<number | null>((best, level) => (best === null || level.price > best ? level.price : best), null);
-    if (side === "BUY" && bestAsk !== null && price >= bestAsk) return block("WOULD_CROSS: bid at or above the best ask.");
-    if (side === "SELL" && bestBid !== null && price <= bestBid) return block("WOULD_CROSS: ask at or below the best bid.");
-
     const inrRules = this.dependencies.getRules(inrMarket);
     const usdtRules = this.dependencies.getRules(usdtMarket);
     if (!inrRules || !usdtRules) return block("RULES_MISSING: market rules are not loaded.");
+    if (side === "SELL" && (this.dependencies.getBalance(coin) ?? 0) <= 0) return block(`NO_STOCK: 0 ${coin} on CoinDCX.`);
+
+    // Re-price from fresh books: one tick inside the INR book, bounded by
+    // the fresh USDT hedge price, fees and the target edge.
+    const book = await this.freshBook(inrMarket);
+    if (!book) return block("BOOK_STALE: no fresh INR book.");
+    const hedgeBook = await this.freshBook(usdtMarket);
+    if (!hedgeBook) return block("BOOK_STALE: no fresh USDT book.");
+    const {bid: bestBid, ask: bestAsk} = bestOf(book);
+    const hedgeTop = bestOf(hedgeBook);
+    if (hedgeTop.bid === null || hedgeTop.ask === null) return block("BOOK_STALE: the USDT book is one-sided.");
+    const tick = inrRules.priceStep;
+    if (!(tick !== null && tick > 0)) return block("RULES_MISSING: no INR price step.");
+    const fresh = computeMakerQuotes({
+      inrBid: bestBid, inrAsk: bestAsk, usdtBid: hedgeTop.bid, usdtAsk: hedgeTop.ask,
+      usdtInrBid: shadow.usdtInrBid, usdtInrAsk: shadow.usdtInrAsk,
+      inrFeePercent: this.dependencies.inrFeePercent(), usdtFeePercent: this.dependencies.usdtFeePercent(),
+      targetEdgePercent: TARGET_EDGE_PERCENT, tick,
+    });
+    const quote = {...shadow, bid: fresh.bid, ask: fresh.ask, usdtBid: hedgeTop.bid, usdtAsk: hedgeTop.ask};
+    const price = side === "BUY" ? quote.bid : quote.ask;
+    if (price === null) return block("NO_EDGE: the fresh books leave no room for this side.");
+    // Never cross: a maker bid must stay below the best ask (and an ask
+    // above the best bid) of the fresh INR book, or it would trade as taker.
+    if (side === "BUY" && bestAsk !== null && price >= bestAsk) return block("WOULD_CROSS: bid at or above the best ask.");
+    if (side === "SELL" && bestBid !== null && price <= bestBid) return block("WOULD_CROSS: ask at or below the best bid.");
     const step = commonStep(inrRules.quantityStep, usdtRules.quantityStep) ?? Math.max(inrRules.quantityStep ?? 0, usdtRules.quantityStep ?? 0);
     if (!(step > 0)) return block("RULES_MISSING: no common lot step.");
     const quantity = floorToStep(this.config.quoteInr / price, step);
@@ -298,11 +330,11 @@ export class InExchangeMakerLiveEngine {
         priceStep: usdtRules.priceStep,
       },
       getHedgeLevels: async () => {
-        const hedgeBook = this.dependencies.getBook(usdtMarket);
-        if (!hedgeBook || this.dependencies.now() - hedgeBook.timestamp > BOOK_MAX_AGE_MS) return null;
+        const levels = await this.freshBook(usdtMarket);
+        if (!levels) return null;
         return buyInr
-          ? [...hedgeBook.bids].sort((a, b) => b.price - a.price)
-          : [...hedgeBook.asks].sort((a, b) => a.price - b.price);
+          ? [...levels.bids].sort((a, b) => b.price - a.price)
+          : [...levels.asks].sort((a, b) => a.price - b.price);
       },
     });
 
@@ -357,9 +389,17 @@ export class InExchangeMakerLiveEngine {
         outcome = "ERROR";
       }
       // Busy states retry quickly; blocks and halts back off.
-      const pause = outcome === "NO_FILL" || outcome === "COMPLETED" || outcome === "DUST_RESIDUAL" ? 100 : outcome.startsWith("HALTED") ? 5_000 : 500;
+      const pause = outcome === "NO_FILL" || outcome === "COMPLETED" || outcome === "DUST_RESIDUAL" ? 100 : outcome.startsWith("HALTED") ? 5_000 : 1_000;
       await this.dependencies.sleep(pause);
     }
+  }
+
+  /** The streamed book when fresh, else a REST snapshot; null when neither is fresh. */
+  private async freshBook(market: string): Promise<OrderBook | null> {
+    const streamed = this.dependencies.getBook(market);
+    if (streamed && this.dependencies.now() - streamed.timestamp <= BOOK_MAX_AGE_MS) return streamed;
+    const fetched = await (this.dependencies.fetchBook?.(market) ?? Promise.resolve(null)).catch(() => null);
+    return fetched && this.dependencies.now() - fetched.timestamp <= BOOK_MAX_AGE_MS ? fetched : null;
   }
 
   private haltedNow(now: number): string | null {
