@@ -550,8 +550,16 @@ export class RouteRefillService {
       results.push(this.record({at: now, actionId: action.id, toVenue: action.toVenue, amountUsdt, status: outcome.status,
         detail: outcome.detail, referenceId: outcome.referenceId}, true));
     }
-    results.push(...(await this.executeStockBuys(plan, now)));
-    results.push(...(await this.executeStockSells(plan, now)));
+    // Stock trades need every exchange's balances: a venue that drops out for
+    // a moment would shrink the budget and distort buys and sells.
+    const valuation = this.dependencies.getValuation(now);
+    const missing = VENUES.filter((venue) => valuation.usable?.(venue) === false);
+    if (missing.length > 0) {
+      this.state.lastSellSkip = {at: now, reason: `Balances unavailable for ${missing.join(", ")}; no stock buy or sell this cycle.`};
+    } else {
+      results.push(...(await this.executeStockBuys(plan, now)));
+      results.push(...(await this.executeStockSells(plan, now)));
+    }
     this.persist();
     return results;
   }

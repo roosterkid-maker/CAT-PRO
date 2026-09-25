@@ -29,6 +29,8 @@ export interface InventoryValuation {
   priceInr(asset: string): number | null;
   /** Assets with a balance on `venue` (empty when that venue's balances are not usable). */
   assets?(venue: string): readonly string[];
+  /** Whether `venue`'s balances are known and usable right now. */
+  usable?(venue: string): boolean;
 }
 
 export function createInventoryValuation(now = Date.now()): InventoryValuation {
@@ -97,6 +99,7 @@ export function createInventoryValuation(now = Date.now()): InventoryValuation {
       return price === null ? null : free * price;
     },
     priceInr,
+    usable: (venue) => snapshot.exchanges.find((item) => item.exchange === venue)?.balanceUsableForDecision === true,
     assets: (venue) => {
       const exchange = snapshot.exchanges.find((item) => item.exchange === venue);
       if (!exchange || !exchange.balanceUsableForDecision) return [];

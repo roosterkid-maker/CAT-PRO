@@ -214,6 +214,23 @@ async function testStockSells(directory: string): Promise<void> {
   await core.executeAuto(nullPort, now);
   assert.equal(corePort.sells.length, 0, "₹2,900 of GRAM is under 1.25x its ₹2,400 allocation");
 
+  // One exchange's balances drop out for a moment: no stock trade at all.
+  holdings = {"coinswitch|FLR": 8_000, "coinswitch|INR": 1_200, "binance|USDT": 3_000};
+  const gapPort = new FakeStockPort();
+  const gap = new RouteRefillService({
+    getTargets: () => [],
+    getAllocation: () => allocation(),
+    getValuation: () => ({...valuation(), usable: (venue: string) => venue !== "binance"}),
+    getConfig: config,
+    getTradeSizeInr: () => 1_500,
+    getAutoBuyConfig: () => ({enabled: true, dailyCapInr: 10_000, cashFloorInr: 1_000}),
+    getAutoSellConfig: () => ({enabled: true, dailyCapInr: 5_000}),
+    getBuyPort: async () => gapPort,
+  }, join(directory, "gap.jsonl"));
+  await gap.executeAuto(nullPort, now);
+  assert.equal(gapPort.sells.length + gapPort.buys.length, 0);
+  assert.match(gap.getPlan(now).automation.autoSell.lastSkip?.reason ?? "", /Balances unavailable for binance/u);
+
   // Switched off: nothing is sold.
   holdings = {"coinswitch|FLR": 8_000, "coinswitch|INR": 1_200, "binance|USDT": 3_000};
   sellEnabled = false;
