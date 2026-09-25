@@ -72,6 +72,10 @@ import {
 } from "../inr-routes/DefaultRouteExitCostSources";
 
 import {
+  getInExchangeMakerShadow,
+} from "../../../strategies/in-exchange-maker/InExchangeMakerShadowService";
+
+import {
   getRouteRefillService,
 } from "../../../rebalancing/services/RouteRefillService";
 
@@ -512,6 +516,23 @@ router.get(
         message: error instanceof Error ? error.message : "Refill plan is unavailable.",
       });
     }
+  },
+);
+
+/* In-exchange maker shadow: CoinDCX INR-book quotes hedged on the USDT book. */
+router.get(
+  "/in-exchange-maker",
+  (
+    _request,
+    response,
+  ) => {
+    const shadow = getInExchangeMakerShadow();
+    response.setHeader("Cache-Control", "no-store");
+    if (!shadow) {
+      response.status(503).json({success: false, message: "In-exchange maker shadow is not running."});
+      return;
+    }
+    response.json({success: true, data: shadow.getReport()});
   },
 );
 

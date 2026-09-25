@@ -92,6 +92,10 @@ import {
 } from "../exchanges/unocoin/constants";
 
 import {
+  startInExchangeMakerShadow,
+} from "../strategies/in-exchange-maker/DefaultInExchangeMaker";
+
+import {
   marketCache,
 } from "../services/cache.service";
 
@@ -542,6 +546,12 @@ class WebSocketManager {
 
       this.inrArbitrageScanner
         .start();
+
+      /*
+       * In-exchange maker (CoinDCX INR vs USDT books): shadow simulation
+       * only - quotes and fills are computed, never sent.
+       */
+      startInExchangeMakerShadow();
 
       registerCoinSwitchInrDepthPoller(
         this.coinSwitchInrDepthPoller,
