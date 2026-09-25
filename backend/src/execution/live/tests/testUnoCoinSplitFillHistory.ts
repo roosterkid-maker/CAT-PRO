@@ -38,6 +38,18 @@ async function main(): Promise<void> {
   const average = (5990 * 0.10488982 + 5999 * 0.01215562 + 5999 * 0.13295456) / 0.25;
   assert.ok(Math.abs(order.averagePrice - average) < 1e-6, String(order.averagePrice));
 
+  // One completed row with no transaction list is a whole fill (real SKY_INR
+  // response, 2026-09-25); the limit is the conservative average.
+  const single = await api([{id: 110173524, rate: "7", volume: "271.4", charges: "0.8142", amount: "1899.8", total: "1899.8",
+    coin: "SKY", order_type: "BID", advance_order_type: "LIMIT", status: 1}]).getSpotOrder("110173524", "SKY_INR", credentials);
+  assert.equal(single.status, 1);
+  assert.equal(single.executedQuantity, 271.4);
+  assert.equal(single.remainingQuantity, 0);
+  assert.equal(single.averagePrice, 7);
+  // An empty list that is present is still missing evidence.
+  await assert.rejects(api([{id: 110173524, rate: "7", volume: "271.4", coin: "SKY", order_type: "BID", advance_order_type: "LIMIT", status: 1,
+    exchange_transactions: []}]).getSpotOrder("110173524", "SKY_INR", credentials), /transaction-level fill evidence/u);
+
   // A piece still open (or a side/coin mismatch) is not merged: the outcome
   // remains unknown and the executor halts instead of guessing.
   for (const rows of [

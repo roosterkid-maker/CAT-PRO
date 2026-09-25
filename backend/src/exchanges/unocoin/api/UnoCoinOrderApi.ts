@@ -749,10 +749,17 @@ export class UnoCoinOrderApi {
       this.requireHistoryStatus(
         row.status,
       );
+    // A completed row with no transaction list at all is itself the fill:
+    // UnoCoin reports whole fills this way (SKY_INR, DASH_INR 2026-09-25).
+    // An empty list that is present still counts as missing evidence.
     const fills =
-      this.normalizeFills(
-        row.exchange_transactions,
-      );
+      status === 1 &&
+      (row.exchange_transactions === undefined ||
+        row.exchange_transactions === null)
+        ? [{quantity: originalQuantity, price}]
+        : this.normalizeFills(
+            row.exchange_transactions,
+          );
     const executedQuantity =
       fills.reduce(
         (
