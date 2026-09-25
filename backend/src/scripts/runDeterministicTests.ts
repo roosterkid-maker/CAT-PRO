@@ -255,6 +255,7 @@ const DETERMINISTIC_TESTS = [
   "trading/account/tests/testTradingAccountOperatorControls.js",
   "trading/account/tests/testExchangeBalanceSynchronizationIsolation.js",
   "portfolio/tests/testPortfolioCredibilityAdjustedSummary.js",
+  "portfolio/tests/testThinVenueValuation.js",
   "rebalancing/tests/testNormalizedInventorySnapshotService.js",
   "rebalancing/tests/testCapitalAllocationAndImbalanceService.js",
   "rebalancing/tests/testInventoryRebalancingScoreService.js",

@@ -2,6 +2,8 @@ export type PortfolioValuationSource =
   | "STABLE_ASSET"
   | "BEST_BID"
   | "LAST_PRICE"
+  /* A venue quote far from the reference venues, capped at the reference. */
+  | "REFERENCE_CAPPED"
   | "UNAVAILABLE";
 
 export interface PortfolioAssetPosition {

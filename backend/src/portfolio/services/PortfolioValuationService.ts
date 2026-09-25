@@ -30,6 +30,11 @@ const STABLE_ASSETS =
     "TUSD",
   ]);
 
+/* Liquid venues whose USDT quotes anchor a thinner venue's valuation. */
+const REFERENCE_EXCHANGES = ["binance", "bybit"] as const;
+/* A venue's own quote beyond this share from the reference is not trusted. */
+const REFERENCE_DEVIATION = 0.25;
+
 export class PortfolioValuationService {
   valueAsset(
     exchange: string,
@@ -123,6 +128,30 @@ export class PortfolioValuationService {
       return this.unavailable();
     }
 
+    /*
+     * Thin venues (UnoCoin's USDT markets report the last trade as both bid
+     * and ask) can quote a coin far from where it trades anywhere else, e.g.
+     * NEAR at 12 USDT against 4.5 on Binance. Such a quote is capped at the
+     * reference venues' bid: never value a holding above what the liquid
+     * market pays for it.
+     */
+    const reference =
+      (REFERENCE_EXCHANGES as readonly string[]).includes(normalizedExchange)
+        ? null
+        : this.referenceBid(normalizedAsset);
+    if (
+      reference !== null &&
+      Math.abs(priceUsdt / reference - 1) > REFERENCE_DEVIATION
+    ) {
+      return {
+        priceUsdt: Math.min(priceUsdt, reference),
+        market: quote.market,
+        source: "REFERENCE_CAPPED",
+        timestamp: quote.timestamp,
+        ageMs: Math.max(0, now - quote.timestamp),
+      };
+    }
+
     return {
       priceUsdt,
 
@@ -146,6 +175,19 @@ export class PortfolioValuationService {
             quote.timestamp,
         ),
     };
+  }
+
+  /** Median best bid of the asset on the reference venues, or null. */
+  private referenceBid(asset: string): number | null {
+    const bids = REFERENCE_EXCHANGES
+      .map((exchange) => this.findUsdtQuote(exchange, asset))
+      .map((quote) => (quote ? this.positiveNumber(quote.bestBidPrice) : null))
+      .filter((bid): bid is number => bid !== null)
+      .sort((a, b) => a - b);
+    if (bids.length === 0) return null;
+    return bids.length % 2 === 1
+      ? bids[(bids.length - 1) / 2]!
+      : (bids[bids.length / 2 - 1]! + bids[bids.length / 2]!) / 2;
   }
 
   private findUsdtQuote(
