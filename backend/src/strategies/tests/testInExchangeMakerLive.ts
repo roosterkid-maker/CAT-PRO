@@ -122,6 +122,13 @@ async function testAttempts(directory: string): Promise<void> {
   const paused = harness(directory, "paused", {otherHalt: true});
   assert.match(await paused.engine.attempt("RWA", "BUY"), /^PAUSED/u);
 
+  // An exchange rejection is not a quiet no-fill: it backs off.
+  const refused = session("NO_FILL", 0, null);
+  const rejected = harness(directory, "rejected", {outcome: {...refused, primary: {idempotencyKey: "p", venue: "coindcx", market: "RWAINR", side: "buy", requestedQuantity: 3_100,
+    limitPrice: 0.19227, filledQuantity: 0, averagePrice: null, orderId: null, status: "FAILED", bufferPercent: null, reasons: ["Price should be within 0.19760 and 0.21840"]}}});
+  assert.match(await rejected.engine.attempt("RWA", "BUY"), /^REJECTED: Price should be within/u);
+  assert.equal(rejected.engine.getDiagnostics().haltedReason, null);
+
   // A clean fill is recorded with its realized P&L.
   const filled = harness(directory, "filled", {outcome: session("COMPLETED", 3_100, 4.2)});
   assert.equal(await filled.engine.attempt("RWA", "BUY"), "COMPLETED");

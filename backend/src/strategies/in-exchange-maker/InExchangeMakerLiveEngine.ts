@@ -341,6 +341,8 @@ export class InExchangeMakerLiveEngine {
     this.state.counts[session.state] = (this.state.counts[session.state] ?? 0) + 1;
     if (session.state === "NO_FILL") {
       this.persist();
+      // The exchange refused the order (price band, funds, rules): back off, do not hammer it.
+      if (session.primary?.status === "FAILED") return block(`REJECTED: ${session.primary.reasons.join(" ") || "the exchange refused the order."}`);
       return block("NO_FILL");
     }
     const filled = session.primary?.filledQuantity ?? 0;
@@ -389,7 +391,8 @@ export class InExchangeMakerLiveEngine {
         outcome = "ERROR";
       }
       // Busy states retry quickly; blocks and halts back off.
-      const pause = outcome === "NO_FILL" || outcome === "COMPLETED" || outcome === "DUST_RESIDUAL" ? 100 : outcome.startsWith("HALTED") ? 5_000 : 1_000;
+      const pause = outcome === "NO_FILL" || outcome === "COMPLETED" || outcome === "DUST_RESIDUAL" ? 100
+        : outcome.startsWith("REJECTED") ? 15_000 : outcome.startsWith("HALTED") ? 5_000 : 1_000;
       await this.dependencies.sleep(pause);
     }
   }
