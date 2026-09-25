@@ -452,7 +452,7 @@ export class InrRouteSessionExecutor {
         orderId: result?.orderId ?? null,
         status: failure !== null ? "GATEWAY_FAILURE" : neverSubmitted ? "NOT_SUBMITTED" : result?.status ?? response?.state ?? "UNKNOWN",
         bufferPercent,
-        reasons: [...(failure !== null ? [failure] : []), ...(response?.reasons ?? [])],
+        reasons: [...(failure !== null ? [failure] : []), ...(result?.failureReason ? [result.failureReason] : []), ...(response?.reasons ?? [])],
       },
     };
   }

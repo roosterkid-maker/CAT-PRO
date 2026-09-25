@@ -228,6 +228,10 @@ import {
   getCoinStudyService,
 } from "./strategies/inr-arbitrage/CoinStudyService";
 
+import {
+  getInExchangeMakerLive,
+} from "./strategies/in-exchange-maker/DefaultInExchangeMakerLive";
+
 import centralLiveTriangularRoutes
   from "./execution/live/routes/centralLiveTriangularRoutes";
 
@@ -990,6 +994,13 @@ const shutdown =
     console.log(
       `[Shutdown] Received ${signal}.`,
     );
+
+    // IXM rests maker orders for seconds: let the order in flight finish
+    // (filled and hedged, or cancelled) before the process exits.
+    await Promise.race([
+      getInExchangeMakerLive()?.stop() ?? Promise.resolve(),
+      new Promise((done) => setTimeout(done, 20_000)),
+    ]);
 
     strategyOneLiveOnlyRunnerService
       .stop();

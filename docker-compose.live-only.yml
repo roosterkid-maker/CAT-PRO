@@ -1,5 +1,7 @@
 services:
   backend:
+    # IXM finishes its in-flight maker order on shutdown (up to ~10 s + hedge).
+    stop_grace_period: 30s
     environment:
       CAT_PRO_RUNTIME_PROFILE: live-only
       TRADING_MODE: live

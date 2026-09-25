@@ -145,6 +145,9 @@ const QUOTE_MAX_AGE_MS = 10_000;
 const BOOK_MAX_AGE_MS = 1_500;
 /* Same edge the shadow quotes with. */
 const TARGET_EDGE_PERCENT = 0.3;
+/* CoinDCX's price band (around the last trade), learned from a rejection. */
+const BAND_MEMORY_MS = 60_000;
+const BAND_PATTERN = /Price should be within ([0-9.]+) and ([0-9.]+)/u;
 
 function bestOf(book: OrderBook): {bid: number | null; ask: number | null} {
   const bid = book.bids.reduce<number | null>((best, level) => (level.quantity > 0 && (best === null || level.price > best) ? level.price : best), null);
@@ -164,6 +167,7 @@ export class InExchangeMakerLiveEngine {
   private running = false;
   private readonly workers: Promise<void>[] = [];
   private lastBlock: Record<string, string> = {};
+  private readonly bands = new Map<string, {minimum: number; maximum: number; at: number}>();
 
   constructor(
     private readonly config: IxmLiveConfig,
@@ -259,8 +263,26 @@ export class InExchangeMakerLiveEngine {
       targetEdgePercent: TARGET_EDGE_PERCENT, tick,
     });
     const quote = {...shadow, bid: fresh.bid, ask: fresh.ask, usdtBid: hedgeTop.bid, usdtAsk: hedgeTop.ask};
-    const price = side === "BUY" ? quote.bid : quote.ask;
+    let price = side === "BUY" ? quote.bid : quote.ask;
     if (price === null) return block("NO_EDGE: the fresh books leave no room for this side.");
+    // Stay inside the exchange's price band: move to its edge when the fee
+    // bound still allows it, else wait (an out-of-band order is refused).
+    const band = this.bands.get(inrMarket);
+    if (band && now - band.at <= BAND_MEMORY_MS) {
+      if (side === "BUY" && price < band.minimum) {
+        const lifted = Math.ceil(band.minimum / tick - 1e-9) * tick;
+        if (lifted > fresh.maximumBid || (bestAsk !== null && lifted >= bestAsk)) return block(`OUTSIDE_BAND: the exchange accepts ${band.minimum}-${band.maximum}; the edge allows at most ${fresh.maximumBid.toFixed(6)}.`);
+        price = Number(lifted.toFixed(12));
+      }
+      if (side === "SELL" && price > band.maximum) {
+        const lowered = Math.floor(band.maximum / tick + 1e-9) * tick;
+        if (lowered < fresh.minimumAsk || (bestBid !== null && lowered <= bestBid)) return block(`OUTSIDE_BAND: the exchange accepts ${band.minimum}-${band.maximum}; the edge needs at least ${fresh.minimumAsk.toFixed(6)}.`);
+        price = Number(lowered.toFixed(12));
+      }
+      if (price < band.minimum || price > band.maximum) return block(`OUTSIDE_BAND: ${price} is outside ${band.minimum}-${band.maximum}.`);
+    }
+    quote.bid = side === "BUY" ? price : quote.bid;
+    quote.ask = side === "SELL" ? price : quote.ask;
     // Never cross: a maker bid must stay below the best ask (and an ask
     // above the best bid) of the fresh INR book, or it would trade as taker.
     if (side === "BUY" && bestAsk !== null && price >= bestAsk) return block("WOULD_CROSS: bid at or above the best ask.");
@@ -342,7 +364,12 @@ export class InExchangeMakerLiveEngine {
     if (session.state === "NO_FILL") {
       this.persist();
       // The exchange refused the order (price band, funds, rules): back off, do not hammer it.
-      if (session.primary?.status === "FAILED") return block(`REJECTED: ${session.primary.reasons.join(" ") || "the exchange refused the order."}`);
+      if (session.primary?.status === "FAILED") {
+        const reason = session.primary.reasons.join(" ");
+        const match = BAND_PATTERN.exec(reason);
+        if (match) this.bands.set(inrMarket, {minimum: Number(match[1]), maximum: Number(match[2]), at: now});
+        return block(`REJECTED: ${reason || "the exchange refused the order."}`);
+      }
       return block("NO_FILL");
     }
     const filled = session.primary?.filledQuantity ?? 0;

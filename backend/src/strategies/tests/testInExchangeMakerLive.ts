@@ -128,6 +128,18 @@ async function testAttempts(directory: string): Promise<void> {
     limitPrice: 0.19227, filledQuantity: 0, averagePrice: null, orderId: null, status: "FAILED", bufferPercent: null, reasons: ["Price should be within 0.19760 and 0.21840"]}}});
   assert.match(await rejected.engine.attempt("RWA", "BUY"), /^REJECTED: Price should be within/u);
   assert.equal(rejected.engine.getDiagnostics().haltedReason, null);
+  // The band is remembered: a bid the edge cannot lift into it waits instead of re-sending.
+  assert.match(await rejected.engine.attempt("RWA", "BUY"), /^OUTSIDE_BAND/u);
+  assert.equal(rejected.calls.length, 1);
+  // A band the edge allows lifts the bid to its floor.
+  const lift = harness(directory, "lift", {outcome: {...refused, primary: {idempotencyKey: "p", venue: "coindcx", market: "RWAINR", side: "buy", requestedQuantity: 3_100,
+    limitPrice: 0.19227, filledQuantity: 0, averagePrice: null, orderId: null, status: "FAILED", bufferPercent: null, reasons: ["Price should be within 0.1925 and 0.2100"]}}});
+  await lift.engine.attempt("RWA", "BUY");
+  await lift.engine.attempt("RWA", "BUY");
+  assert.equal(lift.calls[1]!.plan.buyLimitPrice, 0.1925);
+  // It is forgotten after a minute.
+  rejected.advance(61_000);
+  assert.match(await rejected.engine.attempt("RWA", "BUY"), /^REJECTED/u);
 
   // A clean fill is recorded with its realized P&L.
   const filled = harness(directory, "filled", {outcome: session("COMPLETED", 3_100, 4.2)});
