@@ -414,8 +414,8 @@ function InExchangePanel({maker, executor, venue, onVenue}: {
           <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
             <Kpi label="SIM FILLS" value={String(maker?.totals.fills ?? 0)} sub="real trades through our quotes" accent="cyan" />
             <Kpi label="SIM EDGE" value={maker ? inr(maker.totals.edgeInr) : "—"} sub="after INR + USDT fees" accent={maker && maker.totals.edgeInr > 0 ? "green" : "muted"} />
-            <Kpi label="EST. / DAY" value={maker ? inr(maker.totals.edgeInrPerDay) : "—"} sub="at the observed rate" accent={maker && maker.totals.edgeInrPerDay > 0 ? "green" : "muted"} />
-            <Kpi label="WATCHING" value={String(maker?.tracked.length ?? 0)} sub="coins: spread room × volume" accent="muted" />
+            <Kpi label="ROUND-TRIP" value={maker ? inr(maker.totals.roundTripInr) : "—"} sub={maker ? `bought and sold here · ${inr(maker.totals.roundTripInrPerDay)}/day` : "matched buys + sells"} accent={maker && maker.totals.roundTripInr > 0 ? "green" : "muted"} />
+            <Kpi label="WATCHING" value={String(maker?.tracked.length ?? 0)} sub={maker ? `est. ${inr(maker.totals.edgeInrPerDay)}/day hedged` : "coins: spread room × volume"} accent="muted" />
           </div>
           <div className="overflow-auto" style={{maxHeight: 320}}>
             <table className="w-full min-w-[46rem] text-left font-mono text-[11px]">
@@ -440,7 +440,7 @@ function InExchangePanel({maker, executor, venue, onVenue}: {
                       <td className="px-2 py-1.5 text-text-primary">{row.coin}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">{row.dailyVolumeInr === null ? "—" : compactInr(row.dailyVolumeInr)}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{row.quote ? `${price(row.quote.inrBid)} / ${price(row.quote.inrAsk)}` : "—"}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-amber-300">{row.quote ? `${row.quote.spreadPercent.toFixed(2)}%` : "—"}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-amber-300">{row.quote?.spreadPercent != null ? `${row.quote.spreadPercent.toFixed(2)}%` : row.quote ? "one-sided" : "—"}</td>
                       <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.bid ? "text-emerald-300" : "text-text-muted"}`}>{price(row.quote?.bid ?? null)}</td>
                       <td className={`px-2 py-1.5 text-right tabular-nums ${row.quote?.ask ? "text-rose-300" : "text-text-muted"}`}>{price(row.quote?.ask ?? null)}</td>
                       <td className="px-2 py-1.5 text-right text-text-muted">{row.quote?.hedgeVenue ?? "—"}</td>

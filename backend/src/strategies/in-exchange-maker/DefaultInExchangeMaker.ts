@@ -15,6 +15,7 @@ import {
   InExchangeMakerShadowService,
   registerInExchangeMakerShadow,
   type MarketDetail,
+  type InrTop,
   type PublicTrade,
   type TopOfBook,
 } from "./InExchangeMakerShadowService";
@@ -115,7 +116,7 @@ function startCoinDcx(): InExchangeMakerShadowService {
 
 /* -------------------------------------------------------------- UnoCoin */
 
-const unoCoinBooks = new Map<string, TopOfBook & {at: number}>();
+const unoCoinBooks = new Map<string, InrTop & {at: number}>();
 let unoCoinInrMarkets: string[] = [];
 
 async function unoCoinVolumes(): Promise<ReadonlyMap<string, number>> {
@@ -147,10 +148,12 @@ async function unoCoinRefreshBooks(markets: readonly string[]): Promise<void> {
         .filter((price) => price > 0);
       const bids = levels(book.bids);
       const asks = levels(book.asks);
-      if (bids.length === 0 || asks.length === 0) continue;
-      const bid = Math.max(...bids);
-      const ask = Math.min(...asks);
-      if (ask > bid) unoCoinBooks.set(market, {bid, ask, at: Date.now()});
+      // Many UnoCoin books are one-sided (XRP/INR: bids only): keep that.
+      const bid = bids.length > 0 ? Math.max(...bids) : null;
+      const ask = asks.length > 0 ? Math.min(...asks) : null;
+      if (bid === null && ask === null) continue;
+      if (bid !== null && ask !== null && !(ask > bid)) continue;
+      unoCoinBooks.set(market, {bid, ask, at: Date.now()});
     } catch {
       // A failed book simply ages out.
     }

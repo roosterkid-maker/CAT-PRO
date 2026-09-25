@@ -7,6 +7,7 @@ import type {ExecutableQuote} from "../../core/models/ExecutableQuote";
 import {
   computeMakerQuotes,
   InExchangeMakerShadowService,
+  roundTrips,
   simulateFill,
   tickFromPrice,
   type PublicTrade,
@@ -30,6 +31,29 @@ function testQuotes(): void {
   assert.deepEqual([tight.bid, tight.ask], [null, null]);
   assert.equal(tickFromPrice(0.44), 0.00001);
   assert.equal(tickFromPrice(1_598), 0.1);
+}
+
+function testOneSidedAndRoundTrips(): void {
+  // UnoCoin XRP/INR: bids only (146), global ~162. Our ask sits alone at the
+  // bound; our bid one tick above 146, far under fair.
+  const xrp = computeMakerQuotes({
+    inrBid: 146, inrAsk: null, usdtBid: 1.6232, usdtAsk: 1.6233, usdtInrBid: 99.9, usdtInrAsk: 99.92,
+    inrFeePercent: 0.4, usdtFeePercent: 0.1, targetEdgePercent: 0.3, tick: 0.01,
+  });
+  assert.equal(xrp.bid, 146.01);
+  assert.ok(xrp.ask !== null && xrp.ask >= xrp.minimumAsk && xrp.ask < xrp.minimumAsk + 0.011);
+
+  // Round trips: two buys and one sell of the same coin. Only the matched
+  // quantity is profit; the rest is open stock.
+  const fill = (side: "BUY" | "SELL", price: number, quantity: number, at: number) =>
+    ({coin: "XRP", side, at, price, quantity, notionalInr: price * quantity, edgeInr: 0, edgePercent: 0});
+  const trips = roundTrips([fill("BUY", 146, 10, 1), fill("BUY", 150, 10, 2), fill("SELL", 160, 15, 3)], 0.4);
+  assert.equal(trips.matchedQuantity, 15);
+  assert.ok(Math.abs(trips.openQuantity - 5) < 1e-9);
+  const expected = 10 * (160 * 0.996 - 146 * 1.004) + 5 * (160 * 0.996 - 150 * 1.004);
+  assert.ok(Math.abs(trips.realizedInr - expected) < 1e-9, String(trips.realizedInr));
+  // Only buys: nothing realized.
+  assert.equal(roundTrips([fill("BUY", 146, 10, 1)], 0.4).realizedInr, 0);
 }
 
 function testFill(): void {
@@ -156,6 +180,7 @@ async function main(): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "cat-pro-ixm-"));
   try {
     testQuotes();
+    testOneSidedAndRoundTrips();
     testFill();
     await testService(directory);
     await testPolledVenue(directory);

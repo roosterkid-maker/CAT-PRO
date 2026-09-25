@@ -32,8 +32,9 @@ import {
  */
 
 export interface MakerQuoteInput {
-  readonly inrBid: number;
-  readonly inrAsk: number;
+  /** null: that side of the INR book is empty (UnoCoin books are often one-sided). */
+  readonly inrBid: number | null;
+  readonly inrAsk: number | null;
   readonly usdtBid: number;
   readonly usdtAsk: number;
   readonly usdtInrBid: number;
@@ -66,10 +67,12 @@ export function computeMakerQuotes(input: MakerQuoteInput): MakerQuotes {
   const minimumAsk = (input.usdtAsk * input.usdtInrAsk * (1 + usdt)) / ((1 - inr) * (1 - edge));
   const decimals = Math.max(0, Math.ceil(-Math.log10(input.tick)) + 2);
   const fix = (value: number) => Number(value.toFixed(decimals));
-  const improvedBid = fix(input.inrBid + input.tick);
-  const improvedAsk = fix(input.inrAsk - input.tick);
-  const bid = improvedBid < input.inrAsk && improvedBid <= roundDown(maximumBid, input.tick) + 1e-12 ? improvedBid : null;
-  const ask = improvedAsk > input.inrBid && improvedAsk >= roundUp(minimumAsk, input.tick) - 1e-12 ? improvedAsk : null;
+  // One tick inside the book; alone on an empty side, at the bound itself.
+  const improvedBid = input.inrBid === null ? fix(roundDown(maximumBid, input.tick)) : fix(input.inrBid + input.tick);
+  const improvedAsk = input.inrAsk === null ? fix(roundUp(minimumAsk, input.tick)) : fix(input.inrAsk - input.tick);
+  const bid = improvedBid > 0 && improvedBid < (input.inrAsk ?? Number.POSITIVE_INFINITY) &&
+    improvedBid <= roundDown(maximumBid, input.tick) + 1e-12 ? improvedBid : null;
+  const ask = improvedAsk > (input.inrBid ?? 0) && improvedAsk >= roundUp(minimumAsk, input.tick) - 1e-12 ? improvedAsk : null;
   return {maximumBid, minimumAsk, bid, ask};
 }
 
@@ -147,6 +150,47 @@ export interface TopOfBook {
   readonly ask: number;
 }
 
+/** An INR book's top, either side possibly empty. */
+export interface InrTop {
+  readonly bid: number | null;
+  readonly ask: number | null;
+}
+
+/**
+ * Pure: profit actually realized on the maker exchange. Buys and sells of
+ * the same coin are matched first in, first out; each matched unit earns
+ * the sell price less the buy price, after the INR fee on both. Hedge legs
+ * of a matched pair offset each other, so only matched quantity counts:
+ * where coins cannot be moved (UnoCoin), unmatched stock is not profit
+ * until the other side fills.
+ */
+export function roundTrips(fills: readonly ShadowFill[], inrFeePercent: number): {realizedInr: number; matchedQuantity: number; openQuantity: number} {
+  const fee = inrFeePercent / 100;
+  const buys: {quantity: number; price: number}[] = [];
+  const sells: {quantity: number; price: number}[] = [];
+  let realizedInr = 0;
+  let matchedQuantity = 0;
+  for (const fill of [...fills].sort((a, b) => a.at - b.at)) {
+    const same = fill.side === "BUY" ? buys : sells;
+    const other = fill.side === "BUY" ? sells : buys;
+    let remaining = fill.quantity;
+    while (remaining > 1e-12 && other.length > 0) {
+      const head = other[0]!;
+      const quantity = Math.min(remaining, head.quantity);
+      const buyPrice = fill.side === "BUY" ? fill.price : head.price;
+      const sellPrice = fill.side === "BUY" ? head.price : fill.price;
+      realizedInr += quantity * (sellPrice * (1 - fee) - buyPrice * (1 + fee));
+      matchedQuantity += quantity;
+      remaining -= quantity;
+      head.quantity -= quantity;
+      if (head.quantity <= 1e-12) other.shift();
+    }
+    if (remaining > 1e-12) same.push({quantity: remaining, price: fill.price});
+  }
+  const openQuantity = buys.reduce((sum, lot) => sum + lot.quantity, 0) - sells.reduce((sum, lot) => sum + lot.quantity, 0);
+  return {realizedInr, matchedQuantity, openQuantity};
+}
+
 /**
  * Everything venue-specific. CoinDCX: maker on its INR book, hedge on its
  * own USDT book. UnoCoin: maker on its INR book, hedge on Binance/Bybit
@@ -155,8 +199,8 @@ export interface TopOfBook {
 export interface InExchangeMakerDependencies {
   /** Canonical INR markets on the maker exchange ("ALEXINR"). */
   readonly listInrMarkets: () => readonly string[];
-  /** Fresh two-sided INR top of book on the maker exchange, or null. */
-  readonly getInrBook: (market: string) => TopOfBook | null;
+  /** Fresh INR top of book on the maker exchange (a side may be empty), or null. */
+  readonly getInrBook: (market: string) => InrTop | null;
   /** Fresh two-sided top of book of the coin's USDT hedge market, or null. */
   readonly getHedgeBook: (coin: string) => (TopOfBook & {venue: string}) | null;
   /** USDT/INR used to value the hedge. */
@@ -210,7 +254,7 @@ interface CoinState {
   seen: Set<string>;
   lastTradeAt: number;
   tradesSeen: number;
-  lastQuote: (MakerQuotes & {at: number; inrBid: number; inrAsk: number; spreadPercent: number; hedgeVenue: string}) | null;
+  lastQuote: (MakerQuotes & {at: number; inrBid: number | null; inrAsk: number | null; spreadPercent: number | null; hedgeVenue: string}) | null;
 }
 
 interface PersistedState {
@@ -293,7 +337,9 @@ export class InExchangeMakerShadowService {
       if (!inr || !hedge) continue;
       const detail = this.details.get(market);
       if (detail && !detail.active) continue;
-      const spreadPercent = (inr.ask / inr.bid - 1) * 100;
+      if (inr.bid === null && inr.ask === null) continue;
+      // A one-sided book leaves the empty side entirely to us.
+      const spreadPercent = inr.bid !== null && inr.ask !== null ? (inr.ask / inr.bid - 1) * 100 : this.config.maximumSpreadPercent;
       if (spreadPercent < room || spreadPercent > this.config.maximumSpreadPercent) continue;
       const volumeInr = this.volumes.get(market) ?? 0;
       if (this.volumes.size > 0 && volumeInr < this.config.minimumDailyVolumeInr) continue;
@@ -305,7 +351,7 @@ export class InExchangeMakerShadowService {
     for (const coin of this.tracked) {
       const inr = this.dependencies.getInrBook(`${coin}INR`)!;
       const hedge = this.dependencies.getHedgeBook(coin)!;
-      const tick = this.details.get(`${coin}INR`)?.tick ?? tickFromPrice(inr.bid);
+      const tick = this.details.get(`${coin}INR`)?.tick ?? tickFromPrice(inr.bid ?? inr.ask ?? hedge.bid * conversion.bid);
       const quotes = computeMakerQuotes({
         inrBid: inr.bid, inrAsk: inr.ask, usdtBid: hedge.bid, usdtAsk: hedge.ask,
         usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask,
@@ -314,11 +360,12 @@ export class InExchangeMakerShadowService {
       // Inventory limit: a side that would push the net position further
       // past the limit stops quoting until fills on the other side bring
       // it back (no transfer ever rebalances it).
-      const netInr = this.netQuantity(coin) * ((inr.bid + inr.ask) / 2);
+      const netInr = this.netQuantity(coin) * hedge.bid * conversion.bid;
       const bid = netInr >= this.config.maximumInventoryInr ? null : quotes.bid;
       const ask = netInr <= -this.config.maximumInventoryInr ? null : quotes.ask;
       const state = this.coin(coin);
-      state.lastQuote = {...quotes, bid, ask, at: now, inrBid: inr.bid, inrAsk: inr.ask, spreadPercent: (inr.ask / inr.bid - 1) * 100, hedgeVenue: hedge.venue};
+      state.lastQuote = {...quotes, bid, ask, at: now, inrBid: inr.bid, inrAsk: inr.ask,
+        spreadPercent: inr.bid !== null && inr.ask !== null ? (inr.ask / inr.bid - 1) * 100 : null, hedgeVenue: hedge.venue};
       state.snapshots.push({at: now, bid, ask, usdtBid: hedge.bid, usdtAsk: hedge.ask, usdtInrBid: conversion.bid, usdtInrAsk: conversion.ask});
       state.snapshots = state.snapshots.filter((snapshot) => now - snapshot.at <= SNAPSHOT_RETENTION_MS);
     }
@@ -405,6 +452,10 @@ export class InExchangeMakerShadowService {
     }
     const hours = Math.max(1 / 60, (now - this.state.startedAt) / 3_600_000);
     const totalEdge = this.state.fills.reduce((sum, fill) => sum + fill.edgeInr, 0);
+    const inrFee = this.dependencies.inrFeePercent();
+    const trips = new Map<string, ReturnType<typeof roundTrips>>();
+    for (const coin of perCoin.keys()) trips.set(coin, roundTrips(this.state.fills.filter((fill) => fill.coin === coin), inrFee));
+    const realizedInr = [...trips.values()].reduce((sum, trip) => sum + trip.realizedInr, 0);
     return {
       schemaVersion: "1.0" as const,
       generatedAt: now,
@@ -418,8 +469,13 @@ export class InExchangeMakerShadowService {
         edgeInr: totalEdge,
         edgeInrPerDay: (totalEdge / hours) * 24,
         volumeInr: this.state.fills.reduce((sum, fill) => sum + fill.notionalInr, 0),
+        /** Profit from buys and sells of the same coin matched on this exchange. */
+        roundTripInr: realizedInr,
+        roundTripInrPerDay: (realizedInr / hours) * 24,
       },
-      coins: [...perCoin.entries()].map(([coin, entry]) => ({coin, ...entry, netQuantity: this.netQuantity(coin)})).sort((a, b) => b.edgeInr - a.edgeInr),
+      coins: [...perCoin.entries()]
+        .map(([coin, entry]) => ({coin, ...entry, netQuantity: this.netQuantity(coin), roundTripInr: trips.get(coin)?.realizedInr ?? 0}))
+        .sort((a, b) => b.edgeInr - a.edgeInr),
       tracked: this.tracked.map((coin) => {
         const state = this.coins.get(coin);
         return {coin, tradesSeen: state?.tradesSeen ?? 0, dailyVolumeInr: this.volumes.get(`${coin}INR`) ?? null, quote: state?.lastQuote ?? null};

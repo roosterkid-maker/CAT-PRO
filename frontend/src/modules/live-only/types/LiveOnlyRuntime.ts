@@ -447,17 +447,17 @@ export interface InExchangeMakerResponse {
     startedAt: number;
     hoursObserved: number;
     config: {targetEdgePercent: number; quoteSizeInr: number; maximumTrackedCoins: number};
-    totals: {fills: number; edgeInr: number; edgeInrPerDay: number; volumeInr: number};
-    coins: Array<{coin: string; fills: number; edgeInr: number; volumeInr: number; buys: number; sells: number; netQuantity: number}>;
+    totals: {fills: number; edgeInr: number; edgeInrPerDay: number; volumeInr: number; roundTripInr: number; roundTripInrPerDay: number};
+    coins: Array<{coin: string; fills: number; edgeInr: number; volumeInr: number; buys: number; sells: number; netQuantity: number; roundTripInr: number}>;
     tracked: Array<{
       coin: string;
       tradesSeen: number;
       dailyVolumeInr: number | null;
       quote: {
         at: number;
-        inrBid: number;
-        inrAsk: number;
-        spreadPercent: number;
+        inrBid: number | null;
+        inrAsk: number | null;
+        spreadPercent: number | null;
         bid: number | null;
         ask: number | null;
         maximumBid: number;
