@@ -18,6 +18,7 @@ import type {
 import {
   useCoinStudy,
   useInExchangeMaker,
+  useInExchangeMakerLive,
   useInrExecutor,
   useInrScanner,
   useLiveOnlyInventory,
@@ -99,6 +100,7 @@ export default function CommandCenter() {
   const executor = useInrExecutor().data?.data;
   const [makerVenue, setMakerVenue] = useState<"coindcx" | "unocoin">("coindcx");
   const maker = useInExchangeMaker(makerVenue).data?.data;
+  const makerLive = useInExchangeMakerLive().data?.data;
   const pnl = useArbitragePnL(200).data;
   const orders = useRecentExecutions(200).data?.executions;
   const study = useCoinStudy().data?.data;
@@ -237,7 +239,7 @@ export default function CommandCenter() {
       </div>
 
       {/* ======================= in-exchange (same coin, INR vs USDT) ======================= */}
-      <InExchangePanel maker={maker} executor={executor} venue={makerVenue} onVenue={setMakerVenue} />
+      <InExchangePanel maker={maker} executor={executor} venue={makerVenue} onVenue={setMakerVenue} live={makerLive} />
       <InExchangeFillsPanel maker={maker} venue={makerVenue} />
 
       {/* ======================= charts ======================= */}
@@ -384,11 +386,12 @@ function price(value: number | null): string {
  * One coin, one exchange: the thin INR book against the liquid USDT book.
  * Maker quotes (shadow) and the taker-loop checks the INR executor records.
  */
-function InExchangePanel({maker, executor, venue, onVenue}: {
+function InExchangePanel({maker, executor, venue, onVenue, live}: {
   maker: Maker | undefined;
   executor: Executor | undefined;
   venue: "coindcx" | "unocoin";
   onVenue: (venue: "coindcx" | "unocoin") => void;
+  live: NonNullable<ReturnType<typeof useInExchangeMakerLive>["data"]>["data"] | undefined;
 }) {
   const loops = (executor?.recentAttempts ?? [])
     .filter((attempt) => attempt.buyVenue === attempt.sellVenue)
@@ -398,6 +401,13 @@ function InExchangePanel({maker, executor, venue, onVenue}: {
       title="IN-EXCHANGE · SAME COIN INR ↔ USDT"
       meta={maker ? `${VENUE_NAME[venue]} maker shadow · hedge on ${venue === "coindcx" ? "CoinDCX USDT" : "Binance/Bybit USDT"} · ${maker.speed?.streamed ? `live books · ${maker.speed.bookUpdates.toLocaleString("en-IN")} updates · ${maker.speed.requotes.toLocaleString("en-IN")} re-prices` : "polled books"} · ${maker.hoursObserved.toFixed(1)} h · edge target ${maker.config.targetEdgePercent}% · no orders sent` : "starting…"}
     >
+      <div className={`mb-3 border px-3 py-2 font-mono text-[11px] ${live?.haltedReason ? "border-red-400/50 text-red-300" : live?.mode === "live" ? "border-emerald-400/50 text-emerald-300" : "border-border-default text-text-muted"}`}>
+        {!live ? "LIVE engine: unavailable" : live.mode !== "live" ? "LIVE: OFF · shadow only (CoinDCX live needs CAT_PRO_IXM_MODE=live + confirmation)" : (
+          <>
+            LIVE: {live.haltedReason ? `HALTED · ${live.haltedReason}` : "ON"} · coins {live.config.coins.join(", ")} · ₹{live.config.quoteInr}/quote · today {live.realizedTodayInr >= 0 ? "+" : ""}₹{live.realizedTodayInr.toFixed(2)} (stop -₹{live.config.dailyLossLimitInr}) · live fills {live.recentFills.length}
+          </>
+        )}
+      </div>
       <div className="mb-3 flex gap-2 font-mono text-[11px]">
         {(["coindcx", "unocoin"] as const).map((option) => (
           <button

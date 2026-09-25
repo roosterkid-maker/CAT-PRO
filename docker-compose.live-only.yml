@@ -32,6 +32,15 @@ services:
       # through the exchange's own USDT/INR): shadow first (operator,
       # 2026-09-25) - priced and recorded, no order.
       CAT_PRO_INR_IN_VENUE_MODE: ${CAT_PRO_INR_IN_VENUE_MODE:-shadow}
+      # In-exchange maker LIVE on CoinDCX (INR maker, USDT hedge): OFF until
+      # the operator sets mode=live AND the confirmation phrase in .env.
+      CAT_PRO_IXM_MODE: ${CAT_PRO_IXM_MODE:-off}
+      CAT_PRO_IXM_LIVE_CONFIRMATION: ${CAT_PRO_IXM_LIVE_CONFIRMATION:-}
+      CAT_PRO_IXM_COINS: ${CAT_PRO_IXM_COINS:-}
+      CAT_PRO_IXM_QUOTE_INR: ${CAT_PRO_IXM_QUOTE_INR:-600}
+      CAT_PRO_IXM_MAX_INVENTORY_INR: ${CAT_PRO_IXM_MAX_INVENTORY_INR:-2000}
+      CAT_PRO_IXM_DAILY_LOSS_INR: ${CAT_PRO_IXM_DAILY_LOSS_INR:-200}
+      CAT_PRO_IXM_ORDER_LIFE_MS: ${CAT_PRO_IXM_ORDER_LIFE_MS:-8000}
       # Capital manager buys core-basket stock on its sell venue (operator
       # limits 2026-09-24): core coins only, up to target, <= INR 10,000/day,
       # keeping INR 1,000 of cash on the venue, never at a > 1% premium.

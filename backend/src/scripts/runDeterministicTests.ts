@@ -114,6 +114,7 @@ const DETERMINISTIC_TESTS = [
   "strategies/tests/testInrArbitrageScanner.js",
   "strategies/tests/testCoinStudy.js",
   "strategies/tests/testInExchangeMaker.js",
+  "strategies/tests/testInExchangeMakerLive.js",
   "execution/live/tests/testInrRouteExecution.js",
   "execution/live/tests/testArbitragePnLReport.js",
   "execution/live/tests/testTwoSidedPassiveMakerLiveLifecycleHandler.js",

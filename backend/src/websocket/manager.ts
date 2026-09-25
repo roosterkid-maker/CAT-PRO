@@ -96,6 +96,10 @@ import {
 } from "../strategies/in-exchange-maker/DefaultInExchangeMaker";
 
 import {
+  startInExchangeMakerLive,
+} from "../strategies/in-exchange-maker/DefaultInExchangeMakerLive";
+
+import {
   marketCache,
 } from "../services/cache.service";
 
@@ -552,6 +556,12 @@ class WebSocketManager {
        * only - quotes and fills are computed, never sent.
        */
       startInExchangeMakerShadow(this.coinDCXOrderBook);
+
+      /*
+       * In-exchange maker LIVE: off unless CAT_PRO_IXM_MODE=live with its
+       * confirmation phrase; trades only allowlisted CoinDCX coins.
+       */
+      startInExchangeMakerLive();
 
       registerCoinSwitchInrDepthPoller(
         this.coinSwitchInrDepthPoller,

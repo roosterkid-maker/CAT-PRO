@@ -76,6 +76,10 @@ import {
 } from "../../../strategies/in-exchange-maker/InExchangeMakerShadowService";
 
 import {
+  getInExchangeMakerLive,
+} from "../../../strategies/in-exchange-maker/DefaultInExchangeMakerLive";
+
+import {
   getRouteRefillService,
 } from "../../../rebalancing/services/RouteRefillService";
 
@@ -534,6 +538,40 @@ router.get(
       return;
     }
     response.json({success: true, data: shadow.getReport()});
+  },
+);
+
+/* In-exchange maker LIVE status (CoinDCX). */
+router.get(
+  "/in-exchange-maker/live",
+  (
+    _request,
+    response,
+  ) => {
+    const live = getInExchangeMakerLive();
+    response.setHeader("Cache-Control", "no-store");
+    if (!live) {
+      response.status(503).json({success: false, message: "In-exchange maker live engine is not started."});
+      return;
+    }
+    response.json({success: true, data: live.getDiagnostics()});
+  },
+);
+
+/* Operator-only: release an in-exchange maker halt after checking its cause. */
+router.post(
+  "/in-exchange-maker/live/release-halt",
+  (
+    request,
+    response,
+  ) => {
+    const live = getInExchangeMakerLive();
+    const confirmation = typeof request.body?.confirmation === "string" ? request.body.confirmation : "";
+    if (!live) {
+      response.status(503).json({success: false, message: "In-exchange maker live engine is not started."});
+      return;
+    }
+    response.json({success: true, data: {released: live.releaseHalt(confirmation), engine: live.getDiagnostics()}});
   },
 );
 

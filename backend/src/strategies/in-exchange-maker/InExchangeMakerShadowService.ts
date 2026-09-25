@@ -156,6 +156,16 @@ export function simulateFill(input: {
   return null;
 }
 
+export interface LiveMakerQuote {
+  readonly at: number;
+  readonly bid: number | null;
+  readonly ask: number | null;
+  readonly usdtBid: number;
+  readonly usdtAsk: number;
+  readonly usdtInrBid: number;
+  readonly usdtInrAsk: number;
+}
+
 export interface MarketDetail {
   readonly pair: string;
   readonly tick: number;
@@ -406,6 +416,26 @@ export class InExchangeMakerShadowService {
     for (const coin of this.tracked) this.quoteCoin(coin, now, conversion, inrFee, hedgeFee);
     // Streamed venues: keep the tracked coins' INR and USDT books open.
     this.dependencies.subscribeBooks?.(this.tracked.flatMap((coin) => [`${coin}INR`, `${coin}USDT`]));
+  }
+
+  /**
+   * The coin's current maker quote and the hedge prices it was built from,
+   * for the live engine; null when the coin is not tracked or never quoted.
+   */
+  getLiveQuote(coin: string): LiveMakerQuote | null {
+    if (!this.trackedSet.has(coin)) return null;
+    const state = this.coins.get(coin);
+    const last = state?.snapshots.at(-1);
+    if (!state?.lastQuote || !last) return null;
+    return {
+      at: state.lastQuote.at,
+      bid: state.lastQuote.bid,
+      ask: state.lastQuote.ask,
+      usdtBid: last.usdtBid,
+      usdtAsk: last.usdtAsk,
+      usdtInrBid: last.usdtInrBid,
+      usdtInrAsk: last.usdtInrAsk,
+    };
   }
 
   /** Re-prices one tracked coin now (a book it depends on just changed). */

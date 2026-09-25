@@ -485,3 +485,18 @@ export interface InExchangeMakerResponse {
     }>;
   };
 }
+
+export interface InExchangeMakerLiveResponse {
+  success: boolean;
+  data: {
+    mode: "off" | "live";
+    running: boolean;
+    config: {coins: string[]; quoteInr: number; maximumInventoryInr: number; dailyLossLimitInr: number; primaryTimeoutMs: number};
+    haltedReason: string | null;
+    realizedTodayInr: number;
+    counts: Record<string, number>;
+    lastBlock: Record<string, string>;
+    inventory: Record<string, number>;
+    recentFills: Array<{at: number; coin: string; side: "BUY" | "SELL"; quantity: number; inrPrice: number; hedgePriceUsdt: number | null; usdtInr: number; realizedInr: number; state: string}>;
+  };
+}
