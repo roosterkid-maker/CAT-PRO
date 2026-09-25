@@ -21,7 +21,7 @@ export function RecentExecutionErrors() {
     refetch,
   } =
     useRecentExecutions(
-      50,
+      200,
     );
 
   const failures =
@@ -36,6 +36,18 @@ export function RecentExecutionErrors() {
             "TIMED_OUT" ||
           execution.failureReason !==
             null,
+      )
+      // Routine maker outcomes are not errors: an unfilled order that
+      // timed out or was cancelled, and CoinDCX's price-band refusal
+      // (OMS-VF-0042) that the maker backs off from on its own.
+      .filter(
+        (execution) =>
+          !(
+            (execution.status === "TIMED_OUT" ||
+              execution.status === "CANCELLED") &&
+            !(execution.filledQuantity > 0)
+          ) &&
+          !(execution.failureReason ?? "").includes("OMS-VF-0042"),
       )
       .slice(
         0,

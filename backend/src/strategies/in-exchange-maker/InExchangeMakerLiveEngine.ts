@@ -177,7 +177,7 @@ const BOOK_MAX_AGE_MS = 1_500;
 /* Same edge the shadow quotes with. */
 const TARGET_EDGE_PERCENT = 0.3;
 /* CoinDCX's price band (around the last trade), learned from a rejection. */
-const BAND_MEMORY_MS = 60_000;
+const BAND_MEMORY_MS = 10 * 60_000;
 const BAND_PATTERN = /Price should be within ([0-9.]+) and ([0-9.]+)/u;
 
 function bestOf(book: OrderBook): {bid: number | null; ask: number | null} {

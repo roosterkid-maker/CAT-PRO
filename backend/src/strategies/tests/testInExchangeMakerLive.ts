@@ -138,8 +138,8 @@ async function testAttempts(directory: string): Promise<void> {
   await lift.engine.attempt("RWA", "BUY");
   await lift.engine.attempt("RWA", "BUY");
   assert.equal(lift.calls[1]!.plan.buyLimitPrice, 0.1925);
-  // It is forgotten after a minute.
-  rejected.advance(61_000);
+  // It is forgotten after ten minutes.
+  rejected.advance(601_000);
   assert.match(await rejected.engine.attempt("RWA", "BUY"), /^REJECTED/u);
 
   // A clean fill is recorded with its realized P&L.
