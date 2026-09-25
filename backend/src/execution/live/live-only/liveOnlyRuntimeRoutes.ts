@@ -547,13 +547,14 @@ router.post(
   ) => {
     const venue = typeof request.body?.venue === "string" ? request.body.venue.trim().toLowerCase() : "";
     const coin = typeof request.body?.coin === "string" ? request.body.coin.trim().toUpperCase() : "";
+    const side = request.body?.side === "deposit" ? "deposit" : "withdraw";
     if (!venue || !/^[A-Z0-9]{1,15}$/u.test(coin) || typeof request.body?.closed !== "boolean") {
-      response.status(400).json({success: false, message: "venue, coin and closed (boolean) are required."});
+      response.status(400).json({success: false, message: "venue, coin and closed (boolean) are required; side is withdraw (default) or deposit."});
       return;
     }
     response.json({
       success: true,
-      data: {closed: getOrCreateRouteExitCostService().setClosed(venue, coin, request.body.closed)},
+      data: {closed: getOrCreateRouteExitCostService().setClosed(venue, coin, request.body.closed, side)},
     });
   },
 );

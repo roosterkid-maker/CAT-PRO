@@ -77,7 +77,14 @@ async function main(): Promise<void> {
     reloaded.setClosed("unocoin", "NEAR", false);
     assert.equal(reloaded.exit("NEAR", "unocoin", "binance").status, "OK");
 
-    assert.deepEqual(parseClosedList("unocoin:dash, bad, coindcx:FLR"), ["unocoin:DASH", "coindcx:FLR"]);
+    assert.deepEqual(parseClosedList("unocoin:dash, bad, coinswitch:gram:deposit"), ["unocoin:DASH", "coinswitch:GRAM:deposit"]);
+
+    // A destination that does not list the coin for deposit (CoinSwitch GRAM).
+    reloaded.setClosed("coinswitch", "gram", true, "deposit");
+    const gram = reloaded.exit("GRAM", "binance", "coinswitch");
+    assert.equal(gram.status, "CLOSED");
+    assert.match(gram.detail, /coinswitch does not accept GRAM deposits/u);
+    assert.equal(reloaded.exit("GRAM", "coinswitch", "binance").status, "UNKNOWN", "only deposits into CoinSwitch are marked");
     // UnoCoin names the network only in its notes.
     assert.equal(unoCoinNetworkOf("LINK", ["Only ERC-20 (Ethereum Chain) is supported."]), "ETH");
     assert.equal(unoCoinNetworkOf("NEAR", ["Only BSC (Binance Chain) is supported."]), "BSC");

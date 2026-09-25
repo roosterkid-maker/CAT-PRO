@@ -18,6 +18,9 @@ import {
  *   Bybit    per-chain withdraw/deposit switches and fee (coin info API)
  *   CoinDCX, CoinSwitch  no source: UNKNOWN (not blocked)
  *
+ * The operator can also mark a DESTINATION that does not accept a coin at
+ * all (e.g. CoinSwitch lists no GRAM deposit), which no API reports.
+ *
  * A fee is spread over a batch of trades moved together; a route whose net
  * after that share falls below the live threshold should not trade.
  */
@@ -68,7 +71,7 @@ function canonicalNetwork(value: string): string {
 
 interface ClosedMarks {
   readonly schemaVersion: "1.0";
-  /** "venue:COIN" whose withdrawals the operator saw closed. */
+  /** "venue:COIN" whose withdrawals, or "venue:COIN:deposit" whose deposits, the operator saw closed. */
   closed: string[];
 }
 
@@ -120,9 +123,9 @@ export class RouteExitCostService {
     return [...this.marks.closed];
   }
 
-  /** Operator: mark a coin's withdrawals on a venue closed (or open again). */
-  setClosed(venue: string, coin: string, closed: boolean): readonly string[] {
-    const key = `${venue.trim().toLowerCase()}:${coin.trim().toUpperCase()}`;
+  /** Operator: mark a coin's withdrawals (or deposits) on a venue closed, or open again. */
+  setClosed(venue: string, coin: string, closed: boolean, side: "withdraw" | "deposit" = "withdraw"): readonly string[] {
+    const key = `${venue.trim().toLowerCase()}:${coin.trim().toUpperCase()}${side === "deposit" ? ":deposit" : ""}`;
     const next = new Set(this.marks.closed);
     if (closed) next.add(key);
     else next.delete(key);
@@ -138,6 +141,9 @@ export class RouteExitCostService {
     const to = toValue.toLowerCase();
     if (this.marks.closed.includes(`${from}:${coin}`)) {
       return {status: "CLOSED", network: null, feeUnits: null, detail: `${coin} withdrawals on ${from} are marked closed.`};
+    }
+    if (this.marks.closed.includes(`${to}:${coin}:deposit`)) {
+      return {status: "CLOSED", network: null, feeUnits: null, detail: `${to} does not accept ${coin} deposits (marked).`};
     }
     if (!(SOURCED_VENUES as readonly string[]).includes(from)) {
       return {status: "UNKNOWN", network: null, feeUnits: null, detail: `${from} publishes no withdrawal data.`};
@@ -192,8 +198,8 @@ export function parseClosedList(value: string | undefined): string[] {
     .map((entry) => entry.trim())
     .filter((entry) => entry.includes(":"))
     .map((entry) => {
-      const [venue, coin] = entry.split(":");
-      return `${(venue ?? "").toLowerCase()}:${(coin ?? "").toUpperCase()}`;
+      const [venue, coin, side] = entry.split(":");
+      return `${(venue ?? "").toLowerCase()}:${(coin ?? "").toUpperCase()}${side?.toLowerCase() === "deposit" ? ":deposit" : ""}`;
     });
 }
 
